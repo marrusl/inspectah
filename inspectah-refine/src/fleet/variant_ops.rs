@@ -2,7 +2,9 @@
 //!
 //! These functions mutate a cloned `InspectionSnapshot` in place as part of
 //! the `project_snapshot()` replay loop. They handle SelectVariant,
-//! EditVariant, and DiscardVariant ops for config-file variants.
+//! EditVariant, and DiscardVariant ops for Config, DropIn, Quadlet, and
+//! Compose items. Compose items only support SelectVariant (no Edit/Discard
+//! because they are structured carriers without raw content).
 //!
 //! The `user_variants` map tracks user-created content (from EditVariant)
 //! so that DiscardVariant can distinguish user-created from host-sourced
@@ -13,7 +15,9 @@ use std::collections::{HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::containers::QuadletUnit;
 use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::services::SystemdDropIn;
 
 use crate::types::{ContentHash, ItemId, RefineError};
 
@@ -28,10 +32,16 @@ pub struct VariantProjectionState {
     pub selected: HashMap<String, ContentHash>,
 }
 
-/// Extract the config path from an ItemId, if it is a Config variant.
-fn config_path(item_id: &ItemId) -> Option<&str> {
+/// Extract the path from an ItemId for variant-capable item kinds.
+///
+/// Returns the path for Config, DropIn, Quadlet, and Compose items.
+/// Other item kinds do not participate in variant operations.
+fn item_path(item_id: &ItemId) -> Option<&str> {
     match item_id {
         ItemId::Config { path } => Some(path.as_str()),
+        ItemId::DropIn { path } => Some(path.as_str()),
+        ItemId::Quadlet { path } => Some(path.as_str()),
+        ItemId::Compose { path } => Some(path.as_str()),
         _ => None,
     }
 }
@@ -44,7 +54,7 @@ pub fn apply_select(
     item_id: &ItemId,
     target: &ContentHash,
 ) {
-    if let Some(path) = config_path(item_id) {
+    if let Some(path) = item_path(item_id) {
         state.selected.insert(path.to_string(), target.clone());
     }
 }
@@ -60,22 +70,46 @@ pub fn apply_edit(
     content: &str,
     snap: &InspectionSnapshot,
 ) {
-    let Some(path) = config_path(item_id) else {
+    let Some(path) = item_path(item_id) else {
         return;
     };
 
     let new_hash = ContentHash::from_content(content.as_bytes());
 
-    // Check if this content already exists as a host-sourced variant
-    let existing_host = snap
-        .config
-        .as_ref()
-        .map(|c| {
-            c.files
-                .iter()
-                .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
-        })
-        .unwrap_or(false);
+    // Check if this content already exists as a host-sourced variant.
+    // Check the appropriate snapshot section based on the item kind.
+    let existing_host = match item_id {
+        ItemId::Config { .. } => snap
+            .config
+            .as_ref()
+            .map(|c| {
+                c.files
+                    .iter()
+                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+            })
+            .unwrap_or(false),
+        ItemId::DropIn { .. } => snap
+            .services
+            .as_ref()
+            .map(|s| {
+                s.drop_ins
+                    .iter()
+                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+            })
+            .unwrap_or(false),
+        ItemId::Quadlet { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| {
+                c.quadlet_units
+                    .iter()
+                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+            })
+            .unwrap_or(false),
+        // Compose: EditVariant is blocked at validation, so this branch
+        // should never be reached. Return false for safety.
+        _ => false,
+    };
 
     // Check if it already exists as a user variant
     let existing_user = state
@@ -111,7 +145,7 @@ pub fn apply_discard(
     item_id: &ItemId,
     variant: &ContentHash,
 ) {
-    let Some(path) = config_path(item_id) else {
+    let Some(path) = item_path(item_id) else {
         return;
     };
 
@@ -144,32 +178,85 @@ pub fn validate_select(
     item_id: &ItemId,
     target: &ContentHash,
 ) -> Result<(), RefineError> {
-    let Some(path) = config_path(item_id) else {
+    let Some(path) = item_path(item_id) else {
         return Err(RefineError::BadRequest(
-            "SelectVariant only supported for Config items".into(),
+            "SelectVariant only supported for Config/DropIn/Quadlet/Compose items".into(),
         ));
     };
 
-    // Check path exists in snapshot
-    let path_exists = snap
-        .config
-        .as_ref()
-        .map(|c| c.files.iter().any(|e| e.path == path))
-        .unwrap_or(false);
+    // Check path exists in the appropriate snapshot section
+    let path_exists = match item_id {
+        ItemId::Config { .. } => snap
+            .config
+            .as_ref()
+            .map(|c| c.files.iter().any(|e| e.path == path))
+            .unwrap_or(false),
+        ItemId::DropIn { .. } => snap
+            .services
+            .as_ref()
+            .map(|s| s.drop_ins.iter().any(|e| e.path == path))
+            .unwrap_or(false),
+        ItemId::Quadlet { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| c.quadlet_units.iter().any(|e| e.path == path))
+            .unwrap_or(false),
+        ItemId::Compose { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| c.compose_files.iter().any(|e| e.path == path))
+            .unwrap_or(false),
+        _ => false,
+    };
     if !path_exists {
         return Err(RefineError::UnknownTarget(path.to_string()));
     }
 
     // Check target hash exists (host-sourced or user-created)
-    let hash_in_snap = snap
-        .config
-        .as_ref()
-        .map(|c| {
-            c.files.iter().any(|e| {
-                e.path == path && ContentHash::from_content(e.content.as_bytes()) == *target
+    let hash_in_snap = match item_id {
+        ItemId::Config { .. } => snap
+            .config
+            .as_ref()
+            .map(|c| {
+                c.files.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *target
+                })
             })
-        })
-        .unwrap_or(false);
+            .unwrap_or(false),
+        ItemId::DropIn { .. } => snap
+            .services
+            .as_ref()
+            .map(|s| {
+                s.drop_ins.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *target
+                })
+            })
+            .unwrap_or(false),
+        ItemId::Quadlet { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| {
+                c.quadlet_units.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *target
+                })
+            })
+            .unwrap_or(false),
+        ItemId::Compose { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| {
+                c.compose_files.iter().any(|e| {
+                    e.path == path
+                        && ContentHash::from_content(
+                            serde_json::to_string(&e.images)
+                                .unwrap_or_default()
+                                .as_bytes(),
+                        ) == *target
+                })
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
 
     let hash_in_user = state
         .user_variants
@@ -196,15 +283,24 @@ pub fn validate_select(
 }
 
 /// Validate that a DiscardVariant op targets a user-created variant.
+///
+/// Compose items cannot be discarded (structured carrier, no raw content).
 pub fn validate_discard(
     snap: &InspectionSnapshot,
     state: &VariantProjectionState,
     item_id: &ItemId,
     variant: &ContentHash,
 ) -> Result<(), RefineError> {
-    let Some(path) = config_path(item_id) else {
+    // Compose items do not support DiscardVariant
+    if matches!(item_id, ItemId::Compose { .. }) {
         return Err(RefineError::BadRequest(
-            "DiscardVariant only supported for Config items".into(),
+            "DiscardVariant not supported for Compose items (structured carrier)".into(),
+        ));
+    }
+
+    let Some(path) = item_path(item_id) else {
+        return Err(RefineError::BadRequest(
+            "DiscardVariant only supported for Config/DropIn/Quadlet items".into(),
         ));
     };
 
@@ -219,16 +315,37 @@ pub fn validate_discard(
         return Ok(());
     }
 
-    // Check if it exists as a host-sourced variant
-    let is_host = snap
-        .config
-        .as_ref()
-        .map(|c| {
-            c.files.iter().any(|e| {
-                e.path == path && ContentHash::from_content(e.content.as_bytes()) == *variant
+    // Check if it exists as a host-sourced variant in the appropriate section
+    let is_host = match item_id {
+        ItemId::Config { .. } => snap
+            .config
+            .as_ref()
+            .map(|c| {
+                c.files.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *variant
+                })
             })
-        })
-        .unwrap_or(false);
+            .unwrap_or(false),
+        ItemId::DropIn { .. } => snap
+            .services
+            .as_ref()
+            .map(|s| {
+                s.drop_ins.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *variant
+                })
+            })
+            .unwrap_or(false),
+        ItemId::Quadlet { .. } => snap
+            .containers
+            .as_ref()
+            .map(|c| {
+                c.quadlet_units.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == *variant
+                })
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
 
     if is_host {
         return Err(RefineError::BadRequest(format!(
@@ -245,18 +362,15 @@ pub fn validate_discard(
     )))
 }
 
-/// Materialize the projection state into the snapshot's config section.
+/// Materialize the projection state into the snapshot.
 ///
-/// This is called after all ops have been replayed. It:
-/// 1. Adds user-created variants as new ConfigFileEntry items
-/// 2. Removes discarded variants
+/// This is called after all ops have been replayed. It operates on
+/// Config, DropIn, Quadlet, and Compose sections:
+/// 1. Adds user-created variants as new entries (Config/DropIn/Quadlet only)
+/// 2. Removes discarded variants (Config/DropIn/Quadlet only)
 /// 3. Applies variant selection overrides
 /// 4. Derives VariantSelection (Only when single, Selected/Alternative when multiple)
 pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjectionState) {
-    let Some(ref mut config) = snap.config else {
-        return;
-    };
-
     // Collect all paths that have any variant state
     let mut affected_paths: HashSet<String> = HashSet::new();
     affected_paths.extend(state.user_variants.keys().cloned());
@@ -267,12 +381,37 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
         return;
     }
 
+    // --- Config section ---
+    materialize_config_variants(snap, state, &affected_paths);
+
+    // --- DropIn section ---
+    materialize_dropin_variants(snap, state, &affected_paths);
+
+    // --- Quadlet section ---
+    materialize_quadlet_variants(snap, state, &affected_paths);
+
+    // --- Compose section (select-only, no user variants or discards) ---
+    materialize_compose_variants(snap, state, &affected_paths);
+}
+
+/// Materialize variant state for the config section.
+fn materialize_config_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    let Some(ref mut config) = snap.config else {
+        return;
+    };
+
     // Add user-created variants as new entries
     for (path, user_map) in &state.user_variants {
-        // Find a template entry for this path to clone metadata from
         let template = config.files.iter().find(|e| e.path == *path).cloned();
+        // Only add if this path is actually a config path (template exists)
+        if template.is_none() && !config.files.iter().any(|e| e.path == *path) {
+            continue;
+        }
         for (hash, content) in user_map {
-            // Skip if this hash is discarded
             if state
                 .discarded
                 .get(path)
@@ -281,7 +420,6 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
             {
                 continue;
             }
-            // Don't add if it already exists in files (shouldn't happen, but safety)
             let already_exists = config.files.iter().any(|e| {
                 e.path == *path && ContentHash::from_content(e.content.as_bytes()) == *hash
             });
@@ -294,8 +432,8 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
                 ..Default::default()
             });
             entry.content = content.clone();
-            entry.fleet = None; // user-created, no fleet provenance
-            entry.variant_selection = VariantSelection::Alternative; // will be fixed below
+            entry.fleet = None;
+            entry.variant_selection = VariantSelection::Alternative;
             config.files.push(entry);
         }
     }
@@ -311,8 +449,8 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
         });
     }
 
-    // Apply selection and derive VariantSelection for all affected paths
-    for path in &affected_paths {
+    // Apply selection and derive VariantSelection
+    for path in affected_paths {
         let variants: Vec<usize> = config
             .files
             .iter()
@@ -326,14 +464,11 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
         }
 
         if variants.len() == 1 {
-            // Single variant: always Only
             config.files[variants[0]].variant_selection = VariantSelection::Only;
             continue;
         }
 
-        // Multiple variants: determine which is Selected
         if let Some(selected_hash) = state.selected.get(path) {
-            // User explicitly selected one
             for &idx in &variants {
                 let entry_hash =
                     ContentHash::from_content(config.files[idx].content.as_bytes());
@@ -344,7 +479,233 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
                 }
             }
         }
-        // If no explicit selection, leave the original Selected/Alternative as-is
-        // (the snapshot already has this from the merger)
+    }
+}
+
+/// Materialize variant state for the drop-in section.
+fn materialize_dropin_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    let Some(ref mut services) = snap.services else {
+        return;
+    };
+
+    // Add user-created variants as new entries
+    for (path, user_map) in &state.user_variants {
+        let template = services.drop_ins.iter().find(|e| e.path == *path).cloned();
+        if template.is_none() {
+            continue; // This path isn't a drop-in
+        }
+        for (hash, content) in user_map {
+            if state
+                .discarded
+                .get(path)
+                .map(|d| d.contains(hash))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let already_exists = services.drop_ins.iter().any(|e| {
+                e.path == *path && ContentHash::from_content(e.content.as_bytes()) == *hash
+            });
+            if already_exists {
+                continue;
+            }
+            let mut entry = template.clone().unwrap_or_else(|| SystemdDropIn {
+                path: path.clone(),
+                include: true,
+                ..Default::default()
+            });
+            entry.content = content.clone();
+            entry.fleet = None;
+            entry.variant_selection = VariantSelection::Alternative;
+            services.drop_ins.push(entry);
+        }
+    }
+
+    // Remove discarded variants
+    for (path, disc_set) in &state.discarded {
+        services.drop_ins.retain(|e| {
+            if e.path != *path {
+                return true;
+            }
+            let hash = ContentHash::from_content(e.content.as_bytes());
+            !disc_set.contains(&hash)
+        });
+    }
+
+    // Apply selection and derive VariantSelection
+    for path in affected_paths {
+        let variants: Vec<usize> = services
+            .drop_ins
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.path == *path)
+            .map(|(i, _)| i)
+            .collect();
+
+        if variants.is_empty() {
+            continue;
+        }
+
+        if variants.len() == 1 {
+            services.drop_ins[variants[0]].variant_selection = VariantSelection::Only;
+            continue;
+        }
+
+        if let Some(selected_hash) = state.selected.get(path) {
+            for &idx in &variants {
+                let entry_hash =
+                    ContentHash::from_content(services.drop_ins[idx].content.as_bytes());
+                if entry_hash == *selected_hash {
+                    services.drop_ins[idx].variant_selection = VariantSelection::Selected;
+                } else {
+                    services.drop_ins[idx].variant_selection = VariantSelection::Alternative;
+                }
+            }
+        }
+    }
+}
+
+/// Materialize variant state for the quadlet section.
+fn materialize_quadlet_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    let Some(ref mut containers) = snap.containers else {
+        return;
+    };
+
+    // Add user-created variants as new entries
+    for (path, user_map) in &state.user_variants {
+        let template = containers
+            .quadlet_units
+            .iter()
+            .find(|e| e.path == *path)
+            .cloned();
+        if template.is_none() {
+            continue; // This path isn't a quadlet
+        }
+        for (hash, content) in user_map {
+            if state
+                .discarded
+                .get(path)
+                .map(|d| d.contains(hash))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let already_exists = containers.quadlet_units.iter().any(|e| {
+                e.path == *path && ContentHash::from_content(e.content.as_bytes()) == *hash
+            });
+            if already_exists {
+                continue;
+            }
+            let mut entry = template.clone().unwrap_or_else(|| QuadletUnit {
+                path: path.clone(),
+                include: true,
+                ..Default::default()
+            });
+            entry.content = content.clone();
+            entry.fleet = None;
+            entry.variant_selection = VariantSelection::Alternative;
+            containers.quadlet_units.push(entry);
+        }
+    }
+
+    // Remove discarded variants
+    for (path, disc_set) in &state.discarded {
+        containers.quadlet_units.retain(|e| {
+            if e.path != *path {
+                return true;
+            }
+            let hash = ContentHash::from_content(e.content.as_bytes());
+            !disc_set.contains(&hash)
+        });
+    }
+
+    // Apply selection and derive VariantSelection
+    for path in affected_paths {
+        let variants: Vec<usize> = containers
+            .quadlet_units
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.path == *path)
+            .map(|(i, _)| i)
+            .collect();
+
+        if variants.is_empty() {
+            continue;
+        }
+
+        if variants.len() == 1 {
+            containers.quadlet_units[variants[0]].variant_selection = VariantSelection::Only;
+            continue;
+        }
+
+        if let Some(selected_hash) = state.selected.get(path) {
+            for &idx in &variants {
+                let entry_hash =
+                    ContentHash::from_content(containers.quadlet_units[idx].content.as_bytes());
+                if entry_hash == *selected_hash {
+                    containers.quadlet_units[idx].variant_selection = VariantSelection::Selected;
+                } else {
+                    containers.quadlet_units[idx].variant_selection =
+                        VariantSelection::Alternative;
+                }
+            }
+        }
+    }
+}
+
+/// Materialize variant state for the compose section (select-only).
+///
+/// Compose files are structured carriers — no user variants, no discards.
+/// Only applies selection flags based on `state.selected`.
+fn materialize_compose_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    let Some(ref mut containers) = snap.containers else {
+        return;
+    };
+
+    for path in affected_paths {
+        let variants: Vec<usize> = containers
+            .compose_files
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.path == *path)
+            .map(|(i, _)| i)
+            .collect();
+
+        if variants.is_empty() {
+            continue;
+        }
+
+        if variants.len() == 1 {
+            containers.compose_files[variants[0]].variant_selection = VariantSelection::Only;
+            continue;
+        }
+
+        if let Some(selected_hash) = state.selected.get(path) {
+            for &idx in &variants {
+                let entry_hash = ContentHash::from_content(
+                    serde_json::to_string(&containers.compose_files[idx].images)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                );
+                if entry_hash == *selected_hash {
+                    containers.compose_files[idx].variant_selection = VariantSelection::Selected;
+                } else {
+                    containers.compose_files[idx].variant_selection =
+                        VariantSelection::Alternative;
+                }
+            }
+        }
     }
 }

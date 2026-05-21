@@ -2,9 +2,11 @@ use std::collections::BTreeSet;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::fleet::{FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::{render_refine_export, RefineSession};
 
 /// Build a single-host snapshot (no fleet_meta) with one config file.
@@ -283,5 +285,163 @@ fn fleet_export_via_session_export_tarball() {
     assert!(
         files.iter().any(|f| f.starts_with("fleet/variants/")),
         "session export_tarball must produce fleet/variants/ for fleet snapshots"
+    );
+}
+
+// ===========================================================================
+// DropIn/Quadlet export tests
+// ===========================================================================
+
+/// Build a fleet snapshot with an Alternative drop-in variant.
+fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
+    let mut snap = single_host_snapshot();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test-fleet".into(),
+        host_count: 5,
+        hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: Default::default(),
+    });
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![
+            SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+                content: "[Service]\nTimeoutStartSec=90".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 5,
+                    hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                }),
+            },
+            SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+                content: "[Service]\nTimeoutStartSec=120".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 5,
+                    hosts: vec!["host-3".into(), "host-4".into()],
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+    snap
+}
+
+/// Build a fleet snapshot with an Alternative quadlet variant.
+fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
+    let mut snap = single_host_snapshot();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test-fleet".into(),
+        host_count: 5,
+        hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: Default::default(),
+    });
+    snap.containers = Some(ContainerSection {
+        quadlet_units: vec![
+            QuadletUnit {
+                path: "/etc/containers/systemd/app.container".into(),
+                name: "app.container".into(),
+                content: "[Container]\nImage=quay.io/app:v1".into(),
+                image: "quay.io/app:v1".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 5,
+                    hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                }),
+                ..Default::default()
+            },
+            QuadletUnit {
+                path: "/etc/containers/systemd/app.container".into(),
+                name: "app.container".into(),
+                content: "[Container]\nImage=quay.io/app:v2".into(),
+                image: "quay.io/app:v2".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 5,
+                    hosts: vec!["host-3".into(), "host-4".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    snap
+}
+
+#[test]
+fn export_includes_dropin_alternative_variants() {
+    let snap = fleet_snapshot_with_dropin_variants();
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+
+    render_refine_export(&snap, &tarball_path).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
+
+    // Should have a variant file for the drop-in Alternative
+    let dropin_variants: Vec<_> = variant_files
+        .iter()
+        .filter(|f| f.contains("_etc_systemd_system_httpd.service.d_override.conf"))
+        .collect();
+    assert!(
+        !dropin_variants.is_empty(),
+        "expected variant file for drop-in Alternative, got: {variant_files:?}"
+    );
+
+    // Verify content
+    let content = tarball_read_file(&tarball_path, dropin_variants[0]).unwrap();
+    assert_eq!(
+        content, "[Service]\nTimeoutStartSec=120",
+        "drop-in variant file must contain the Alternative content"
+    );
+}
+
+#[test]
+fn export_includes_quadlet_alternative_variants() {
+    let snap = fleet_snapshot_with_quadlet_variants();
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+
+    render_refine_export(&snap, &tarball_path).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
+
+    // Should have a variant file for the quadlet Alternative
+    let quadlet_variants: Vec<_> = variant_files
+        .iter()
+        .filter(|f| f.contains("_etc_containers_systemd_app.container"))
+        .collect();
+    assert!(
+        !quadlet_variants.is_empty(),
+        "expected variant file for quadlet Alternative, got: {variant_files:?}"
+    );
+
+    // Verify content
+    let content = tarball_read_file(&tarball_path, quadlet_variants[0]).unwrap();
+    assert_eq!(
+        content, "[Container]\nImage=quay.io/app:v2",
+        "quadlet variant file must contain the Alternative content"
     );
 }

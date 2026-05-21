@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+use inspectah_core::types::containers::{ComposeFile, ComposeService, ContainerSection, QuadletUnit};
 use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
@@ -242,26 +244,19 @@ fn edit_variant_converges_with_existing_content() {
 }
 
 #[test]
-fn edit_variant_based_on_nonexistent_hash_still_works() {
+fn edit_variant_based_on_nonexistent_hash_rejected() {
     let path = "/etc/test.conf";
     let snap = make_variant_snapshot(path, "aaa", 3, "bbb", 2);
     let mut session = RefineSession::new(snap);
 
     let bogus_hash = ContentHash::new("f".repeat(64)).unwrap();
-    // based_on pointing to a non-existent hash should be handled gracefully:
-    // the edit still creates a new variant, based_on is just metadata
-    session
-        .apply(RefinementOp::EditVariant {
-            item_id: ItemId::Config { path: path.into() },
-            content: "new-content".into(),
-            based_on: Some(bogus_hash),
-        })
-        .unwrap();
-
-    let proj = session.snapshot_projected();
-    let variants = variants_for_path(&proj, path);
-    assert_eq!(variants.len(), 3);
-    assert!(variants.iter().any(|v| v.content == "new-content"));
+    // based_on pointing to a non-existent hash should be rejected
+    let result = session.apply(RefinementOp::EditVariant {
+        item_id: ItemId::Config { path: path.into() },
+        content: "new-content".into(),
+        based_on: Some(bogus_hash),
+    });
+    assert!(result.is_err(), "EditVariant with bogus based_on hash must be rejected");
 }
 
 #[test]
@@ -594,4 +589,462 @@ fn discard_variant_unknown_hash_fails() {
         variant: bogus,
     });
     assert!(result.is_err(), "discard with unknown hash should fail");
+}
+
+// ===========================================================================
+// DropIn/Quadlet/Compose helper functions
+// ===========================================================================
+
+/// Build a fleet snapshot with two DropIn variants for testing.
+fn make_dropin_variant_snapshot(
+    path: &str,
+    content_a: &str,
+    count_a: i32,
+    content_b: &str,
+    count_b: i32,
+) -> InspectionSnapshot {
+    let host_count = (count_a + count_b) as usize;
+    let mut snap = InspectionSnapshot::default();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test".into(),
+        host_count,
+        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![
+            SystemdDropIn {
+                unit: "test.service".into(),
+                path: path.into(),
+                content: content_a.into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: count_a,
+                    total: host_count as i32,
+                    hosts: (0..count_a as usize)
+                        .map(|i| format!("host-{i}"))
+                        .collect(),
+                }),
+            },
+            SystemdDropIn {
+                unit: "test.service".into(),
+                path: path.into(),
+                content: content_b.into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: count_b,
+                    total: host_count as i32,
+                    hosts: (count_a as usize..host_count)
+                        .map(|i| format!("host-{i}"))
+                        .collect(),
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+    snap
+}
+
+/// Build a fleet snapshot with two Quadlet variants for testing.
+fn make_quadlet_variant_snapshot(
+    path: &str,
+    content_a: &str,
+    count_a: i32,
+    content_b: &str,
+    count_b: i32,
+) -> InspectionSnapshot {
+    let host_count = (count_a + count_b) as usize;
+    let mut snap = InspectionSnapshot::default();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test".into(),
+        host_count,
+        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.containers = Some(ContainerSection {
+        quadlet_units: vec![
+            QuadletUnit {
+                path: path.into(),
+                name: "test.container".into(),
+                content: content_a.into(),
+                image: "quay.io/test:latest".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: count_a,
+                    total: host_count as i32,
+                    hosts: (0..count_a as usize)
+                        .map(|i| format!("host-{i}"))
+                        .collect(),
+                }),
+                ..Default::default()
+            },
+            QuadletUnit {
+                path: path.into(),
+                name: "test.container".into(),
+                content: content_b.into(),
+                image: "quay.io/test:latest".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: count_b,
+                    total: host_count as i32,
+                    hosts: (count_a as usize..host_count)
+                        .map(|i| format!("host-{i}"))
+                        .collect(),
+                }),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    snap
+}
+
+/// Build a fleet snapshot with two Compose variants (different images lists).
+fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
+    let host_count = 5;
+    let mut snap = InspectionSnapshot::default();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test".into(),
+        host_count,
+        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.containers = Some(ContainerSection {
+        compose_files: vec![
+            ComposeFile {
+                path: path.into(),
+                images: vec![ComposeService {
+                    service: "web".into(),
+                    image: "nginx:1.24".into(),
+                }],
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: host_count as i32,
+                    hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                }),
+            },
+            ComposeFile {
+                path: path.into(),
+                images: vec![ComposeService {
+                    service: "web".into(),
+                    image: "nginx:1.25".into(),
+                }],
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: host_count as i32,
+                    hosts: vec!["host-3".into(), "host-4".into()],
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+    snap
+}
+
+/// Helper to find all DropIn entries for a given path in a projected snapshot.
+fn dropins_for_path(
+    snap: &InspectionSnapshot,
+    path: &str,
+) -> Vec<SystemdDropIn> {
+    snap.services
+        .as_ref()
+        .map(|s| {
+            s.drop_ins
+                .iter()
+                .filter(|e| e.path == path)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Helper to find all Quadlet entries for a given path in a projected snapshot.
+fn quadlets_for_path(
+    snap: &InspectionSnapshot,
+    path: &str,
+) -> Vec<QuadletUnit> {
+    snap.containers
+        .as_ref()
+        .map(|c| {
+            c.quadlet_units
+                .iter()
+                .filter(|e| e.path == path)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Helper to find all Compose entries for a given path in a projected snapshot.
+fn compose_for_path(
+    snap: &InspectionSnapshot,
+    path: &str,
+) -> Vec<ComposeFile> {
+    snap.containers
+        .as_ref()
+        .map(|c| {
+            c.compose_files
+                .iter()
+                .filter(|e| e.path == path)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// ===========================================================================
+// DropIn variant tests
+// ===========================================================================
+
+#[test]
+fn select_variant_dropin_swaps_selection() {
+    let path = "/etc/systemd/system/test.service.d/override.conf";
+    let content_a = "[Service]\nTimeoutStartSec=90";
+    let content_b = "[Service]\nTimeoutStartSec=120";
+
+    let snap = make_dropin_variant_snapshot(path, content_a, 3, content_b, 2);
+    let mut session = RefineSession::new(snap);
+
+    // Before: content_a is Selected
+    let proj = session.snapshot_projected();
+    let variants = dropins_for_path(&proj, path);
+    assert_eq!(variants.len(), 2);
+    assert_eq!(
+        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        VariantSelection::Selected,
+    );
+
+    // Select content_b
+    let hash_b = ContentHash::from_content(content_b.as_bytes());
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::DropIn { path: path.into() },
+            target: hash_b,
+        })
+        .unwrap();
+
+    // After: content_b is Selected
+    let proj = session.snapshot_projected();
+    let variants = dropins_for_path(&proj, path);
+    assert_eq!(variants.len(), 2);
+    assert_eq!(
+        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        VariantSelection::Selected,
+    );
+    assert_eq!(
+        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        VariantSelection::Alternative,
+    );
+}
+
+#[test]
+fn edit_variant_dropin_creates_user_variant() {
+    let path = "/etc/systemd/system/test.service.d/override.conf";
+    let snap = make_dropin_variant_snapshot(path, "original-a", 3, "original-b", 2);
+    let mut session = RefineSession::new(snap);
+
+    let new_content = "[Service]\nTimeoutStartSec=300";
+    session
+        .apply(RefinementOp::EditVariant {
+            item_id: ItemId::DropIn { path: path.into() },
+            content: new_content.into(),
+            based_on: None,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    let variants = dropins_for_path(&proj, path);
+    assert_eq!(variants.len(), 3, "edit should add a new drop-in variant");
+    let new_variant = variants.iter().find(|v| v.content == new_content).unwrap();
+    assert_eq!(new_variant.variant_selection, VariantSelection::Selected);
+}
+
+#[test]
+fn discard_variant_dropin_removes_user_variant() {
+    let path = "/etc/systemd/system/test.service.d/override.conf";
+    let snap = make_dropin_variant_snapshot(path, "host-a", 3, "host-b", 2);
+    let mut session = RefineSession::new(snap);
+
+    // Create a user variant
+    session
+        .apply(RefinementOp::EditVariant {
+            item_id: ItemId::DropIn { path: path.into() },
+            content: "user-dropin".into(),
+            based_on: None,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    assert_eq!(dropins_for_path(&proj, path).len(), 3);
+
+    // Discard the user variant
+    let user_hash = ContentHash::from_content(b"user-dropin");
+    session
+        .apply(RefinementOp::DiscardVariant {
+            item_id: ItemId::DropIn { path: path.into() },
+            variant: user_hash,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    let variants = dropins_for_path(&proj, path);
+    assert_eq!(variants.len(), 2, "discard should remove the user drop-in variant");
+    assert!(!variants.iter().any(|v| v.content == "user-dropin"));
+}
+
+// ===========================================================================
+// Quadlet variant tests
+// ===========================================================================
+
+#[test]
+fn select_variant_quadlet_works() {
+    let path = "/etc/containers/systemd/app.container";
+    let content_a = "[Container]\nImage=quay.io/app:v1";
+    let content_b = "[Container]\nImage=quay.io/app:v2";
+
+    let snap = make_quadlet_variant_snapshot(path, content_a, 3, content_b, 2);
+    let mut session = RefineSession::new(snap);
+
+    // Select content_b
+    let hash_b = ContentHash::from_content(content_b.as_bytes());
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Quadlet { path: path.into() },
+            target: hash_b,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    let variants = quadlets_for_path(&proj, path);
+    assert_eq!(variants.len(), 2);
+    assert_eq!(
+        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        VariantSelection::Selected,
+    );
+    assert_eq!(
+        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        VariantSelection::Alternative,
+    );
+}
+
+#[test]
+fn edit_variant_quadlet_works() {
+    let path = "/etc/containers/systemd/app.container";
+    let snap = make_quadlet_variant_snapshot(path, "original-a", 3, "original-b", 2);
+    let mut session = RefineSession::new(snap);
+
+    let new_content = "[Container]\nImage=quay.io/app:v3";
+    session
+        .apply(RefinementOp::EditVariant {
+            item_id: ItemId::Quadlet { path: path.into() },
+            content: new_content.into(),
+            based_on: None,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    let variants = quadlets_for_path(&proj, path);
+    assert_eq!(variants.len(), 3, "edit should add a new quadlet variant");
+    let new_variant = variants.iter().find(|v| v.content == new_content).unwrap();
+    assert_eq!(new_variant.variant_selection, VariantSelection::Selected);
+}
+
+// ===========================================================================
+// Compose variant tests
+// ===========================================================================
+
+#[test]
+fn select_variant_compose_works() {
+    let path = "/opt/app/docker-compose.yml";
+    let snap = make_compose_variant_snapshot(path);
+    let mut session = RefineSession::new(snap);
+
+    // Compute hash of the Alternative variant (nginx:1.25)
+    let alt_images = vec![ComposeService {
+        service: "web".into(),
+        image: "nginx:1.25".into(),
+    }];
+    let hash_b = ContentHash::from_content(
+        serde_json::to_string(&alt_images).unwrap().as_bytes(),
+    );
+
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Compose { path: path.into() },
+            target: hash_b,
+        })
+        .unwrap();
+
+    let proj = session.snapshot_projected();
+    let variants = compose_for_path(&proj, path);
+    assert_eq!(variants.len(), 2);
+    // The nginx:1.25 variant should now be Selected
+    assert_eq!(
+        variants
+            .iter()
+            .find(|v| v.images[0].image == "nginx:1.25")
+            .unwrap()
+            .variant_selection,
+        VariantSelection::Selected,
+    );
+    assert_eq!(
+        variants
+            .iter()
+            .find(|v| v.images[0].image == "nginx:1.24")
+            .unwrap()
+            .variant_selection,
+        VariantSelection::Alternative,
+    );
+}
+
+#[test]
+fn edit_variant_compose_rejected() {
+    let path = "/opt/app/docker-compose.yml";
+    let snap = make_compose_variant_snapshot(path);
+    let mut session = RefineSession::new(snap);
+
+    let result = session.apply(RefinementOp::EditVariant {
+        item_id: ItemId::Compose { path: path.into() },
+        content: "should-not-work".into(),
+        based_on: None,
+    });
+    assert!(result.is_err(), "EditVariant must be rejected for Compose items");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Compose"),
+        "error should mention Compose: {err_msg}"
+    );
+}
+
+#[test]
+fn discard_variant_compose_rejected() {
+    let path = "/opt/app/docker-compose.yml";
+    let snap = make_compose_variant_snapshot(path);
+    let mut session = RefineSession::new(snap);
+
+    let bogus = ContentHash::new("0".repeat(64)).unwrap();
+    let result = session.apply(RefinementOp::DiscardVariant {
+        item_id: ItemId::Compose { path: path.into() },
+        variant: bogus,
+    });
+    assert!(result.is_err(), "DiscardVariant must be rejected for Compose items");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Compose"),
+        "error should mention Compose: {err_msg}"
+    );
 }

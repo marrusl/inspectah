@@ -662,22 +662,72 @@ impl RefineSession {
                 let state = self.build_variant_state();
                 variant_ops::validate_select(&self.original, &state, item_id, target)?;
             }
-            RefinementOp::EditVariant { item_id, .. } => {
-                // EditVariant only needs the path to exist (or be creatable)
-                if let ItemId::Config { path } = item_id {
-                    let path_exists = self
-                        .original
-                        .config
-                        .as_ref()
-                        .map(|c| c.files.iter().any(|e| e.path == *path))
-                        .unwrap_or(false);
-                    if !path_exists {
-                        return Err(RefineError::UnknownTarget(path.clone()));
+            RefinementOp::EditVariant {
+                item_id,
+                content: _,
+                based_on,
+            } => {
+                match item_id {
+                    ItemId::Config { path } => {
+                        let found = self
+                            .original
+                            .config
+                            .as_ref()
+                            .map(|c| c.files.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
                     }
-                } else {
-                    return Err(RefineError::BadRequest(
-                        "EditVariant only supported for Config items".into(),
-                    ));
+                    ItemId::DropIn { path } => {
+                        let found = self
+                            .original
+                            .services
+                            .as_ref()
+                            .map(|s| s.drop_ins.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Quadlet { path } => {
+                        let found = self
+                            .original
+                            .containers
+                            .as_ref()
+                            .map(|c| c.quadlet_units.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Compose { .. } => {
+                        return Err(RefineError::BadRequest(
+                            "EditVariant not supported for Compose items (structured carrier)"
+                                .into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(RefineError::BadRequest(format!(
+                            "EditVariant not supported for {:?}",
+                            item_id
+                        )));
+                    }
+                }
+                // Validate based_on if provided
+                if let Some(hash) = based_on {
+                    let state = self.build_variant_state();
+                    let pool_has_hash = state
+                        .user_variants
+                        .values()
+                        .any(|m| m.contains_key(hash))
+                        || self.hash_in_any_variant_section(item_id, hash);
+                    if !pool_has_hash {
+                        return Err(RefineError::BadRequest(format!(
+                            "based_on hash {} not found in variant pool",
+                            hash.as_str()
+                        )));
+                    }
                 }
             }
             RefinementOp::DiscardVariant { item_id, variant } => {
@@ -702,6 +752,48 @@ impl RefineSession {
                 })
             })
             .unwrap_or(false)
+    }
+
+    /// Check whether a content hash exists in the host-sourced variant entries
+    /// for the appropriate snapshot section based on item_id kind.
+    fn hash_in_any_variant_section(
+        &self,
+        item_id: &ItemId,
+        hash: &crate::types::ContentHash,
+    ) -> bool {
+        match item_id {
+            ItemId::Config { .. } => self
+                .original
+                .config
+                .as_ref()
+                .map(|c| {
+                    c.files.iter().any(|e| {
+                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                    })
+                })
+                .unwrap_or(false),
+            ItemId::DropIn { .. } => self
+                .original
+                .services
+                .as_ref()
+                .map(|s| {
+                    s.drop_ins.iter().any(|e| {
+                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                    })
+                })
+                .unwrap_or(false),
+            ItemId::Quadlet { .. } => self
+                .original
+                .containers
+                .as_ref()
+                .map(|c| {
+                    c.quadlet_units.iter().any(|e| {
+                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                    })
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
     }
 
     /// Build the variant projection state by replaying ops up to the current cursor.
@@ -1390,33 +1482,75 @@ pub fn render_refine_export(
     }
 
     // 2d. Fleet variant materialization (fleet snapshots only).
-    //      For each config file with Alternative variants, write the
-    //      alternative content to fleet/variants/<escaped-path>/<hash>.content.
+    //      For each item with Alternative variants, write the alternative
+    //      content to fleet/variants/<escaped-path>/<hash>.content.
     //      Single-host snapshots (no fleet_meta) skip this entirely.
+    //      Covers: config files, drop-ins, quadlets. Compose is skipped
+    //      (no raw content to export).
     if snap.fleet_meta.is_some() {
-        if let Some(ref config) = snap.config {
-            use crate::types::ContentHash;
-            use inspectah_core::types::fleet::VariantSelection;
+        use crate::types::ContentHash;
+        use inspectah_core::types::fleet::VariantSelection;
 
+        let variants_dir = out.join("fleet").join("variants");
+
+        // Config file alternatives
+        if let Some(ref config) = snap.config {
             let alt_entries: Vec<_> = config
                 .files
                 .iter()
                 .filter(|f| f.variant_selection == VariantSelection::Alternative)
                 .collect();
 
-            if !alt_entries.is_empty() {
-                let variants_dir = out.join("fleet").join("variants");
-                for entry in &alt_entries {
-                    let escaped_path = entry.path.replace('/', "_");
-                    let dir = variants_dir.join(&escaped_path);
-                    std::fs::create_dir_all(&dir)?;
-                    let hash = ContentHash::from_content(entry.content.as_bytes());
-                    let hash_prefix = &hash.as_str()[..12];
-                    let file_name = format!("{hash_prefix}.content");
-                    std::fs::write(dir.join(file_name), &entry.content)?;
-                }
+            for entry in &alt_entries {
+                let escaped_path = entry.path.replace('/', "_");
+                let dir = variants_dir.join(&escaped_path);
+                std::fs::create_dir_all(&dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(dir.join(file_name), &entry.content)?;
             }
         }
+
+        // Drop-in alternatives
+        if let Some(ref services) = snap.services {
+            let alt_dropins: Vec<_> = services
+                .drop_ins
+                .iter()
+                .filter(|d| d.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            for entry in &alt_dropins {
+                let escaped_path = entry.path.replace('/', "_");
+                let dir = variants_dir.join(&escaped_path);
+                std::fs::create_dir_all(&dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(dir.join(file_name), &entry.content)?;
+            }
+        }
+
+        // Quadlet alternatives
+        if let Some(ref containers) = snap.containers {
+            let alt_quadlets: Vec<_> = containers
+                .quadlet_units
+                .iter()
+                .filter(|q| q.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            for entry in &alt_quadlets {
+                let escaped_path = entry.path.replace('/', "_");
+                let dir = variants_dir.join(&escaped_path);
+                std::fs::create_dir_all(&dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(dir.join(file_name), &entry.content)?;
+            }
+        }
+
+        // Compose: skip (structured carrier, no raw content to export)
     }
 
     // 3. Containerfile -- uses materialized_roots from the SAME config
