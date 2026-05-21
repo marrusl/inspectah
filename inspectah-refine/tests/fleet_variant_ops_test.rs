@@ -332,7 +332,7 @@ fn discard_user_created_variant() {
 }
 
 #[test]
-fn discard_selected_falls_back_to_most_prevalent() {
+fn discard_selected_falls_back_to_original_selection() {
     let path = "/etc/test.conf";
     let snap = make_variant_snapshot(path, "high-prev", 4, "low-prev", 1);
     let mut session = RefineSession::new(snap);

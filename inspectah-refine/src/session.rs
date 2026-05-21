@@ -468,6 +468,10 @@ impl RefineSession {
                     if !path_exists {
                         return Err(RefineError::UnknownTarget(path.clone()));
                     }
+                } else {
+                    return Err(RefineError::BadRequest(
+                        "EditVariant only supported for Config items".into(),
+                    ));
                 }
             }
             RefinementOp::DiscardVariant { item_id, variant } => {
@@ -560,7 +564,7 @@ impl RefineSession {
             }
             // User ops are never noop — always replay to ensure correctness
             RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
-            // Fleet ops are never noop in single-host context
+            // Fleet ops are never noop — projection-derived state makes idempotency detection fragile
             RefinementOp::SelectVariant { .. }
             | RefinementOp::EditVariant { .. }
             | RefinementOp::DiscardVariant { .. } => false,

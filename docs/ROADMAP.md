@@ -51,7 +51,9 @@
     ↓
 ✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
     ↓
-⏳ Fleet Spec 2: Refine (fleet sessions, prevalence UI, variant comparison)
+⏳ Fleet Phase 2a: Refine Engine (zone classification, variant ops, diff, auto-save)
+    ↓
+Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓
 Fleet Spec 3: Architect (cross-role hierarchy, possibly multi-phase)
     ↓
