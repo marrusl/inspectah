@@ -13,8 +13,9 @@ use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, FleetContext, ItemId, PackageTarget, RefineError,
-    RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance, UserPasswordOp,
+    AnnotatedOp, AttentionLevel, ChangesSummary, ContentHash, FleetContext, ItemId, PackageTarget,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
+    UserPasswordOp,
 };
 
 pub struct RefineSession {
@@ -425,18 +426,110 @@ impl RefineSession {
         let repos_excluded: Vec<String> =
             self.excluded_sections_at(&projected).into_iter().collect();
 
-        // Count active variant mutations (SelectVariant, EditVariant, DiscardVariant)
-        let variants_changed = self.ops[..self.cursor]
-            .iter()
-            .filter(|op| {
-                matches!(
-                    op,
-                    RefinementOp::SelectVariant { .. }
-                        | RefinementOp::EditVariant { .. }
-                        | RefinementOp::DiscardVariant { .. }
-                )
-            })
-            .count();
+        // Projection-based variant dirty check: compare projected variant_selection
+        // values against originals. A variant op followed by its reverse
+        // (e.g., select A→B then B→A) correctly reports variants_changed == 0.
+        let variants_changed = {
+            use inspectah_core::types::fleet::VariantSelection;
+            let mut count = 0usize;
+
+            // Config variants
+            if let (Some(orig_cfg), Some(proj_cfg)) =
+                (&self.original.config, &projected.config)
+            {
+                // Check for selection changes in original entries
+                for orig_entry in &orig_cfg.files {
+                    if let Some(proj_entry) = proj_cfg.files.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1; // entry removed (discarded)
+                    }
+                }
+                // Check for user-created variants (in projected but not original)
+                for proj_entry in &proj_cfg.files {
+                    let in_original = orig_cfg.files.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            // Drop-in variants
+            if let (Some(orig_svc), Some(proj_svc)) =
+                (&self.original.services, &projected.services)
+            {
+                for orig_entry in &orig_svc.drop_ins {
+                    if let Some(proj_entry) = proj_svc.drop_ins.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+                for proj_entry in &proj_svc.drop_ins {
+                    let in_original = orig_svc.drop_ins.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            // Quadlet variants
+            if let (Some(orig_ctr), Some(proj_ctr)) =
+                (&self.original.containers, &projected.containers)
+            {
+                for orig_entry in &orig_ctr.quadlet_units {
+                    if let Some(proj_entry) = proj_ctr.quadlet_units.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+                for proj_entry in &proj_ctr.quadlet_units {
+                    let in_original = orig_ctr.quadlet_units.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            count
+        };
 
         let is_dirty = !packages_included.is_empty()
             || !packages_excluded.is_empty()
@@ -1507,7 +1600,7 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_entries {
-                let escaped_path = entry.path.replace('/', "_");
+                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
                 let dir = variants_dir.join(&escaped_path);
                 std::fs::create_dir_all(&dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());
@@ -1526,7 +1619,7 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_dropins {
-                let escaped_path = entry.path.replace('/', "_");
+                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
                 let dir = variants_dir.join(&escaped_path);
                 std::fs::create_dir_all(&dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());
@@ -1545,7 +1638,7 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_quadlets {
-                let escaped_path = entry.path.replace('/', "_");
+                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
                 let dir = variants_dir.join(&escaped_path);
                 std::fs::create_dir_all(&dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());

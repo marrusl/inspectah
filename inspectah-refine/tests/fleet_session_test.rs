@@ -1,11 +1,11 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone};
+use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::ItemId;
+use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 use std::collections::BTreeMap;
 
 fn make_fleet_snapshot(host_count: usize) -> InspectionSnapshot {
@@ -207,4 +207,81 @@ fn single_host_session_has_no_fleet_attention() {
             "single-host session must NOT populate fleet_attention",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// R4a: Projection-based dirty state — net-zero variant ops should be clean
+// ---------------------------------------------------------------------------
+
+#[test]
+fn variants_changed_net_zero_is_clean() {
+    // Create a fleet snapshot with two config variants for the same path
+    let mut snap = make_fleet_snapshot(5);
+    let content_a = "ServerRoot /etc/httpd\nMaxClients 256";
+    let content_b = "ServerRoot /etc/httpd\nMaxClients 128";
+    let hash_a = ContentHash::from_content(content_a.as_bytes());
+    let hash_b = ContentHash::from_content(content_b.as_bytes());
+
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                content: content_a.into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: fleet_prevalence(3, 5),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                content: content_b.into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: fleet_prevalence(2, 5),
+                ..Default::default()
+            },
+        ],
+    });
+
+    let mut session = RefineSession::new(snap);
+
+    // Select variant B (Alternative → Selected)
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Config {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+            },
+            target: hash_b.clone(),
+        })
+        .unwrap();
+
+    // Now variants_changed should be 1 (we changed from original)
+    let changes = session.pending_changes();
+    assert!(
+        changes.variants_changed > 0,
+        "after selecting a different variant, variants_changed must be > 0"
+    );
+    assert!(changes.is_dirty, "session must be dirty after variant change");
+
+    // Select back to original (A)
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Config {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+            },
+            target: hash_a.clone(),
+        })
+        .unwrap();
+
+    // Net zero — back to original state
+    let changes = session.pending_changes();
+    assert_eq!(
+        changes.variants_changed, 0,
+        "select A→B then B→A should report variants_changed == 0, got {}",
+        changes.variants_changed,
+    );
+    assert!(
+        !changes.is_dirty,
+        "session must be clean after net-zero variant round-trip",
+    );
 }

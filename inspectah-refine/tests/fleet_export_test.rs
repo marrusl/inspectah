@@ -8,6 +8,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::{render_refine_export, RefineSession};
+use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
 /// Build a single-host snapshot (no fleet_meta) with one config file.
 fn single_host_snapshot() -> InspectionSnapshot {
@@ -162,7 +163,7 @@ fn fleet_export_creates_variant_files() {
     // Check escaped path directories exist for both config paths
     let httpd_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.contains("_etc_httpd_conf_httpd.conf"))
+        .filter(|f| f.contains("etc_httpd_conf_httpd.conf"))
         .collect();
     assert!(
         !httpd_variants.is_empty(),
@@ -171,7 +172,7 @@ fn fleet_export_creates_variant_files() {
 
     let sysctl_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.contains("_etc_sysctl.conf"))
+        .filter(|f| f.contains("etc_sysctl.conf"))
         .collect();
     assert!(
         !sysctl_variants.is_empty(),
@@ -192,7 +193,7 @@ fn fleet_variant_content_is_materialized() {
     // Find the httpd variant file and read its content
     let httpd_variant = files
         .iter()
-        .find(|f| f.starts_with("fleet/variants/_etc_httpd_conf_httpd.conf/"))
+        .find(|f| f.starts_with("fleet/variants/etc_httpd_conf_httpd.conf/"))
         .expect("httpd variant file must exist");
 
     let content = tarball_read_file(&tarball_path, httpd_variant)
@@ -205,7 +206,7 @@ fn fleet_variant_content_is_materialized() {
     // Verify the sysctl variant content
     let sysctl_variant = files
         .iter()
-        .find(|f| f.starts_with("fleet/variants/_etc_sysctl.conf/"))
+        .find(|f| f.starts_with("fleet/variants/etc_sysctl.conf/"))
         .expect("sysctl variant file must exist");
 
     let content = tarball_read_file(&tarball_path, sysctl_variant)
@@ -399,7 +400,7 @@ fn export_includes_dropin_alternative_variants() {
     // Should have a variant file for the drop-in Alternative
     let dropin_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.contains("_etc_systemd_system_httpd.service.d_override.conf"))
+        .filter(|f| f.contains("etc_systemd_system_httpd.service.d_override.conf"))
         .collect();
     assert!(
         !dropin_variants.is_empty(),
@@ -431,7 +432,7 @@ fn export_includes_quadlet_alternative_variants() {
     // Should have a variant file for the quadlet Alternative
     let quadlet_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.contains("_etc_containers_systemd_app.container"))
+        .filter(|f| f.contains("etc_containers_systemd_app.container"))
         .collect();
     assert!(
         !quadlet_variants.is_empty(),
@@ -443,5 +444,138 @@ fn export_includes_quadlet_alternative_variants() {
     assert_eq!(
         content, "[Container]\nImage=quay.io/app:v2",
         "quadlet variant file must contain the Alternative content"
+    );
+}
+
+// ===========================================================================
+// R4b: Export path layout fix — no leading underscores
+// ===========================================================================
+
+#[test]
+fn export_variant_paths_no_leading_underscore() {
+    let snap = fleet_snapshot_with_variants();
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+
+    render_refine_export(&snap, &tarball_path).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
+
+    assert!(
+        !variant_files.is_empty(),
+        "must have variant files to test"
+    );
+
+    for file in &variant_files {
+        // Extract the escaped-path directory name (between fleet/variants/ and the filename)
+        let after_prefix = file.strip_prefix("fleet/variants/").unwrap();
+        assert!(
+            !after_prefix.starts_with('_'),
+            "variant path must NOT start with underscore (leading / not escaped): {file}"
+        );
+    }
+}
+
+#[test]
+fn export_dropin_variant_paths_no_leading_underscore() {
+    let snap = fleet_snapshot_with_dropin_variants();
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+
+    render_refine_export(&snap, &tarball_path).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    for file in files.iter().filter(|f| f.starts_with("fleet/variants/")) {
+        let after_prefix = file.strip_prefix("fleet/variants/").unwrap();
+        assert!(
+            !after_prefix.starts_with('_'),
+            "drop-in variant path must NOT start with underscore: {file}"
+        );
+    }
+}
+
+#[test]
+fn export_quadlet_variant_paths_no_leading_underscore() {
+    let snap = fleet_snapshot_with_quadlet_variants();
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+
+    render_refine_export(&snap, &tarball_path).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    for file in files.iter().filter(|f| f.starts_with("fleet/variants/")) {
+        let after_prefix = file.strip_prefix("fleet/variants/").unwrap();
+        assert!(
+            !after_prefix.starts_with('_'),
+            "quadlet variant path must NOT start with underscore: {file}"
+        );
+    }
+}
+
+// ===========================================================================
+// R4d: Export-reimport round-trip test
+// ===========================================================================
+
+#[test]
+fn export_reimport_preserves_variant_state() {
+    let snap = fleet_snapshot_with_variants();
+
+    // Apply a SelectVariant op — switch /etc/httpd/conf/httpd.conf to Alternative
+    let alt_content = "ServerRoot /etc/httpd\nMaxClients 128";
+    let alt_hash = ContentHash::from_content(alt_content.as_bytes());
+
+    let mut session = RefineSession::new(snap);
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Config {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+            },
+            target: alt_hash,
+        })
+        .unwrap();
+
+    // Export
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    // Read the exported tarball and parse inspection-snapshot.json
+    let snap_json = tarball_read_file(&tarball_path, "inspection-snapshot.json")
+        .expect("exported tarball must contain inspection-snapshot.json");
+    let reimported: InspectionSnapshot =
+        serde_json::from_str(&snap_json).expect("inspection-snapshot.json must parse");
+
+    // Verify the reimported snapshot's config files have correct variant selections
+    let config = reimported
+        .config
+        .as_ref()
+        .expect("reimported snapshot must have config section");
+
+    let httpd_entries: Vec<_> = config
+        .files
+        .iter()
+        .filter(|e| e.path == "/etc/httpd/conf/httpd.conf")
+        .collect();
+
+    // After SelectVariant, the previously-Alternative entry should now be Selected
+    let selected_entries: Vec<_> = httpd_entries
+        .iter()
+        .filter(|e| e.variant_selection == VariantSelection::Selected)
+        .collect();
+    assert_eq!(
+        selected_entries.len(),
+        1,
+        "reimported snapshot must have exactly one Selected entry for httpd.conf, got {}",
+        selected_entries.len()
+    );
+    assert_eq!(
+        selected_entries[0].content, alt_content,
+        "the Selected entry must contain the Alternative content we selected"
     );
 }

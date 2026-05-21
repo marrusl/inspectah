@@ -426,3 +426,36 @@ fn fleet_refine_full_lifecycle() {
         .expect("beta variant must still exist");
     assert_eq!(beta.variant_selection, VariantSelection::Selected);
 }
+
+// ===========================================================================
+// R4c: variant_summary distribution must be sorted (BTreeMap)
+// ===========================================================================
+
+#[test]
+fn variant_summary_distribution_is_sorted() {
+    let snap = make_e2e_snapshot();
+    let session = RefineSession::new(snap);
+    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context())
+        .expect("fleet session must produce a summary");
+
+    // BTreeMap keys are always sorted — verify this contract
+    let keys: Vec<_> = summary.variant_distribution.keys().cloned().collect();
+    let mut sorted_keys = keys.clone();
+    sorted_keys.sort();
+    assert_eq!(
+        keys, sorted_keys,
+        "variant_distribution keys must be in sorted order"
+    );
+
+    // Also verify host_split uses usize (no negative values possible)
+    for (path, info) in &summary.variant_distribution {
+        for &count in &info.host_split {
+            // This is a compile-time check really — if host_split is Vec<usize>,
+            // negative values are impossible. But we verify the values are sensible.
+            assert!(
+                count <= 5,
+                "host count for {path} must be <= total hosts (5), got {count}"
+            );
+        }
+    }
+}
