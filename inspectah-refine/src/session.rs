@@ -1239,6 +1239,7 @@ pub fn render_refine_export(
     let allowed_top_level: std::collections::HashSet<&str> = [
         "config",
         "env-files",
+        "fleet",
         "schema",
         "users",
         "inspection-snapshot.json",
@@ -1260,6 +1261,36 @@ pub fn render_refine_export(
                 std::fs::remove_dir_all(entry.path())?;
             } else {
                 std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
+
+    // 2d. Fleet variant materialization (fleet snapshots only).
+    //      For each config file with Alternative variants, write the
+    //      alternative content to fleet/variants/<escaped-path>/<hash>.content.
+    //      Single-host snapshots (no fleet_meta) skip this entirely.
+    if snap.fleet_meta.is_some() {
+        if let Some(ref config) = snap.config {
+            use crate::types::ContentHash;
+            use inspectah_core::types::fleet::VariantSelection;
+
+            let alt_entries: Vec<_> = config
+                .files
+                .iter()
+                .filter(|f| f.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            if !alt_entries.is_empty() {
+                let variants_dir = out.join("fleet").join("variants");
+                for entry in &alt_entries {
+                    let escaped_path = entry.path.replace('/', "_");
+                    let dir = variants_dir.join(&escaped_path);
+                    std::fs::create_dir_all(&dir)?;
+                    let hash = ContentHash::from_content(entry.content.as_bytes());
+                    let hash_prefix = &hash.as_str()[..12];
+                    let file_name = format!("{hash_prefix}.content");
+                    std::fs::write(dir.join(file_name), &entry.content)?;
+                }
             }
         }
     }
