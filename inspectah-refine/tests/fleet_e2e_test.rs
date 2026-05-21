@@ -227,16 +227,15 @@ fn fleet_refine_full_lifecycle() {
     // -----------------------------------------------------------------------
     // 3. Check zone classification
     // -----------------------------------------------------------------------
-    // main.conf variant A (3/5 = 60%) → NearConsensus
     let main_id = ItemId::Config {
         path: "/etc/app/main.conf".into(),
     };
-    // Zone uses max prevalence across variants: max(3/5, 1/5, 1/5) = 3/5.
-    // 3*2=6 >= 5 → NearConsensus.
+    // Zone sums prevalence across variants: 3/5 + 1/5 + 1/5 = 5/5 → Consensus.
+    // The merger partitions hosts across variants, so summing gives item-level prevalence.
     assert_eq!(
         fleet_ctx.zones.get(&main_id),
-        Some(&PrevalenceZone::NearConsensus),
-        "main.conf zone should use max prevalence (3/5 = 60% >= 50%)",
+        Some(&PrevalenceZone::Consensus),
+        "main.conf zone should use sum prevalence (3+1+1=5/5 = Consensus)",
     );
 
     // logging.conf — single variant, 5/5 → Consensus

@@ -1031,6 +1031,99 @@ fn edit_variant_compose_rejected() {
 }
 
 #[test]
+fn edit_variant_based_on_hash_from_different_item_rejected() {
+    // Create snapshot with two config paths, each having variants.
+    // Hash from path A used as based_on for EditVariant on path B should fail.
+    let host_count = 5;
+    let mut snap = InspectionSnapshot::default();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test".into(),
+        host_count,
+        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+        merged_at: "2026-05-21T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![
+            // Path A
+            ConfigFileEntry {
+                path: "/etc/path-a.conf".into(),
+                content: "path-a-content".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: host_count as i32,
+                    hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                }),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/path-a.conf".into(),
+                content: "path-a-variant-2".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: host_count as i32,
+                    hosts: vec!["host-3".into(), "host-4".into()],
+                }),
+                ..Default::default()
+            },
+            // Path B
+            ConfigFileEntry {
+                path: "/etc/path-b.conf".into(),
+                content: "path-b-content".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 4,
+                    total: host_count as i32,
+                    hosts: vec![
+                        "host-0".into(),
+                        "host-1".into(),
+                        "host-2".into(),
+                        "host-3".into(),
+                    ],
+                }),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/path-b.conf".into(),
+                content: "path-b-variant-2".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 1,
+                    total: host_count as i32,
+                    hosts: vec!["host-4".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+    });
+
+    let mut session = RefineSession::new(snap);
+
+    // Get hash of path-a content
+    let hash_from_path_a = ContentHash::from_content(b"path-a-content");
+
+    // Try to use path-a's hash as based_on for an edit on path-b — should fail
+    let result = session.apply(RefinementOp::EditVariant {
+        item_id: ItemId::Config {
+            path: "/etc/path-b.conf".into(),
+        },
+        content: "new-content-for-b".into(),
+        based_on: Some(hash_from_path_a),
+    });
+    assert!(
+        result.is_err(),
+        "EditVariant with based_on hash from a different item's path must be rejected"
+    );
+}
+
+#[test]
 fn discard_variant_compose_rejected() {
     let path = "/opt/app/docker-compose.yml";
     let snap = make_compose_variant_snapshot(path);

@@ -62,10 +62,11 @@ fn fleet_prevalence(count: i32, total: i32) -> Option<FleetPrevalence> {
 }
 
 #[test]
-fn multi_variant_path_zone_uses_max_prevalence() {
+fn multi_variant_path_zone_uses_sum_prevalence() {
     // Three config variants for /etc/app/main.conf: 3/5, 1/5, 1/5.
-    // Zone should use max prevalence (3/5). 3*2=6 >= 5 → NearConsensus.
-    // If it used 1/5 (last-write-wins bug), 1*2=2 < 5 → Divergent.
+    // Zone should sum prevalence: 3+1+1=5 of 5 hosts = Consensus.
+    // The merger partitions hosts across variants — each host appears in
+    // exactly one variant, so summing gives item-level prevalence.
     let mut snap = make_fleet_snapshot(5);
     snap.config = Some(ConfigSection {
         files: vec![
@@ -97,8 +98,34 @@ fn multi_variant_path_zone_uses_max_prevalence() {
     };
     assert_eq!(
         ctx.zones.get(&item),
-        Some(&PrevalenceZone::NearConsensus),
-        "zone must use max prevalence (3/5), not last-write-wins",
+        Some(&PrevalenceZone::Consensus),
+        "zone must use sum prevalence (3+1+1=5/5), not max",
+    );
+}
+
+#[test]
+fn zone_for_partial_path_is_divergent() {
+    // A path present on only 2 of 5 hosts (one variant, count=2/total=5) → Divergent.
+    // Proves non-trivial classification still works with sum approach.
+    let mut snap = make_fleet_snapshot(5);
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/app/rare.conf".into(),
+            include: true,
+            fleet: fleet_prevalence(2, 5),
+            ..Default::default()
+        }],
+    });
+
+    let session = RefineSession::new(snap);
+    let ctx = session.fleet_context().unwrap();
+    let item = ItemId::Config {
+        path: "/etc/app/rare.conf".into(),
+    };
+    assert_eq!(
+        ctx.zones.get(&item),
+        Some(&PrevalenceZone::Divergent),
+        "path on 2/5 hosts must be Divergent (2*2=4 < 5)",
     );
 }
 

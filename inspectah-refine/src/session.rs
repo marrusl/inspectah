@@ -64,31 +64,32 @@ impl RefineSession {
             let zones_active = fleet_meta.host_count >= 3;
             let mut zones = HashMap::new();
 
-            // Populate zone map from config files.
-            // Group entries by path, take max prevalence for zone classification.
-            // Multiple entries sharing a path are variants — use the highest
-            // prevalence count to determine the zone for that path.
+            // Sum variant prevalence per path for item-level zone classification.
+            // The merger partitions hosts across variants — each host appears in
+            // exactly one variant, so summing counts gives item-level prevalence.
             if let Some(ref cfg) = snapshot.config {
-                let mut config_max: HashMap<&str, &inspectah_core::types::fleet::FleetPrevalence> =
-                    HashMap::new();
+                let mut path_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &cfg.files {
                     if let Some(ref prevalence) = entry.fleet {
-                        config_max
+                        path_sum
                             .entry(entry.path.as_str())
-                            .and_modify(|current| {
-                                if prevalence.count > current.count {
-                                    *current = prevalence;
-                                }
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
                             })
-                            .or_insert(prevalence);
+                            .or_insert((prevalence.count, prevalence.total));
                     }
                 }
-                for (path, prevalence) in &config_max {
+                for (path, (count, total)) in &path_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
                     zones.insert(
                         ItemId::Config {
                             path: path.to_string(),
                         },
-                        classify_zone(prevalence),
+                        classify_zone(&item_prev),
                     );
                 }
             }
@@ -108,54 +109,56 @@ impl RefineSession {
 
             // Zone classification for drop-ins (services section).
             if let Some(ref svc) = snapshot.services {
-                let mut dropin_max: HashMap<&str, &inspectah_core::types::fleet::FleetPrevalence> =
-                    HashMap::new();
+                let mut dropin_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &svc.drop_ins {
                     if let Some(ref prevalence) = entry.fleet {
-                        dropin_max
+                        dropin_sum
                             .entry(entry.path.as_str())
-                            .and_modify(|c| {
-                                if prevalence.count > c.count {
-                                    *c = prevalence;
-                                }
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
                             })
-                            .or_insert(prevalence);
+                            .or_insert((prevalence.count, prevalence.total));
                     }
                 }
-                for (path, prevalence) in &dropin_max {
+                for (path, (count, total)) in &dropin_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
                     zones.insert(
                         ItemId::DropIn {
                             path: path.to_string(),
                         },
-                        classify_zone(prevalence),
+                        classify_zone(&item_prev),
                     );
                 }
             }
 
             // Zone classification for quadlets (containers section).
             if let Some(ref containers) = snapshot.containers {
-                let mut quadlet_max: HashMap<
-                    &str,
-                    &inspectah_core::types::fleet::FleetPrevalence,
-                > = HashMap::new();
+                let mut quadlet_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &containers.quadlet_units {
                     if let Some(ref prevalence) = entry.fleet {
-                        quadlet_max
+                        quadlet_sum
                             .entry(entry.path.as_str())
-                            .and_modify(|c| {
-                                if prevalence.count > c.count {
-                                    *c = prevalence;
-                                }
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
                             })
-                            .or_insert(prevalence);
+                            .or_insert((prevalence.count, prevalence.total));
                     }
                 }
-                for (path, prevalence) in &quadlet_max {
+                for (path, (count, total)) in &quadlet_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
                     zones.insert(
                         ItemId::Quadlet {
                             path: path.to_string(),
                         },
-                        classify_zone(prevalence),
+                        classify_zone(&item_prev),
                     );
                 }
             }
@@ -812,15 +815,15 @@ impl RefineSession {
                         )));
                     }
                 }
-                // Validate based_on if provided
+                // Validate based_on if provided — scoped to the target item's path.
                 if let Some(hash) = based_on {
                     let state = self.build_variant_state();
-                    let pool_has_hash = state
-                        .user_variants
-                        .values()
-                        .any(|m| m.contains_key(hash))
-                        || self.hash_in_any_variant_section(item_id, hash);
-                    if !pool_has_hash {
+                    let path = variant_ops::item_path(item_id);
+                    let in_user = path
+                        .and_then(|p| state.user_variants.get(p).map(|m| m.contains_key(hash)))
+                        .unwrap_or(false);
+                    let in_host = self.hash_in_variant_section_for_item(item_id, hash);
+                    if !in_user && !in_host {
                         return Err(RefineError::BadRequest(format!(
                             "based_on hash {} not found in variant pool",
                             hash.as_str()
@@ -853,40 +856,47 @@ impl RefineSession {
     }
 
     /// Check whether a content hash exists in the host-sourced variant entries
-    /// for the appropriate snapshot section based on item_id kind.
-    fn hash_in_any_variant_section(
+    /// for the target item's path in the appropriate snapshot section.
+    /// Scoped to entries matching the target path — prevents cross-item leakage.
+    fn hash_in_variant_section_for_item(
         &self,
         item_id: &ItemId,
         hash: &crate::types::ContentHash,
     ) -> bool {
         match item_id {
-            ItemId::Config { .. } => self
+            ItemId::Config { path } => self
                 .original
                 .config
                 .as_ref()
                 .map(|c| {
                     c.files.iter().any(|e| {
-                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
                     })
                 })
                 .unwrap_or(false),
-            ItemId::DropIn { .. } => self
+            ItemId::DropIn { path } => self
                 .original
                 .services
                 .as_ref()
                 .map(|s| {
                     s.drop_ins.iter().any(|e| {
-                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
                     })
                 })
                 .unwrap_or(false),
-            ItemId::Quadlet { .. } => self
+            ItemId::Quadlet { path } => self
                 .original
                 .containers
                 .as_ref()
                 .map(|c| {
                     c.quadlet_units.iter().any(|e| {
-                        crate::types::ContentHash::from_content(e.content.as_bytes()) == *hash
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
                     })
                 })
                 .unwrap_or(false),

@@ -36,7 +36,7 @@ pub struct VariantProjectionState {
 ///
 /// Returns the path for Config, DropIn, Quadlet, and Compose items.
 /// Other item kinds do not participate in variant operations.
-fn item_path(item_id: &ItemId) -> Option<&str> {
+pub fn item_path(item_id: &ItemId) -> Option<&str> {
     match item_id {
         ItemId::Config { path } => Some(path.as_str()),
         ItemId::DropIn { path } => Some(path.as_str()),
