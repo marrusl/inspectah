@@ -232,6 +232,7 @@ pub struct ChangesSummary {
     pub configs_included: Vec<String>,
     pub configs_excluded: Vec<String>,
     pub repos_excluded: Vec<String>,
+    pub variants_changed: usize,
     pub is_dirty: bool,
 }
 

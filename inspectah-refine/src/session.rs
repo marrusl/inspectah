@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -30,6 +30,12 @@ pub struct RefineSession {
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
     /// Non-serialized — excluded from tarball export.
     viewed: HashSet<String>,
+    /// Path to the source tarball. When set, auto-save writes a session
+    /// sidecar file after every cursor-changing mutation.
+    tarball_path: Option<PathBuf>,
+    /// Set to true when auto-save encounters a permanent I/O failure
+    /// (EROFS, EACCES). Suppresses further save attempts for this session.
+    durability_degraded: bool,
 }
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
@@ -103,9 +109,121 @@ impl RefineSession {
             cached_view: None,
             generation: 0,
             viewed: HashSet::new(),
+            tarball_path: None,
+            durability_degraded: false,
         };
         session.recompute_view();
         session
+    }
+
+    /// Create a session from a snapshot with a known tarball path.
+    /// Enables auto-save: a session sidecar file is written after every
+    /// cursor-changing mutation (apply, undo, redo).
+    pub fn new_with_tarball(snapshot: InspectionSnapshot, tarball: PathBuf) -> Self {
+        let mut session = Self::new(snapshot);
+        session.tarball_path = Some(tarball);
+        session
+    }
+
+    /// Persist current session state to the sidecar file.
+    ///
+    /// No-op when `tarball_path` is `None` or durability has been degraded
+    /// by a prior permanent I/O error. Transient failures are logged but
+    /// do not degrade durability.
+    fn try_autosave(&mut self) {
+        let tarball = match &self.tarball_path {
+            Some(p) if !self.durability_degraded => p.clone(),
+            _ => return,
+        };
+
+        let tarball_hash = match crate::autosave::compute_tarball_hash(&tarball) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("autosave: failed to hash tarball: {e}");
+                return;
+            }
+        };
+
+        let state = crate::autosave::SessionState {
+            schema_version: 1,
+            tarball_path: tarball.clone(),
+            tarball_hash,
+            ops: self.ops.clone(),
+            cursor: self.cursor,
+            saved_at: {
+                let dur = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                format!("{}s", dur.as_secs())
+            },
+        };
+
+        if let Err(e) = crate::autosave::save_session(&state, &tarball) {
+            let is_permanent = matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            );
+            if is_permanent {
+                eprintln!("autosave: permanently degraded — {e}");
+                self.durability_degraded = true;
+            } else {
+                eprintln!("autosave: transient failure — {e}");
+            }
+        }
+    }
+
+    /// Attempt to resume a previous refine session from the sidecar file
+    /// next to the given tarball.
+    ///
+    /// Returns `Ok(None)` if no session file exists. Returns an error if
+    /// the session file is corrupt or the tarball cannot be loaded.
+    ///
+    /// On success, the returned session has all saved ops replayed up to
+    /// the persisted cursor position, with auto-save enabled.
+    pub fn resume_from(tarball: &Path) -> Result<Option<Self>, RefineError> {
+        let saved = match crate::autosave::load_session(tarball) {
+            Ok(Some(s)) => s,
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                return Err(RefineError::SnapshotLoad(format!(
+                    "failed to load session file: {e}"
+                )));
+            }
+        };
+
+        // Load a fresh session from the tarball (extract, validate, normalize).
+        // We use the public snapshot() accessor to get the normalized snapshot,
+        // then build a new session with tarball tracking enabled.
+        let fresh = crate::tarball::from_tarball(tarball)?;
+        let snapshot = fresh.snapshot().clone();
+
+        // Reconstruct with tarball path for auto-save
+        let mut session = Self::new_with_tarball(snapshot, tarball.to_path_buf());
+
+        // Replay saved ops up to cursor
+        for op in &saved.ops[..saved.cursor] {
+            if let Err(e) = session.apply(op.clone()) {
+                eprintln!("resume: skipping op that failed replay: {e}");
+            }
+        }
+
+        // Preserve redo history: ops beyond cursor are kept but inactive
+        if saved.cursor < saved.ops.len() {
+            // We need to store the full op list and reset cursor.
+            // apply() truncates at cursor, so we must restore manually.
+            session.ops = saved.ops;
+            session.cursor = saved.cursor;
+            session.cached_view = None;
+            session.recompute_view();
+        }
+
+        Ok(Some(session))
+    }
+
+    /// Enable auto-save for an existing session by setting the tarball path.
+    /// Called by the CLI after `from_tarball()` to wire up persistence.
+    pub fn set_tarball_path(&mut self, path: PathBuf) {
+        self.tarball_path = Some(path);
     }
 
     pub fn repo_index(&self) -> &RepoIndex {
@@ -143,6 +261,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -154,6 +273,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -165,6 +285,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -229,11 +350,25 @@ impl RefineSession {
         let repos_excluded: Vec<String> =
             self.excluded_sections_at(&projected).into_iter().collect();
 
+        // Count active variant mutations (SelectVariant, EditVariant, DiscardVariant)
+        let variants_changed = self.ops[..self.cursor]
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    RefinementOp::SelectVariant { .. }
+                        | RefinementOp::EditVariant { .. }
+                        | RefinementOp::DiscardVariant { .. }
+                )
+            })
+            .count();
+
         let is_dirty = !packages_included.is_empty()
             || !packages_excluded.is_empty()
             || !configs_included.is_empty()
             || !configs_excluded.is_empty()
-            || !repos_excluded.is_empty();
+            || !repos_excluded.is_empty()
+            || variants_changed > 0;
 
         ChangesSummary {
             packages_included,
@@ -241,6 +376,7 @@ impl RefineSession {
             configs_included,
             configs_excluded,
             repos_excluded,
+            variants_changed,
             is_dirty,
         }
     }
