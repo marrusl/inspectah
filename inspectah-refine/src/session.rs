@@ -64,15 +64,31 @@ impl RefineSession {
             let mut zones = HashMap::new();
 
             // Populate zone map from config files.
+            // Group entries by path, take max prevalence for zone classification.
+            // Multiple entries sharing a path are variants — use the highest
+            // prevalence count to determine the zone for that path.
             if let Some(ref cfg) = snapshot.config {
+                let mut config_max: HashMap<&str, &inspectah_core::types::fleet::FleetPrevalence> =
+                    HashMap::new();
                 for entry in &cfg.files {
                     if let Some(ref prevalence) = entry.fleet {
-                        let zone = classify_zone(prevalence);
-                        let item_id = ItemId::Config {
-                            path: entry.path.clone(),
-                        };
-                        zones.insert(item_id, zone);
+                        config_max
+                            .entry(entry.path.as_str())
+                            .and_modify(|current| {
+                                if prevalence.count > current.count {
+                                    *current = prevalence;
+                                }
+                            })
+                            .or_insert(prevalence);
                     }
+                }
+                for (path, prevalence) in &config_max {
+                    zones.insert(
+                        ItemId::Config {
+                            path: path.to_string(),
+                        },
+                        classify_zone(prevalence),
+                    );
                 }
             }
 
@@ -86,6 +102,60 @@ impl RefineSession {
                         };
                         zones.insert(item_id, zone);
                     }
+                }
+            }
+
+            // Zone classification for drop-ins (services section).
+            if let Some(ref svc) = snapshot.services {
+                let mut dropin_max: HashMap<&str, &inspectah_core::types::fleet::FleetPrevalence> =
+                    HashMap::new();
+                for entry in &svc.drop_ins {
+                    if let Some(ref prevalence) = entry.fleet {
+                        dropin_max
+                            .entry(entry.path.as_str())
+                            .and_modify(|c| {
+                                if prevalence.count > c.count {
+                                    *c = prevalence;
+                                }
+                            })
+                            .or_insert(prevalence);
+                    }
+                }
+                for (path, prevalence) in &dropin_max {
+                    zones.insert(
+                        ItemId::DropIn {
+                            path: path.to_string(),
+                        },
+                        classify_zone(prevalence),
+                    );
+                }
+            }
+
+            // Zone classification for quadlets (containers section).
+            if let Some(ref containers) = snapshot.containers {
+                let mut quadlet_max: HashMap<
+                    &str,
+                    &inspectah_core::types::fleet::FleetPrevalence,
+                > = HashMap::new();
+                for entry in &containers.quadlet_units {
+                    if let Some(ref prevalence) = entry.fleet {
+                        quadlet_max
+                            .entry(entry.path.as_str())
+                            .and_modify(|c| {
+                                if prevalence.count > c.count {
+                                    *c = prevalence;
+                                }
+                            })
+                            .or_insert(prevalence);
+                    }
+                }
+                for (path, prevalence) in &quadlet_max {
+                    zones.insert(
+                        ItemId::Quadlet {
+                            path: path.to_string(),
+                        },
+                        classify_zone(prevalence),
+                    );
                 }
             }
 
@@ -1012,8 +1082,62 @@ impl RefineSession {
 
     fn recompute_view(&mut self) {
         let projected = self.project_snapshot();
-        let all_packages = compute_package_attention(&projected);
-        let config_files = compute_config_attention(&projected);
+        let mut all_packages = compute_package_attention(&projected);
+        let mut config_files = compute_config_attention(&projected);
+
+        // Fleet attention scoring (when in fleet mode).
+        if let RefineMode::Fleet(ref ctx) = self.refine_mode {
+            for pkg in &mut all_packages {
+                let item_id = ItemId::Package {
+                    name_arch: format!("{}.{}", pkg.entry.name, pkg.entry.arch),
+                };
+                let attention_level = pkg
+                    .attention
+                    .first()
+                    .map(|t| t.level)
+                    .unwrap_or(AttentionLevel::Routine);
+                let prevalence = pkg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count as u32)
+                    .unwrap_or(0);
+                let score = crate::fleet::attention::score_fleet_attention(
+                    ctx,
+                    &item_id,
+                    attention_level,
+                    prevalence,
+                );
+                if let crate::types::AttentionScore::Fleet(fa) = score {
+                    pkg.fleet_attention = Some(fa);
+                }
+            }
+            for cfg in &mut config_files {
+                let item_id = ItemId::Config {
+                    path: cfg.entry.path.clone(),
+                };
+                let attention_level = cfg
+                    .attention
+                    .first()
+                    .map(|t| t.level)
+                    .unwrap_or(AttentionLevel::Routine);
+                let prevalence = cfg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count as u32)
+                    .unwrap_or(0);
+                let score = crate::fleet::attention::score_fleet_attention(
+                    ctx,
+                    &item_id,
+                    attention_level,
+                    prevalence,
+                );
+                if let crate::types::AttentionScore::Fleet(fa) = score {
+                    cfg.fleet_attention = Some(fa);
+                }
+            }
+        }
 
         // Build a set of packages that were normalized to include=false at
         // construction time (non-leaf Tier 2 dependencies). These are hidden

@@ -192,12 +192,16 @@ pub struct AttentionTag {
 pub struct RefinedPackage {
     pub entry: PackageEntry,
     pub attention: Vec<AttentionTag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_attention: Option<FleetAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedConfig {
     pub entry: ConfigFileEntry,
     pub attention: Vec<AttentionTag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_attention: Option<FleetAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,7 +271,7 @@ pub enum RefineMode {
 /// Fleet-aware attention score combining zone placement, attention level,
 /// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus),
 /// then attention (NeedsReview < Informational < Routine), then prevalence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FleetAttention {
     pub zone: PrevalenceZone,
     pub attention: AttentionLevel,

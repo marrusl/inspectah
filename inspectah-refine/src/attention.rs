@@ -92,6 +92,7 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                         reason: AttentionReason::PackageBaselineMatch,
                         detail: None,
                     }],
+                    fleet_attention: None,
                 };
             }
 
@@ -117,6 +118,7 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
             RefinedPackage {
                 entry: entry.clone(),
                 attention: tags,
+                fleet_attention: None,
             }
         })
         .collect()
@@ -278,6 +280,7 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
             RefinedConfig {
                 entry: entry.clone(),
                 attention: tags,
+                fleet_attention: None,
             }
         })
         .collect();

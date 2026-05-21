@@ -231,15 +231,12 @@ fn fleet_refine_full_lifecycle() {
     let main_id = ItemId::Config {
         path: "/etc/app/main.conf".into(),
     };
-    // The zone map has entries per config entry. The first entry for
-    // main.conf (variant A, 3/5) gets classified during session init.
-    let main_zone = fleet_ctx.zones.get(&main_id);
-    // main.conf has multiple entries mapped to the same ItemId — the last
-    // one written wins in the HashMap. With 3 entries at 3/5, 1/5, 1/5,
-    // the zone depends on which was inserted last.
-    assert!(
-        main_zone.is_some(),
-        "main.conf must have a zone classification",
+    // Zone uses max prevalence across variants: max(3/5, 1/5, 1/5) = 3/5.
+    // 3*2=6 >= 5 → NearConsensus.
+    assert_eq!(
+        fleet_ctx.zones.get(&main_id),
+        Some(&PrevalenceZone::NearConsensus),
+        "main.conf zone should use max prevalence (3/5 = 60% >= 50%)",
     );
 
     // logging.conf — single variant, 5/5 → Consensus

@@ -1,6 +1,11 @@
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::fleet::FleetSnapshotMeta;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone};
+use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::ItemId;
 use std::collections::BTreeMap;
 
 fn make_fleet_snapshot(host_count: usize) -> InspectionSnapshot {
@@ -42,4 +47,164 @@ fn fleet_of_three_has_zones_active() {
     let session = RefineSession::new(make_fleet_snapshot(3));
     let ctx = session.fleet_context().unwrap();
     assert!(ctx.zones_active, "fleet-of-3+ activates zones");
+}
+
+// ---------------------------------------------------------------------------
+// R1 fixup tests: multi-variant zone, drop-in/quadlet zones, fleet_attention
+// ---------------------------------------------------------------------------
+
+fn fleet_prevalence(count: i32, total: i32) -> Option<FleetPrevalence> {
+    Some(FleetPrevalence {
+        count,
+        total,
+        hosts: (0..count).map(|i| format!("host-{i}")).collect(),
+    })
+}
+
+#[test]
+fn multi_variant_path_zone_uses_max_prevalence() {
+    // Three config variants for /etc/app/main.conf: 3/5, 1/5, 1/5.
+    // Zone should use max prevalence (3/5). 3*2=6 >= 5 → NearConsensus.
+    // If it used 1/5 (last-write-wins bug), 1*2=2 < 5 → Divergent.
+    let mut snap = make_fleet_snapshot(5);
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/app/main.conf".into(),
+                include: true,
+                fleet: fleet_prevalence(3, 5),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/app/main.conf".into(),
+                include: true,
+                fleet: fleet_prevalence(1, 5),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/app/main.conf".into(),
+                include: true,
+                fleet: fleet_prevalence(1, 5),
+                ..Default::default()
+            },
+        ],
+    });
+
+    let session = RefineSession::new(snap);
+    let ctx = session.fleet_context().unwrap();
+    let item = ItemId::Config {
+        path: "/etc/app/main.conf".into(),
+    };
+    assert_eq!(
+        ctx.zones.get(&item),
+        Some(&PrevalenceZone::NearConsensus),
+        "zone must use max prevalence (3/5), not last-write-wins",
+    );
+}
+
+#[test]
+fn dropin_zone_classified_on_fleet_init() {
+    let mut snap = make_fleet_snapshot(5);
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![SystemdDropIn {
+            unit: "httpd.service".into(),
+            path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+            content: "test".into(),
+            include: true,
+            fleet: fleet_prevalence(4, 5),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let ctx = session.fleet_context().unwrap();
+    let item = ItemId::DropIn {
+        path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+    };
+    assert_eq!(
+        ctx.zones.get(&item),
+        Some(&PrevalenceZone::NearConsensus),
+        "drop-in must appear in zone map",
+    );
+}
+
+#[test]
+fn quadlet_zone_classified_on_fleet_init() {
+    let mut snap = make_fleet_snapshot(5);
+    snap.containers = Some(ContainerSection {
+        quadlet_units: vec![QuadletUnit {
+            path: "/etc/containers/systemd/myapp.container".into(),
+            name: "myapp".into(),
+            include: true,
+            fleet: fleet_prevalence(5, 5),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let ctx = session.fleet_context().unwrap();
+    let item = ItemId::Quadlet {
+        path: "/etc/containers/systemd/myapp.container".into(),
+    };
+    assert_eq!(
+        ctx.zones.get(&item),
+        Some(&PrevalenceZone::Consensus),
+        "quadlet must appear in zone map",
+    );
+}
+
+#[test]
+fn fleet_session_populates_fleet_attention_on_refined_package() {
+    let mut snap = make_fleet_snapshot(5);
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "rhel-9-appstream".into(),
+            include: true,
+            fleet: fleet_prevalence(3, 5),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    assert!(!view.packages.is_empty(), "must have packages");
+    let pkg = &view.packages[0];
+    assert!(
+        pkg.fleet_attention.is_some(),
+        "fleet session must populate fleet_attention on packages",
+    );
+    let fa = pkg.fleet_attention.unwrap();
+    assert_eq!(fa.prevalence, 3);
+}
+
+#[test]
+fn single_host_session_has_no_fleet_attention() {
+    let mut snap = InspectionSnapshot::default();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "rhel-9-appstream".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    assert!(!view.packages.is_empty(), "must have packages");
+    for pkg in &view.packages {
+        assert!(
+            pkg.fleet_attention.is_none(),
+            "single-host session must NOT populate fleet_attention",
+        );
+    }
 }
