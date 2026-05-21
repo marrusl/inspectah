@@ -397,6 +397,10 @@ impl RefineSession {
                     return Err(RefineError::UnknownTarget(uname.clone()));
                 }
             }
+            // Fleet ops validated at the fleet layer, not single-host session
+            RefinementOp::SelectVariant { .. }
+            | RefinementOp::EditVariant { .. }
+            | RefinementOp::DiscardVariant { .. } => {}
         }
         Ok(())
     }
@@ -460,6 +464,10 @@ impl RefineSession {
             }
             // User ops are never noop — always replay to ensure correctness
             RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
+            // Fleet ops are never noop in single-host context
+            RefinementOp::SelectVariant { .. }
+            | RefinementOp::EditVariant { .. }
+            | RefinementOp::DiscardVariant { .. } => false,
         }
     }
 
@@ -671,6 +679,10 @@ impl RefineSession {
                         }
                     }
                 }
+                // Fleet ops don't project onto single-host snapshots
+                RefinementOp::SelectVariant { .. }
+                | RefinementOp::EditVariant { .. }
+                | RefinementOp::DiscardVariant { .. } => {}
             }
         }
 

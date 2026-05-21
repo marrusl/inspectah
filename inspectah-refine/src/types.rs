@@ -2,6 +2,7 @@ use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -20,6 +21,74 @@ impl std::fmt::Display for PackageTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.name, self.arch)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ContentHash(String);
+
+impl ContentHash {
+    pub fn new(s: impl Into<String>) -> Result<Self, String> {
+        let s = s.into();
+        if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!(
+                "invalid content hash: expected 64 hex chars, got {} chars",
+                s.len()
+            ));
+        }
+        Ok(Self(s))
+    }
+
+    pub fn from_content(content: &[u8]) -> Self {
+        Self(format!("{:x}", Sha256::digest(content)))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "key")]
+pub enum ItemId {
+    // RPM section
+    Package { name_arch: String },
+    Repo { path: String },
+    ModuleStream { module_stream: String },
+    VersionLock { name_arch: String },
+
+    // Config section
+    Config { path: String },
+
+    // Services section
+    Service { unit: String },
+    DropIn { path: String },
+
+    // Containers section
+    Quadlet { path: String },
+    Compose { path: String },
+
+    // Network section
+    NMConnection { path: String },
+    FirewallZone { path: String },
+
+    // Kernel/boot section
+    KernelModule { name: String },
+    Sysctl { key: String },
+
+    // Scheduled section
+    CronJob { path: String },
+    SystemdTimer { name: String },
+    AtJob { file: String },
+    GeneratedTimer { name: String },
+
+    // SELinux section
+    SelinuxPort { protocol_port: String },
+
+    // Storage section
+    Fstab { mount_point: String },
+
+    // Non-RPM section
+    NonRpm { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +113,19 @@ pub enum RefinementOp {
         strategy: UserContainerfileStrategy,
     },
     UserPassword(UserPasswordOp),
+    SelectVariant {
+        item_id: ItemId,
+        target: ContentHash,
+    },
+    EditVariant {
+        item_id: ItemId,
+        content: String,
+        based_on: Option<ContentHash>,
+    },
+    DiscardVariant {
+        item_id: ItemId,
+        variant: ContentHash,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
