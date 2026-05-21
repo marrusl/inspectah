@@ -531,6 +531,19 @@ impl RefineSession {
                 }
             }
 
+            // Compose variant selection changes
+            if let (Some(orig_cont), Some(proj_cont)) =
+                (&self.original.containers, &projected.containers)
+            {
+                for orig_entry in &orig_cont.compose_files {
+                    if let Some(proj_entry) = proj_cont.compose_files.iter().find(|e| e.path == orig_entry.path) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+
             count
         };
 
@@ -1610,13 +1623,13 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_entries {
-                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
-                let dir = variants_dir.join(&escaped_path);
-                std::fs::create_dir_all(&dir)?;
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());
                 let hash_prefix = &hash.as_str()[..12];
                 let file_name = format!("{hash_prefix}.content");
-                std::fs::write(dir.join(file_name), &entry.content)?;
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
             }
         }
 
@@ -1629,13 +1642,13 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_dropins {
-                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
-                let dir = variants_dir.join(&escaped_path);
-                std::fs::create_dir_all(&dir)?;
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());
                 let hash_prefix = &hash.as_str()[..12];
                 let file_name = format!("{hash_prefix}.content");
-                std::fs::write(dir.join(file_name), &entry.content)?;
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
             }
         }
 
@@ -1648,13 +1661,13 @@ pub fn render_refine_export(
                 .collect();
 
             for entry in &alt_quadlets {
-                let escaped_path = entry.path.trim_start_matches('/').replace('/', "_");
-                let dir = variants_dir.join(&escaped_path);
-                std::fs::create_dir_all(&dir)?;
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
                 let hash = ContentHash::from_content(entry.content.as_bytes());
                 let hash_prefix = &hash.as_str()[..12];
                 let file_name = format!("{hash_prefix}.content");
-                std::fs::write(dir.join(file_name), &entry.content)?;
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
             }
         }
 
