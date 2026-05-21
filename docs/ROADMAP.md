@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-20)
+## Current Status (2026-05-21)
 
 | Phase | Status |
 |-------|--------|
@@ -19,6 +19,7 @@
 | Service Intent Inference | SHIPPED (2026-05-19) |
 | **v0.8.0-alpha.4** | **TAGGED (2026-05-19)** |
 | Fleet Spec 1: Aggregate | SHIPPED (2026-05-20) |
+| Fleet Phase 2a: Refine Engine | SHIPPED (2026-05-21) |
 
 ## Roadmap to CLI Cutover
 
@@ -51,7 +52,7 @@
     ↓
 ✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
     ↓
-⏳ Fleet Phase 2a: Refine Engine (zone classification, variant ops, diff, auto-save)
+✅ Fleet Phase 2a: Refine Engine (21 commits, 4 review rounds, 2026-05-21)
     ↓
 Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓
@@ -63,6 +64,23 @@ Post-cutover: TUI, build command
 ```
 
 ## Shipped Work
+
+### Fleet Phase 2a: Refine Engine (SHIPPED — 2026-05-21)
+
+**Status:** 21 implementation commits, 4 review rounds (Tang, Collins, Thorn, Lens). Spec at `docs/specs/proposed/2026-05-20-fleet-refine-engine-spec.md` (7 review rounds). Plan at `docs/plans/2026-05-20-fleet-refine-engine.md` (3 revisions).
+
+Fleet-aware refinement engine extending the single-host refine crate. Key components:
+
+1. **PrevalenceZone** enum + `classify_zone()` — item-level zone classification using sum-prevalence across variants
+2. **ContentHash** newtype + **ItemId** enum (20 variants) — type-safe variant identity across all snapshot sections
+3. **FleetContext** + **RefineMode** — auto-detected at session init, zones_active flag for fleet-of-2 suppression
+4. **FleetAttention** with custom Ord — zone/attention/prevalence tri-sort, `Option<PrevalenceZone>` for unclassified-sort-last, wired into production `recompute_view()`
+5. **Diff engine** — `similar` crate LCS diffs with batch API, binary/size guards
+6. **Variant ops via projection** — SelectVariant, EditVariant, DiscardVariant flowing through `snapshot_projected()`. Config/DropIn/Quadlet full ops, Compose select-only. Undo works via cursor replay.
+7. **Auto-save persistence** — atomic write-then-rename, stale tarball detection, redo-safe direct restore (not replay-through-apply)
+8. **CLI resume flow** — interactive `[r] Resume [f] Fresh [q] Quit` prompt, `--fresh` with destructive confirmation
+9. **Variant-aware export** — `fleet/variants/` with hierarchical path structure in export tarball
+10. **28 files changed, +8,649 / -12 lines**, 229+ tests in inspectah-refine
 
 ### Fleet Spec 1: Aggregate (SHIPPED — 2026-05-20)
 
