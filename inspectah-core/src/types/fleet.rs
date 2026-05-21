@@ -41,6 +41,13 @@ pub struct FleetSnapshotMeta {
     pub section_host_counts: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum PrevalenceZone {
+    Divergent,
+    NearConsensus,
+    Consensus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

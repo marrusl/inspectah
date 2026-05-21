@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
@@ -8,17 +9,20 @@ use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
+use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, PackageTarget, RefineError, RefineStats,
-    RefinedView, RefinementOp, RepoProvenance, UserPasswordOp,
+    AnnotatedOp, AttentionLevel, ChangesSummary, ContentHash, FleetContext, ItemId, PackageTarget,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
+    UserPasswordOp,
 };
 
 pub struct RefineSession {
     original: InspectionSnapshot,
     repo_index: RepoIndex,
     baseline_available: bool,
+    refine_mode: RefineMode,
     ops: Vec<RefinementOp>,
     cursor: usize,
     cached_view: Option<RefinedView>,
@@ -27,6 +31,12 @@ pub struct RefineSession {
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
     /// Non-serialized — excluded from tarball export.
     viewed: HashSet<String>,
+    /// Path to the source tarball. When set, auto-save writes a session
+    /// sidecar file after every cursor-changing mutation.
+    tarball_path: Option<PathBuf>,
+    /// Set to true when auto-save encounters a permanent I/O failure
+    /// (EROFS, EACCES). Suppresses further save attempts for this session.
+    durability_degraded: bool,
 }
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
@@ -49,22 +59,263 @@ impl RefineSession {
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
 
+        // Detect fleet mode from snapshot metadata.
+        let refine_mode = if let Some(ref fleet_meta) = snapshot.fleet_meta {
+            let zones_active = fleet_meta.host_count >= 3;
+            let mut zones = HashMap::new();
+
+            // Sum variant prevalence per path for item-level zone classification.
+            // The merger partitions hosts across variants — each host appears in
+            // exactly one variant, so summing counts gives item-level prevalence.
+            if let Some(ref cfg) = snapshot.config {
+                let mut path_sum: HashMap<&str, (i32, i32)> = HashMap::new();
+                for entry in &cfg.files {
+                    if let Some(ref prevalence) = entry.fleet {
+                        path_sum
+                            .entry(entry.path.as_str())
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
+                            })
+                            .or_insert((prevalence.count, prevalence.total));
+                    }
+                }
+                for (path, (count, total)) in &path_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
+                    zones.insert(
+                        ItemId::Config {
+                            path: path.to_string(),
+                        },
+                        classify_zone(&item_prev),
+                    );
+                }
+            }
+
+            // Populate zone map from packages.
+            if let Some(ref rpm) = snapshot.rpm {
+                for entry in &rpm.packages_added {
+                    if let Some(ref prevalence) = entry.fleet {
+                        let zone = classify_zone(prevalence);
+                        let item_id = ItemId::Package {
+                            name_arch: format!("{}.{}", entry.name, entry.arch),
+                        };
+                        zones.insert(item_id, zone);
+                    }
+                }
+            }
+
+            // Zone classification for drop-ins (services section).
+            if let Some(ref svc) = snapshot.services {
+                let mut dropin_sum: HashMap<&str, (i32, i32)> = HashMap::new();
+                for entry in &svc.drop_ins {
+                    if let Some(ref prevalence) = entry.fleet {
+                        dropin_sum
+                            .entry(entry.path.as_str())
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
+                            })
+                            .or_insert((prevalence.count, prevalence.total));
+                    }
+                }
+                for (path, (count, total)) in &dropin_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
+                    zones.insert(
+                        ItemId::DropIn {
+                            path: path.to_string(),
+                        },
+                        classify_zone(&item_prev),
+                    );
+                }
+            }
+
+            // Zone classification for quadlets (containers section).
+            if let Some(ref containers) = snapshot.containers {
+                let mut quadlet_sum: HashMap<&str, (i32, i32)> = HashMap::new();
+                for entry in &containers.quadlet_units {
+                    if let Some(ref prevalence) = entry.fleet {
+                        quadlet_sum
+                            .entry(entry.path.as_str())
+                            .and_modify(|(sum, _)| {
+                                *sum += prevalence.count;
+                            })
+                            .or_insert((prevalence.count, prevalence.total));
+                    }
+                }
+                for (path, (count, total)) in &quadlet_sum {
+                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                        count: *count,
+                        total: *total,
+                        hosts: vec![],
+                    };
+                    zones.insert(
+                        ItemId::Quadlet {
+                            path: path.to_string(),
+                        },
+                        classify_zone(&item_prev),
+                    );
+                }
+            }
+
+            RefineMode::Fleet(FleetContext {
+                fleet_meta: fleet_meta.clone(),
+                zones,
+                total_hosts: fleet_meta.host_count,
+                zones_active,
+            })
+        } else {
+            RefineMode::SingleHost
+        };
+
         let mut session = Self {
             original: snapshot,
             repo_index,
             baseline_available,
+            refine_mode,
             ops: Vec::new(),
             cursor: 0,
             cached_view: None,
             generation: 0,
             viewed: HashSet::new(),
+            tarball_path: None,
+            durability_degraded: false,
         };
         session.recompute_view();
         session
     }
 
+    /// Create a session from a snapshot with a known tarball path.
+    /// Enables auto-save: a session sidecar file is written after every
+    /// cursor-changing mutation (apply, undo, redo).
+    pub fn new_with_tarball(snapshot: InspectionSnapshot, tarball: PathBuf) -> Self {
+        let mut session = Self::new(snapshot);
+        session.tarball_path = Some(tarball);
+        session
+    }
+
+    /// Persist current session state to the sidecar file.
+    ///
+    /// No-op when `tarball_path` is `None` or durability has been degraded
+    /// by a prior permanent I/O error. Transient failures are logged but
+    /// do not degrade durability.
+    fn try_autosave(&mut self) {
+        let tarball = match &self.tarball_path {
+            Some(p) if !self.durability_degraded => p.clone(),
+            _ => return,
+        };
+
+        let tarball_hash = match crate::autosave::compute_tarball_hash(&tarball) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("autosave: failed to hash tarball: {e}");
+                return;
+            }
+        };
+
+        let state = crate::autosave::SessionState {
+            schema_version: 1,
+            tarball_path: tarball.clone(),
+            tarball_hash,
+            ops: self.ops.clone(),
+            cursor: self.cursor,
+            saved_at: {
+                let dur = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                format!("{}s", dur.as_secs())
+            },
+        };
+
+        if let Err(e) = crate::autosave::save_session(&state, &tarball) {
+            let is_permanent = matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            );
+            if is_permanent {
+                eprintln!("autosave: permanently degraded — {e}");
+                self.durability_degraded = true;
+            } else {
+                eprintln!("autosave: transient failure — {e}");
+            }
+        }
+    }
+
+    /// Attempt to resume a previous refine session from the sidecar file
+    /// next to the given tarball.
+    ///
+    /// Returns `Ok(None)` if no session file exists. Returns an error if
+    /// the session file is corrupt, the tarball has been modified since the
+    /// session was saved (stale), or the tarball cannot be loaded.
+    ///
+    /// On success, the returned session has all saved ops restored with the
+    /// full redo tail preserved, and auto-save enabled.
+    pub fn resume_from(tarball: &Path) -> Result<Option<Self>, RefineError> {
+        let saved = match crate::autosave::load_session(tarball) {
+            Ok(Some(s)) => s,
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                return Err(RefineError::SnapshotLoad(format!(
+                    "failed to load session file: {e}"
+                )));
+            }
+        };
+
+        // Stale tarball detection: reject resume if the tarball has changed
+        // since the session was saved.
+        let current_hash = crate::autosave::compute_tarball_hash(tarball)
+            .map_err(|e| RefineError::SnapshotLoad(format!("hash computation failed: {e}")))?;
+        if current_hash != saved.tarball_hash {
+            return Err(RefineError::StaleTarball {
+                saved_hash: saved.tarball_hash.as_str().to_string(),
+                current_hash: current_hash.as_str().to_string(),
+            });
+        }
+
+        // Load a fresh session from the tarball (extract, validate, normalize).
+        let fresh = crate::tarball::from_tarball(tarball)?;
+        let snapshot = fresh.snapshot().clone();
+
+        // Reconstruct with tarball path for auto-save
+        let mut session = Self::new_with_tarball(snapshot, tarball.to_path_buf());
+
+        // Direct restore: set ops and cursor atomically, skip per-op validation.
+        // Safe because: (a) ops were validated on original apply, (b) tarball
+        // hash match guarantees identical snapshot baseline. This preserves
+        // the full redo tail because we bypass apply() which truncates.
+        session.ops = saved.ops;
+        session.cursor = saved.cursor;
+        session.cached_view = None;
+        session.recompute_view();
+
+        // Single autosave to confirm restored state
+        session.try_autosave();
+
+        Ok(Some(session))
+    }
+
+    /// Enable auto-save for an existing session by setting the tarball path.
+    /// Called by the CLI after `from_tarball()` to wire up persistence.
+    pub fn set_tarball_path(&mut self, path: PathBuf) {
+        self.tarball_path = Some(path);
+    }
+
     pub fn repo_index(&self) -> &RepoIndex {
         &self.repo_index
+    }
+
+    /// Returns the fleet context if this session was created from a fleet snapshot.
+    /// Returns `None` for single-host snapshots.
+    pub fn fleet_context(&self) -> Option<&FleetContext> {
+        match &self.refine_mode {
+            RefineMode::Fleet(ctx) => Some(ctx),
+            RefineMode::SingleHost => None,
+        }
     }
 
     pub fn view(&self) -> &RefinedView {
@@ -89,6 +340,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -100,6 +352,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -111,6 +364,7 @@ impl RefineSession {
         self.generation += 1;
         self.cached_view = None;
         self.recompute_view();
+        self.try_autosave();
         Ok(())
     }
 
@@ -175,11 +429,146 @@ impl RefineSession {
         let repos_excluded: Vec<String> =
             self.excluded_sections_at(&projected).into_iter().collect();
 
+        // Projection-based variant dirty check: compare projected variant_selection
+        // values against originals. A variant op followed by its reverse
+        // (e.g., select A→B then B→A) correctly reports variants_changed == 0.
+        let variants_changed = {
+            use inspectah_core::types::fleet::VariantSelection;
+            let mut count = 0usize;
+
+            // Config variants
+            if let (Some(orig_cfg), Some(proj_cfg)) =
+                (&self.original.config, &projected.config)
+            {
+                // Check for selection changes in original entries
+                for orig_entry in &orig_cfg.files {
+                    if let Some(proj_entry) = proj_cfg.files.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1; // entry removed (discarded)
+                    }
+                }
+                // Check for user-created variants (in projected but not original)
+                for proj_entry in &proj_cfg.files {
+                    let in_original = orig_cfg.files.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            // Drop-in variants
+            if let (Some(orig_svc), Some(proj_svc)) =
+                (&self.original.services, &projected.services)
+            {
+                for orig_entry in &orig_svc.drop_ins {
+                    if let Some(proj_entry) = proj_svc.drop_ins.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+                for proj_entry in &proj_svc.drop_ins {
+                    let in_original = orig_svc.drop_ins.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            // Quadlet variants
+            if let (Some(orig_ctr), Some(proj_ctr)) =
+                (&self.original.containers, &projected.containers)
+            {
+                for orig_entry in &orig_ctr.quadlet_units {
+                    if let Some(proj_entry) = proj_ctr.quadlet_units.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(orig_entry.content.as_bytes())
+                    }) {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+                for proj_entry in &proj_ctr.quadlet_units {
+                    let in_original = orig_ctr.quadlet_units.iter().any(|e| {
+                        e.path == proj_entry.path
+                            && ContentHash::from_content(e.content.as_bytes())
+                                == ContentHash::from_content(proj_entry.content.as_bytes())
+                    });
+                    if !in_original
+                        && proj_entry.variant_selection != VariantSelection::Only
+                    {
+                        count += 1;
+                    }
+                }
+            }
+
+            // Compose variant selection changes (keyed by path + serialized images hash)
+            if let (Some(orig_cont), Some(proj_cont)) =
+                (&self.original.containers, &projected.containers)
+            {
+                for orig_entry in &orig_cont.compose_files {
+                    let orig_hash = ContentHash::from_content(
+                        serde_json::to_string(&orig_entry.images)
+                            .unwrap_or_default()
+                            .as_bytes(),
+                    );
+                    if let Some(proj_entry) =
+                        proj_cont.compose_files.iter().find(|e| {
+                            e.path == orig_entry.path
+                                && ContentHash::from_content(
+                                    serde_json::to_string(&e.images)
+                                        .unwrap_or_default()
+                                        .as_bytes(),
+                                ) == orig_hash
+                        })
+                    {
+                        if proj_entry.variant_selection != orig_entry.variant_selection {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+            }
+
+            count
+        };
+
         let is_dirty = !packages_included.is_empty()
             || !packages_excluded.is_empty()
             || !configs_included.is_empty()
             || !configs_excluded.is_empty()
-            || !repos_excluded.is_empty();
+            || !repos_excluded.is_empty()
+            || variants_changed > 0;
 
         ChangesSummary {
             packages_included,
@@ -187,6 +576,7 @@ impl RefineSession {
             configs_included,
             configs_excluded,
             repos_excluded,
+            variants_changed,
             is_dirty,
         }
     }
@@ -397,6 +787,83 @@ impl RefineSession {
                     return Err(RefineError::UnknownTarget(uname.clone()));
                 }
             }
+            // Fleet variant ops: validate using projection state
+            RefinementOp::SelectVariant { item_id, target } => {
+                let state = self.build_variant_state();
+                variant_ops::validate_select(&self.original, &state, item_id, target)?;
+            }
+            RefinementOp::EditVariant {
+                item_id,
+                content: _,
+                based_on,
+            } => {
+                match item_id {
+                    ItemId::Config { path } => {
+                        let found = self
+                            .original
+                            .config
+                            .as_ref()
+                            .map(|c| c.files.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::DropIn { path } => {
+                        let found = self
+                            .original
+                            .services
+                            .as_ref()
+                            .map(|s| s.drop_ins.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Quadlet { path } => {
+                        let found = self
+                            .original
+                            .containers
+                            .as_ref()
+                            .map(|c| c.quadlet_units.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Compose { .. } => {
+                        return Err(RefineError::BadRequest(
+                            "EditVariant not supported for Compose items (structured carrier)"
+                                .into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(RefineError::BadRequest(format!(
+                            "EditVariant not supported for {:?}",
+                            item_id
+                        )));
+                    }
+                }
+                // Validate based_on if provided — scoped to the target item's path.
+                if let Some(hash) = based_on {
+                    let state = self.build_variant_state();
+                    let path = variant_ops::item_path(item_id);
+                    let in_user = path
+                        .and_then(|p| state.user_variants.get(p).map(|m| m.contains_key(hash)))
+                        .unwrap_or(false);
+                    let in_host = self.hash_in_variant_section_for_item(item_id, hash);
+                    if !in_user && !in_host {
+                        return Err(RefineError::BadRequest(format!(
+                            "based_on hash {} not found in variant pool",
+                            hash.as_str()
+                        )));
+                    }
+                }
+            }
+            RefinementOp::DiscardVariant { item_id, variant } => {
+                let state = self.build_variant_state();
+                variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
+            }
         }
         Ok(())
     }
@@ -415,6 +882,78 @@ impl RefineSession {
                 })
             })
             .unwrap_or(false)
+    }
+
+    /// Check whether a content hash exists in the host-sourced variant entries
+    /// for the target item's path in the appropriate snapshot section.
+    /// Scoped to entries matching the target path — prevents cross-item leakage.
+    fn hash_in_variant_section_for_item(
+        &self,
+        item_id: &ItemId,
+        hash: &crate::types::ContentHash,
+    ) -> bool {
+        match item_id {
+            ItemId::Config { path } => self
+                .original
+                .config
+                .as_ref()
+                .map(|c| {
+                    c.files.iter().any(|e| {
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
+                    })
+                })
+                .unwrap_or(false),
+            ItemId::DropIn { path } => self
+                .original
+                .services
+                .as_ref()
+                .map(|s| {
+                    s.drop_ins.iter().any(|e| {
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
+                    })
+                })
+                .unwrap_or(false),
+            ItemId::Quadlet { path } => self
+                .original
+                .containers
+                .as_ref()
+                .map(|c| {
+                    c.quadlet_units.iter().any(|e| {
+                        e.path == *path
+                            && crate::types::ContentHash::from_content(e.content.as_bytes())
+                                == *hash
+                    })
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    /// Build the variant projection state by replaying ops up to the current cursor.
+    /// Used by validate_target to check variant state at the point of validation.
+    fn build_variant_state(&self) -> VariantProjectionState {
+        let mut state = VariantProjectionState::default();
+        for op in &self.ops[..self.cursor] {
+            match op {
+                RefinementOp::SelectVariant { item_id, target } => {
+                    variant_ops::apply_select(&mut state, item_id, target);
+                }
+                RefinementOp::EditVariant {
+                    item_id, content, ..
+                } => {
+                    variant_ops::apply_edit(&mut state, item_id, content, &self.original);
+                }
+                RefinementOp::DiscardVariant { item_id, variant } => {
+                    variant_ops::apply_discard(&mut state, item_id, variant);
+                }
+                _ => {}
+            }
+        }
+        state
     }
 
     fn is_op_noop(&self, op: &RefinementOp) -> bool {
@@ -460,11 +999,16 @@ impl RefineSession {
             }
             // User ops are never noop — always replay to ensure correctness
             RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
+            // Fleet ops are never noop — projection-derived state makes idempotency detection fragile
+            RefinementOp::SelectVariant { .. }
+            | RefinementOp::EditVariant { .. }
+            | RefinementOp::DiscardVariant { .. } => false,
         }
     }
 
     fn project_snapshot(&self) -> InspectionSnapshot {
         let mut snap = self.original.clone();
+        let mut variant_state = VariantProjectionState::default();
 
         for op in &self.ops[..self.cursor] {
             match op {
@@ -671,8 +1215,23 @@ impl RefineSession {
                         }
                     }
                 }
+                // Fleet variant ops: accumulate into projection state
+                RefinementOp::SelectVariant { item_id, target } => {
+                    variant_ops::apply_select(&mut variant_state, item_id, target);
+                }
+                RefinementOp::EditVariant {
+                    item_id, content, ..
+                } => {
+                    variant_ops::apply_edit(&mut variant_state, item_id, content, &self.original);
+                }
+                RefinementOp::DiscardVariant { item_id, variant } => {
+                    variant_ops::apply_discard(&mut variant_state, item_id, variant);
+                }
             }
         }
+
+        // Materialize variant projection state into the snapshot
+        variant_ops::materialize_variants(&mut snap, &variant_state);
 
         // If refine-time ops introduced sensitivity (e.g. NewPassword),
         // upgrade the snapshot's redaction_state and sensitive_snapshot flag.
@@ -752,8 +1311,62 @@ impl RefineSession {
 
     fn recompute_view(&mut self) {
         let projected = self.project_snapshot();
-        let all_packages = compute_package_attention(&projected);
-        let config_files = compute_config_attention(&projected);
+        let mut all_packages = compute_package_attention(&projected);
+        let mut config_files = compute_config_attention(&projected);
+
+        // Fleet attention scoring (when in fleet mode).
+        if let RefineMode::Fleet(ref ctx) = self.refine_mode {
+            for pkg in &mut all_packages {
+                let item_id = ItemId::Package {
+                    name_arch: format!("{}.{}", pkg.entry.name, pkg.entry.arch),
+                };
+                let attention_level = pkg
+                    .attention
+                    .first()
+                    .map(|t| t.level)
+                    .unwrap_or(AttentionLevel::Routine);
+                let prevalence = pkg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count as u32)
+                    .unwrap_or(0);
+                let score = crate::fleet::attention::score_fleet_attention(
+                    ctx,
+                    &item_id,
+                    attention_level,
+                    prevalence,
+                );
+                if let crate::types::AttentionScore::Fleet(fa) = score {
+                    pkg.fleet_attention = Some(fa);
+                }
+            }
+            for cfg in &mut config_files {
+                let item_id = ItemId::Config {
+                    path: cfg.entry.path.clone(),
+                };
+                let attention_level = cfg
+                    .attention
+                    .first()
+                    .map(|t| t.level)
+                    .unwrap_or(AttentionLevel::Routine);
+                let prevalence = cfg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count as u32)
+                    .unwrap_or(0);
+                let score = crate::fleet::attention::score_fleet_attention(
+                    ctx,
+                    &item_id,
+                    attention_level,
+                    prevalence,
+                );
+                if let crate::types::AttentionScore::Fleet(fa) = score {
+                    cfg.fleet_attention = Some(fa);
+                }
+            }
+        }
 
         // Build a set of packages that were normalized to include=false at
         // construction time (non-leaf Tier 2 dependencies). These are hidden
@@ -979,6 +1592,7 @@ pub fn render_refine_export(
     let allowed_top_level: std::collections::HashSet<&str> = [
         "config",
         "env-files",
+        "fleet",
         "schema",
         "users",
         "inspection-snapshot.json",
@@ -1002,6 +1616,78 @@ pub fn render_refine_export(
                 std::fs::remove_file(entry.path())?;
             }
         }
+    }
+
+    // 2d. Fleet variant materialization (fleet snapshots only).
+    //      For each item with Alternative variants, write the alternative
+    //      content to fleet/variants/<escaped-path>/<hash>.content.
+    //      Single-host snapshots (no fleet_meta) skip this entirely.
+    //      Covers: config files, drop-ins, quadlets. Compose is skipped
+    //      (no raw content to export).
+    if snap.fleet_meta.is_some() {
+        use crate::types::ContentHash;
+        use inspectah_core::types::fleet::VariantSelection;
+
+        let variants_dir = out.join("fleet").join("variants");
+
+        // Config file alternatives
+        if let Some(ref config) = snap.config {
+            let alt_entries: Vec<_> = config
+                .files
+                .iter()
+                .filter(|f| f.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            for entry in &alt_entries {
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
+            }
+        }
+
+        // Drop-in alternatives
+        if let Some(ref services) = snap.services {
+            let alt_dropins: Vec<_> = services
+                .drop_ins
+                .iter()
+                .filter(|d| d.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            for entry in &alt_dropins {
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
+            }
+        }
+
+        // Quadlet alternatives
+        if let Some(ref containers) = snap.containers {
+            let alt_quadlets: Vec<_> = containers
+                .quadlet_units
+                .iter()
+                .filter(|q| q.variant_selection == VariantSelection::Alternative)
+                .collect();
+
+            for entry in &alt_quadlets {
+                let rel_path = entry.path.trim_start_matches('/');
+                let variant_item_dir = variants_dir.join(rel_path);
+                std::fs::create_dir_all(&variant_item_dir)?;
+                let hash = ContentHash::from_content(entry.content.as_bytes());
+                let hash_prefix = &hash.as_str()[..12];
+                let file_name = format!("{hash_prefix}.content");
+                std::fs::write(variant_item_dir.join(file_name), &entry.content)?;
+            }
+        }
+
+        // Compose: skip (structured carrier, no raw content to export)
     }
 
     // 3. Containerfile -- uses materialized_roots from the SAME config

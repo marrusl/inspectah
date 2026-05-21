@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use crate::baseline::{ResolutionStrategy, TargetImageIdentity};
 use crate::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use crate::types::completeness::{Completeness, InspectorId};
-use crate::types::fleet::FleetSnapshotMeta;
+use crate::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone};
 
 use self::manifest::FleetManifest;
 use self::merge::{
@@ -17,6 +17,21 @@ use self::merge::{
     merge_usersgroups_sections,
 };
 use self::validate::{FleetValidationError, FleetWarning, extract_hostname};
+
+/// Classify a fleet prevalence into a zone based on its distribution across hosts.
+///
+/// - **Consensus**: Item appears on all hosts (count == total)
+/// - **NearConsensus**: Item appears on at least half the hosts (count * 2 >= total)
+/// - **Divergent**: Item appears on fewer than half the hosts (count * 2 < total)
+pub fn classify_zone(prevalence: &FleetPrevalence) -> PrevalenceZone {
+    if prevalence.count == prevalence.total {
+        PrevalenceZone::Consensus
+    } else if prevalence.count * 2 >= prevalence.total {
+        PrevalenceZone::NearConsensus
+    } else {
+        PrevalenceZone::Divergent
+    }
+}
 
 /// Merge multiple host snapshots into a single fleet-aggregate snapshot.
 ///

@@ -431,6 +431,7 @@ mod tests {
                     reason: AttentionReason::PackageProvenanceUnavailable,
                     detail: None,
                 }],
+                fleet_attention: None,
             })
             .collect();
 
@@ -518,6 +519,7 @@ mod tests {
                     reason: AttentionReason::PackageProvenanceUnavailable,
                     detail: None,
                 }],
+                fleet_attention: None,
             })
             .collect();
 

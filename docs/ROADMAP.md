@@ -51,7 +51,9 @@
     ↓
 ✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
     ↓
-⏳ Fleet Spec 2: Refine (fleet sessions, prevalence UI, variant comparison)
+⏳ Fleet Phase 2a: Refine Engine (zone classification, variant ops, diff, auto-save)
+    ↓
+Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓
 Fleet Spec 3: Architect (cross-role hierarchy, possibly multi-phase)
     ↓
@@ -125,6 +127,18 @@ Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_sta
 ### Fleet Spec 3: Architect
 
 Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
+
+### CLI UX: Scan Progress Reporting (MEDIUM)
+
+`inspectah scan` gives no feedback while inspectors run. Add per-inspector progress lines to stderr (e.g., "Scanning RPM packages... done", "Scanning config files..."). Inspector count is known upfront so a simple counter works.
+
+### CLI UX: Baseline Pull Viewport Height (LOW)
+
+The live viewport during target image pull is 1-2 rows too short. Increase the viewport height so pull progress is readable without excessive scrolling.
+
+### Test Hygiene: Rename phase6_integration_test (LOW)
+
+Rename `inspectah-refine/tests/phase6_integration_test.rs` to `baseline_integration_test.rs`. "Phase 6" was an internal milestone name — the tests are cross-crate baseline data flow integration tests and deserve a descriptive name. Also fix the stale `assert_eq!(snap.schema_version, 16)` to use the `SCHEMA_VERSION` constant.
 
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 

@@ -1,8 +1,12 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone};
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackageTarget {
@@ -20,6 +24,74 @@ impl std::fmt::Display for PackageTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.name, self.arch)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ContentHash(String);
+
+impl ContentHash {
+    pub fn new(s: impl Into<String>) -> Result<Self, String> {
+        let s = s.into();
+        if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!(
+                "invalid content hash: expected 64 hex chars, got {} chars",
+                s.len()
+            ));
+        }
+        Ok(Self(s))
+    }
+
+    pub fn from_content(content: &[u8]) -> Self {
+        Self(format!("{:x}", Sha256::digest(content)))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "key")]
+pub enum ItemId {
+    // RPM section
+    Package { name_arch: String },
+    Repo { path: String },
+    ModuleStream { module_stream: String },
+    VersionLock { name_arch: String },
+
+    // Config section
+    Config { path: String },
+
+    // Services section
+    Service { unit: String },
+    DropIn { path: String },
+
+    // Containers section
+    Quadlet { path: String },
+    Compose { path: String },
+
+    // Network section
+    NMConnection { path: String },
+    FirewallZone { path: String },
+
+    // Kernel/boot section
+    KernelModule { name: String },
+    Sysctl { key: String },
+
+    // Scheduled section
+    CronJob { path: String },
+    SystemdTimer { name: String },
+    AtJob { file: String },
+    GeneratedTimer { name: String },
+
+    // SELinux section
+    SelinuxPort { protocol_port: String },
+
+    // Storage section
+    Fstab { mount_point: String },
+
+    // Non-RPM section
+    NonRpm { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +116,19 @@ pub enum RefinementOp {
         strategy: UserContainerfileStrategy,
     },
     UserPassword(UserPasswordOp),
+    SelectVariant {
+        item_id: ItemId,
+        target: ContentHash,
+    },
+    EditVariant {
+        item_id: ItemId,
+        content: String,
+        based_on: Option<ContentHash>,
+    },
+    DiscardVariant {
+        item_id: ItemId,
+        variant: ContentHash,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +146,7 @@ pub enum UserPasswordOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionLevel {
     NeedsReview,
@@ -107,12 +192,16 @@ pub struct AttentionTag {
 pub struct RefinedPackage {
     pub entry: PackageEntry,
     pub attention: Vec<AttentionTag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_attention: Option<FleetAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedConfig {
     pub entry: ConfigFileEntry,
     pub attention: Vec<AttentionTag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_attention: Option<FleetAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +236,7 @@ pub struct ChangesSummary {
     pub configs_included: Vec<String>,
     pub configs_excluded: Vec<String>,
     pub repos_excluded: Vec<String>,
+    pub variants_changed: usize,
     pub is_dirty: bool,
 }
 
@@ -155,6 +245,66 @@ pub struct AnnotatedOp {
     #[serde(flatten)]
     pub op: RefinementOp,
     pub active: bool,
+}
+
+/// Runtime context for fleet-mode refine sessions.
+///
+/// Not serialized — this is derived from the snapshot at session creation time.
+#[derive(Debug)]
+pub struct FleetContext {
+    pub fleet_meta: FleetSnapshotMeta,
+    pub zones: HashMap<ItemId, PrevalenceZone>,
+    pub total_hosts: usize,
+    /// false for fleet-of-2 (zones suppressed, variant ops available),
+    /// true for fleet-of-3+ (zones active).
+    pub zones_active: bool,
+}
+
+/// Operating mode of the refine session, determined at construction time
+/// from the presence/absence of `FleetSnapshotMeta` in the snapshot.
+#[derive(Debug)]
+pub enum RefineMode {
+    SingleHost,
+    Fleet(FleetContext),
+}
+
+/// Fleet-aware attention score combining zone placement, attention level,
+/// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus,
+/// None/unclassified sorts last), then attention (NeedsReview < Informational
+/// < Routine), then prevalence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetAttention {
+    pub zone: Option<PrevalenceZone>,
+    pub attention: AttentionLevel,
+    pub prevalence: u32,
+}
+
+impl Ord for FleetAttention {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // None (unclassified) sorts after all Some zones
+        let zone_ord = match (self.zone, other.zone) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        zone_ord
+            .then(self.attention.cmp(&other.attention))
+            .then(self.prevalence.cmp(&other.prevalence))
+    }
+}
+
+impl PartialOrd for FleetAttention {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Attention score that works for both single-host and fleet modes.
+#[derive(Debug, Clone)]
+pub enum AttentionScore {
+    SingleHost(AttentionLevel),
+    Fleet(FleetAttention),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -173,6 +323,11 @@ pub enum RefineError {
     TarballError(String),
     #[error("snapshot load error: {0}")]
     SnapshotLoad(String),
+    #[error("stale tarball: saved hash {saved_hash} does not match current hash {current_hash}")]
+    StaleTarball {
+        saved_hash: String,
+        current_hash: String,
+    },
     #[error("untrusted snapshot: {0}")]
     UntrustedSnapshot(String),
     #[error("archive safety violation: {0}")]
