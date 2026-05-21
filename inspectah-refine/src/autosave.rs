@@ -1,6 +1,7 @@
 use crate::types::{ContentHash, RefinementOp};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
@@ -57,6 +58,7 @@ pub fn save_session(state: &SessionState, tarball: &Path) -> Result<(), std::io:
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     tmp.write_all(json.as_bytes())?;
+    tmp.flush()?;
     tmp.persist(&dest)?;
     Ok(())
 }
@@ -88,7 +90,19 @@ pub fn load_session(
 }
 
 /// Compute the SHA-256 hash of a tarball file.
+///
+/// Uses streaming hash to avoid loading large tarballs into memory.
 pub fn compute_tarball_hash(tarball: &Path) -> Result<ContentHash, std::io::Error> {
-    let data = std::fs::read(tarball)?;
-    Ok(ContentHash::from_content(&data))
+    let mut file = std::fs::File::open(tarball)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let hash = format!("{:x}", hasher.finalize());
+    ContentHash::new(hash).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
