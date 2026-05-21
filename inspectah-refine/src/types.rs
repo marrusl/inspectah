@@ -316,6 +316,11 @@ pub enum RefineError {
     TarballError(String),
     #[error("snapshot load error: {0}")]
     SnapshotLoad(String),
+    #[error("stale tarball: saved hash {saved_hash} does not match current hash {current_hash}")]
+    StaleTarball {
+        saved_hash: String,
+        current_hash: String,
+    },
     #[error("untrusted snapshot: {0}")]
     UntrustedSnapshot(String),
     #[error("archive safety violation: {0}")]

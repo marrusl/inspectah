@@ -20,39 +20,98 @@ pub struct RefineArgs {
 }
 
 pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
+    use std::io::Write;
+
     eprintln!("Loading snapshot...");
 
-    let session = if args.fresh {
-        // Delete any existing session file when --fresh is passed
-        let session_path = inspectah_refine::autosave::session_file_path(&args.tarball);
-        if session_path.exists() {
-            let _ = std::fs::remove_file(&session_path);
-            eprintln!("Discarded previous session.");
+    let session_path = inspectah_refine::autosave::session_file_path(&args.tarball);
+
+    let session = if !args.fresh && session_path.exists() {
+        // Sidecar exists and --fresh not set: interactive resume prompt
+        match inspectah_refine::autosave::load_session(&args.tarball) {
+            Ok(Some(state)) => {
+                eprintln!("Found saved session:");
+                eprintln!(
+                    "  Operations: {} ({} active, {} redo)",
+                    state.ops.len(),
+                    state.cursor,
+                    state.ops.len() - state.cursor
+                );
+                eprintln!("  Saved at: {}", state.saved_at);
+                eprintln!();
+
+                eprint!("[r] Resume  [f] Start fresh  [q] Quit: ");
+                std::io::stderr().flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                match input.trim().to_lowercase().as_str() {
+                    "r" | "resume" => {
+                        match inspectah_refine::session::RefineSession::resume_from(&args.tarball) {
+                            Ok(Some(s)) => {
+                                let ops_count = s.view().stats.ops_applied;
+                                eprintln!("Resumed session ({ops_count} ops active).");
+                                s
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: could not resume: {e}");
+                                eprintln!("Starting fresh session.");
+                                let mut s =
+                                    inspectah_refine::tarball::from_tarball(&args.tarball)?;
+                                s.set_tarball_path(args.tarball.clone());
+                                s
+                            }
+                            Ok(None) => unreachable!("sidecar was just verified to exist"),
+                        }
+                    }
+                    "f" | "fresh" => {
+                        let _ = std::fs::remove_file(&session_path);
+                        eprintln!("Discarded previous session.");
+                        let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
+                        s.set_tarball_path(args.tarball.clone());
+                        s
+                    }
+                    "q" | "quit" | "" => {
+                        eprintln!("Quit.");
+                        std::process::exit(0);
+                    }
+                    _ => {
+                        eprintln!("Invalid choice. Quitting.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ => {
+                // Corrupt or unreadable session, start fresh silently
+                let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
+                s.set_tarball_path(args.tarball.clone());
+                s
+            }
         }
+    } else if args.fresh && session_path.exists() {
+        // --fresh with existing session: confirm destructive discard
+        match inspectah_refine::autosave::load_session(&args.tarball) {
+            Ok(Some(state)) => {
+                eprint!("Discard {} saved operations? [y/N]: ", state.ops.len());
+                std::io::stderr().flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if input.trim().to_lowercase() != "y" {
+                    eprintln!("Cancelled.");
+                    std::process::exit(0);
+                }
+            }
+            _ => {}
+        }
+        let _ = std::fs::remove_file(&session_path);
+        eprintln!("Discarded previous session.");
         let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
         s.set_tarball_path(args.tarball.clone());
         s
     } else {
-        // Try to resume from a saved session
-        match inspectah_refine::session::RefineSession::resume_from(&args.tarball) {
-            Ok(Some(session)) => {
-                let ops_count = session.view().stats.ops_applied;
-                eprintln!("Resumed session with {ops_count} operations.");
-                session
-            }
-            Ok(None) => {
-                // No saved session — start fresh
-                let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
-                s.set_tarball_path(args.tarball.clone());
-                s
-            }
-            Err(e) => {
-                eprintln!("Warning: could not resume session ({e}), starting fresh.");
-                let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
-                s.set_tarball_path(args.tarball.clone());
-                s
-            }
-        }
+        // No session or --fresh with no session
+        let mut s = inspectah_refine::tarball::from_tarball(&args.tarball)?;
+        s.set_tarball_path(args.tarball.clone());
+        s
     };
     let is_dirty_on_exit = {
         let state = Arc::new(inspectah_web::handlers::AppState {

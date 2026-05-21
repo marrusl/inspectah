@@ -1,8 +1,9 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::autosave::{load_session, session_file_path};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{PackageTarget, RefinementOp};
+use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
@@ -30,12 +31,56 @@ fn test_snapshot() -> InspectionSnapshot {
     snap
 }
 
+/// Build a snapshot that passes `from_tarball()` provenance validation.
+fn test_snapshot_redacted() -> InspectionSnapshot {
+    let mut snap = test_snapshot();
+    snap.redaction_state = Some(RedactionState::FullyRedacted {
+        redacted_by: "inspectah-test".into(),
+        config_hash: "abc".into(),
+    });
+    snap
+}
+
 fn make_session_with_tarball_path() -> (RefineSession, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let tarball = dir.path().join("test.tar.gz");
     std::fs::write(&tarball, b"fake").unwrap();
     let snap = test_snapshot();
     let session = RefineSession::new_with_tarball(snap, tarball);
+    (session, dir)
+}
+
+/// Create a real `.tar.gz` file containing a valid `inspection-snapshot.json`,
+/// suitable for round-tripping through `from_tarball()` / `resume_from()`.
+fn write_real_tarball(path: &std::path::Path, snap: &InspectionSnapshot) {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    let json = serde_json::to_string_pretty(snap).unwrap();
+    let f = std::fs::File::create(path).unwrap();
+    let gz = GzEncoder::new(f, Compression::default());
+    let mut tar = tar::Builder::new(gz);
+
+    let json_bytes = json.as_bytes();
+    let mut header = tar::Header::new_gnu();
+    header.set_path("inspection-snapshot.json").unwrap();
+    header.set_size(json_bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append(&header, json_bytes).unwrap();
+    tar.finish().unwrap();
+}
+
+/// Create a session backed by a real tarball that can round-trip through
+/// `resume_from()`.
+fn make_session_with_real_tarball() -> (RefineSession, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let tarball = dir.path().join("test.tar.gz");
+    let snap = test_snapshot_redacted();
+    write_real_tarball(&tarball, &snap);
+
+    let mut session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
+    session.set_tarball_path(tarball);
     (session, dir)
 }
 
@@ -168,4 +213,102 @@ fn session_without_tarball_does_not_autosave() {
         .filter(|e| e.file_name().to_string_lossy().contains("inspectah-session"))
         .collect();
     assert!(entries.is_empty(), "no session file should be created for tarball-less sessions");
+}
+
+#[test]
+fn stale_tarball_detected_on_resume() {
+    let (mut session, dir) = make_session_with_tarball_path();
+    let tarball = dir.path().join("test.tar.gz");
+
+    // Apply an op to create a sidecar
+    session.apply(exclude_httpd()).unwrap();
+
+    // Verify sidecar exists
+    assert!(session_file_path(&tarball).exists());
+
+    // Modify the tarball content to make it stale
+    std::fs::write(&tarball, b"modified-content-different-hash").unwrap();
+
+    // Attempt to resume — should fail with StaleTarball
+    let result = RefineSession::resume_from(&tarball);
+    match result {
+        Err(RefineError::StaleTarball {
+            saved_hash,
+            current_hash,
+        }) => {
+            assert_ne!(saved_hash, current_hash, "hashes must differ for stale detection");
+        }
+        Err(other) => panic!("expected StaleTarball error, got: {other}"),
+        Ok(_) => panic!("resume_from must fail on stale tarball"),
+    }
+}
+
+#[test]
+fn resume_preserves_redo_tail() {
+    let (mut session, dir) = make_session_with_real_tarball();
+    let tarball = dir.path().join("test.tar.gz");
+
+    // Apply 3 ops
+    session.apply(exclude_httpd()).unwrap();
+    session.apply(exclude_glibc()).unwrap();
+    session
+        .apply(RefinementOp::IncludePackage(PackageTarget {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+        }))
+        .unwrap();
+
+    // Undo once: cursor=2, ops=3
+    session.undo().unwrap();
+    assert_eq!(session.cursor(), 2);
+    assert!(session.can_redo());
+
+    // Verify persisted state
+    let state = load_session(&tarball).unwrap().unwrap();
+    assert_eq!(state.ops.len(), 3, "sidecar must have all 3 ops");
+    assert_eq!(state.cursor, 2, "sidecar cursor must be 2");
+
+    // Drop session and resume
+    drop(session);
+    let resumed = RefineSession::resume_from(&tarball).unwrap().unwrap();
+
+    // Verify redo tail is preserved
+    assert_eq!(
+        resumed.ops_history().len(),
+        3,
+        "resumed session must have all 3 ops"
+    );
+    assert!(resumed.can_redo(), "resumed session must be able to redo");
+    assert_eq!(resumed.cursor(), 2, "resumed cursor must be 2");
+}
+
+#[test]
+fn resume_does_not_truncate_redo_on_autosave() {
+    let (mut session, dir) = make_session_with_real_tarball();
+    let tarball = dir.path().join("test.tar.gz");
+
+    // Apply 3 ops, undo once
+    session.apply(exclude_httpd()).unwrap();
+    session.apply(exclude_glibc()).unwrap();
+    session
+        .apply(RefinementOp::IncludePackage(PackageTarget {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+        }))
+        .unwrap();
+    session.undo().unwrap();
+
+    // Drop and resume
+    drop(session);
+    let _resumed = RefineSession::resume_from(&tarball).unwrap().unwrap();
+
+    // After resume, the autosave triggered by resume_from should preserve
+    // all 3 ops in the sidecar (not truncate to cursor)
+    let state = load_session(&tarball).unwrap().unwrap();
+    assert_eq!(
+        state.ops.len(),
+        3,
+        "sidecar after resume must still have all 3 ops (redo tail preserved)"
+    );
+    assert_eq!(state.cursor, 2, "sidecar cursor must remain at 2");
 }

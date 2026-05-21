@@ -246,10 +246,11 @@ impl RefineSession {
     /// next to the given tarball.
     ///
     /// Returns `Ok(None)` if no session file exists. Returns an error if
-    /// the session file is corrupt or the tarball cannot be loaded.
+    /// the session file is corrupt, the tarball has been modified since the
+    /// session was saved (stale), or the tarball cannot be loaded.
     ///
-    /// On success, the returned session has all saved ops replayed up to
-    /// the persisted cursor position, with auto-save enabled.
+    /// On success, the returned session has all saved ops restored with the
+    /// full redo tail preserved, and auto-save enabled.
     pub fn resume_from(tarball: &Path) -> Result<Option<Self>, RefineError> {
         let saved = match crate::autosave::load_session(tarball) {
             Ok(Some(s)) => s,
@@ -261,31 +262,35 @@ impl RefineSession {
             }
         };
 
+        // Stale tarball detection: reject resume if the tarball has changed
+        // since the session was saved.
+        let current_hash = crate::autosave::compute_tarball_hash(tarball)
+            .map_err(|e| RefineError::SnapshotLoad(format!("hash computation failed: {e}")))?;
+        if current_hash != saved.tarball_hash {
+            return Err(RefineError::StaleTarball {
+                saved_hash: saved.tarball_hash.as_str().to_string(),
+                current_hash: current_hash.as_str().to_string(),
+            });
+        }
+
         // Load a fresh session from the tarball (extract, validate, normalize).
-        // We use the public snapshot() accessor to get the normalized snapshot,
-        // then build a new session with tarball tracking enabled.
         let fresh = crate::tarball::from_tarball(tarball)?;
         let snapshot = fresh.snapshot().clone();
 
         // Reconstruct with tarball path for auto-save
         let mut session = Self::new_with_tarball(snapshot, tarball.to_path_buf());
 
-        // Replay saved ops up to cursor
-        for op in &saved.ops[..saved.cursor] {
-            if let Err(e) = session.apply(op.clone()) {
-                eprintln!("resume: skipping op that failed replay: {e}");
-            }
-        }
+        // Direct restore: set ops and cursor atomically, skip per-op validation.
+        // Safe because: (a) ops were validated on original apply, (b) tarball
+        // hash match guarantees identical snapshot baseline. This preserves
+        // the full redo tail because we bypass apply() which truncates.
+        session.ops = saved.ops;
+        session.cursor = saved.cursor;
+        session.cached_view = None;
+        session.recompute_view();
 
-        // Preserve redo history: ops beyond cursor are kept but inactive
-        if saved.cursor < saved.ops.len() {
-            // We need to store the full op list and reset cursor.
-            // apply() truncates at cursor, so we must restore manually.
-            session.ops = saved.ops;
-            session.cursor = saved.cursor;
-            session.cached_view = None;
-            session.recompute_view();
-        }
+        // Single autosave to confirm restored state
+        session.try_autosave();
 
         Ok(Some(session))
     }
