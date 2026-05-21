@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
@@ -11,14 +12,15 @@ use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, PackageTarget, RefineError, RefineStats,
-    RefinedView, RefinementOp, RepoProvenance, UserPasswordOp,
+    AnnotatedOp, AttentionLevel, ChangesSummary, FleetContext, ItemId, PackageTarget, RefineError,
+    RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance, UserPasswordOp,
 };
 
 pub struct RefineSession {
     original: InspectionSnapshot,
     repo_index: RepoIndex,
     baseline_available: bool,
+    refine_mode: RefineMode,
     ops: Vec<RefinementOp>,
     cursor: usize,
     cached_view: Option<RefinedView>,
@@ -49,10 +51,52 @@ impl RefineSession {
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
 
+        // Detect fleet mode from snapshot metadata.
+        let refine_mode = if let Some(ref fleet_meta) = snapshot.fleet_meta {
+            let zones_active = fleet_meta.host_count >= 3;
+            let mut zones = HashMap::new();
+
+            // Populate zone map from config files.
+            if let Some(ref cfg) = snapshot.config {
+                for entry in &cfg.files {
+                    if let Some(ref prevalence) = entry.fleet {
+                        let zone = classify_zone(prevalence);
+                        let item_id = ItemId::Config {
+                            path: entry.path.clone(),
+                        };
+                        zones.insert(item_id, zone);
+                    }
+                }
+            }
+
+            // Populate zone map from packages.
+            if let Some(ref rpm) = snapshot.rpm {
+                for entry in &rpm.packages_added {
+                    if let Some(ref prevalence) = entry.fleet {
+                        let zone = classify_zone(prevalence);
+                        let item_id = ItemId::Package {
+                            name_arch: format!("{}.{}", entry.name, entry.arch),
+                        };
+                        zones.insert(item_id, zone);
+                    }
+                }
+            }
+
+            RefineMode::Fleet(FleetContext {
+                fleet_meta: fleet_meta.clone(),
+                zones,
+                total_hosts: fleet_meta.host_count,
+                zones_active,
+            })
+        } else {
+            RefineMode::SingleHost
+        };
+
         let mut session = Self {
             original: snapshot,
             repo_index,
             baseline_available,
+            refine_mode,
             ops: Vec::new(),
             cursor: 0,
             cached_view: None,
@@ -65,6 +109,15 @@ impl RefineSession {
 
     pub fn repo_index(&self) -> &RepoIndex {
         &self.repo_index
+    }
+
+    /// Returns the fleet context if this session was created from a fleet snapshot.
+    /// Returns `None` for single-host snapshots.
+    pub fn fleet_context(&self) -> Option<&FleetContext> {
+        match &self.refine_mode {
+            RefineMode::Fleet(ctx) => Some(ctx),
+            RefineMode::SingleHost => None,
+        }
     }
 
     pub fn view(&self) -> &RefinedView {

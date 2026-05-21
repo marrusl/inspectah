@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone};
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackageTarget {
@@ -237,6 +240,27 @@ pub struct AnnotatedOp {
     #[serde(flatten)]
     pub op: RefinementOp,
     pub active: bool,
+}
+
+/// Runtime context for fleet-mode refine sessions.
+///
+/// Not serialized — this is derived from the snapshot at session creation time.
+#[derive(Debug)]
+pub struct FleetContext {
+    pub fleet_meta: FleetSnapshotMeta,
+    pub zones: HashMap<ItemId, PrevalenceZone>,
+    pub total_hosts: usize,
+    /// false for fleet-of-2 (zones suppressed, variant ops available),
+    /// true for fleet-of-3+ (zones active).
+    pub zones_active: bool,
+}
+
+/// Operating mode of the refine session, determined at construction time
+/// from the presence/absence of `FleetSnapshotMeta` in the snapshot.
+#[derive(Debug)]
+pub enum RefineMode {
+    SingleHost,
+    Fleet(FleetContext),
 }
 
 #[derive(Debug, thiserror::Error)]
