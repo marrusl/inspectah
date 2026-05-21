@@ -9,6 +9,7 @@ use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
+use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
@@ -450,10 +451,29 @@ impl RefineSession {
                     return Err(RefineError::UnknownTarget(uname.clone()));
                 }
             }
-            // Fleet ops validated at the fleet layer, not single-host session
-            RefinementOp::SelectVariant { .. }
-            | RefinementOp::EditVariant { .. }
-            | RefinementOp::DiscardVariant { .. } => {}
+            // Fleet variant ops: validate using projection state
+            RefinementOp::SelectVariant { item_id, target } => {
+                let state = self.build_variant_state();
+                variant_ops::validate_select(&self.original, &state, item_id, target)?;
+            }
+            RefinementOp::EditVariant { item_id, .. } => {
+                // EditVariant only needs the path to exist (or be creatable)
+                if let ItemId::Config { path } = item_id {
+                    let path_exists = self
+                        .original
+                        .config
+                        .as_ref()
+                        .map(|c| c.files.iter().any(|e| e.path == *path))
+                        .unwrap_or(false);
+                    if !path_exists {
+                        return Err(RefineError::UnknownTarget(path.clone()));
+                    }
+                }
+            }
+            RefinementOp::DiscardVariant { item_id, variant } => {
+                let state = self.build_variant_state();
+                variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
+            }
         }
         Ok(())
     }
@@ -472,6 +492,29 @@ impl RefineSession {
                 })
             })
             .unwrap_or(false)
+    }
+
+    /// Build the variant projection state by replaying ops up to the current cursor.
+    /// Used by validate_target to check variant state at the point of validation.
+    fn build_variant_state(&self) -> VariantProjectionState {
+        let mut state = VariantProjectionState::default();
+        for op in &self.ops[..self.cursor] {
+            match op {
+                RefinementOp::SelectVariant { item_id, target } => {
+                    variant_ops::apply_select(&mut state, item_id, target);
+                }
+                RefinementOp::EditVariant {
+                    item_id, content, ..
+                } => {
+                    variant_ops::apply_edit(&mut state, item_id, content, &self.original);
+                }
+                RefinementOp::DiscardVariant { item_id, variant } => {
+                    variant_ops::apply_discard(&mut state, item_id, variant);
+                }
+                _ => {}
+            }
+        }
+        state
     }
 
     fn is_op_noop(&self, op: &RefinementOp) -> bool {
@@ -526,6 +569,7 @@ impl RefineSession {
 
     fn project_snapshot(&self) -> InspectionSnapshot {
         let mut snap = self.original.clone();
+        let mut variant_state = VariantProjectionState::default();
 
         for op in &self.ops[..self.cursor] {
             match op {
@@ -732,12 +776,23 @@ impl RefineSession {
                         }
                     }
                 }
-                // Fleet ops don't project onto single-host snapshots
-                RefinementOp::SelectVariant { .. }
-                | RefinementOp::EditVariant { .. }
-                | RefinementOp::DiscardVariant { .. } => {}
+                // Fleet variant ops: accumulate into projection state
+                RefinementOp::SelectVariant { item_id, target } => {
+                    variant_ops::apply_select(&mut variant_state, item_id, target);
+                }
+                RefinementOp::EditVariant {
+                    item_id, content, ..
+                } => {
+                    variant_ops::apply_edit(&mut variant_state, item_id, content, &self.original);
+                }
+                RefinementOp::DiscardVariant { item_id, variant } => {
+                    variant_ops::apply_discard(&mut variant_state, item_id, variant);
+                }
             }
         }
+
+        // Materialize variant projection state into the snapshot
+        variant_ops::materialize_variants(&mut snap, &variant_state);
 
         // If refine-time ops introduced sensitivity (e.g. NewPassword),
         // upgrade the snapshot's redaction_state and sensitive_snapshot flag.
