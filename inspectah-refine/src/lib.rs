@@ -1,4 +1,5 @@
 pub mod attention;
+pub mod autosave;
 pub mod baseline_summary;
 pub mod fleet;
 pub mod normalize;
