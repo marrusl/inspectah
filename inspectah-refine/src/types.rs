@@ -269,19 +269,26 @@ pub enum RefineMode {
 }
 
 /// Fleet-aware attention score combining zone placement, attention level,
-/// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus),
-/// then attention (NeedsReview < Informational < Routine), then prevalence.
+/// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus,
+/// None/unclassified sorts last), then attention (NeedsReview < Informational
+/// < Routine), then prevalence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FleetAttention {
-    pub zone: PrevalenceZone,
+    pub zone: Option<PrevalenceZone>,
     pub attention: AttentionLevel,
     pub prevalence: u32,
 }
 
 impl Ord for FleetAttention {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.zone
-            .cmp(&other.zone)
+        // None (unclassified) sorts after all Some zones
+        let zone_ord = match (self.zone, other.zone) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        zone_ord
             .then(self.attention.cmp(&other.attention))
             .then(self.prevalence.cmp(&other.prevalence))
     }

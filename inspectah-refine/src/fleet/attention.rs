@@ -7,19 +7,15 @@ use inspectah_core::types::fleet::PrevalenceZone;
 /// existing single-host `AttentionLevel` and the raw prevalence count to
 /// produce a `FleetAttention` score.
 ///
-/// Items not found in the zone map default to `PrevalenceZone::Consensus`
-/// (seen on all hosts — lowest priority).
+/// Items not found in the zone map get `zone: None` (unclassified),
+/// which sorts after all classified zones in the FleetAttention Ord.
 pub fn score_fleet_attention(
     ctx: &FleetContext,
     item_id: &ItemId,
     attention: AttentionLevel,
     prevalence: u32,
 ) -> AttentionScore {
-    let zone = ctx
-        .zones
-        .get(item_id)
-        .copied()
-        .unwrap_or(PrevalenceZone::Consensus);
+    let zone = ctx.zones.get(item_id).copied();
 
     AttentionScore::Fleet(FleetAttention {
         zone,
@@ -62,7 +58,7 @@ mod tests {
         let score = score_fleet_attention(&ctx, &item, AttentionLevel::NeedsReview, 2);
         match score {
             AttentionScore::Fleet(fa) => {
-                assert_eq!(fa.zone, PrevalenceZone::Divergent);
+                assert_eq!(fa.zone, Some(PrevalenceZone::Divergent));
                 assert_eq!(fa.attention, AttentionLevel::NeedsReview);
                 assert_eq!(fa.prevalence, 2);
             }
@@ -71,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_item_defaults_to_consensus() {
+    fn unknown_item_is_unclassified() {
         let item = ItemId::Package {
             name_arch: "unknown.x86_64".into(),
         };
@@ -80,7 +76,7 @@ mod tests {
         let score = score_fleet_attention(&ctx, &item, AttentionLevel::Informational, 5);
         match score {
             AttentionScore::Fleet(fa) => {
-                assert_eq!(fa.zone, PrevalenceZone::Consensus);
+                assert_eq!(fa.zone, None, "missing zone should be None (unclassified)");
             }
             _ => panic!("expected Fleet score"),
         }

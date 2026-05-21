@@ -436,6 +436,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
         changes.variants_changed > 0,
         "compose SelectVariant must report dirty",
     );
+    assert!(changes.is_dirty, "compose session must be dirty after variant change");
 
     // Revert to original selection A
     session
