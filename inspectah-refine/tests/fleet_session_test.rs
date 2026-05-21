@@ -1,6 +1,6 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+use inspectah_core::types::containers::{ComposeFile, ComposeService, ContainerSection, QuadletUnit};
 use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
@@ -310,5 +310,151 @@ fn variants_changed_net_zero_is_clean() {
     assert!(
         !changes.is_dirty,
         "session must be clean after net-zero variant round-trip",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R4 round-4: Compose multi-variant dirty-state regression
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_multi_variant_pristine_is_clean() {
+    let mut snap = make_fleet_snapshot(5);
+    snap.containers = Some(ContainerSection {
+        compose_files: vec![
+            ComposeFile {
+                path: "/opt/app/docker-compose.yml".into(),
+                images: vec![ComposeService {
+                    service: "web".into(),
+                    image: "nginx:1.25".into(),
+                    ..Default::default()
+                }],
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 5,
+                    hosts: vec!["h1".into(), "h2".into(), "h3".into()],
+                }),
+            },
+            ComposeFile {
+                path: "/opt/app/docker-compose.yml".into(),
+                images: vec![ComposeService {
+                    service: "web".into(),
+                    image: "nginx:1.24".into(),
+                    ..Default::default()
+                }],
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 5,
+                    hosts: vec!["h4".into(), "h5".into()],
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+
+    // Pristine session with multi-variant compose must report clean
+    let changes = session.pending_changes();
+    assert_eq!(
+        changes.variants_changed, 0,
+        "pristine compose session must report variants_changed == 0, got {}",
+        changes.variants_changed,
+    );
+    assert!(
+        !changes.is_dirty,
+        "pristine compose session must not be dirty",
+    );
+}
+
+#[test]
+fn compose_select_variant_marks_dirty_then_revert_is_clean() {
+    let mut snap = make_fleet_snapshot(5);
+    let images_a = vec![ComposeService {
+        service: "web".into(),
+        image: "nginx:1.25".into(),
+        ..Default::default()
+    }];
+    let images_b = vec![ComposeService {
+        service: "web".into(),
+        image: "nginx:1.24".into(),
+        ..Default::default()
+    }];
+    let hash_a = ContentHash::from_content(
+        serde_json::to_string(&images_a).unwrap().as_bytes(),
+    );
+    let hash_b = ContentHash::from_content(
+        serde_json::to_string(&images_b).unwrap().as_bytes(),
+    );
+
+    snap.containers = Some(ContainerSection {
+        compose_files: vec![
+            ComposeFile {
+                path: "/opt/app/docker-compose.yml".into(),
+                images: images_a,
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 5,
+                    hosts: vec!["h1".into(), "h2".into(), "h3".into()],
+                }),
+            },
+            ComposeFile {
+                path: "/opt/app/docker-compose.yml".into(),
+                images: images_b,
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 5,
+                    hosts: vec!["h4".into(), "h5".into()],
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+
+    // Select variant B
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Compose {
+                path: "/opt/app/docker-compose.yml".into(),
+            },
+            target: hash_b.clone(),
+        })
+        .unwrap();
+
+    let changes = session.pending_changes();
+    assert!(
+        changes.variants_changed > 0,
+        "compose SelectVariant must report dirty",
+    );
+
+    // Revert to original selection A
+    session
+        .apply(RefinementOp::SelectVariant {
+            item_id: ItemId::Compose {
+                path: "/opt/app/docker-compose.yml".into(),
+            },
+            target: hash_a.clone(),
+        })
+        .unwrap();
+
+    let changes = session.pending_changes();
+    assert_eq!(
+        changes.variants_changed, 0,
+        "compose select A→B then B→A must be net-zero, got {}",
+        changes.variants_changed,
+    );
+    assert!(
+        !changes.is_dirty,
+        "compose net-zero round-trip must be clean",
     );
 }

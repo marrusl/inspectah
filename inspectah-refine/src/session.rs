@@ -531,15 +531,31 @@ impl RefineSession {
                 }
             }
 
-            // Compose variant selection changes
+            // Compose variant selection changes (keyed by path + serialized images hash)
             if let (Some(orig_cont), Some(proj_cont)) =
                 (&self.original.containers, &projected.containers)
             {
                 for orig_entry in &orig_cont.compose_files {
-                    if let Some(proj_entry) = proj_cont.compose_files.iter().find(|e| e.path == orig_entry.path) {
+                    let orig_hash = ContentHash::from_content(
+                        serde_json::to_string(&orig_entry.images)
+                            .unwrap_or_default()
+                            .as_bytes(),
+                    );
+                    if let Some(proj_entry) =
+                        proj_cont.compose_files.iter().find(|e| {
+                            e.path == orig_entry.path
+                                && ContentHash::from_content(
+                                    serde_json::to_string(&e.images)
+                                        .unwrap_or_default()
+                                        .as_bytes(),
+                                ) == orig_hash
+                        })
+                    {
                         if proj_entry.variant_selection != orig_entry.variant_selection {
                             count += 1;
                         }
+                    } else {
+                        count += 1;
                     }
                 }
             }
