@@ -32,6 +32,7 @@ pub struct PackageEntry {
     pub release: String,
     #[serde(default)]
     pub arch: String,
+    #[serde(default)]
     pub state: PackageState,
     #[serde(default)]
     pub include: bool,

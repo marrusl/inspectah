@@ -121,7 +121,7 @@ pub fn merge_snapshots(
     merged.baseline = baseline;
     merged.no_baseline = merged.baseline.is_none();
     merged.completeness = completeness;
-    merged.redaction_state = None;
+    merged.redaction_state = sorted_snapshots.first().and_then(|s| s.redaction_state.clone());
     merged.sensitive_snapshot = sorted_snapshots.iter().any(|s| s.sensitive_snapshot);
     merged.preserved_credentials = sorted_snapshots.iter().any(|s| s.preserved_credentials);
     merged.preserved_ssh_keys = sorted_snapshots.iter().any(|s| s.preserved_ssh_keys);
