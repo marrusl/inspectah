@@ -272,7 +272,15 @@ function App() {
 
   const viewLoading = view.loading && view.data === null;
 
+  // Fleet mode: fork early, before single-host error guards.
+  // useView/useSections hooks still run (rules of hooks) but their results
+  // are ignored — FleetApp fetches its own data from /api/fleet/view.
+  if (health.data?.fleet) {
+    return <FleetApp fleet={health.data.fleet} health={health.data} />;
+  }
+
   // Initial load error: show full-page error with retry when first fetch fails
+  // (single-host mode only — fleet mode already returned above)
   const initialLoadError =
     !view.loading && view.error && view.data === null
       ? view.error
@@ -310,11 +318,6 @@ function App() {
         </PageSection>
       </Page>
     );
-  }
-
-  // Fleet mode: delegate to FleetApp
-  if (health.data?.fleet) {
-    return <FleetApp fleet={health.data.fleet} health={health.data} />;
   }
 
   // Single-host mode: use AppShell

@@ -98,6 +98,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
+  const [filterText, setFilterText] = useState("");
   const [pendingNavTarget, setPendingNavTarget] = useState<{
     sectionId: string;
     itemId: ItemId;
@@ -120,7 +121,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Restore focus to the last-focused fleet item after view updates
   useFleetFocusRecovery(view?.generation ?? null);
 
-  // Handle pending navigation target (from banner clicks)
+  // Handle pending navigation target (from banner and search clicks)
   useEffect(() => {
     if (pendingNavTarget) {
       setActiveSection(pendingNavTarget.sectionId);
@@ -128,6 +129,11 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       setPendingNavTarget(null);
     }
   }, [pendingNavTarget]);
+
+  // Clear section filter when switching sections
+  useEffect(() => {
+    setFilterText("");
+  }, [activeSection]);
 
   const handleToggle = useCallback(
     (itemId: ItemId, include: boolean) => {
@@ -157,8 +163,16 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   );
 
   const handleSearchNavigate = useCallback(
-    (sectionId: string, _itemId: string) => {
-      setActiveSection(sectionId);
+    (sectionId: string, itemId: string) => {
+      // itemId was serialized via JSON.stringify in buildFleetSearchSections
+      setFilterText(""); // clear any active section filter
+      try {
+        const parsed = JSON.parse(itemId) as ItemId;
+        setPendingNavTarget({ sectionId, itemId: parsed });
+      } catch {
+        // Fallback: just navigate to the section
+        setActiveSection(sectionId);
+      }
     },
     [],
   );
@@ -255,7 +269,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         toolbarExtra={<AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />}
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
       >
-        {(_shellState) => (
+        {({ sectionSearchOpen: _sectionSearchOpen, onSectionSearchClose: _onSectionSearchClose, filterClearCounter: _filterClearCounter, searchSlot: _searchSlot }) => (
           <div className="fleet-content" data-testid="fleet-content">
             <FleetBanner
               summary={fleetView.summary}
@@ -270,7 +284,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
             )}
             <FleetSectionContent
               section={activeFleetSection}
-              filterText=""
+              filterText={filterText}
               isDecisionSection={activeFleetSection?.is_decision_section ?? false}
               onToggle={handleToggle}
               ack={ack}
