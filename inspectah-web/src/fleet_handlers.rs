@@ -1,13 +1,15 @@
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    AttentionLevel, AttentionReason, AttentionTag, FleetAttention, FleetContext, ItemId,
+    AttentionLevel, AttentionReason, AttentionTag, ContentHash, FleetAttention, FleetContext,
+    ItemId,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -108,7 +110,54 @@ pub struct FleetVariantOption {
 }
 
 // ---------------------------------------------------------------------------
-// Handler
+// DTOs — fleet diff endpoint
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct FleetDiffRequest {
+    pub item_id: ItemId,
+    pub base: String,
+    pub target: String,
+}
+
+#[derive(Serialize)]
+pub struct FleetDiffResponse {
+    pub base_hash: String,
+    pub target_hash: String,
+    pub base_hosts: Vec<String>,
+    pub target_hosts: Vec<String>,
+    pub hunks: Vec<FleetDiffHunk>,
+    pub stats: FleetDiffStats,
+}
+
+#[derive(Serialize)]
+pub struct FleetDiffHunk {
+    pub base_range: FleetLineRange,
+    pub target_range: FleetLineRange,
+    pub changes: Vec<FleetDiffChange>,
+}
+
+#[derive(Serialize)]
+pub struct FleetLineRange {
+    pub start: usize,
+    pub count: usize,
+}
+
+#[derive(Serialize)]
+pub struct FleetDiffChange {
+    pub kind: String,
+    pub content: String,
+}
+
+#[derive(Serialize)]
+pub struct FleetDiffStats {
+    pub total_changes: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
 // ---------------------------------------------------------------------------
 
 pub async fn fleet_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -120,6 +169,165 @@ pub async fn fleet_view(State(state): State<Arc<AppState>>) -> impl IntoResponse
         }
         None => Json(json!({"error": "not a fleet session"})).into_response(),
     }
+}
+
+pub async fn fleet_diff(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let req: FleetDiffRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid request: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let path = match &req.item_id {
+        ItemId::Config { path } => path.clone(),
+        _ => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": "diff is only supported for config items"})),
+            )
+                .into_response();
+        }
+    };
+
+    let session = state.session.lock().unwrap();
+    let snap = session.snapshot_projected();
+
+    let config = match snap.config.as_ref() {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": "no config section in snapshot"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Collect all entries for this path.
+    let entries: Vec<_> = config.files.iter().filter(|e| e.path == path).collect();
+    if entries.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": format!("unknown config path: {path}")})),
+        )
+            .into_response();
+    }
+
+    // Find entries matching the requested hashes.
+    let base_entry = entries
+        .iter()
+        .find(|e| ContentHash::from_content(e.content.as_bytes()).as_str() == req.base);
+    let target_entry = entries
+        .iter()
+        .find(|e| ContentHash::from_content(e.content.as_bytes()).as_str() == req.target);
+
+    let base_entry = match base_entry {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": format!("unknown base hash: {}", req.base)})),
+            )
+                .into_response();
+        }
+    };
+    let target_entry = match target_entry {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": format!("unknown target hash: {}", req.target)})),
+            )
+                .into_response();
+        }
+    };
+
+    // Extract host lists from fleet prevalence.
+    let base_hosts = base_entry
+        .fleet
+        .as_ref()
+        .map(|f| f.hosts.clone())
+        .unwrap_or_default();
+    let target_hosts = target_entry
+        .fleet
+        .as_ref()
+        .map(|f| f.hosts.clone())
+        .unwrap_or_default();
+
+    // Compute the diff.
+    let diff_result =
+        match inspectah_refine::fleet::diff::compute_diff(&base_entry.content, &target_entry.content, 3)
+        {
+            Ok(r) => r,
+            Err(inspectah_refine::fleet::diff::DiffError::BinaryContent) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"error": "binary content cannot be diffed"})),
+                )
+                    .into_response();
+            }
+            Err(inspectah_refine::fleet::diff::DiffError::InputTooLarge) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"error": "content exceeds size limit for diffing"})),
+                )
+                    .into_response();
+            }
+        };
+
+    // Map DiffResult to response DTOs.
+    let hunks: Vec<FleetDiffHunk> = diff_result
+        .hunks
+        .into_iter()
+        .map(|h| FleetDiffHunk {
+            base_range: FleetLineRange {
+                start: h.base_range.start,
+                count: h.base_range.count,
+            },
+            target_range: FleetLineRange {
+                start: h.target_range.start,
+                count: h.target_range.count,
+            },
+            changes: h
+                .changes
+                .into_iter()
+                .map(|c| {
+                    use inspectah_refine::fleet::diff::ChangeKind;
+                    FleetDiffChange {
+                        kind: match c.kind {
+                            ChangeKind::Equal => "equal".to_string(),
+                            ChangeKind::Delete => "delete".to_string(),
+                            ChangeKind::Insert => "insert".to_string(),
+                        },
+                        content: c.content,
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+
+    let response = FleetDiffResponse {
+        base_hash: req.base,
+        target_hash: req.target,
+        base_hosts,
+        target_hosts,
+        hunks,
+        stats: FleetDiffStats {
+            total_changes: diff_result.stats.total_changes,
+            insertions: diff_result.stats.insertions,
+            deletions: diff_result.stats.deletions,
+        },
+    };
+
+    Json(serde_json::to_value(&response).unwrap()).into_response()
 }
 
 // ---------------------------------------------------------------------------

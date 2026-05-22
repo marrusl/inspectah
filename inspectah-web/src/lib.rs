@@ -68,6 +68,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/user-password", post(handlers::user_password))
         .route("/api/user-preview", get(handlers::user_preview))
         .route("/api/fleet/view", get(fleet_handlers::fleet_view))
+        .route("/api/fleet/diff", post(fleet_handlers::fleet_diff))
         .route("/api/snapshot/sections", get(handlers::get_sections))
         .route(
             "/api/viewed",

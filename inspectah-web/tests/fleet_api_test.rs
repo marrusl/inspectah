@@ -2,8 +2,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::fleet::FleetSnapshotMeta;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::ContentHash;
 use inspectah_web::handlers::AppState;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,6 +24,29 @@ async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Va
     let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    (status, json)
+}
+
+async fn post_json(
+    app: &axum::Router,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     (status, json)
 }
 
@@ -259,4 +284,247 @@ async fn fleet_view_returns_error_for_single_host() {
         .get("error")
         .expect("error field should be present for single-host session");
     assert_eq!(error, "not a fleet session", "error message should indicate not a fleet session");
+}
+
+// ---------------------------------------------------------------------------
+// Fleet diff tests
+// ---------------------------------------------------------------------------
+
+const VARIANT_A_CONTENT: &str = "# Config A\nserver_name = web-01\nport = 8080\n";
+const VARIANT_B_CONTENT: &str = "# Config A\nserver_name = web-02\nport = 9090\ntimeout = 30\n";
+
+fn fleet_state_with_variants() -> Arc<AppState> {
+    let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
+    let hash_b = ContentHash::from_content(VARIANT_B_CONTENT.as_bytes());
+    _ = (&hash_a, &hash_b); // suppress unused warnings in fixture
+
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "web-tier".into(),
+        host_count: 5,
+        hostnames: vec![
+            "web-01".into(),
+            "web-02".into(),
+            "web-03".into(),
+            "web-04".into(),
+            "web-05".into(),
+        ],
+        merged_at: "2026-05-21T12:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/app/config.conf".into(),
+                kind: ConfigFileKind::RpmOwnedModified,
+                content: VARIANT_A_CONTENT.into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 5,
+                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+                }),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/app/config.conf".into(),
+                kind: ConfigFileKind::RpmOwnedModified,
+                content: VARIANT_B_CONTENT.into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 5,
+                    hosts: vec!["web-04".into(), "web-05".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+#[tokio::test]
+async fn fleet_diff_returns_unified_diff() {
+    let state = fleet_state_with_variants();
+    let app = app(state);
+
+    let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
+    let hash_b = ContentHash::from_content(VARIANT_B_CONTENT.as_bytes());
+
+    let (status, json) = post_json(
+        &app,
+        "/api/fleet/diff",
+        serde_json::json!({
+            "item_id": {"kind": "Config", "key": {"path": "/etc/app/config.conf"}},
+            "base": hash_a.as_str(),
+            "target": hash_b.as_str(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    // Verify hashes echo back
+    assert_eq!(json["base_hash"], hash_a.as_str());
+    assert_eq!(json["target_hash"], hash_b.as_str());
+
+    // Verify host lists
+    let base_hosts = json["base_hosts"].as_array().expect("base_hosts should be array");
+    assert_eq!(base_hosts.len(), 3);
+    let target_hosts = json["target_hosts"].as_array().expect("target_hosts should be array");
+    assert_eq!(target_hosts.len(), 2);
+
+    // Verify hunks exist with changes
+    let hunks = json["hunks"].as_array().expect("hunks should be array");
+    assert!(!hunks.is_empty(), "should have at least one hunk");
+
+    // Verify hunk structure
+    let hunk = &hunks[0];
+    assert!(hunk.get("base_range").is_some(), "hunk should have base_range");
+    assert!(hunk.get("target_range").is_some(), "hunk should have target_range");
+    let changes = hunk["changes"].as_array().expect("changes should be array");
+    assert!(!changes.is_empty(), "hunk should have changes");
+
+    // Verify change kinds are valid strings
+    for change in changes {
+        let kind = change["kind"].as_str().expect("kind should be string");
+        assert!(
+            ["equal", "delete", "insert"].contains(&kind),
+            "change kind should be equal/delete/insert, got: {kind}"
+        );
+    }
+
+    // Verify stats
+    let stats = json.get("stats").expect("stats should be present");
+    assert!(stats["total_changes"].as_u64().unwrap() > 0, "should have changes");
+    assert_eq!(
+        stats["total_changes"].as_u64().unwrap(),
+        stats["insertions"].as_u64().unwrap() + stats["deletions"].as_u64().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn fleet_diff_422_unknown_item() {
+    let state = fleet_state_with_variants();
+    let app = app(state);
+
+    let (status, json) = post_json(
+        &app,
+        "/api/fleet/diff",
+        serde_json::json!({
+            "item_id": {"kind": "Config", "key": {"path": "/etc/nonexistent.conf"}},
+            "base": "abc123",
+            "target": "def456",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json["error"].as_str().unwrap().contains("unknown config path"),
+        "error should mention unknown config path"
+    );
+}
+
+#[tokio::test]
+async fn fleet_diff_422_unknown_hash() {
+    let state = fleet_state_with_variants();
+    let app = app(state);
+
+    let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
+
+    let (status, json) = post_json(
+        &app,
+        "/api/fleet/diff",
+        serde_json::json!({
+            "item_id": {"kind": "Config", "key": {"path": "/etc/app/config.conf"}},
+            "base": hash_a.as_str(),
+            "target": "nonexistent_hash",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json["error"].as_str().unwrap().contains("unknown target hash"),
+        "error should mention unknown target hash"
+    );
+}
+
+#[tokio::test]
+async fn fleet_diff_422_binary() {
+    // Build a state with binary content (contains null bytes)
+    let binary_content = "binary\0content";
+    let text_content = "normal text content\n";
+
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test".into(),
+        host_count: 2,
+        hostnames: vec!["h1".into(), "h2".into()],
+        merged_at: "2026-05-21T12:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/binary.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                content: binary_content.into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 1,
+                    total: 2,
+                    hosts: vec!["h1".into()],
+                }),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/binary.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                content: text_content.into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 1,
+                    total: 2,
+                    hosts: vec!["h2".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let hash_binary = ContentHash::from_content(binary_content.as_bytes());
+    let hash_text = ContentHash::from_content(text_content.as_bytes());
+
+    let (status, json) = post_json(
+        &app,
+        "/api/fleet/diff",
+        serde_json::json!({
+            "item_id": {"kind": "Config", "key": {"path": "/etc/binary.conf"}},
+            "base": hash_binary.as_str(),
+            "target": hash_text.as_str(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json["error"].as_str().unwrap().contains("binary"),
+        "error should mention binary content"
+    );
 }
