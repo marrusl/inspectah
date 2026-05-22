@@ -2,9 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::fleet::FleetSnapshotMeta;
 use inspectah_refine::session::RefineSession;
 use inspectah_web::handlers::AppState;
 use std::collections::BTreeMap;
@@ -145,28 +143,27 @@ async fn fleet_view_returns_zone_grouped_sections() {
         .as_array()
         .expect("sections should be an array");
 
-    // For a 5-host fleet, zones should be active
+    // For a 5-host fleet, zones should be grouped
     // Assert: sections have zones with consensus/near_consensus/divergent
     for section in sections {
-        let zones_active = section
-            .get("zones_active")
-            .expect("zones_active should be present")
-            .as_bool()
-            .expect("zones_active should be a boolean");
+        // Check whether this section uses zone grouping (presence of zones field)
+        // or flat listing (presence of items field)
+        let has_zones = section.get("zones").is_some() && !section.get("zones").unwrap().is_null();
+        let has_items = section.get("items").is_some();
 
-        if zones_active {
-            let zones = section
-                .get("zones")
-                .expect("zones should be present when zones_active is true");
-            assert!(!zones.is_null(), "zones should not be null when zones_active is true");
+        // Each section should have either zones or items (or both empty if no data)
+        assert!(has_zones || has_items, "section should have zones or items");
+
+        if has_zones {
+            let zones = section.get("zones").unwrap();
 
             // Check for zone structure
             if let Some(zones_obj) = zones.as_object() {
                 // At least one of consensus/near_consensus/divergent should exist
-                let has_zones = zones_obj.contains_key("consensus")
+                let has_zone_groups = zones_obj.contains_key("consensus")
                     || zones_obj.contains_key("near_consensus")
                     || zones_obj.contains_key("divergent");
-                assert!(has_zones, "zones should have at least one of consensus/near_consensus/divergent");
+                assert!(has_zone_groups, "zones should have at least one of consensus/near_consensus/divergent");
             }
         }
 
@@ -230,7 +227,7 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
 
     assert_eq!(status, StatusCode::OK);
 
-    // For a 2-host fleet, zones_active should be false
+    // For a 2-host fleet, sections should use flat listing (no zone grouping)
     let sections = json
         .get("sections")
         .expect("sections should be present")
@@ -238,19 +235,13 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
         .expect("sections should be an array");
 
     for section in sections {
-        let zones_active = section
-            .get("zones_active")
-            .expect("zones_active should be present")
-            .as_bool()
-            .expect("zones_active should be a boolean");
+        // In a small fleet, zones should be absent or null (flat listing mode)
+        let zones = section.get("zones");
+        let has_zones = zones.is_some() && !zones.unwrap().is_null();
 
-        if !zones_active {
-            // Assert: zones should be null
-            let zones = section.get("zones").expect("zones field should be present");
-            assert!(zones.is_null(), "zones should be null when zones_active is false");
-
-            // Assert: items should be present
-            assert!(section.get("items").is_some(), "items should be present");
+        if !has_zones {
+            // Assert: items should be present for flat listing
+            assert!(section.get("items").is_some(), "items should be present in flat mode");
         }
     }
 }

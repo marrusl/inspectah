@@ -213,10 +213,7 @@ fn build_fleet_sections(
                     item_id,
                     include: pkg.entry.include,
                     attention: build_attention_dto(&pkg.attention, fa),
-                    prevalence: FleetPrevalenceDto {
-                        count: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
-                        total: fp.map(|f| f.total.max(0) as u32).unwrap_or(ctx.total_hosts as u32),
-                    },
+                    prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                 }
             })
@@ -268,12 +265,7 @@ fn build_fleet_sections(
                     item_id,
                     include: cfg.entry.include,
                     attention: build_attention_dto(&cfg.attention, fa),
-                    prevalence: FleetPrevalenceDto {
-                        count: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
-                        total: fp
-                            .map(|f| f.total.max(0) as u32)
-                            .unwrap_or(ctx.total_hosts as u32),
-                    },
+                    prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                 }
             })
