@@ -592,7 +592,7 @@ fn build_context_sections(
                 let fp = unit.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -635,7 +635,7 @@ fn build_context_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -685,7 +685,7 @@ fn build_context_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -723,7 +723,7 @@ fn build_context_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -752,7 +752,7 @@ fn build_context_sections(
             let fp = conn.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -765,7 +765,7 @@ fn build_context_sections(
             let fp = zone.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -788,7 +788,7 @@ fn build_context_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -810,7 +810,7 @@ fn build_context_sections(
             let fp = cron.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -823,7 +823,7 @@ fn build_context_sections(
             let fp = timer.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -852,7 +852,7 @@ fn build_context_sections(
                 let fp = port.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -874,7 +874,7 @@ fn build_context_sections(
             let fp = module.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -887,7 +887,7 @@ fn build_context_sections(
             let fp = sysctl.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: true,
+                include: fleet_include_default(fp),
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -916,7 +916,7 @@ fn build_context_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: true,
+                    include: fleet_include_default(fp),
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -974,6 +974,12 @@ fn default_context_attention(
         zone,
         prevalence: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
     }
+}
+
+/// Returns `true` only when the item is present on every host (100% prevalence).
+/// Items without fleet prevalence data default to excluded.
+fn fleet_include_default(fp: Option<&inspectah_core::types::fleet::FleetPrevalence>) -> bool {
+    fp.is_some_and(|f| f.count > 0 && f.count == f.total)
 }
 
 fn fleet_prevalence_dto(
