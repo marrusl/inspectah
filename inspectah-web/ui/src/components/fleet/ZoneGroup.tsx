@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ExpandableSection, Badge } from "@patternfly/react-core";
 
 export interface ZoneGroupProps {
   zone: "consensus" | "near_consensus" | "divergent";
   count: number;
   defaultExpanded: boolean;
+  /** When true, forces the zone open regardless of internal state. */
+  forceExpanded?: boolean;
   children: React.ReactNode;
 }
 
@@ -18,10 +20,15 @@ export function ZoneGroup({
   zone,
   count,
   defaultExpanded,
+  forceExpanded,
   children,
 }: ZoneGroupProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const label = ZONE_LABELS[zone];
+
+  useEffect(() => {
+    if (forceExpanded) setIsExpanded(true);
+  }, [forceExpanded]);
 
   return (
     <div className={`fleet-zone-group fleet-zone-group--${zone}`} data-testid={`zone-${zone}`}>

@@ -119,35 +119,17 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Restore focus to the last-focused fleet item after view updates
   useFleetFocusRecovery(view?.generation ?? null);
 
-  // Portal flow: complete the reveal -> scroll -> highlight -> focus
-  // sequence after a banner or search navigation sets pendingNavTarget.
-  const [portalCounter, setPortalCounter] = useState(0);
-
+  // Portal flow: when pendingNavTarget is set (by banner or search),
+  // switch the active section. FleetSectionContent handles the rest:
+  // force-expand the zone, auto-expand variants, scroll, highlight, focus.
   useEffect(() => {
     if (!pendingNavTarget) return;
     setActiveSection(pendingNavTarget.sectionId);
-    setExpandedItemId(null);
-    setPortalCounter((c) => c + 1);
   }, [pendingNavTarget]);
 
-  useEffect(() => {
-    if (!pendingNavTarget) return;
-    const targetId = JSON.stringify(pendingNavTarget.itemId);
-
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-item-id='${targetId.replace(/'/g, "\\'")}']`) as HTMLElement | null;
-      if (!el) {
-        setPendingNavTarget(null);
-        return;
-      }
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("inspectah-highlight");
-      el.focus();
-      setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
-      setPendingNavTarget(null);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalCounter]);
+  const handleNavTargetConsumed = useCallback(() => {
+    setPendingNavTarget(null);
+  }, []);
 
   // Track shell's filterClearCounter to reset filterText when
   // GlobalSearch navigation clears the section search.
@@ -341,6 +323,8 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
               onToggle={handleToggle}
               ack={ack}
               onExpandVariant={handleExpandVariant}
+              pendingNavTarget={pendingNavTarget}
+              onNavTargetConsumed={handleNavTargetConsumed}
             />
             {expandedItem && expandedItem.variants && (
               <VariantView

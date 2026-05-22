@@ -183,12 +183,8 @@ describe("Overlay close returns focus to hamburger", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // The hamburger button should be present
-    const hamburger = screen.getByLabelText("Open navigation");
+    // Wait for app content to render (health + view must resolve first)
+    const hamburger = await screen.findByLabelText("Open navigation");
     expect(hamburger).toBeInTheDocument();
     expect(hamburger.tagName.toLowerCase()).toBe("button");
 
