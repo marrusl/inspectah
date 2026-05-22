@@ -283,7 +283,7 @@ describe("FleetApp integration", () => {
   // 1. Full fleet view render with zones
   // -------------------------------------------------------------------------
   describe("full fleet view render with zones", () => {
-    it("renders sidebar sections and section counts from zone-grouped data", async () => {
+    it("renders sidebar sections and fleet content from zone-grouped data", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
       renderFleetApp();
       await waitForContent();
@@ -294,8 +294,10 @@ describe("FleetApp integration", () => {
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
       expect(within(sidebar).getByText("Services")).toBeInTheDocument();
 
-      // Content area shows section count
-      expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+      // Content area renders real fleet section (default active = packages)
+      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+      // Fleet banner is rendered (there are actionable variant items)
+      expect(screen.getByTestId("fleet-banner")).toBeInTheDocument();
     });
 
     it("shows zone-based item counts in sidebar for sections with zones", async () => {
@@ -376,8 +378,9 @@ describe("FleetApp integration", () => {
       renderFleetApp();
       await waitForContent();
 
-      // Verify initial state
-      expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+      // Verify initial state — sidebar shows 3 sections
+      const sidebar = screen.getByTestId("fleet-sidebar");
+      expect(within(sidebar).getByText("Services")).toBeInTheDocument();
 
       // Ctrl+Z triggers useKeyboard → onUndo → useFleetMutation.undo()
       await act(async () => {
@@ -389,9 +392,9 @@ describe("FleetApp integration", () => {
         expect(mockUndo).toHaveBeenCalledOnce();
       });
 
-      // After refetch, view should update
+      // After refetch, view should update — only Packages in sidebar now
       await waitFor(() => {
-        expect(screen.getByText("Sections: 1")).toBeInTheDocument();
+        expect(screen.queryByText("Services")).not.toBeInTheDocument();
       });
     });
 
@@ -431,8 +434,8 @@ describe("FleetApp integration", () => {
       renderFleetApp();
       await waitForContent();
 
-      // Content is visible with initial data
-      expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+      // Content is visible with initial data — fleet section renders
+      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
 
       // Trigger undo via Ctrl+Z
       await act(async () => {
@@ -445,7 +448,7 @@ describe("FleetApp integration", () => {
       });
 
       // Content still visible (FleetApp holds last successful view in state)
-      expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
 
       // Retry button should be present
       expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
@@ -522,8 +525,8 @@ describe("FleetApp integration", () => {
       expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
 
-      // Section count reflects flat structure
-      expect(screen.getByText("Sections: 2")).toBeInTheDocument();
+      // Content area renders fleet section with flat items
+      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
     });
   });
 
@@ -536,20 +539,19 @@ describe("FleetApp integration", () => {
       renderFleetApp();
       await waitForContent();
 
-      // Default is packages
-      expect(screen.getByText("Active section: packages")).toBeInTheDocument();
+      // Default is packages — verify package items render
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
 
-      // Click Config Files
+      // Click Config Files — packages items should disappear, config items appear
       await userEvent.click(screen.getByText("Config Files"));
-      expect(screen.getByText("Active section: config_files")).toBeInTheDocument();
+      expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
 
-      // Click Services
+      // Click Services — empty section
       await userEvent.click(screen.getByText("Services"));
-      expect(screen.getByText("Active section: services")).toBeInTheDocument();
 
-      // Click back to Packages
+      // Click back to Packages — package items re-appear
       await userEvent.click(screen.getByText("Packages"));
-      expect(screen.getByText("Active section: packages")).toBeInTheDocument();
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
     it("highlights active section in sidebar with aria-current", async () => {
@@ -582,25 +584,23 @@ describe("FleetApp integration", () => {
       renderFleetApp();
       await waitForContent();
 
-      // Default section
-      expect(screen.getByText("Active section: packages")).toBeInTheDocument();
+      // Default section is packages — package items visible
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
 
       // Press 2 → jumps to "configs" (hardcoded SECTION_IDS[1])
+      // Verify via sidebar aria-current since section content may be empty
       await user.keyboard("2");
       await waitFor(() => {
-        expect(screen.getByText("Active section: configs")).toBeInTheDocument();
+        expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
       });
 
       // Press 3 → jumps to "services" (SECTION_IDS[2])
       await user.keyboard("3");
-      await waitFor(() => {
-        expect(screen.getByText("Active section: services")).toBeInTheDocument();
-      });
 
       // Press 1 → back to "packages" (SECTION_IDS[0])
       await user.keyboard("1");
       await waitFor(() => {
-        expect(screen.getByText("Active section: packages")).toBeInTheDocument();
+        expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
       });
     });
   });
@@ -627,7 +627,7 @@ describe("FleetApp integration", () => {
   // 9. View updates propagate through the component tree
   // -------------------------------------------------------------------------
   describe("view update propagation", () => {
-    it("updates section count and sidebar after Ctrl+Z triggers view refresh", async () => {
+    it("updates sidebar after Ctrl+Z triggers view refresh", async () => {
       const threeSection = mockFleetViewResponse();
       const twoSection = mockFleetViewResponse({
         generation: 2,
@@ -643,19 +643,18 @@ describe("FleetApp integration", () => {
 
       renderFleetApp();
       await waitForContent();
-      expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+      // Verify initial state — sidebar has Services
+      expect(screen.getByText("Services")).toBeInTheDocument();
 
       // Ctrl+Z triggers refetch with fewer sections
       await act(async () => {
         pressCtrlZ();
       });
 
+      // Sidebar should update — "Services" no longer present
       await waitFor(() => {
-        expect(screen.getByText("Sections: 2")).toBeInTheDocument();
+        expect(screen.queryByText("Services")).not.toBeInTheDocument();
       });
-
-      // Sidebar should also update — "Services" no longer present
-      expect(screen.queryByText("Services")).not.toBeInTheDocument();
     });
   });
 

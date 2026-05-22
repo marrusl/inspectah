@@ -132,7 +132,8 @@ describe("FleetApp", () => {
       expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Sections: 3")).toBeInTheDocument();
+    // Content area renders fleet section with items from the active section (packages)
+    expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
     expect(mockFetchFleetView).toHaveBeenCalledOnce();
   });
 
@@ -157,14 +158,16 @@ describe("FleetApp", () => {
       expect(screen.getByTestId("fleet-sidebar")).toBeInTheDocument();
     });
 
-    // Default active section
-    expect(screen.getByText("Active section: packages")).toBeInTheDocument();
+    // Default active section is packages — verify the package item renders
+    expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
 
     // Click on Config Files
     const configNav = screen.getByText("Config Files");
     await userEvent.click(configNav);
 
-    expect(screen.getByText("Active section: configs")).toBeInTheDocument();
+    // Config section has no items in zones (all empty), so no fleet-item-row
+    // but the section content renders (FleetSectionContent handles empty zones)
+    expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
   });
 
   it("wires undo/redo to mutation hook", async () => {

@@ -40,14 +40,31 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
 export interface ShortcutOverlayProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Additional shortcuts appended to the Global group. */
+  extraShortcuts?: Array<{ key: string; description: string }>;
 }
 
 /**
  * Modal overlay listing all keyboard shortcuts, organized by category.
  * Opened by pressing `?`, closed by `Escape` or `?` again.
  */
-export function ShortcutOverlay({ isOpen, onClose }: ShortcutOverlayProps) {
+export function ShortcutOverlay({ isOpen, onClose, extraShortcuts }: ShortcutOverlayProps) {
   if (!isOpen) return null;
+
+  // Merge extra shortcuts into the Global group
+  const groups = extraShortcuts?.length
+    ? SHORTCUT_GROUPS.map((group) =>
+        group.title === "Global"
+          ? {
+              ...group,
+              shortcuts: [
+                ...group.shortcuts,
+                ...extraShortcuts.map((s) => ({ keys: s.key, description: s.description })),
+              ],
+            }
+          : group,
+      )
+    : SHORTCUT_GROUPS;
 
   return (
     <Modal
@@ -59,7 +76,7 @@ export function ShortcutOverlay({ isOpen, onClose }: ShortcutOverlayProps) {
     >
       <ModalHeader title="Keyboard Shortcuts" />
       <ModalBody>
-        {SHORTCUT_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div
             key={group.title}
             style={{ marginBottom: "var(--pf-t--global--spacer--lg)" }}

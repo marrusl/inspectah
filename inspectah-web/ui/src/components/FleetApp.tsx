@@ -1,12 +1,26 @@
-import { useState, useEffect, useCallback } from "react";
-import { Page, PageSection, EmptyState, EmptyStateBody, Spinner } from "@patternfly/react-core";
-import type { FleetHealthInfo, HealthResponse, FleetViewResponse } from "../api/types";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Button, Page, PageSection, EmptyState, EmptyStateBody, Spinner } from "@patternfly/react-core";
+import type {
+  FleetHealthInfo,
+  HealthResponse,
+  FleetViewResponse,
+  FleetSection,
+  FleetItem,
+  ItemId,
+  RefinementOp,
+  ContextSection,
+} from "../api/types";
 import { fetchFleetView } from "../api/fleet-client";
 import { useFleetMutation } from "../hooks/useFleetMutation";
 import { useVariantAck } from "../hooks/useVariantAck";
+import { useFleetDiff } from "../hooks/useFleetDiff";
 import { useFleetFocusRecovery } from "../hooks/useFleetFocusRecovery";
 import { AppShell } from "./AppShell";
 import { FleetSidebar } from "./fleet/FleetSidebar";
+import { FleetBanner } from "./fleet/FleetBanner";
+import { FleetSectionContent } from "./fleet/FleetSection";
+import { VariantView } from "./fleet/VariantView";
+import { itemDisplayName } from "./fleet/FleetItemRow";
 
 export interface FleetAppProps {
   fleet: FleetHealthInfo;
@@ -23,25 +37,111 @@ function AckProgress({ unackedCount, totalCount }: { unackedCount: number; total
   );
 }
 
+/** Collect all FleetItems from a section (flat items or zone items). */
+function sectionItems(section: FleetSection): FleetItem[] {
+  if (section.items) return section.items;
+  if (!section.zones) return [];
+  return [
+    ...section.zones.consensus.items,
+    ...section.zones.near_consensus.items,
+    ...section.zones.divergent.items,
+  ];
+}
+
+/** Build ContextSection[] from fleet sections for GlobalSearch indexing. */
+function buildFleetSearchSections(sections: FleetSection[]): ContextSection[] {
+  return sections.map((s) => ({
+    id: s.id,
+    display_name: s.display_name,
+    items: sectionItems(s).map((item) => {
+      const name = itemDisplayName(item.item_id);
+      return {
+        id: JSON.stringify(item.item_id),
+        title: name,
+        subtitle: null,
+        detail: null,
+        searchable_text: name,
+      };
+    }),
+  }));
+}
+
+/** Build the correct RefinementOp for a fleet item toggle. */
+function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
+  if (itemId.kind === "Package") {
+    const [name, arch] = itemId.key.name_arch.split(".");
+    return include
+      ? { op: "IncludePackage", target: { name, arch } }
+      : { op: "ExcludePackage", target: { name, arch } };
+  }
+  return include
+    ? { op: "IncludeConfig", target: { path: itemId.key.path } }
+    : { op: "ExcludeConfig", target: { path: itemId.key.path } };
+}
+
 export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   const [view, setView] = useState<FleetViewResponse | null>(null);
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
+  const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
+  const [pendingNavTarget, setPendingNavTarget] = useState<{
+    sectionId: string;
+    itemId: ItemId;
+  } | null>(null);
+  const lastFocusedItemRef = useRef<ItemId | null>(null);
 
   useEffect(() => {
     fetchFleetView().then(setView).catch((e) => setError(e.message));
   }, []);
 
-  const { undo, redo, isPending, refetchError, retry } = useFleetMutation(
+  const { mutate, undo, redo, isPending, refetchError, retry } = useFleetMutation(
     setView,
     (err) => setError(err.message),
   );
 
   const actionableIds = view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
   const ack = useVariantAck(fleet.label, fleet.merged_at, actionableIds);
+  const diffHook = useFleetDiff();
 
   // Restore focus to the last-focused fleet item after view updates
   useFleetFocusRecovery(view?.generation ?? null);
+
+  // Handle pending navigation target (from banner clicks)
+  useEffect(() => {
+    if (pendingNavTarget) {
+      setActiveSection(pendingNavTarget.sectionId);
+      lastFocusedItemRef.current = pendingNavTarget.itemId;
+      setPendingNavTarget(null);
+    }
+  }, [pendingNavTarget]);
+
+  const handleToggle = useCallback(
+    (itemId: ItemId, include: boolean) => {
+      mutate(buildToggleOp(itemId, include));
+    },
+    [mutate],
+  );
+
+  const handleExpandVariant = useCallback((itemId: ItemId) => {
+    setExpandedItemId((prev) =>
+      prev && JSON.stringify(prev) === JSON.stringify(itemId) ? null : itemId,
+    );
+  }, []);
+
+  const handleSelectVariant = useCallback(
+    (_itemId: ItemId, _hash: string) => {
+      // Variant selection is handled by VariantView internally via ack.confirm/markChanged.
+      // No RefinementOp is needed -- the view reflects selected variant via ack state.
+    },
+    [],
+  );
+
+  const handleBannerNavigate = useCallback(
+    (sectionId: string, itemId: ItemId) => {
+      setPendingNavTarget({ sectionId, itemId });
+    },
+    [],
+  );
 
   const handleSearchNavigate = useCallback(
     (sectionId: string, _itemId: string) => {
@@ -69,7 +169,16 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       <Page className="inspectah-page" data-testid="fleet-app">
         <PageSection>
           <EmptyState titleText="Failed to load fleet view" headingLevel="h2">
-            <EmptyStateBody>{error}</EmptyStateBody>
+            <EmptyStateBody>
+              {error}
+              <br />
+              <Button variant="link" onClick={() => {
+                setError(null);
+                fetchFleetView().then(setView).catch((e) => setError(e.message));
+              }}>
+                Retry
+              </Button>
+            </EmptyStateBody>
           </EmptyState>
         </PageSection>
       </Page>
@@ -78,6 +187,15 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   // view is guaranteed non-null past this point
   const fleetView = view!;
+
+  const activeFleetSection = fleetView.sections.find((s) => s.id === activeSection);
+  const expandedItem = expandedItemId
+    ? fleetView.sections
+        .flatMap(sectionItems)
+        .find((item) => JSON.stringify(item.item_id) === JSON.stringify(expandedItemId))
+    : null;
+
+  const searchContextSections = buildFleetSearchSections(fleetView.sections);
 
   return (
     <div data-testid="fleet-app">
@@ -104,20 +222,39 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         onNavigateSection={setActiveSection}
         searchPackageItems={[]}
         searchConfigItems={[]}
-        searchContextSections={null}
+        searchContextSections={searchContextSections}
         onSearchNavigate={handleSearchNavigate}
         toolbarExtra={<AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />}
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
       >
         {(_shellState) => (
           <div className="fleet-content" data-testid="fleet-content">
-            <div>Active section: {activeSection}</div>
-            <div>Sections: {fleetView.sections.length}</div>
+            <FleetBanner
+              summary={fleetView.summary}
+              ackState={ack}
+              onNavigate={handleBannerNavigate}
+            />
             {refetchError && (
               <div className="refetch-error" data-testid="refetch-error">
                 {refetchError}
-                <button onClick={retry}>Retry</button>
+                <Button variant="link" onClick={retry}>Retry</Button>
               </div>
+            )}
+            <FleetSectionContent
+              section={activeFleetSection}
+              filterText=""
+              isDecisionSection={activeFleetSection?.is_decision_section ?? false}
+              onToggle={handleToggle}
+              ack={ack}
+              onExpandVariant={handleExpandVariant}
+            />
+            {expandedItem && expandedItem.variants && (
+              <VariantView
+                item={expandedItem}
+                ack={ack}
+                onSelectVariant={handleSelectVariant}
+                diffHook={diffHook}
+              />
             )}
           </div>
         )}

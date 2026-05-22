@@ -113,8 +113,8 @@ export function AppShell({
   searchUserDecisions,
   searchContextSections,
   onSearchNavigate,
-  extraShortcuts: _extraShortcuts,
-  toolbarExtra: _toolbarExtra,
+  extraShortcuts,
+  toolbarExtra,
   hamburger,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(initialPanelOpen);
@@ -202,6 +202,11 @@ export function AppShell({
         isPending={isPending}
         hamburger={hamburger}
       />
+      {toolbarExtra && (
+        <div className="inspectah-toolbar-extra" data-testid="toolbar-extra">
+          {toolbarExtra}
+        </div>
+      )}
       <div className="inspectah-layout">
         {sidebar}
         {children({
@@ -221,6 +226,7 @@ export function AppShell({
       <ShortcutOverlay
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
+        extraShortcuts={extraShortcuts}
       />
       <ExportDialog
         isOpen={exportDialogOpen}
