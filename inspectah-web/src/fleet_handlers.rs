@@ -383,16 +383,15 @@ fn build_fleet_summary(
         }
     }
 
-    // Count non-config variants (informational) from context sections.
-    // Context sections are read-only (is_decision_section == false) and
-    // may now carry FleetVariants on items with multiple content variants.
+    // Count non-config items that have variants (informational).
+    // This is an item count (how many items have variants), not a variant
+    // option count. The frontend displays "N additional items have variants."
     let informational_variant_count = sections
         .iter()
         .filter(|s| !s.is_decision_section)
         .flat_map(section_items)
-        .filter_map(|item| item.variants.as_ref())
-        .map(|v| v.count)
-        .sum();
+        .filter(|item| item.variants.is_some())
+        .count();
 
     FleetSummary {
         host_count: ctx.total_hosts,

@@ -103,8 +103,6 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     sectionId: string;
     itemId: ItemId;
   } | null>(null);
-  const lastFocusedItemRef = useRef<ItemId | null>(null);
-
   useEffect(() => {
     fetchFleetView().then(setView).catch((e) => setError(e.message));
   }, []);
@@ -121,14 +119,39 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Restore focus to the last-focused fleet item after view updates
   useFleetFocusRecovery(view?.generation ?? null);
 
-  // Handle pending navigation target (from banner and search clicks)
+  // Portal flow: complete the reveal -> scroll -> highlight -> focus
+  // sequence after a banner or search navigation sets pendingNavTarget.
+  const [portalCounter, setPortalCounter] = useState(0);
+
   useEffect(() => {
-    if (pendingNavTarget) {
-      setActiveSection(pendingNavTarget.sectionId);
-      lastFocusedItemRef.current = pendingNavTarget.itemId;
-      setPendingNavTarget(null);
-    }
+    if (!pendingNavTarget) return;
+    setActiveSection(pendingNavTarget.sectionId);
+    setExpandedItemId(null);
+    setPortalCounter((c) => c + 1);
   }, [pendingNavTarget]);
+
+  useEffect(() => {
+    if (!pendingNavTarget) return;
+    const targetId = JSON.stringify(pendingNavTarget.itemId);
+
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-item-id='${targetId.replace(/'/g, "\\'")}']`) as HTMLElement | null;
+      if (!el) {
+        setPendingNavTarget(null);
+        return;
+      }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("inspectah-highlight");
+      el.focus();
+      setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
+      setPendingNavTarget(null);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalCounter]);
+
+  // Track shell's filterClearCounter to reset filterText when
+  // GlobalSearch navigation clears the section search.
+  const filterClearRef = useRef(0);
 
   // Clear section filter when switching sections
   useEffect(() => {
@@ -242,14 +265,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   return (
     <div data-testid="fleet-app">
       <AppShell
-        sidebar={
-          <FleetSidebar
-            sections={fleetView.sections}
-            activeSection={activeSection}
-            onSelect={setActiveSection}
-            ackState={ack}
-          />
-        }
+        sidebar={null}
         containerfilePreview={fleetView.containerfile_preview}
         stats={fleetStats}
         generation={fleetView.generation}
@@ -269,13 +285,49 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         toolbarExtra={<AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />}
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
       >
-        {({ sectionSearchOpen: _sectionSearchOpen, onSectionSearchClose: _onSectionSearchClose, filterClearCounter: _filterClearCounter, searchSlot: _searchSlot }) => (
+        {({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => {
+          // Sync filterText reset with shell's filterClearCounter
+          if (filterClearCounter !== filterClearRef.current) {
+            filterClearRef.current = filterClearCounter;
+            // Schedule state update outside render via microtask
+            Promise.resolve().then(() => setFilterText(""));
+          }
+
+          return (
+          <>
+          <div className="inspectah-layout__sidebar">
+            <FleetSidebar
+              sections={fleetView.sections}
+              activeSection={activeSection}
+              onSelect={setActiveSection}
+              ackState={ack}
+              searchSlot={searchSlot}
+            />
+          </div>
           <div className="fleet-content" data-testid="fleet-content">
             <FleetBanner
               summary={fleetView.summary}
               ackState={ack}
               onNavigate={handleBannerNavigate}
             />
+            {sectionSearchOpen && (
+              <div className="fleet-section-search" data-testid="fleet-section-search">
+                <input
+                  type="text"
+                  placeholder="Filter items..."
+                  autoFocus
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setFilterText("");
+                      onSectionSearchClose();
+                    }
+                  }}
+                  aria-label="Filter section items"
+                />
+              </div>
+            )}
             {refetchError && (
               <div className="refetch-error" data-testid="refetch-error">
                 {refetchError}
@@ -299,7 +351,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
               />
             )}
           </div>
-        )}
+          </>
+          );
+        }}
       </AppShell>
     </div>
   );

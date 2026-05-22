@@ -7,6 +7,7 @@ export interface FleetSidebarProps {
   activeSection: string;
   onSelect: (sectionId: string) => void;
   ackState: UseVariantAckResult;
+  searchSlot?: React.ReactNode;
 }
 
 function sectionItemCount(section: FleetSection): number {
@@ -35,6 +36,7 @@ export function FleetSidebar({
   activeSection,
   onSelect,
   ackState,
+  searchSlot,
 }: FleetSidebarProps) {
   return (
     <nav
@@ -42,6 +44,7 @@ export function FleetSidebar({
       aria-label="Fleet section navigation"
       data-testid="fleet-sidebar"
     >
+      {searchSlot}
       <Nav aria-label="Fleet sections">
         {sections.map((section) => {
           const ack = ackLabel(section, ackState);

@@ -628,10 +628,10 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
         informational > 0,
         "informational_variant_count should be non-zero when context items have variants, got {informational}"
     );
-    // 2 variants for the quadlet + 2 variants for the drop-in = 4
+    // 1 quadlet path with variants + 1 drop-in path with variants = 2 items
     assert_eq!(
-        informational, 4,
-        "expected 4 informational variants (2 quadlet + 2 drop-in)"
+        informational, 2,
+        "expected 2 informational items with variants (1 quadlet + 1 drop-in)"
     );
 
     // Verify the containers section has a quadlet item with variants
