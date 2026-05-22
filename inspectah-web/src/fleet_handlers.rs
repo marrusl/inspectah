@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::fleet::PrevalenceZone;
+use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
     AttentionLevel, AttentionReason, AttentionTag, ContentHash, FleetAttention, FleetContext,
@@ -340,6 +340,8 @@ fn build_fleet_view_response(
 ) -> FleetViewResponse {
     let view = session.view();
     let snap = session.snapshot_projected();
+    let sections = build_fleet_sections(session, &snap, ctx);
+    let summary = build_fleet_summary(&snap, ctx, &sections);
 
     FleetViewResponse {
         generation: session.generation(),
@@ -347,8 +349,8 @@ fn build_fleet_view_response(
         can_redo: session.can_redo(),
         containerfile_preview: view.containerfile_preview.clone(),
         session_is_sensitive: session.is_sensitive(),
-        summary: build_fleet_summary(&snap, ctx),
-        sections: build_fleet_sections(session, &snap, ctx),
+        summary,
+        sections,
     }
 }
 
@@ -359,12 +361,12 @@ fn build_fleet_view_response(
 fn build_fleet_summary(
     snap: &InspectionSnapshot,
     ctx: &FleetContext,
+    sections: &[FleetSection],
 ) -> FleetSummary {
     let variant_summary =
         inspectah_refine::fleet::variant_summary(snap, Some(ctx));
 
     let mut actionable_variant_items = Vec::new();
-    let mut informational_variant_count: usize = 0;
 
     if let Some(ref vs) = variant_summary {
         for (path, info) in &vs.variant_distribution {
@@ -382,15 +384,40 @@ fn build_fleet_summary(
     }
 
     // Count non-config variants (informational) from context sections.
-    // Currently config is the only section with variant tracking, so this
-    // stays 0 until other sections gain fleet_prevalence variant support.
-    _ = &mut informational_variant_count;
+    // Context sections are read-only (is_decision_section == false) and
+    // may now carry FleetVariants on items with multiple content variants.
+    let informational_variant_count = sections
+        .iter()
+        .filter(|s| !s.is_decision_section)
+        .flat_map(section_items)
+        .filter_map(|item| item.variants.as_ref())
+        .map(|v| v.count)
+        .sum();
 
     FleetSummary {
         host_count: ctx.total_hosts,
         actionable_variant_items,
         informational_variant_count,
     }
+}
+
+/// Iterate over all items in a section regardless of zone/flat layout.
+fn section_items(section: &FleetSection) -> impl Iterator<Item = &FleetItem> {
+    let zone_items = section
+        .zones
+        .iter()
+        .flat_map(|z| {
+            z.consensus
+                .items
+                .iter()
+                .chain(z.near_consensus.items.iter())
+                .chain(z.divergent.items.iter())
+        });
+    let flat_items = section
+        .items
+        .iter()
+        .flat_map(|items| items.iter());
+    zone_items.chain(flat_items)
 }
 
 // ---------------------------------------------------------------------------
@@ -554,9 +581,9 @@ fn build_context_sections(
     snap: &InspectionSnapshot,
     ctx: &FleetContext,
 ) {
-    // Services
+    // Services (state changes + drop-in overrides)
     if let Some(ref svc) = snap.services {
-        let items: Vec<FleetItem> = svc
+        let mut items: Vec<FleetItem> = svc
             .state_changes
             .iter()
             .map(|unit| {
@@ -573,6 +600,50 @@ fn build_context_sections(
                 }
             })
             .collect();
+
+        // Group drop-ins by (unit, path) to detect variants.
+        let mut dropin_groups: std::collections::BTreeMap<
+            (&str, &str),
+            Vec<&inspectah_core::types::services::SystemdDropIn>,
+        > = std::collections::BTreeMap::new();
+        for d in &svc.drop_ins {
+            dropin_groups
+                .entry((d.unit.as_str(), d.path.as_str()))
+                .or_default()
+                .push(d);
+        }
+
+        for ((_, path), group) in &dropin_groups {
+            // Emit only the Selected/Only entry as the representative item.
+            let representative = group
+                .iter()
+                .find(|d| matches!(d.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .or_else(|| group.first());
+            if let Some(d) = representative {
+                let item_id = ItemId::DropIn {
+                    path: path.to_string(),
+                };
+                let fp = d.fleet.as_ref();
+                let variants = if group.len() >= 2 {
+                    Some(build_content_variants(
+                        &group
+                            .iter()
+                            .map(|d| (&d.content, d.variant_selection, d.fleet.as_ref()))
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                };
+                items.push(FleetItem {
+                    item_id,
+                    include: true,
+                    attention: default_context_attention(fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants,
+                });
+            }
+        }
+
         if !items.is_empty() {
             sections.push(build_section("services", "Services", false, &items, ctx));
         }
@@ -581,32 +652,86 @@ fn build_context_sections(
     // Containers (quadlets + compose)
     if let Some(ref containers) = snap.containers {
         let mut items: Vec<FleetItem> = Vec::new();
+
+        // Group quadlet units by path to detect variants.
+        let mut quadlet_groups: std::collections::BTreeMap<
+            &str,
+            Vec<&inspectah_core::types::containers::QuadletUnit>,
+        > = std::collections::BTreeMap::new();
         for q in &containers.quadlet_units {
-            let item_id = ItemId::Quadlet {
-                path: q.path.clone(),
-            };
-            let fp = q.fleet.as_ref();
-            items.push(FleetItem {
-                item_id,
-                include: true,
-                attention: default_context_attention(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
-                variants: None,
-            });
+            quadlet_groups
+                .entry(q.path.as_str())
+                .or_default()
+                .push(q);
         }
+        for (path, group) in &quadlet_groups {
+            let representative = group
+                .iter()
+                .find(|q| matches!(q.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .or_else(|| group.first());
+            if let Some(q) = representative {
+                let item_id = ItemId::Quadlet {
+                    path: path.to_string(),
+                };
+                let fp = q.fleet.as_ref();
+                let variants = if group.len() >= 2 {
+                    Some(build_content_variants(
+                        &group
+                            .iter()
+                            .map(|q| (&q.content, q.variant_selection, q.fleet.as_ref()))
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                };
+                items.push(FleetItem {
+                    item_id,
+                    include: true,
+                    attention: default_context_attention(fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants,
+                });
+            }
+        }
+
+        // Group compose files by path to detect variants.
+        let mut compose_groups: std::collections::BTreeMap<
+            &str,
+            Vec<&inspectah_core::types::containers::ComposeFile>,
+        > = std::collections::BTreeMap::new();
         for c in &containers.compose_files {
-            let item_id = ItemId::Compose {
-                path: c.path.clone(),
-            };
-            let fp = c.fleet.as_ref();
-            items.push(FleetItem {
-                item_id,
-                include: true,
-                attention: default_context_attention(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
-                variants: None,
-            });
+            compose_groups
+                .entry(c.path.as_str())
+                .or_default()
+                .push(c);
         }
+        for (path, group) in &compose_groups {
+            let representative = group
+                .iter()
+                .find(|c| matches!(c.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .or_else(|| group.first());
+            if let Some(c) = representative {
+                let item_id = ItemId::Compose {
+                    path: path.to_string(),
+                };
+                let fp = c.fleet.as_ref();
+                // Compose files don't have a single `content` field; hash
+                // the path + serialized images to produce a stable key.
+                let variants = if group.len() >= 2 {
+                    Some(build_compose_variants(group))
+                } else {
+                    None
+                };
+                items.push(FleetItem {
+                    item_id,
+                    include: true,
+                    attention: default_context_attention(fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants,
+                });
+            }
+        }
+
         if !items.is_empty() {
             sections.push(build_section(
                 "containers",
@@ -911,6 +1036,86 @@ fn build_variants(
                     .as_ref()
                     .map(|f| f.count.max(0) as usize)
                     .unwrap_or(0),
+                selected: is_selected,
+            }
+        })
+        .collect();
+
+    FleetVariants {
+        count: entries.len(),
+        selected: selected_hash.as_str().to_string(),
+        options,
+    }
+}
+
+/// Build read-only `FleetVariants` for context items that have content
+/// (quadlet units, service drop-ins). Each tuple is (content, variant_selection, fleet).
+fn build_content_variants(
+    entries: &[(&String, VariantSelection, Option<&FleetPrevalence>)],
+) -> FleetVariants {
+    let selected_entry = entries
+        .iter()
+        .find(|(_, vs, _)| matches!(vs, VariantSelection::Selected | VariantSelection::Only));
+    let selected_hash = selected_entry
+        .map(|(content, _, _)| ContentHash::from_content(content.as_bytes()))
+        .unwrap_or_else(|| ContentHash::from_content(entries[0].0.as_bytes()));
+
+    let options: Vec<FleetVariantOption> = entries
+        .iter()
+        .map(|(content, vs, fp)| {
+            let hash = ContentHash::from_content(content.as_bytes());
+            let is_selected = matches!(vs, VariantSelection::Selected)
+                || (matches!(vs, VariantSelection::Only) && hash == selected_hash);
+            FleetVariantOption {
+                hash: hash.as_str().to_string(),
+                hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
+                host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
+                selected: is_selected,
+            }
+        })
+        .collect();
+
+    FleetVariants {
+        count: entries.len(),
+        selected: selected_hash.as_str().to_string(),
+        options,
+    }
+}
+
+/// Build read-only `FleetVariants` for compose files. Compose files lack a
+/// single `content` field, so we hash `path + serialized images` to produce
+/// a stable content identity.
+fn build_compose_variants(
+    entries: &[&inspectah_core::types::containers::ComposeFile],
+) -> FleetVariants {
+    fn compose_hash(c: &inspectah_core::types::containers::ComposeFile) -> ContentHash {
+        let mut key = c.path.clone();
+        for svc in &c.images {
+            key.push(':');
+            key.push_str(&svc.service);
+            key.push('=');
+            key.push_str(&svc.image);
+        }
+        ContentHash::from_content(key.as_bytes())
+    }
+
+    let selected_entry = entries
+        .iter()
+        .find(|c| matches!(c.variant_selection, VariantSelection::Selected | VariantSelection::Only));
+    let selected_hash = selected_entry
+        .map(|c| compose_hash(c))
+        .unwrap_or_else(|| compose_hash(entries[0]));
+
+    let options: Vec<FleetVariantOption> = entries
+        .iter()
+        .map(|c| {
+            let hash = compose_hash(c);
+            let is_selected = matches!(c.variant_selection, VariantSelection::Selected)
+                || (matches!(c.variant_selection, VariantSelection::Only) && hash == selected_hash);
+            FleetVariantOption {
+                hash: hash.as_str().to_string(),
+                hosts: c.fleet.as_ref().map(|f| f.hosts.clone()).unwrap_or_default(),
+                host_count: c.fleet.as_ref().map(|f| f.count.max(0) as usize).unwrap_or(0),
                 selected: is_selected,
             }
         })

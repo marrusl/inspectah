@@ -3,7 +3,9 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
 use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
 use inspectah_web::handlers::AppState;
@@ -527,4 +529,169 @@ async fn fleet_diff_422_binary() {
         json["error"].as_str().unwrap().contains("binary"),
         "error should mention binary content"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Informational variant tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "web-tier".into(),
+        host_count: 3,
+        hostnames: vec!["h1".into(), "h2".into(), "h3".into()],
+        merged_at: "2026-05-22T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+
+    // Quadlet with 2 variants (same path, different content)
+    snap.containers = Some(ContainerSection {
+        quadlet_units: vec![
+            QuadletUnit {
+                path: "/etc/containers/systemd/app.container".into(),
+                name: "app.container".into(),
+                content: "[Container]\nImage=quay.io/app:v1\n".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 3,
+                    hosts: vec!["h1".into(), "h2".into()],
+                }),
+                ..Default::default()
+            },
+            QuadletUnit {
+                path: "/etc/containers/systemd/app.container".into(),
+                name: "app.container".into(),
+                content: "[Container]\nImage=quay.io/app:v2\n".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 1,
+                    total: 3,
+                    hosts: vec!["h3".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+
+    // Service drop-in with 2 variants
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![
+            SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+                content: "[Service]\nRestart=always\n".into(),
+                include: true,
+                variant_selection: VariantSelection::Selected,
+                fleet: Some(FleetPrevalence {
+                    count: 2,
+                    total: 3,
+                    hosts: vec!["h1".into(), "h2".into()],
+                }),
+            },
+            SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+                content: "[Service]\nRestart=on-failure\n".into(),
+                include: true,
+                variant_selection: VariantSelection::Alternative,
+                fleet: Some(FleetPrevalence {
+                    count: 1,
+                    total: 3,
+                    hosts: vec!["h3".into()],
+                }),
+            },
+        ],
+        ..Default::default()
+    });
+
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let (status, json) = get_json(&app, "/api/fleet/view").await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let summary = json.get("summary").expect("summary should be present");
+    let informational = summary["informational_variant_count"]
+        .as_u64()
+        .expect("informational_variant_count should be a number");
+    assert!(
+        informational > 0,
+        "informational_variant_count should be non-zero when context items have variants, got {informational}"
+    );
+    // 2 variants for the quadlet + 2 variants for the drop-in = 4
+    assert_eq!(
+        informational, 4,
+        "expected 4 informational variants (2 quadlet + 2 drop-in)"
+    );
+
+    // Verify the containers section has a quadlet item with variants
+    let sections = json["sections"].as_array().expect("sections array");
+    let containers = sections
+        .iter()
+        .find(|s| s["id"] == "containers")
+        .expect("containers section should exist");
+
+    // Find the quadlet item (may be in zones or flat items)
+    let quadlet_item = find_item_in_section(containers, "Quadlet");
+    assert!(
+        quadlet_item.is_some(),
+        "containers section should have a Quadlet item"
+    );
+    let quadlet = quadlet_item.unwrap();
+    let variants = quadlet
+        .get("variants")
+        .expect("quadlet item should have variants");
+    assert!(!variants.is_null(), "variants should not be null");
+    assert_eq!(variants["count"], 2, "quadlet should have 2 variants");
+
+    // Verify the services section has a drop-in item with variants
+    let services = sections
+        .iter()
+        .find(|s| s["id"] == "services")
+        .expect("services section should exist");
+    let dropin_item = find_item_in_section(services, "DropIn");
+    assert!(
+        dropin_item.is_some(),
+        "services section should have a DropIn item"
+    );
+    let dropin = dropin_item.unwrap();
+    let dropin_variants = dropin
+        .get("variants")
+        .expect("drop-in item should have variants");
+    assert!(!dropin_variants.is_null(), "drop-in variants should not be null");
+    assert_eq!(dropin_variants["count"], 2, "drop-in should have 2 variants");
+}
+
+/// Find an item with the given `kind` in a section (checking both zones and flat items).
+fn find_item_in_section<'a>(
+    section: &'a serde_json::Value,
+    kind: &str,
+) -> Option<&'a serde_json::Value> {
+    // Check flat items
+    if let Some(items) = section.get("items").and_then(|i| i.as_array()) {
+        if let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind) {
+            return Some(item);
+        }
+    }
+    // Check zone-grouped items
+    if let Some(zones) = section.get("zones").and_then(|z| z.as_object()) {
+        for (_zone_name, zone_group) in zones {
+            if let Some(items) = zone_group.get("items").and_then(|i| i.as_array()) {
+                if let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind) {
+                    return Some(item);
+                }
+            }
+        }
+    }
+    None
 }
