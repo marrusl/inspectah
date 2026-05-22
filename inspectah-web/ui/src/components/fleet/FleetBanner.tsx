@@ -167,7 +167,7 @@ function BannerItem({
           color: "var(--pf-t--global--text--color--subtle, #6a6e73)",
         }}
       >
-        {item.variant_count} variants
+        &mdash; {item.variant_count} variants
       </span>
     </li>
   );

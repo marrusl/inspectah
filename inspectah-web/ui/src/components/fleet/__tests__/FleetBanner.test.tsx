@@ -217,7 +217,7 @@ describe("FleetBanner", () => {
       <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
-    expect(screen.getByText("4 variants")).toBeInTheDocument();
-    expect(screen.getByText("2 variants")).toBeInTheDocument();
+    expect(screen.getByText(/4 variants/)).toBeInTheDocument();
+    expect(screen.getByText(/2 variants/)).toBeInTheDocument();
   });
 });

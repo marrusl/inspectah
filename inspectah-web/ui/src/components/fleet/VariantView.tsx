@@ -100,7 +100,9 @@ export function VariantView({
                 <span className="variant-view__option-hash">
                   {option.hash.substring(0, 8)}
                 </span>
-                <span className="variant-view__option-hosts">{hostLabel}</span>
+                <span className="variant-view__option-hosts">
+                  {hostLabel}:
+                </span>
                 <span className="variant-view__option-hostnames">
                   {option.hosts.join(", ")}
                 </span>

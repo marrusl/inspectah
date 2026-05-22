@@ -12,6 +12,7 @@ import type {
   ContextSection,
 } from "../api/types";
 import { fetchFleetView } from "../api/fleet-client";
+import "../fleet.css";
 import { useFleetMutation } from "../hooks/useFleetMutation";
 import { useVariantAck } from "../hooks/useVariantAck";
 import { useFleetDiff } from "../hooks/useFleetDiff";
@@ -135,9 +136,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // GlobalSearch navigation clears the section search.
   const filterClearRef = useRef(0);
 
-  // Clear section filter when switching sections
+  // Clear section filter and close variant view when switching sections
   useEffect(() => {
     setFilterText("");
+    setExpandedItemId(null);
   }, [activeSection]);
 
   const handleToggle = useCallback(
@@ -233,13 +235,33 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const searchContextSections = buildFleetSearchSections(fleetView.sections);
 
+  // Compute fleet-level stats from section data
+  const fleetSectionCounts = fleetView.sections.reduce(
+    (acc, section) => {
+      const items = sectionItems(section);
+      const included = items.filter((i) => i.include).length;
+      const excluded = items.length - included;
+      if (section.id === "packages") {
+        acc.totalPkg = items.length;
+        acc.inclPkg = included;
+        acc.exclPkg = excluded;
+      } else if (section.id === "config_files") {
+        acc.totalCfg = items.length;
+        acc.inclCfg = included;
+        acc.exclCfg = excluded;
+      }
+      return acc;
+    },
+    { totalPkg: 0, inclPkg: 0, exclPkg: 0, totalCfg: 0, inclCfg: 0, exclCfg: 0 },
+  );
+
   const fleetStats: RefineStats = {
-    total_packages: 0,
-    included_packages: 0,
-    excluded_packages: 0,
-    total_configs: 0,
-    included_configs: 0,
-    excluded_configs: 0,
+    total_packages: fleetSectionCounts.totalPkg,
+    included_packages: fleetSectionCounts.inclPkg,
+    excluded_packages: fleetSectionCounts.exclPkg,
+    total_configs: fleetSectionCounts.totalCfg,
+    included_configs: fleetSectionCounts.inclCfg,
+    excluded_configs: fleetSectionCounts.exclCfg,
     package_managed_configs: 0,
     needs_review_count: ack.unackedCount,
     ops_applied: 0,

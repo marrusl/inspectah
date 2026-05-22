@@ -177,9 +177,9 @@ describe("VariantView", () => {
     );
 
     // Two options have 1 host each (aaa111, ccc333)
-    const singleHostLabels = screen.getAllByText("1 host");
+    const singleHostLabels = screen.getAllByText("1 host:");
     expect(singleHostLabels).toHaveLength(2);
-    expect(screen.getByText("2 hosts")).toBeInTheDocument();
+    expect(screen.getByText("2 hosts:")).toBeInTheDocument();
   });
 
   it("calls diffHook.fetchDiff with correct args when Compare clicked", async () => {
