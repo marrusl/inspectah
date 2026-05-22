@@ -92,7 +92,10 @@ impl Inspector for ConfigInspector {
         // Build DHCP exclusion set
         let dhcp_paths: HashSet<String> = dhcp_connection_paths(exec).into_iter().collect();
 
-        // 1) RPM-owned modified files (from rpm -Va / verification_results)
+        // 1) RPM-owned modified files (from rpm -Va / verification_results).
+        //    Files with only metadata changes (mtime, mode, etc.) are
+        //    classified as RpmOwnedDefault and skipped — defaults don't
+        //    belong in the snapshot, same as base-image packages.
         let mut rpm_va_paths: HashSet<String> = HashSet::new();
         let mut va_entries: Vec<(&str, &str, Option<&str>)> = Vec::new();
         for entry in rpm_state.verification_results() {
@@ -116,6 +119,12 @@ impl Inspector for ConfigInspector {
             let content = read_config_content(exec, path, &mut degraded_reasons);
 
             let kind = classify_rpm_va_kind(flags);
+
+            // Default/unmodified configs don't belong in the snapshot.
+            // Only modified (content-changed) RPM configs are migration-relevant.
+            if kind == ConfigFileKind::RpmOwnedDefault {
+                continue;
+            }
 
             section.files.push(ConfigFileEntry {
                 path: path.to_string(),
