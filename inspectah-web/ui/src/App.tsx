@@ -14,52 +14,20 @@ import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
-import { useKeyboard } from "./hooks/useKeyboard";
 import { Sidebar } from "./components/Sidebar";
-import { StatsBar } from "./components/StatsBar";
-import { ContainerfilePanel } from "./components/ContainerfilePanel";
 import { MainContent } from "./components/MainContent";
-import { ShortcutOverlay } from "./components/ShortcutOverlay";
-import { GlobalSearch } from "./components/GlobalSearch";
-import type { GlobalSearchHandle } from "./components/GlobalSearch";
-import { ExportDialog } from "./components/ExportDialog";
+import { AppShell } from "./components/AppShell";
+import { FleetApp } from "./components/FleetApp";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
-const LS_PANEL_KEY = "inspectah-cf-panel-open";
-
-function readPanelPref(): boolean {
-  try {
-    const v = localStorage.getItem(LS_PANEL_KEY);
-    if (v === "false") return false;
-    return true; // default open
-  } catch {
-    return true;
-  }
-}
-
-/** Compute initial panel state synchronously to avoid flash on narrow viewports. */
-function initialPanelOpen(): boolean {
-  const savedOpen = readPanelPref();
-  // On narrow viewports, always start collapsed regardless of persisted state
-  if (typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches) {
-    return false;
-  }
-  return savedOpen;
-}
-
 function App() {
   const [activeSection, setActiveSection] = useState("packages");
-  const [cfPanelOpen, setCfPanelOpen] = useState(initialPanelOpen);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
-  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
-  const [filterClearCounter, setFilterClearCounter] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [revealItemId, setRevealItemId] = useState<string | undefined>();
+  const [searchNavCounter, setSearchNavCounter] = useState(0);
   const mainContentRef = useRef<HTMLDivElement>(null);
-  const globalSearchRef = useRef<GlobalSearchHandle>(null);
   const hamburgerRef = useRef<HTMLButtonElement>(null);
   const pendingFocusItemRef = useRef<string | null>(null);
 
@@ -168,7 +136,6 @@ function App() {
             const section = testId.includes("packages:") ? "packages" : "configs";
             const itemId = testId.replace("decision-item-", "");
             setActiveSection(section);
-            setFilterClearCounter((c) => c + 1);
             pendingFocusItemRef.current = itemId;
           }
         });
@@ -232,34 +199,6 @@ function App() {
       });
   }, [mutation]);
 
-  const togglePanel = useCallback(() => {
-    setCfPanelOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(LS_PANEL_KEY, String(next));
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
-
-  const handleExport = useCallback(() => {
-    setExportDialogOpen(true);
-  }, []);
-
-  const handleToggleShortcuts = useCallback(() => {
-    setShortcutsOpen((prev) => !prev);
-  }, []);
-
-  const handleOpenGlobalSearch = useCallback(() => {
-    globalSearchRef.current?.focus();
-  }, []);
-
-  const handleOpenSectionSearch = useCallback(() => {
-    setSectionSearchOpen(true);
-  }, []);
-
   const closeSidebarOverlay = useCallback(() => {
     setSidebarOverlayOpen(false);
     requestAnimationFrame(() => {
@@ -267,12 +206,12 @@ function App() {
     });
   }, []);
 
-  const handleNavigateFromGlobalSearch = useCallback(
+  const handleNavigateFromSearch = useCallback(
     (sectionId: string, itemId: string) => {
       pendingFocusItemRef.current = itemId;
       setRevealItemId(itemId);
       setActiveSection(sectionId);
-      setFilterClearCounter((c) => c + 1);
+      setSearchNavCounter((c) => c + 1);
       // Close mobile overlay so the target item is visible
       if (isMobile && sidebarOverlayOpen) closeSidebarOverlay();
     },
@@ -314,7 +253,7 @@ function App() {
         setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
       }
     });
-  }, [activeSection, view.data, filterClearCounter]);
+  }, [activeSection, view.data, searchNavCounter]);
 
   const handleSidebarSelect = useCallback(
     (sectionId: string) => {
@@ -330,17 +269,6 @@ function App() {
     },
     [view.invalidate],
   );
-
-  useKeyboard({
-    onUndo: handleUndo,
-    onRedo: handleRedo,
-    onTogglePanel: togglePanel,
-    onExport: handleExport,
-    onSectionChange: setActiveSection,
-    onOpenSearch: handleOpenSectionSearch,
-    onOpenGlobalSearch: handleOpenGlobalSearch,
-    onOpenShortcuts: handleToggleShortcuts,
-  });
 
   const viewLoading = view.loading && view.data === null;
 
@@ -384,26 +312,40 @@ function App() {
     );
   }
 
-  const searchSlot = (
-    <GlobalSearch
-      ref={globalSearchRef}
-      packageItems={view.data ? view.data.packages.map((p) => ({ type: "package" as const, data: p })) : []}
-      configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
-      userDecisions={view.data?.users_groups_decisions}
-      contextSections={sections.data}
-      onNavigate={handleNavigateFromGlobalSearch}
-    />
-  );
+  // Fleet mode: delegate to FleetApp
+  if (health.data?.fleet) {
+    return <FleetApp fleet={health.data.fleet} health={health.data} />;
+  }
+
+  // Single-host mode: use AppShell
+  const packageItems = view.data
+    ? view.data.packages.map((p) => ({ type: "package" as const, data: p }))
+    : [];
+  const configItems = view.data
+    ? view.data.config_files.map((c) => ({ type: "config" as const, data: c }))
+    : [];
 
   return (
-    <Page className="inspectah-page">
-      <StatsBar
+    <>
+      <AppShell
+        sidebar={null}
+        containerfilePreview={view.data?.containerfile_preview}
+        containerfileLoading={viewLoading}
         stats={view.data?.stats ?? null}
-        viewedNeedsReviewCount={viewedNeedsReviewCount}
+        generation={view.data?.generation ?? 0}
+        sessionIsSensitive={view.data?.session_is_sensitive ?? false}
         onUndo={handleUndo}
         onRedo={handleRedo}
-        onExport={handleExport}
+        onExportComplete={handleExportViewUpdate}
         isPending={mutation.isPending}
+        viewedNeedsReviewCount={viewedNeedsReviewCount}
+        activeSection={activeSection}
+        onNavigateSection={setActiveSection}
+        searchPackageItems={packageItems}
+        searchConfigItems={configItems}
+        searchUserDecisions={view.data?.users_groups_decisions}
+        searchContextSections={sections.data}
+        onSearchNavigate={handleNavigateFromSearch}
         hamburger={
           isMobile ? (
             <button
@@ -419,70 +361,54 @@ function App() {
             </button>
           ) : undefined
         }
-      />
-      <div className="inspectah-layout">
-        {!isMobile && (
-          <div className="inspectah-layout__sidebar">
-            <Sidebar
-              activeSection={activeSection}
-              onSelect={handleSidebarSelect}
-              stats={view.data?.stats ?? null}
-              sections={sections.data}
-              health={health.data}
-              userDecisionCount={view.data?.users_groups_decisions?.length}
-              searchSlot={searchSlot}
-            />
-          </div>
+      >
+        {({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => (
+          <>
+            {!isMobile && (
+              <div className="inspectah-layout__sidebar">
+                <Sidebar
+                  activeSection={activeSection}
+                  onSelect={handleSidebarSelect}
+                  stats={view.data?.stats ?? null}
+                  sections={sections.data}
+                  health={health.data}
+                  userDecisionCount={view.data?.users_groups_decisions?.length}
+                  searchSlot={searchSlot}
+                />
+              </div>
+            )}
+            <div className="inspectah-layout__main" ref={mainContentRef} tabIndex={-1}>
+              <MainContent
+                activeSection={activeSection}
+                loading={viewLoading}
+                viewData={view.data}
+                sections={sections.data}
+                onViewUpdate={() => view.invalidate()}
+                onMutationError={(err) => console.error("Mutation failed:", err.message)}
+                sectionSearchOpen={sectionSearchOpen}
+                onSectionSearchClose={onSectionSearchClose}
+                onViewedChange={refreshViewed}
+                filterClearCounter={filterClearCounter}
+                revealItemId={revealItemId}
+              />
+            </div>
+            {isMobile && sidebarOverlayOpen && (
+              <Sidebar
+                activeSection={activeSection}
+                onSelect={handleSidebarSelect}
+                stats={view.data?.stats ?? null}
+                sections={sections.data}
+                health={health.data}
+                userDecisionCount={view.data?.users_groups_decisions?.length}
+                overlay
+                onClose={closeSidebarOverlay}
+                searchSlot={searchSlot}
+              />
+            )}
+          </>
         )}
-        <div className="inspectah-layout__main" ref={mainContentRef} tabIndex={-1}>
-          <MainContent
-            activeSection={activeSection}
-            loading={viewLoading}
-            viewData={view.data}
-            sections={sections.data}
-            onViewUpdate={() => view.invalidate()}
-            onMutationError={(err) => console.error("Mutation failed:", err.message)}
-            sectionSearchOpen={sectionSearchOpen}
-            onSectionSearchClose={() => setSectionSearchOpen(false)}
-            onViewedChange={refreshViewed}
-            filterClearCounter={filterClearCounter}
-            revealItemId={revealItemId}
-          />
-        </div>
-        <ContainerfilePanel
-          content={view.data?.containerfile_preview ?? null}
-          isOpen={cfPanelOpen}
-          onToggle={togglePanel}
-          loading={viewLoading}
-          sessionIsSensitive={view.data?.session_is_sensitive ?? false}
-        />
-      </div>
-      {isMobile && sidebarOverlayOpen && (
-        <Sidebar
-          activeSection={activeSection}
-          onSelect={handleSidebarSelect}
-          stats={view.data?.stats ?? null}
-          sections={sections.data}
-          health={health.data}
-          userDecisionCount={view.data?.users_groups_decisions?.length}
-          overlay
-          onClose={closeSidebarOverlay}
-          searchSlot={searchSlot}
-        />
-      )}
-      <ShortcutOverlay
-        isOpen={shortcutsOpen}
-        onClose={() => setShortcutsOpen(false)}
-      />
-      <ExportDialog
-        isOpen={exportDialogOpen}
-        onClose={() => setExportDialogOpen(false)}
-        stats={view.data?.stats ?? null}
-        generation={view.data?.generation ?? 0}
-        sessionIsSensitive={view.data?.session_is_sensitive ?? false}
-        onViewUpdate={handleExportViewUpdate}
-      />
-    </Page>
+      </AppShell>
+    </>
   );
 }
 
