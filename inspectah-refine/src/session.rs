@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
@@ -64,32 +65,30 @@ impl RefineSession {
             let zones_active = fleet_meta.host_count >= 3;
             let mut zones = HashMap::new();
 
-            // Sum variant prevalence per path for item-level zone classification.
-            // The merger partitions hosts across variants — each host appears in
-            // exactly one variant, so summing counts gives item-level prevalence.
+            // Classify multi-variant config paths by most-divergent variant.
+            // When a path has 2+ variants (e.g., 3 hosts have version A, 2 have
+            // version B), the path-level zone should reflect the divergence, not
+            // hide it. We classify each variant individually and take the min
+            // (Divergent < NearConsensus < Consensus).
             if let Some(ref cfg) = snapshot.config {
-                let mut path_sum: HashMap<&str, (i32, i32)> = HashMap::new();
+                let mut path_zones: HashMap<&str, PrevalenceZone> = HashMap::new();
                 for entry in &cfg.files {
                     if let Some(ref prevalence) = entry.fleet {
-                        path_sum
+                        let variant_zone = classify_zone(prevalence);
+                        path_zones
                             .entry(entry.path.as_str())
-                            .and_modify(|(sum, _)| {
-                                *sum += prevalence.count;
+                            .and_modify(|current| {
+                                *current = (*current).min(variant_zone);
                             })
-                            .or_insert((prevalence.count, prevalence.total));
+                            .or_insert(variant_zone);
                     }
                 }
-                for (path, (count, total)) in &path_sum {
-                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
-                        count: *count,
-                        total: *total,
-                        hosts: vec![],
-                    };
+                for (path, zone) in &path_zones {
                     zones.insert(
                         ItemId::Config {
                             path: path.to_string(),
                         },
-                        classify_zone(&item_prev),
+                        *zone,
                     );
                 }
             }

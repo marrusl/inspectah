@@ -62,11 +62,11 @@ fn fleet_prevalence(count: i32, total: i32) -> Option<FleetPrevalence> {
 }
 
 #[test]
-fn multi_variant_path_zone_uses_sum_prevalence() {
+fn multi_variant_path_zone_uses_most_divergent_variant() {
     // Three config variants for /etc/app/main.conf: 3/5, 1/5, 1/5.
-    // Zone should sum prevalence: 3+1+1=5 of 5 hosts = Consensus.
-    // The merger partitions hosts across variants — each host appears in
-    // exactly one variant, so summing gives item-level prevalence.
+    // Each variant is classified individually: NearConsensus, Divergent, Divergent.
+    // The path-level zone uses the most-divergent (min): Divergent.
+    // This surfaces the decision: the user must choose among variants.
     let mut snap = make_fleet_snapshot(5);
     snap.config = Some(ConfigSection {
         files: vec![
@@ -98,8 +98,8 @@ fn multi_variant_path_zone_uses_sum_prevalence() {
     };
     assert_eq!(
         ctx.zones.get(&item),
-        Some(&PrevalenceZone::Consensus),
-        "zone must use sum prevalence (3+1+1=5/5), not max",
+        Some(&PrevalenceZone::Divergent),
+        "multi-variant path must use most-divergent variant zone (1/5 → Divergent)",
     );
 }
 

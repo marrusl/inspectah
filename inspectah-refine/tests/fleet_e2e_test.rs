@@ -230,12 +230,12 @@ fn fleet_refine_full_lifecycle() {
     let main_id = ItemId::Config {
         path: "/etc/app/main.conf".into(),
     };
-    // Zone sums prevalence across variants: 3/5 + 1/5 + 1/5 = 5/5 → Consensus.
-    // The merger partitions hosts across variants, so summing gives item-level prevalence.
+    // Zone uses most-divergent variant: 3/5→NearConsensus, 1/5→Divergent, 1/5→Divergent.
+    // The path-level zone is the min (most-divergent): Divergent.
     assert_eq!(
         fleet_ctx.zones.get(&main_id),
-        Some(&PrevalenceZone::Consensus),
-        "main.conf zone should use sum prevalence (3+1+1=5/5 = Consensus)",
+        Some(&PrevalenceZone::Divergent),
+        "main.conf zone should use most-divergent variant (1/5 → Divergent)",
     );
 
     // logging.conf — single variant, 5/5 → Consensus
