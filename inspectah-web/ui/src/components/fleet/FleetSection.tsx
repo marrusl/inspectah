@@ -16,6 +16,8 @@ export interface FleetSectionContentProps {
   onToggle: (itemId: ItemId, include: boolean) => void;
   ack: UseVariantAckResult;
   onExpandVariant?: (itemId: ItemId) => void;
+  /** Force-open variant view (idempotent, used by portal navigation). */
+  onForceExpandVariant?: (itemId: ItemId) => void;
   pendingNavTarget?: NavTarget | null;
   onNavTargetConsumed?: () => void;
 }
@@ -56,6 +58,7 @@ export function FleetSectionContent({
   onToggle,
   ack,
   onExpandVariant,
+  onForceExpandVariant,
   pendingNavTarget,
   onNavTargetConsumed,
 }: FleetSectionContentProps) {
@@ -77,8 +80,10 @@ export function FleetSectionContent({
       setForceExpandZone(zone);
     }
 
-    // Auto-expand the variant view for the target item
-    if (onExpandVariant) {
+    // Auto-expand the variant view for the target item (force-open, not toggle).
+    // Only for decision section config items — context items don't get editable variants.
+    const expandFn = onForceExpandVariant ?? onExpandVariant;
+    if (expandFn && section.is_decision_section) {
       const allItems = section.items ?? [
         ...(section.zones?.consensus.items ?? []),
         ...(section.zones?.near_consensus.items ?? []),
@@ -86,7 +91,7 @@ export function FleetSectionContent({
       ];
       const targetItem = allItems.find((i) => itemIdKey(i.item_id) === targetKey);
       if (targetItem?.variants) {
-        onExpandVariant(pendingNavTarget.itemId);
+        expandFn(pendingNavTarget.itemId);
       }
     }
 

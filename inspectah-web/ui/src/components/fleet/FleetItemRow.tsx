@@ -73,11 +73,11 @@ export function FleetItemRow({
 
   const handleVariantClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onExpandVariant?.(item.item_id);
+    if (isDecisionSection) onExpandVariant?.(item.item_id);
   };
 
   const handleRowClick = () => {
-    onExpandVariant?.(item.item_id);
+    if (isDecisionSection && hasVariants) onExpandVariant?.(item.item_id);
   };
 
   return (
@@ -106,7 +106,7 @@ export function FleetItemRow({
         {count}/{total} hosts
       </Badge>
 
-      {hasVariants && (
+      {hasVariants && isDecisionSection && (
         <button
           className="fleet-item-row__variants"
           onClick={handleVariantClick}
@@ -114,6 +114,11 @@ export function FleetItemRow({
         >
           {item.variants!.count} variants
         </button>
+      )}
+      {hasVariants && !isDecisionSection && (
+        <span className="fleet-item-row__variants fleet-item-row__variants--readonly">
+          {item.variants!.count} variants
+        </span>
       )}
 
       {showAttention && (

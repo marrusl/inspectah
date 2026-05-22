@@ -153,6 +153,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     );
   }, []);
 
+  const handleForceExpandVariant = useCallback((itemId: ItemId) => {
+    setExpandedItemId(itemId);
+  }, []);
+
   const handleSelectVariant = useCallback(
     (itemId: ItemId, hash: string) => {
       mutate({ op: "SelectVariant", target: { item_id: itemId, target: hash } });
@@ -323,10 +327,11 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
               onToggle={handleToggle}
               ack={ack}
               onExpandVariant={handleExpandVariant}
+              onForceExpandVariant={handleForceExpandVariant}
               pendingNavTarget={pendingNavTarget}
               onNavTargetConsumed={handleNavTargetConsumed}
             />
-            {expandedItem && expandedItem.variants && (
+            {expandedItem && expandedItem.variants && activeFleetSection?.is_decision_section && (
               <VariantView
                 item={expandedItem}
                 ack={ack}
