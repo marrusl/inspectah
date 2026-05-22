@@ -312,11 +312,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
               searchSlot={searchSlot}
             />
           </div>
-          <div className="fleet-content" data-testid="fleet-content">
+          <div className="inspectah-layout__main fleet-content" data-testid="fleet-content">
             <FleetBanner
               summary={fleetView.summary}
               ackState={ack}
               onNavigate={handleBannerNavigate}
+              activeSection={activeSection}
             />
             {sectionSearchOpen && (
               <div className="fleet-section-search" data-testid="fleet-section-search">

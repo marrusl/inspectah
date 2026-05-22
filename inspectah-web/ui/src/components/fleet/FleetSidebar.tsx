@@ -1,4 +1,4 @@
-import { Nav, NavItem, Badge } from "@patternfly/react-core";
+import { Nav, NavGroup, NavItem, Badge } from "@patternfly/react-core";
 import type { FleetSection } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
@@ -38,6 +38,30 @@ export function FleetSidebar({
   ackState,
   searchSlot,
 }: FleetSidebarProps) {
+  const reviewSections = sections.filter((s) => s.is_decision_section);
+  const referenceSections = sections.filter((s) => !s.is_decision_section);
+
+  const renderItem = (section: FleetSection) => {
+    const ack = ackLabel(section, ackState);
+    return (
+      <NavItem
+        key={section.id}
+        itemId={section.id}
+        isActive={activeSection === section.id}
+        aria-current={activeSection === section.id ? "page" : undefined}
+        onClick={() => onSelect(section.id)}
+      >
+        {section.display_name}{" "}
+        <Badge isRead>{sectionItemCount(section)}</Badge>
+        {ack && (
+          <span className="fleet-sidebar__ack-progress" data-testid={`ack-progress-${section.id}`}>
+            {ack}
+          </span>
+        )}
+      </NavItem>
+    );
+  };
+
   return (
     <nav
       className="inspectah-sidebar"
@@ -46,26 +70,14 @@ export function FleetSidebar({
     >
       {searchSlot}
       <Nav aria-label="Fleet sections">
-        {sections.map((section) => {
-          const ack = ackLabel(section, ackState);
-          return (
-            <NavItem
-              key={section.id}
-              itemId={section.id}
-              isActive={activeSection === section.id}
-              aria-current={activeSection === section.id ? "page" : undefined}
-              onClick={() => onSelect(section.id)}
-            >
-              {section.display_name}{" "}
-              <Badge isRead>{sectionItemCount(section)}</Badge>
-              {ack && (
-                <span className="fleet-sidebar__ack-progress" data-testid={`ack-progress-${section.id}`}>
-                  {ack}
-                </span>
-              )}
-            </NavItem>
-          );
-        })}
+        <NavGroup title="Review">
+          {reviewSections.map(renderItem)}
+        </NavGroup>
+        {referenceSections.length > 0 && (
+          <NavGroup title="Reference">
+            {referenceSections.map(renderItem)}
+          </NavGroup>
+        )}
       </Nav>
     </nav>
   );

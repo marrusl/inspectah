@@ -10,6 +10,8 @@ export interface FleetBannerProps {
   summary: FleetSummary;
   ackState: UseVariantAckResult;
   onNavigate: (sectionId: string, itemId: ItemId) => void;
+  /** When set, only show items for this section; summarize others. */
+  activeSection?: string;
 }
 
 /** Convert a snake_case section_id to a readable tag label. */
@@ -31,71 +33,64 @@ function getSeverity(ackState: UseVariantAckResult): Severity {
   return "danger";
 }
 
-const severityColors: Record<Severity, { bg: string; border: string }> = {
-  success: {
-    bg: "var(--pf-t--global--color--status--success--default, #3e8635)",
-    border: "var(--pf-t--global--color--status--success--default, #3e8635)",
-  },
-  warning: {
-    bg: "var(--pf-t--global--color--status--warning--default, #f0ab00)",
-    border: "var(--pf-t--global--color--status--warning--default, #f0ab00)",
-  },
-  danger: {
-    bg: "var(--pf-t--global--color--status--danger--default, #c9190b)",
-    border: "var(--pf-t--global--color--status--danger--default, #c9190b)",
-  },
-};
-
 export function FleetBanner({
   summary,
   ackState,
   onNavigate,
+  activeSection,
 }: FleetBannerProps) {
   const { actionable_variant_items, informational_variant_count } = summary;
 
   if (actionable_variant_items.length === 0) return null;
 
   const severity = getSeverity(ackState);
-  const colors = severityColors[severity];
+
+  // Filter items to the active section when specified
+  const sectionItems = activeSection
+    ? actionable_variant_items.filter((item) => item.section_id === activeSection)
+    : actionable_variant_items;
+
+  const otherSectionItems = activeSection
+    ? actionable_variant_items.filter((item) => item.section_id !== activeSection)
+    : [];
+
+  // Count unacked items within the visible set
+  const unackedSectionItems =
+    severity === "success"
+      ? []
+      : sectionItems.filter((item) => !ackState.isAcked(item.item_id));
+
+  // Build cross-section summary for other sections
+  const otherSectionSummary = otherSectionItems.reduce<Record<string, number>>(
+    (acc, item) => {
+      if (!ackState.isAcked(item.item_id)) {
+        const tag = sectionTag(item.section_id);
+        acc[tag] = (acc[tag] ?? 0) + 1;
+      }
+      return acc;
+    },
+    {},
+  );
 
   const headline =
     severity === "success"
       ? `All ${ackState.totalCount} variants reviewed`
       : `${ackState.unackedCount} config items have variants requiring review`;
 
-  const unackedItems =
-    severity === "success"
-      ? []
-      : actionable_variant_items.filter(
-          (item) => !ackState.isAcked(item.item_id),
-        );
-
   return (
     <div
+      className={`fleet-banner fleet-banner--${severity}`}
       data-testid="fleet-banner"
       data-severity={severity}
       role="status"
-      style={{
-        border: `1px solid ${colors.border}`,
-        borderLeft: `4px solid ${colors.border}`,
-        borderRadius: "4px",
-        padding: "12px 16px",
-        marginBottom: "16px",
-        backgroundColor:
-          severity === "success"
-            ? "var(--pf-t--global--color--status--success--100, #f3faf2)"
-            : severity === "warning"
-              ? "var(--pf-t--global--color--status--warning--100, #fef6e7)"
-              : "var(--pf-t--global--color--status--danger--100, #fce8e6)",
-      }}
     >
-      <div style={{ fontWeight: 600, marginBottom: unackedItems.length > 0 ? "8px" : 0 }}>
+      <div className="fleet-banner__headline">
         {headline}
       </div>
 
-      {unackedItems.length > 0 && (
-        <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-          {unackedItems.map((item) => (
+      {unackedSectionItems.length > 0 && (
+        <ul className="fleet-banner__items">
+          {unackedSectionItems.map((item) => (
             <BannerItem
               key={JSON.stringify(item.item_id)}
               item={item}
@@ -105,14 +100,17 @@ export function FleetBanner({
         </ul>
       )}
 
+      {Object.keys(otherSectionSummary).length > 0 && (
+        <div className="fleet-banner__cross-section">
+          Also:{" "}
+          {Object.entries(otherSectionSummary)
+            .map(([tag, count]) => `${count} ${tag.toLowerCase()} variant${count !== 1 ? "s" : ""}`)
+            .join(", ")}
+        </div>
+      )}
+
       {informational_variant_count > 0 && (
-        <div
-          style={{
-            marginTop: "8px",
-            fontSize: "0.875rem",
-            opacity: 0.8,
-          }}
-        >
+        <div className="fleet-banner__info">
           {informational_variant_count} additional items in other sections have
           variants (read-only)
         </div>
@@ -132,42 +130,20 @@ function BannerItem({
   const tag = sectionTag(item.section_id);
 
   return (
-    <li style={{ padding: "2px 0" }}>
-      <span
-        style={{
-          display: "inline-block",
-          fontSize: "0.75rem",
-          fontWeight: 600,
-          color: "var(--pf-t--global--text--color--subtle, #6a6e73)",
-          marginRight: "6px",
-        }}
-      >
+    <li className="fleet-banner__item">
+      <span className="fleet-banner__item-tag">
         [{tag}]
       </span>
       <button
         type="button"
+        className="fleet-banner__item-link"
         onClick={() => onNavigate(item.section_id, item.item_id)}
         aria-label={`Navigate to ${name}`}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          textDecoration: "underline",
-          color: "inherit",
-          fontSize: "inherit",
-        }}
       >
         {name}
       </button>
-      <span
-        style={{
-          marginLeft: "8px",
-          fontSize: "0.8125rem",
-          color: "var(--pf-t--global--text--color--subtle, #6a6e73)",
-        }}
-      >
-        &mdash; {item.variant_count} variants
+      <span className="fleet-banner__item-count">
+        {" — "}{item.variant_count} variants
       </span>
     </li>
   );

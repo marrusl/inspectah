@@ -2,10 +2,8 @@
 
 /* ─── Fleet content area ─────────────────────────────────────────────── */
 
+/* Fleet-specific padding (layout handled by .inspectah-layout__main) */
 .fleet-content {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
   padding: var(--pf-t--global--spacer--md);
 }
 
@@ -91,6 +89,13 @@
   color: var(--pf-t--global--color--brand--hover);
 }
 
+.fleet-item-row__variants-chevron {
+  display: inline-block;
+  font-size: 0.7em;
+  margin-left: 2px;
+  transition: transform 150ms ease;
+}
+
 .fleet-item-row__variants--readonly {
   cursor: default;
   color: var(--pf-t--global--text--color--subtle);
@@ -149,12 +154,91 @@
 }
 
 /* ─── Fleet banner ───────────────────────────────────────────────────── */
-/* Inline styles handle severity-specific colors; CSS provides structure. */
 
 .fleet-banner {
   border-radius: var(--pf-t--global--border--radius--small);
   padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
   margin-bottom: var(--pf-t--global--spacer--md);
+  border: 1px solid;
+  border-left-width: 4px;
+  color: var(--pf-t--global--text--color--regular);
+}
+
+.fleet-banner--success {
+  background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
+  border-color: var(--pf-t--global--color--status--success--default, #3e8635);
+}
+
+.fleet-banner--warning {
+  background-color: var(--pf-t--global--color--status--warning--100, #fef6e7);
+  border-color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+
+.fleet-banner--danger {
+  background-color: var(--pf-t--global--color--status--danger--100, #fce8e6);
+  border-color: var(--pf-t--global--color--status--danger--default, #c9190b);
+}
+
+.fleet-banner__headline {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.fleet-banner__items {
+  margin: var(--pf-t--global--spacer--xs) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-banner__item {
+  padding: 2px 0;
+}
+
+.fleet-banner__item-tag {
+  display: inline-block;
+  font-size: var(--pf-t--global--font--size--body--sm);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--subtle);
+  margin-right: var(--pf-t--global--spacer--xs);
+}
+
+.fleet-banner__item-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  color: inherit;
+  font-size: inherit;
+}
+
+.fleet-banner__item-link:hover {
+  color: var(--pf-t--global--color--brand--default);
+}
+
+.fleet-banner__item-count {
+  margin-left: var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.fleet-banner__cross-section {
+  margin-top: var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.fleet-banner__info {
+  margin-top: var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* ─── Fleet sidebar active state ─────────────────────────────────────── */
+
+.inspectah-sidebar .pf-v6-c-nav__item.pf-m-current {
+  border-left: 3px solid var(--pf-t--global--color--brand--default);
+  background-color: var(--pf-t--global--background--color--secondary--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
 }
 
 /* ─── Fleet sidebar ack progress ─────────────────────────────────────── */
@@ -178,6 +262,16 @@
 .inspectah-toolbar-extra {
   padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
   border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+
+/* ─── Width containment ─────────────────────────────────────────────── */
+
+.variant-view,
+.fleet-zone-group,
+.fleet-item-row,
+.fleet-banner {
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 /* ─── Variant view ───────────────────────────────────────────────────── */

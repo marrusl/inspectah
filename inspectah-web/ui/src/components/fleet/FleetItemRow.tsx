@@ -111,8 +111,9 @@ export function FleetItemRow({
           className="fleet-item-row__variants"
           onClick={handleVariantClick}
           type="button"
+          aria-expanded={false}
         >
-          {item.variants!.count} variants
+          {item.variants!.count} variants <span className="fleet-item-row__variants-chevron" aria-hidden="true">&#9656;</span>
         </button>
       )}
       {hasVariants && !isDecisionSection && (

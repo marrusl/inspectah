@@ -39,7 +39,7 @@
 }
 
 .inspectah-layout__main {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   overflow-y: auto;
 }
@@ -69,6 +69,7 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  transition: flex-basis 200ms ease;
 }
 
 /* Resize drag handle on left edge */
@@ -138,12 +139,11 @@
 
 /* Containerfile panel — collapsed */
 .inspectah-cf-panel--collapsed {
-  width: 28px;
-  flex-shrink: 0;
+  flex: 0 0 28px;
   border-left: 1px solid var(--pf-t--global--border--color--default);
   display: flex;
   align-items: stretch;
-  transition: width 200ms ease;
+  transition: flex-basis 200ms ease;
 }
 
 .inspectah-cf-panel__tab {
