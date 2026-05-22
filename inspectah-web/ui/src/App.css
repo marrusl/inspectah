@@ -4,15 +4,27 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
+  --pf-v6-c-page--inset: 0;
 }
 
 /* Strip PatternFly Page padding so the app fills full screen width */
 .inspectah-page .pf-v6-c-page__main {
   padding: 0;
+  margin: 0;
+  max-width: none;
+}
+
+.inspectah-page .pf-v6-c-page__main-container {
+  padding: 0;
+  margin: 0;
+  margin-inline: 0;
+  --pf-v6-c-page__main-container--MarginInlineStart: 0;
+  --pf-v6-c-page__main-container--MarginInlineEnd: 0;
 }
 
 .inspectah-page .pf-v6-c-page__main-section {
-  padding-inline: var(--pf-t--global--spacer--md);
+  padding-inline: 0;
+  padding-block: 0;
 }
 
 /* Stats bar */
