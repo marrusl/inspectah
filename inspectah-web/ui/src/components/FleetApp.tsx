@@ -8,6 +8,7 @@ import type {
   FleetItem,
   ItemId,
   RefinementOp,
+  RefineStats,
   ContextSection,
 } from "../api/types";
 import { fetchFleetView } from "../api/fleet-client";
@@ -74,9 +75,22 @@ function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
       ? { op: "IncludePackage", target: { name, arch } }
       : { op: "ExcludePackage", target: { name, arch } };
   }
+  if (itemId.kind === "Config") {
+    return include
+      ? { op: "IncludeConfig", target: { path: itemId.key.path } }
+      : { op: "ExcludeConfig", target: { path: itemId.key.path } };
+  }
+  if (itemId.kind === "Repo") {
+    return include
+      ? { op: "IncludeRepo", target: { section_id: itemId.key.path } }
+      : { op: "ExcludeRepo", target: { section_id: itemId.key.path } };
+  }
+  // Other item kinds don't have dedicated include/exclude ops;
+  // fall back to ExcludeConfig with the item's display name as path.
+  const name = itemDisplayName(itemId);
   return include
-    ? { op: "IncludeConfig", target: { path: itemId.key.path } }
-    : { op: "ExcludeConfig", target: { path: itemId.key.path } };
+    ? { op: "IncludeConfig", target: { path: name } }
+    : { op: "ExcludeConfig", target: { path: name } };
 }
 
 export function FleetApp({ fleet, health: _health }: FleetAppProps) {
@@ -129,11 +143,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   }, []);
 
   const handleSelectVariant = useCallback(
-    (_itemId: ItemId, _hash: string) => {
-      // Variant selection is handled by VariantView internally via ack.confirm/markChanged.
-      // No RefinementOp is needed -- the view reflects selected variant via ack state.
+    (itemId: ItemId, hash: string) => {
+      mutate({ op: "SelectVariant", target: { item_id: itemId, target: hash } });
     },
-    [],
+    [mutate],
   );
 
   const handleBannerNavigate = useCallback(
@@ -197,6 +210,21 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const searchContextSections = buildFleetSearchSections(fleetView.sections);
 
+  const fleetStats: RefineStats = {
+    total_packages: 0,
+    included_packages: 0,
+    excluded_packages: 0,
+    total_configs: 0,
+    included_configs: 0,
+    excluded_configs: 0,
+    package_managed_configs: 0,
+    needs_review_count: ack.unackedCount,
+    ops_applied: 0,
+    baseline_available: false,
+    can_undo: fleetView.can_undo,
+    can_redo: fleetView.can_redo,
+  };
+
   return (
     <div data-testid="fleet-app">
       <AppShell
@@ -209,7 +237,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
           />
         }
         containerfilePreview={fleetView.containerfile_preview}
-        stats={null}
+        stats={fleetStats}
         generation={fleetView.generation}
         sessionIsSensitive={fleetView.session_is_sensitive}
         onUndo={undo}

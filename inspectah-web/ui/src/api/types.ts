@@ -158,7 +158,10 @@ export type RefinementOp =
   | { op: "ExcludeConfig"; target: { path: string } }
   | { op: "IncludeConfig"; target: { path: string } }
   | { op: "ExcludeRepo"; target: { section_id: string } }
-  | { op: "IncludeRepo"; target: { section_id: string } };
+  | { op: "IncludeRepo"; target: { section_id: string } }
+  | { op: "SelectVariant"; target: { item_id: ItemId; target: string } }
+  | { op: "EditVariant"; target: { item_id: ItemId; content: string; based_on: string | null } }
+  | { op: "DiscardVariant"; target: { item_id: ItemId; variant: string } };
 
 export interface ChangesSummary {
   packages_included: PackageTarget[];
@@ -166,6 +169,7 @@ export interface ChangesSummary {
   configs_included: string[];
   configs_excluded: string[];
   repos_excluded: string[];
+  variants_changed: number;
   is_dirty: boolean;
 }
 
@@ -309,7 +313,117 @@ export interface ItemIdPackage {
   key: { name_arch: string };
 }
 
-export type ItemId = ItemIdConfig | ItemIdPackage;
+export interface ItemIdRepo {
+  kind: "Repo";
+  key: { path: string };
+}
+
+export interface ItemIdModuleStream {
+  kind: "ModuleStream";
+  key: { module_stream: string };
+}
+
+export interface ItemIdVersionLock {
+  kind: "VersionLock";
+  key: { name_arch: string };
+}
+
+export interface ItemIdService {
+  kind: "Service";
+  key: { unit: string };
+}
+
+export interface ItemIdDropIn {
+  kind: "DropIn";
+  key: { path: string };
+}
+
+export interface ItemIdQuadlet {
+  kind: "Quadlet";
+  key: { path: string };
+}
+
+export interface ItemIdCompose {
+  kind: "Compose";
+  key: { path: string };
+}
+
+export interface ItemIdNMConnection {
+  kind: "NMConnection";
+  key: { path: string };
+}
+
+export interface ItemIdFirewallZone {
+  kind: "FirewallZone";
+  key: { path: string };
+}
+
+export interface ItemIdKernelModule {
+  kind: "KernelModule";
+  key: { name: string };
+}
+
+export interface ItemIdSysctl {
+  kind: "Sysctl";
+  key: { key: string };
+}
+
+export interface ItemIdCronJob {
+  kind: "CronJob";
+  key: { path: string };
+}
+
+export interface ItemIdSystemdTimer {
+  kind: "SystemdTimer";
+  key: { name: string };
+}
+
+export interface ItemIdAtJob {
+  kind: "AtJob";
+  key: { file: string };
+}
+
+export interface ItemIdGeneratedTimer {
+  kind: "GeneratedTimer";
+  key: { name: string };
+}
+
+export interface ItemIdSelinuxPort {
+  kind: "SelinuxPort";
+  key: { protocol_port: string };
+}
+
+export interface ItemIdFstab {
+  kind: "Fstab";
+  key: { mount_point: string };
+}
+
+export interface ItemIdNonRpm {
+  kind: "NonRpm";
+  key: { name: string };
+}
+
+export type ItemId =
+  | ItemIdConfig
+  | ItemIdPackage
+  | ItemIdRepo
+  | ItemIdModuleStream
+  | ItemIdVersionLock
+  | ItemIdService
+  | ItemIdDropIn
+  | ItemIdQuadlet
+  | ItemIdCompose
+  | ItemIdNMConnection
+  | ItemIdFirewallZone
+  | ItemIdKernelModule
+  | ItemIdSysctl
+  | ItemIdCronJob
+  | ItemIdSystemdTimer
+  | ItemIdAtJob
+  | ItemIdGeneratedTimer
+  | ItemIdSelinuxPort
+  | ItemIdFstab
+  | ItemIdNonRpm;
 
 export interface ActionableVariantItem {
   item_id: ItemId;

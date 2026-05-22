@@ -16,6 +16,42 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.path;
     case "Package":
       return itemId.key.name_arch;
+    case "Repo":
+      return itemId.key.path;
+    case "ModuleStream":
+      return itemId.key.module_stream;
+    case "VersionLock":
+      return itemId.key.name_arch;
+    case "Service":
+      return itemId.key.unit;
+    case "DropIn":
+      return itemId.key.path;
+    case "Quadlet":
+      return itemId.key.path;
+    case "Compose":
+      return itemId.key.path;
+    case "NMConnection":
+      return itemId.key.path;
+    case "FirewallZone":
+      return itemId.key.path;
+    case "KernelModule":
+      return itemId.key.name;
+    case "Sysctl":
+      return itemId.key.key;
+    case "CronJob":
+      return itemId.key.path;
+    case "SystemdTimer":
+      return itemId.key.name;
+    case "AtJob":
+      return itemId.key.file;
+    case "GeneratedTimer":
+      return itemId.key.name;
+    case "SelinuxPort":
+      return itemId.key.protocol_port;
+    case "Fstab":
+      return itemId.key.mount_point;
+    case "NonRpm":
+      return itemId.key.name;
   }
 }
 

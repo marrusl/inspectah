@@ -149,6 +149,7 @@ const mockChanges: ChangesSummary = {
   configs_included: [],
   configs_excluded: ["/etc/nanorc"],
   repos_excluded: [],
+  variants_changed: 0,
   is_dirty: true,
 };
 
