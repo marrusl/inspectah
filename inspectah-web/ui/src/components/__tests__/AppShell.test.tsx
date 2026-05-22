@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within, act } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "../AppShell";
 import type { AppShellProps } from "../AppShell";
@@ -16,10 +16,13 @@ const MOCK_STATS: RefineStats = {
   excluded_packages: 20,
   total_configs: 50,
   included_configs: 40,
+  package_managed_configs: 35,
   excluded_configs: 10,
   needs_review_count: 5,
+  ops_applied: 3,
   can_undo: true,
   can_redo: false,
+  baseline_available: false,
 };
 
 function renderAppShell(overrides: Partial<AppShellProps> = {}) {

@@ -23,7 +23,7 @@ export function FleetItemRow({
   item,
   isDecisionSection,
   onToggle,
-  ack,
+  ack: _ack,
   onExpandVariant,
 }: FleetItemRowProps) {
   const name = itemDisplayName(item.item_id);

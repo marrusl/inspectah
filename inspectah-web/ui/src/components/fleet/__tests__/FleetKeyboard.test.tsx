@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VariantView } from "../VariantView";
 import type { FleetItem, ItemId } from "../../../api/types";
@@ -83,7 +83,7 @@ describe("Fleet keyboard", () => {
     const fetchDiff = vi.fn();
 
     // Render variant view with an input inside the test container
-    const { container } = render(
+    render(
       <div>
         <input data-testid="text-input" />
         <VariantView

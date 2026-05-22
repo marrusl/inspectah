@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { FleetSectionContent } from "../FleetSection";
 import type { FleetSection, FleetItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";

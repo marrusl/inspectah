@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor, act } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { useFleetDiff } from "../useFleetDiff";
 import type { FleetDiffResponse, ItemId } from "../../api/types";
 

@@ -24,11 +24,11 @@ function TestHarness({ initialGeneration }: { initialGeneration: number }) {
 }
 
 describe("useFleetFocusRecovery", () => {
-  let rafCallbacks: (() => void)[];
+  let rafCallbacks: FrameRequestCallback[];
 
   beforeEach(() => {
     rafCallbacks = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb: FrameRequestCallback) => {
       rafCallbacks.push(cb);
       return rafCallbacks.length;
     });
@@ -41,7 +41,7 @@ describe("useFleetFocusRecovery", () => {
   function flushRaf() {
     const cbs = [...rafCallbacks];
     rafCallbacks = [];
-    cbs.forEach((cb) => cb());
+    cbs.forEach((cb) => cb(0));
   }
 
   it("restores focus to previously focused item after generation bump", () => {

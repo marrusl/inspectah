@@ -3,7 +3,6 @@ import type {
   FleetViewResponse,
   FleetDiffRequest,
   FleetDiffResponse,
-  ItemId,
 } from "../types";
 import { ApiError } from "../types";
 import { fetchFleetView, fetchFleetDiff } from "../fleet-client";
