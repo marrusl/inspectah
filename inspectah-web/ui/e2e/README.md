@@ -79,6 +79,7 @@ npx playwright test --ui
 | `keyboard.spec.ts` | j/k nav, Space toggle, /, Ctrl+K, ?, Escape     |
 | `responsive.spec.ts` | Hamburger at 1024px, sidebar at 1280px, panel toggle |
 | `a11y.spec.ts`     | axe-core WCAG audit, keyboard accessibility      |
+| `fleet.spec.ts`  | Fleet zone rendering, banner/ack, diff, export, undo/redo, a11y |
 
 ## CI
 
