@@ -296,6 +296,133 @@ export interface UserPreviewResponse {
   sensitive: boolean;
 }
 
+// --- Fleet types (inspectah-web/src/handlers/fleet.rs) ---
+
+/** ItemId uses tag/content serde (Rust: #[serde(tag = "kind", content = "key")]) */
+export interface ItemIdConfig {
+  kind: "Config";
+  key: { path: string };
+}
+
+export interface ItemIdPackage {
+  kind: "Package";
+  key: { name_arch: string };
+}
+
+export type ItemId = ItemIdConfig | ItemIdPackage;
+
+export interface ActionableVariantItem {
+  item_id: ItemId;
+  section_id: string;
+  variant_count: number;
+  max_host_spread: number;
+}
+
+export interface FleetSummary {
+  host_count: number;
+  actionable_variant_items: ActionableVariantItem[];
+  informational_variant_count: number;
+}
+
+export interface FleetAttention {
+  level: string; // "high" | "medium" | "low" | "none"
+  reason: string;
+  zone?: string; // "Consensus" | "NearConsensus" | "Divergent"
+  prevalence: number;
+}
+
+export interface FleetVariantOption {
+  hash: string;
+  hosts: string[];
+  host_count: number;
+  selected: boolean;
+}
+
+export interface FleetVariants {
+  count: number;
+  selected: string; // content hash
+  options: FleetVariantOption[];
+}
+
+export interface FleetItemPrevalence {
+  count: number;
+  total: number;
+}
+
+export interface FleetItem {
+  item_id: ItemId;
+  include: boolean;
+  attention: FleetAttention;
+  prevalence: FleetItemPrevalence;
+  variants?: FleetVariants;
+}
+
+export interface FleetZoneGroup {
+  items: FleetItem[];
+  count: number;
+}
+
+export interface FleetZones {
+  consensus: FleetZoneGroup;
+  near_consensus: FleetZoneGroup;
+  divergent: FleetZoneGroup;
+}
+
+export interface FleetSection {
+  id: string;
+  display_name: string;
+  is_decision_section: boolean;
+  zones?: FleetZones;
+  items?: FleetItem[];
+}
+
+export interface FleetViewResponse {
+  generation: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  containerfile_preview: string;
+  session_is_sensitive: boolean;
+  summary: FleetSummary;
+  sections: FleetSection[];
+}
+
+export interface LineRange {
+  start: number;
+  count: number;
+}
+
+export interface DiffChange {
+  kind: string; // "equal" | "delete" | "insert"
+  content: string;
+}
+
+export interface DiffHunk {
+  base_range: LineRange;
+  target_range: LineRange;
+  changes: DiffChange[];
+}
+
+export interface DiffStats {
+  total_changes: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface FleetDiffRequest {
+  item_id: ItemId;
+  base: string;
+  target: string;
+}
+
+export interface FleetDiffResponse {
+  base_hash: string;
+  target_hash: string;
+  base_hosts: string[];
+  target_hosts: string[];
+  hunks: DiffHunk[];
+  stats: DiffStats;
+}
+
 // --- Error type ---
 
 export class ApiError extends Error {
