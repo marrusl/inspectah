@@ -225,6 +225,15 @@ export interface RepoGroupInfo {
   enabled: boolean;
 }
 
+export interface FleetHealthInfo {
+  host_count: number;
+  hostnames: string[];
+  zones_active: boolean;
+  variant_count: number;
+  label: string;
+  merged_at: string;
+}
+
 export interface HealthResponse {
   status: string;
   host: {
@@ -237,6 +246,8 @@ export interface HealthResponse {
   };
   completeness: string;
   policy: { distro_repos: string[] };
+  fleet: FleetHealthInfo | null;
+  session_is_sensitive: boolean;
 }
 
 /** View endpoint response: RefinedView + repo_groups. */

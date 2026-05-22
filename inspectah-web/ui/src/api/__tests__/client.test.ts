@@ -38,6 +38,8 @@ const mockHealth: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: ["baseos", "appstream", "crb"] },
+  fleet: null,
+  session_is_sensitive: false,
 };
 
 const mockView: ViewResponse = {

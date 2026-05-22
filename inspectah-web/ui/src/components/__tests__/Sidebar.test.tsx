@@ -44,6 +44,8 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: ["baseos", "appstream"] },
+  fleet: null,
+  session_is_sensitive: false,
 };
 
 describe("Sidebar", () => {
