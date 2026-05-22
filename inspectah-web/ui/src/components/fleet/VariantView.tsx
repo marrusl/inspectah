@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@patternfly/react-core";
 import type { FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
@@ -18,20 +18,13 @@ export function VariantView({
   onSelectVariant,
   diffHook,
 }: VariantViewProps) {
-  // Guard: return null for items without variants
-  if (!item.variants) {
-    return null;
-  }
-
   const [showDiff, setShowDiff] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
 
-  // Scroll into view when the variant view opens
-  useEffect(() => {
-    requestAnimationFrame(() => {
-      viewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-  }, []);
+  // Guard: return null for items without variants (after hooks)
+  if (!item.variants) {
+    return null;
+  }
 
   const variants = item.variants;
   const selectedHash = variants.selected;
@@ -117,7 +110,7 @@ export function VariantView({
                 </span>
               </span>
               {option.hash === selectedHash && (
-                <span className="variant-view__selected-indicator">selected</span>
+                <span className="variant-view__selected-indicator" data-testid="variant-selected-indicator">Selected</span>
               )}
             </label>
           );
