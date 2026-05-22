@@ -181,4 +181,91 @@ describe("VariantView", () => {
     expect(singleHostLabels).toHaveLength(2);
     expect(screen.getByText("2 hosts")).toBeInTheDocument();
   });
+
+  it("calls diffHook.fetchDiff with correct args when Compare clicked", async () => {
+    const user = userEvent.setup();
+    const fetchDiff = vi.fn();
+
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook({ fetchDiff })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /compare/i }));
+
+    // Should diff between selected (aaa111) and first other option (bbb222)
+    expect(fetchDiff).toHaveBeenCalledWith(configItemId, "aaa111", "bbb222");
+  });
+
+  it("shows DiffDrawer content when Compare clicked", async () => {
+    const user = userEvent.setup();
+    const sampleDiff = {
+      base_hash: "aaa111",
+      target_hash: "bbb222",
+      base_hosts: ["host-a"],
+      target_hosts: ["host-b"],
+      hunks: [],
+      stats: { total_changes: 0, insertions: 0, deletions: 0 },
+    };
+
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook({ diff: sampleDiff })}
+      />,
+    );
+
+    // DiffDrawer not shown initially
+    expect(screen.queryByTestId("diff-drawer")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /compare/i }));
+
+    // DiffDrawer now visible
+    expect(screen.getByTestId("diff-drawer")).toBeInTheDocument();
+  });
+
+  it("disables Compare button when only 1 variant option", () => {
+    const singleVariantItem = makeItem({
+      variants: {
+        count: 1,
+        selected: "aaa111",
+        options: [
+          { hash: "aaa111", hosts: ["host-a"], host_count: 1, selected: true },
+        ],
+      },
+    });
+
+    render(
+      <VariantView
+        item={singleVariantItem}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    const compareButton = screen.getByRole("button", { name: /compare/i });
+    expect(compareButton).toBeDisabled();
+  });
+
+  it("returns null for items without variants", () => {
+    const noVariantsItem = makeItem({ variants: undefined });
+
+    const { container } = render(
+      <VariantView
+        item={noVariantsItem}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    expect(container.firstChild).toBeNull();
+  });
 });

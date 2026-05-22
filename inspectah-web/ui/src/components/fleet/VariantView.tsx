@@ -18,8 +18,13 @@ export function VariantView({
   onSelectVariant,
   diffHook,
 }: VariantViewProps) {
+  // Guard: return null for items without variants
+  if (!item.variants) {
+    return null;
+  }
+
   const [showDiff, setShowDiff] = useState(false);
-  const variants = item.variants!;
+  const variants = item.variants;
   const selectedHash = variants.selected;
 
   const handleSelect = (hash: string) => {

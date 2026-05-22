@@ -131,4 +131,49 @@ describe("DiffDrawer", () => {
     expect(screen.getByRole("button", { name: /close/i })).toBeInTheDocument();
     expect(screen.queryByText(/insertions/)).not.toBeInTheDocument();
   });
+
+  it("renders diff lines with correct prefixes and CSS classes", () => {
+    const { container } = render(
+      <DiffDrawer
+        diff={sampleDiff}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Equal line (space prefix, no modifier class)
+    const equalLines = container.querySelectorAll(".diff-drawer__line:not(.diff-drawer__line--insert):not(.diff-drawer__line--delete)");
+    expect(equalLines.length).toBeGreaterThan(0);
+    const firstEqualLine = equalLines[0];
+    expect(firstEqualLine.querySelector(".diff-drawer__line-prefix")?.textContent).toBe(" ");
+
+    // Delete line (- prefix, delete class)
+    const deleteLines = container.querySelectorAll(".diff-drawer__line--delete");
+    expect(deleteLines).toHaveLength(1);
+    expect(deleteLines[0].querySelector(".diff-drawer__line-prefix")?.textContent).toBe("-");
+
+    // Insert lines (+ prefix, insert class)
+    const insertLines = container.querySelectorAll(".diff-drawer__line--insert");
+    expect(insertLines).toHaveLength(2);
+    insertLines.forEach((line) => {
+      expect(line.querySelector(".diff-drawer__line-prefix")?.textContent).toBe("+");
+    });
+  });
+
+  it("renders hunk range header", () => {
+    render(
+      <DiffDrawer
+        diff={sampleDiff}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Range header format: @@ -start,count +start,count @@
+    expect(screen.getByText("@@ -1,3 +1,4 @@")).toBeInTheDocument();
+  });
 });
