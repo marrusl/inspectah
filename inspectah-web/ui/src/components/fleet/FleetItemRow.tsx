@@ -51,6 +51,7 @@ export function FleetItemRow({
       data-item-id={JSON.stringify(item.item_id)}
       onClick={handleRowClick}
       role="row"
+      tabIndex={0}
     >
       {isDecisionSection && (
         <div className="fleet-item-row__toggle" onClick={(e) => e.stopPropagation()}>

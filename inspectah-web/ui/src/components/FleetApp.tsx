@@ -4,6 +4,7 @@ import type { FleetHealthInfo, HealthResponse, FleetViewResponse } from "../api/
 import { fetchFleetView } from "../api/fleet-client";
 import { useFleetMutation } from "../hooks/useFleetMutation";
 import { useVariantAck } from "../hooks/useVariantAck";
+import { useFleetFocusRecovery } from "../hooks/useFleetFocusRecovery";
 import { AppShell } from "./AppShell";
 import { FleetSidebar } from "./fleet/FleetSidebar";
 
@@ -38,6 +39,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const actionableIds = view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
   const ack = useVariantAck(fleet.label, fleet.merged_at, actionableIds);
+
+  // Restore focus to the last-focused fleet item after view updates
+  useFleetFocusRecovery(view?.generation ?? null);
 
   const handleSearchNavigate = useCallback(
     (sectionId: string, _itemId: string) => {

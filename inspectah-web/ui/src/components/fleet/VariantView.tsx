@@ -59,8 +59,27 @@ export function VariantView({
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Don't handle keys when focus is in a text input
+    const tag = (e.target as HTMLElement).tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+    if (e.key === "Escape" && showDiff) {
+      e.preventDefault();
+      handleCloseDiff();
+      return;
+    }
+
+    if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (variants.options.length >= 2) {
+        e.preventDefault();
+        handleCompare();
+      }
+    }
+  };
+
   return (
-    <div className="variant-view" data-testid="variant-view">
+    <div className="variant-view" data-testid="variant-view" onKeyDown={handleKeyDown} tabIndex={-1}>
       <div className="variant-view__options" role="radiogroup" aria-label="Variant options">
         {variants.options.map((option) => {
           const hostLabel =
