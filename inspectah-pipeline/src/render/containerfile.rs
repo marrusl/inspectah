@@ -377,11 +377,9 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         }
     }
 
-    let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
     let leaf_filter: Option<std::collections::HashSet<String>> = rpm
         .leaf_packages
         .as_ref()
-        .filter(|_| !is_fleet_snapshot)
         .map(|leaf_packages| leaf_packages.iter().cloned().collect());
 
     let baseline_suppressed_set: std::collections::HashSet<String> = rpm
