@@ -197,4 +197,44 @@ describe("StatsBar", () => {
     );
     expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
   });
+
+  it("renders fleet summary when fleetSummary is provided", () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+        fleetSummary={{ hostCount: 5, totalItems: 2480, needsReviewCount: 27 }}
+      />,
+    );
+
+    const summary = screen.getByTestId("fleet-stats-summary");
+    expect(summary).toBeInTheDocument();
+    expect(summary).toHaveTextContent("5");
+    expect(summary).toHaveTextContent("hosts");
+    expect(summary).toHaveTextContent("2,480");
+    expect(summary).toHaveTextContent("items");
+    expect(summary).toHaveTextContent("27 need review");
+
+    // Single-host counters must NOT be present
+    expect(screen.queryByText(/Packages:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Configs:/)).not.toBeInTheDocument();
+  });
+
+  it("shows all-reviewed label in fleet summary when needsReviewCount is 0", () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+        fleetSummary={{ hostCount: 3, totalItems: 100, needsReviewCount: 0 }}
+      />,
+    );
+
+    expect(screen.getByTestId("fleet-stats-summary")).toHaveTextContent("All reviewed");
+  });
 });
