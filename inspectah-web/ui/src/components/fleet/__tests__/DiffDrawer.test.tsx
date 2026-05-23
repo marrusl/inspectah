@@ -176,4 +176,38 @@ describe("DiffDrawer", () => {
     // Range header format: @@ -start,count +start,count @@
     expect(screen.getByText("@@ -1,3 +1,4 @@")).toBeInTheDocument();
   });
+
+  it("shows descriptive title with operand labels", () => {
+    render(
+      <DiffDrawer
+        diff={sampleDiff}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onClose={vi.fn()}
+        targetLabel="e5f6g7h8 (web-4, web-5)"
+        baseLabel="a1b2c3d4 (web-1, web-2) [selected]"
+      />,
+    );
+
+    const title = screen.getByTestId("diff-drawer-title");
+    expect(title.textContent).toBe(
+      "Diff: e5f6g7h8 (web-4, web-5) vs a1b2c3d4 (web-1, web-2) [selected]",
+    );
+  });
+
+  it("shows generic title when no operand labels provided", () => {
+    render(
+      <DiffDrawer
+        diff={sampleDiff}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const title = screen.getByTestId("diff-drawer-title");
+    expect(title.textContent).toBe("Diff");
+  });
 });

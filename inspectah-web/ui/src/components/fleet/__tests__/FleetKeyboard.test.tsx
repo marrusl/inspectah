@@ -56,82 +56,6 @@ function makeDiffHook(overrides?: Partial<UseFleetDiffResult>): UseFleetDiffResu
 }
 
 describe("Fleet keyboard", () => {
-  it("c key triggers compare when variant view is open", async () => {
-    const user = userEvent.setup();
-    const fetchDiff = vi.fn();
-
-    render(
-      <VariantView
-        item={makeItem()}
-        ack={makeAck()}
-        onSelectVariant={vi.fn()}
-        diffHook={makeDiffHook({ fetchDiff })}
-      />,
-    );
-
-    // Focus the variant view container
-    const variantView = screen.getByTestId("variant-view");
-    variantView.focus();
-
-    await user.keyboard("c");
-
-    expect(fetchDiff).toHaveBeenCalledWith(configItemId, "aaa111", "bbb222");
-  });
-
-  it("c key does not trigger compare when focused in text input", async () => {
-    const user = userEvent.setup();
-    const fetchDiff = vi.fn();
-
-    // Render variant view with an input inside the test container
-    render(
-      <div>
-        <input data-testid="text-input" />
-        <VariantView
-          item={makeItem()}
-          ack={makeAck()}
-          onSelectVariant={vi.fn()}
-          diffHook={makeDiffHook({ fetchDiff })}
-        />
-      </div>,
-    );
-
-    // Focus the text input, then press c
-    const input = screen.getByTestId("text-input");
-    input.focus();
-    await user.keyboard("c");
-
-    expect(fetchDiff).not.toHaveBeenCalled();
-  });
-
-  it("c key does not trigger compare with fewer than 2 variants", async () => {
-    const user = userEvent.setup();
-    const fetchDiff = vi.fn();
-    const singleVariantItem = makeItem({
-      variants: {
-        count: 1,
-        selected: "aaa111",
-        options: [
-          { hash: "aaa111", hosts: ["host-a"], host_count: 1, selected: true },
-        ],
-      },
-    });
-
-    render(
-      <VariantView
-        item={singleVariantItem}
-        ack={makeAck()}
-        onSelectVariant={vi.fn()}
-        diffHook={makeDiffHook({ fetchDiff })}
-      />,
-    );
-
-    const variantView = screen.getByTestId("variant-view");
-    variantView.focus();
-    await user.keyboard("c");
-
-    expect(fetchDiff).not.toHaveBeenCalled();
-  });
-
   it("Escape closes DiffDrawer", async () => {
     const user = userEvent.setup();
     const clearDiff = vi.fn();
@@ -153,8 +77,9 @@ describe("Fleet keyboard", () => {
       />,
     );
 
-    // Open the DiffDrawer by clicking Compare
-    await user.click(screen.getByRole("button", { name: /compare/i }));
+    // Open the DiffDrawer by clicking "Diff vs selected" on a non-selected row
+    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    await user.click(diffLinks[0]);
     expect(screen.getByTestId("diff-drawer")).toBeInTheDocument();
 
     // Press Escape

@@ -353,12 +353,17 @@
   border-radius: var(--pf-t--global--border--radius--small);
   font-size: var(--pf-t--global--font--size--body--sm);
   font-weight: var(--pf-t--global--font--weight--body--bold);
-  background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
-  color: var(--pf-t--global--color--status--success--default, #3e8635);
+  background-color: #1e4620;
+  color: #fff;
 }
 
 .variant-view__selected-indicator::before {
   content: "\2713";
+}
+
+.variant-view__diff-link {
+  flex-shrink: 0;
+  font-size: var(--pf-t--global--font--size--body--sm);
 }
 
 .variant-view__actions {

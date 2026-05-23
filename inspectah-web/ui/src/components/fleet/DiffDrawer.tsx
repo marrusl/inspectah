@@ -7,6 +7,10 @@ export interface DiffDrawerProps {
   error: string | null;
   onRetry: () => void;
   onClose: () => void;
+  /** Label for the target operand, e.g. "e5f6g7h (web-4, web-5)" */
+  targetLabel?: string;
+  /** Label for the base (selected) operand, e.g. "a1b2c3d (web-1, web-2) [selected]" */
+  baseLabel?: string;
 }
 
 function HunkView({ hunk }: { hunk: DiffHunk }) {
@@ -46,11 +50,18 @@ export function DiffDrawer({
   error,
   onRetry,
   onClose,
+  targetLabel,
+  baseLabel,
 }: DiffDrawerProps) {
+  const title =
+    targetLabel && baseLabel
+      ? `Diff: ${targetLabel} vs ${baseLabel}`
+      : "Diff";
+
   return (
     <div className="diff-drawer" data-testid="diff-drawer">
       <div className="diff-drawer__header">
-        <span className="diff-drawer__title">Diff</span>
+        <span className="diff-drawer__title" data-testid="diff-drawer-title">{title}</span>
         <Button variant="plain" onClick={onClose} aria-label="Close">
           &times;
         </Button>

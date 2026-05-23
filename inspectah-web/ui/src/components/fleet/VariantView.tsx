@@ -19,6 +19,7 @@ export function VariantView({
   diffHook,
 }: VariantViewProps) {
   const [showDiff, setShowDiff] = useState(false);
+  const [diffTargetHash, setDiffTargetHash] = useState<string | null>(null);
   const viewRef = useRef<HTMLDivElement>(null);
 
   // Guard: return null for items without variants (after hooks)
@@ -40,24 +41,21 @@ export function VariantView({
     ack.confirm(item.item_id);
   };
 
-  const handleCompare = () => {
-    // Diff between selected and first non-selected option
-    const target = variants.options.find((o) => o.hash !== selectedHash);
-    if (target) {
-      diffHook.fetchDiff(item.item_id, selectedHash, target.hash);
-      setShowDiff(true);
-    }
+  const handleDiffVsSelected = (targetHash: string) => {
+    setDiffTargetHash(targetHash);
+    diffHook.fetchDiff(item.item_id, selectedHash, targetHash);
+    setShowDiff(true);
   };
 
   const handleCloseDiff = () => {
     setShowDiff(false);
+    setDiffTargetHash(null);
     diffHook.clearDiff();
   };
 
   const handleRetry = () => {
-    const target = variants.options.find((o) => o.hash !== selectedHash);
-    if (target) {
-      diffHook.fetchDiff(item.item_id, selectedHash, target.hash);
+    if (diffTargetHash) {
+      diffHook.fetchDiff(item.item_id, selectedHash, diffTargetHash);
     }
   };
 
@@ -71,14 +69,13 @@ export function VariantView({
       handleCloseDiff();
       return;
     }
-
-    if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (variants.options.length >= 2) {
-        e.preventDefault();
-        handleCompare();
-      }
-    }
   };
+
+  // Build operand descriptions for the diff drawer header
+  const selectedOption = variants.options.find((o) => o.hash === selectedHash);
+  const targetOption = diffTargetHash
+    ? variants.options.find((o) => o.hash === diffTargetHash)
+    : null;
 
   return (
     <div ref={viewRef} className="variant-view" data-testid="variant-view" onKeyDown={handleKeyDown} tabIndex={-1}>
@@ -88,6 +85,7 @@ export function VariantView({
             option.host_count === 1
               ? "1 host"
               : `${option.host_count} hosts`;
+          const isSelected = option.hash === selectedHash;
 
           return (
             <label key={option.hash} className="variant-view__option">
@@ -95,7 +93,7 @@ export function VariantView({
                 type="radio"
                 name={`variant-${JSON.stringify(item.item_id)}`}
                 value={option.hash}
-                checked={option.hash === selectedHash}
+                checked={isSelected}
                 onChange={() => handleSelect(option.hash)}
               />
               <span className="variant-view__option-info">
@@ -109,8 +107,21 @@ export function VariantView({
                   {option.hosts.join(", ")}
                 </span>
               </span>
-              {option.hash === selectedHash && (
+              {isSelected && (
                 <span className="variant-view__selected-indicator" data-testid="variant-selected-indicator">Selected</span>
+              )}
+              {!isSelected && variants.options.length >= 2 && (
+                <Button
+                  variant="link"
+                  isInline
+                  className="variant-view__diff-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDiffVsSelected(option.hash);
+                  }}
+                >
+                  Diff vs selected
+                </Button>
               )}
             </label>
           );
@@ -118,13 +129,6 @@ export function VariantView({
       </div>
 
       <div className="variant-view__actions">
-        <Button
-          variant="secondary"
-          onClick={handleCompare}
-          isDisabled={variants.options.length < 2}
-        >
-          Compare
-        </Button>
         <Button variant="primary" onClick={handleConfirm}>
           Confirm
         </Button>
@@ -137,6 +141,16 @@ export function VariantView({
           error={diffHook.error}
           onRetry={handleRetry}
           onClose={handleCloseDiff}
+          targetLabel={
+            targetOption
+              ? `${targetOption.hash.substring(0, 8)} (${targetOption.hosts.join(", ")})`
+              : undefined
+          }
+          baseLabel={
+            selectedOption
+              ? `${selectedOption.hash.substring(0, 8)} (${selectedOption.hosts.join(", ")}) [selected]`
+              : undefined
+          }
         />
       )}
     </div>

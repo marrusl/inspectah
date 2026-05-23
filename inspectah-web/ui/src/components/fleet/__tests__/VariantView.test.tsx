@@ -153,7 +153,7 @@ describe("VariantView", () => {
     expect(markChanged).toHaveBeenCalledWith(configItemId);
   });
 
-  it("shows Compare button", () => {
+  it("shows 'Diff vs selected' link on non-selected variants", () => {
     render(
       <VariantView
         item={makeItem()}
@@ -163,7 +163,39 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /compare/i })).toBeInTheDocument();
+    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    // Two non-selected variants should each have a link
+    expect(diffLinks).toHaveLength(2);
+  });
+
+  it("does not show 'Diff vs selected' on the selected variant", () => {
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    // Selected variant shows "Selected" indicator, not diff link
+    expect(screen.getByTestId("variant-selected-indicator")).toBeInTheDocument();
+    // Total diff links = number of non-selected variants (2)
+    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    expect(diffLinks).toHaveLength(2);
+  });
+
+  it("does not show a global Compare button", () => {
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /^compare$/i })).not.toBeInTheDocument();
   });
 
   it("shows host count for each variant option", () => {
@@ -182,7 +214,7 @@ describe("VariantView", () => {
     expect(screen.getByText("2 hosts:")).toBeInTheDocument();
   });
 
-  it("calls diffHook.fetchDiff with correct args when Compare clicked", async () => {
+  it("calls diffHook.fetchDiff with correct args when 'Diff vs selected' clicked", async () => {
     const user = userEvent.setup();
     const fetchDiff = vi.fn();
 
@@ -195,19 +227,21 @@ describe("VariantView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /compare/i }));
+    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    // Click first diff link (bbb222 row)
+    await user.click(diffLinks[0]);
 
-    // Should diff between selected (aaa111) and first other option (bbb222)
+    // Should diff between selected (aaa111) and clicked row (bbb222)
     expect(fetchDiff).toHaveBeenCalledWith(configItemId, "aaa111", "bbb222");
   });
 
-  it("shows DiffDrawer content when Compare clicked", async () => {
+  it("shows DiffDrawer with operand header when 'Diff vs selected' clicked", async () => {
     const user = userEvent.setup();
     const sampleDiff = {
       base_hash: "aaa111",
       target_hash: "bbb222",
       base_hosts: ["host-a"],
-      target_hosts: ["host-b"],
+      target_hosts: ["host-b", "host-c"],
       hunks: [],
       stats: { total_changes: 0, insertions: 0, deletions: 0 },
     };
@@ -224,13 +258,18 @@ describe("VariantView", () => {
     // DiffDrawer not shown initially
     expect(screen.queryByTestId("diff-drawer")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /compare/i }));
+    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    await user.click(diffLinks[0]);
 
-    // DiffDrawer now visible
+    // DiffDrawer now visible with descriptive header
     expect(screen.getByTestId("diff-drawer")).toBeInTheDocument();
+    const title = screen.getByTestId("diff-drawer-title");
+    expect(title.textContent).toContain("bbb222");
+    expect(title.textContent).toContain("aaa111");
+    expect(title.textContent).toContain("[selected]");
   });
 
-  it("disables Compare button when only 1 variant option", () => {
+  it("does not show 'Diff vs selected' links when only 1 variant option", () => {
     const singleVariantItem = makeItem({
       variants: {
         count: 1,
@@ -250,8 +289,7 @@ describe("VariantView", () => {
       />,
     );
 
-    const compareButton = screen.getByRole("button", { name: /compare/i });
-    expect(compareButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /diff vs selected/i })).not.toBeInTheDocument();
   });
 
   it("returns null for items without variants", () => {
