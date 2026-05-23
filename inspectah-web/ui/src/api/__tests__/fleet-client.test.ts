@@ -113,25 +113,29 @@ const mockDiffResponse: FleetDiffResponse = {
 };
 
 describe("fleet-client", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.resetAllMocks();
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
   });
 
   describe("fetchFleetView", () => {
     it("fetches fleet view successfully", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => mockFleetView,
       });
 
       const result = await fetchFleetView();
 
-      expect(fetch).toHaveBeenCalledWith("/api/fleet/view", { method: "GET" });
+      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/view", { method: "GET" });
       expect(result).toEqual(mockFleetView);
     });
 
     it("throws ApiError on non-200 response", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
         json: async () => ({ error: "Internal server error" }),
@@ -147,14 +151,14 @@ describe("fleet-client", () => {
 
   describe("fetchFleetDiff", () => {
     it("posts diff request and returns response", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => mockDiffResponse,
       });
 
       const result = await fetchFleetDiff(mockDiffRequest);
 
-      expect(fetch).toHaveBeenCalledWith("/api/fleet/diff", {
+      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/diff", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(mockDiffRequest),
@@ -163,7 +167,7 @@ describe("fleet-client", () => {
     });
 
     it("correctly serializes ItemId in request", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => mockDiffResponse,
       });
@@ -176,7 +180,7 @@ describe("fleet-client", () => {
 
       await fetchFleetDiff(configItemRequest);
 
-      const callArgs = (fetch as any).mock.calls[0];
+      const callArgs = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(callArgs[1].body);
       expect(requestBody.item_id).toEqual({
         kind: "Config",
@@ -185,7 +189,7 @@ describe("fleet-client", () => {
     });
 
     it("throws ApiError on non-200 response", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 400,
         json: async () => ({ error: "Invalid diff request" }),
