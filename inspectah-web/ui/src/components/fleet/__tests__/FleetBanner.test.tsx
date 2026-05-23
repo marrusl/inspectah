@@ -79,7 +79,7 @@ describe("FleetBanner", () => {
     const banner = screen.getByTestId("fleet-banner");
     expect(banner).toHaveAttribute("data-severity", "danger");
     expect(
-      screen.getByText("2 config items have variants requiring review"),
+      screen.getByText("2 items have variants requiring review"),
     ).toBeInTheDocument();
   });
 

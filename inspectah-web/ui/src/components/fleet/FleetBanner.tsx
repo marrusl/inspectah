@@ -27,9 +27,9 @@ function sectionTag(sectionId: string): string {
 
 type Severity = "success" | "warning" | "danger";
 
-function getSeverity(ackState: UseVariantAckResult): Severity {
-  if (ackState.unackedCount === 0) return "success";
-  if (ackState.unackedCount < ackState.totalCount) return "warning";
+function getSeverity(unacked: number, total: number): Severity {
+  if (total === 0 || unacked === 0) return "success";
+  if (unacked < total) return "warning";
   return "danger";
 }
 
@@ -43,8 +43,6 @@ export function FleetBanner({
 
   if (actionable_variant_items.length === 0) return null;
 
-  const severity = getSeverity(ackState);
-
   // Filter items to the active section when specified
   const sectionItems = activeSection
     ? actionable_variant_items.filter((item) => item.section_id === activeSection)
@@ -55,10 +53,12 @@ export function FleetBanner({
     : [];
 
   // Count unacked items within the visible set
-  const unackedSectionItems =
-    severity === "success"
-      ? []
-      : sectionItems.filter((item) => !ackState.isAcked(item.item_id));
+  const unackedSectionItems = sectionItems.filter((item) => !ackState.isAcked(item.item_id));
+
+  // Severity is scoped to the active section so color matches what the user sees
+  const severity = activeSection
+    ? getSeverity(unackedSectionItems.length, sectionItems.length)
+    : getSeverity(ackState.unackedCount, ackState.totalCount);
 
   // Build cross-section summary for other sections
   const otherSectionSummary = otherSectionItems.reduce<Record<string, number>>(
@@ -72,10 +72,15 @@ export function FleetBanner({
     {},
   );
 
+  const sectionLabel = activeSection ? sectionTag(activeSection).toLowerCase() : "items";
+  const unackedInSection = unackedSectionItems.length;
+
   const headline =
     severity === "success"
       ? `All ${ackState.totalCount} variants reviewed`
-      : `${ackState.unackedCount} config items have variants requiring review`;
+      : activeSection
+        ? `${unackedInSection} ${sectionLabel} ${unackedInSection === 1 ? "item has" : "items have"} variants requiring review`
+        : `${ackState.unackedCount} items have variants requiring review`;
 
   return (
     <div
