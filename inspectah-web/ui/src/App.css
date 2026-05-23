@@ -26,6 +26,8 @@ html, body, #root {
   padding: 0;
   margin: 0;
   margin-inline: 0;
+  --pf-v6-c-page__main-container--AlignSelf: stretch;
+  align-self: stretch;
   --pf-v6-c-page__main-container--MarginInlineStart: 0;
   --pf-v6-c-page__main-container--MarginInlineEnd: 0;
 }
