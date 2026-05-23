@@ -127,8 +127,8 @@
 
 .fleet-item-row__attention--informational {
   background-color: var(--pf-t--global--color--status--info--100, #e7f1fa);
-  color: #004080;
-  border: 1px solid #004080;
+  color: #002952;
+  border: 1px solid #06c;
 }
 
 .fleet-item-row__attention--routine {
