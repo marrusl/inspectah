@@ -17,9 +17,25 @@ use std::collections::{HashMap, HashSet};
 /// RPM query format string — matches Go's `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
 
-/// RPM query format for file ownership — produces `name\tpath` per owned file.
-/// The `[]` brackets iterate the FILENAMES array tag.
-const RPM_FILE_OWNERSHIP_FORMAT: &str = "[%{NAME}\\t%{FILENAMES}\\n]";
+/// RPM query format for file ownership — sentinel format.
+///
+/// `%{NAME}` is a scalar tag and cannot be inside `[...]` alongside
+/// array tags (`%{FILENAMES}`). RPM requires all tags inside brackets
+/// to be arrays of the same length, so mixing scalar + array produces
+/// `error: incorrect format: array iterator used with different sized arrays`.
+///
+/// The sentinel format puts `%{NAME}` outside brackets as a `@@`-prefixed
+/// header line, with `%{FILENAMES}` iterated inside brackets below it:
+///
+/// ```text
+/// @@tzdata
+/// /usr/share/doc/tzdata
+/// /usr/share/doc/tzdata/NEWS
+/// @@setup
+/// /etc/bashrc
+/// /etc/profile
+/// ```
+const RPM_FILE_OWNERSHIP_FORMAT: &str = "@@%{NAME}\\n[%{FILENAMES}\\n]";
 
 struct SupplementaryData {
     repo_files: Vec<inspectah_core::types::rpm::RepoFile>,
@@ -121,10 +137,10 @@ impl RpmInspector {
 
     /// Query file ownership for all installed packages.
     ///
-    /// Runs `rpm -qa --queryformat '[%{NAME}\t%{FILENAMES}\n]'` to produce
-    /// `package_name\tfilepath` per line. Groups results by package name
-    /// into `FileOwnershipEntry` structs. Matches Go's `BuildRpmOwnedPaths`
-    /// but retains per-package attribution for `path_to_package`.
+    /// Runs `rpm -qa --queryformat '@@%{NAME}\n[%{FILENAMES}\n]'` which
+    /// produces a sentinel format: each package starts with a `@@name`
+    /// header line, followed by its file paths (one per line). Groups
+    /// results by package name into `FileOwnershipEntry` structs.
     fn query_file_ownership(&self, exec: &dyn Executor) -> Vec<FileOwnershipEntry> {
         let result = exec.run("rpm", &["-qa", "--queryformat", RPM_FILE_OWNERSHIP_FORMAT]);
         if !result.success() {
@@ -132,20 +148,14 @@ impl RpmInspector {
         }
 
         let mut pkg_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut current_package: Option<String> = None;
         for line in result.stdout.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            if let Some((name, path)) = line.split_once('\t') {
-                let name = name.trim();
-                let path = path.trim();
-                if !name.is_empty() && !path.is_empty() {
-                    pkg_map
-                        .entry(name.to_string())
-                        .or_default()
-                        .push(path.to_string());
-                }
+            if let Some(name) = line.strip_prefix("@@") {
+                current_package = Some(name.to_string());
+            } else if !line.is_empty()
+                && let Some(ref pkg) = current_package
+            {
+                pkg_map.entry(pkg.clone()).or_default().push(line.to_string());
             }
         }
 
@@ -286,7 +296,7 @@ impl Inspector for RpmInspector {
         // 6. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
 
-        // 7. Query file ownership for Wave 2 inspectors
+        // 7. Query file ownership for Wave 2 inspectors (sentinel format)
         let file_ownership = self.query_file_ownership(exec);
 
         // 8. Build baseline_package_names for Go snapshot backward compat
@@ -578,16 +588,20 @@ mod tests {
 (none):tzdata-2024a-1.el9.noarch
 0:gpg-pubkey-fd431d51-4ae0493b.x86_64
 ";
-        // File ownership output: package_name\tfilepath per line.
+        // File ownership output: sentinel format (@@name header + paths).
         // Covers /etc (for owned_paths) and non-/etc (for completeness).
         let file_ownership_output = "\
-bash\t/etc/profile.d/bash_completion.sh
-bash\t/usr/bin/bash
-httpd\t/etc/httpd/conf/httpd.conf
-httpd\t/etc/httpd/conf.d/ssl.conf
-httpd\t/usr/sbin/httpd
-vim-enhanced\t/usr/bin/vim
-tzdata\t/usr/share/zoneinfo/UTC
+@@bash
+/etc/profile.d/bash_completion.sh
+/usr/bin/bash
+@@httpd
+/etc/httpd/conf/httpd.conf
+/etc/httpd/conf.d/ssl.conf
+/usr/sbin/httpd
+@@vim-enhanced
+/usr/bin/vim
+@@tzdata
+/usr/share/zoneinfo/UTC
 ";
         MockExecutor::new()
             .with_command(
@@ -1703,6 +1717,102 @@ tzdata\t/usr/share/zoneinfo/UTC
         assert!(
             !baseline_names.iter().any(|name| name.contains('.')),
             "baseline_package_names should not contain any names with arch suffix (name.arch)"
+        );
+    }
+
+    // --- query_file_ownership sentinel format tests ---
+
+    #[test]
+    fn test_query_file_ownership_sentinel_format_multi_file_packages() {
+        // Verify the sentinel format parser handles multi-file packages,
+        // single-file packages, and packages with only non-/etc paths.
+        let sentinel_output = "\
+@@setup
+/etc/bashrc
+/etc/profile
+/etc/hosts
+/etc/services
+/usr/share/doc/setup/README
+@@httpd
+/etc/httpd/conf/httpd.conf
+/etc/httpd/conf.d/ssl.conf
+/usr/sbin/httpd
+/usr/lib64/httpd/modules/mod_ssl.so
+@@tzdata
+/usr/share/zoneinfo/UTC
+";
+        let exec = MockExecutor::new().with_command(
+            &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+            ExecResult {
+                stdout: sentinel_output.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+
+        let inspector = RpmInspector::new();
+        let entries = inspector.query_file_ownership(&exec);
+
+        assert_eq!(entries.len(), 3, "should have 3 packages");
+
+        let setup = entries.iter().find(|e| e.package_name == "setup");
+        assert!(setup.is_some(), "setup package should exist");
+        let setup_paths = &setup.unwrap().paths;
+        assert_eq!(setup_paths.len(), 5, "setup should own 5 files");
+        assert!(setup_paths.contains(&"/etc/bashrc".to_string()));
+        assert!(setup_paths.contains(&"/etc/profile".to_string()));
+        assert!(setup_paths.contains(&"/etc/hosts".to_string()));
+        assert!(setup_paths.contains(&"/etc/services".to_string()));
+        assert!(setup_paths.contains(&"/usr/share/doc/setup/README".to_string()));
+
+        let httpd = entries.iter().find(|e| e.package_name == "httpd");
+        assert!(httpd.is_some(), "httpd package should exist");
+        let httpd_paths = &httpd.unwrap().paths;
+        assert_eq!(httpd_paths.len(), 4, "httpd should own 4 files");
+        assert!(httpd_paths.contains(&"/etc/httpd/conf/httpd.conf".to_string()));
+        assert!(httpd_paths.contains(&"/etc/httpd/conf.d/ssl.conf".to_string()));
+
+        let tzdata = entries.iter().find(|e| e.package_name == "tzdata");
+        assert!(tzdata.is_some(), "tzdata package should exist");
+        assert_eq!(
+            tzdata.unwrap().paths.len(),
+            1,
+            "tzdata should own 1 file"
+        );
+    }
+
+    #[test]
+    fn test_query_file_ownership_empty_output() {
+        let exec = MockExecutor::new().with_command(
+            &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+            ExecResult {
+                stdout: "".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+
+        let inspector = RpmInspector::new();
+        let entries = inspector.query_file_ownership(&exec);
+        assert!(entries.is_empty(), "empty output should produce no entries");
+    }
+
+    #[test]
+    fn test_query_file_ownership_command_failure() {
+        let exec = MockExecutor::new().with_command(
+            &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+            ExecResult {
+                exit_code: 1,
+                stderr: "rpm: command failed".into(),
+                ..Default::default()
+            },
+        );
+
+        let inspector = RpmInspector::new();
+        let entries = inspector.query_file_ownership(&exec);
+        assert!(
+            entries.is_empty(),
+            "failed command should produce no entries"
         );
     }
 }

@@ -1040,20 +1040,24 @@ mod tests {
 0:cronie-1.5.7-8.el9.x86_64
 0:pam-1.5.1-14.el9.x86_64
 ";
-        // File ownership: package_name\tfilepath per line.
+        // File ownership: sentinel format (@@name header + paths).
         // Includes /etc paths (for owned_paths) and non-/etc (filtered out).
         let file_ownership_output = "\
-bash\t/etc/profile.d/bash_completion.sh
-bash\t/usr/bin/bash
-httpd\t/etc/httpd/conf/httpd.conf
-httpd\t/etc/httpd/conf.d/ssl.conf
-httpd\t/usr/sbin/httpd
-cronie\t/etc/cron.d/0hourly
-cronie\t/etc/cron.daily/logrotate
-cronie\t/usr/sbin/crond
-pam\t/etc/pam.d/system-auth
-pam\t/etc/pam.d/password-auth
-pam\t/etc/security/limits.conf
+@@bash
+/etc/profile.d/bash_completion.sh
+/usr/bin/bash
+@@httpd
+/etc/httpd/conf/httpd.conf
+/etc/httpd/conf.d/ssl.conf
+/usr/sbin/httpd
+@@cronie
+/etc/cron.d/0hourly
+/etc/cron.daily/logrotate
+/usr/sbin/crond
+@@pam
+/etc/pam.d/system-auth
+/etc/pam.d/password-auth
+/etc/security/limits.conf
 ";
         MockExecutor::new()
             .with_command(
@@ -1065,7 +1069,7 @@ pam\t/etc/security/limits.conf
                 },
             )
             .with_command(
-                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
                 ExecResult {
                     stdout: file_ownership_output.into(),
                     exit_code: 0,
@@ -1166,9 +1170,11 @@ pam\t/etc/security/limits.conf
 0:bash-5.2.26-3.el9.x86_64
 ";
         let file_ownership_output = "\
-httpd\t/etc/httpd/conf/httpd.conf
-httpd\t/usr/sbin/httpd
-bash\t/etc/profile.d/bash_completion.sh
+@@httpd
+/etc/httpd/conf/httpd.conf
+/usr/sbin/httpd
+@@bash
+/etc/profile.d/bash_completion.sh
 ";
         let exec = MockExecutor::new()
             .with_command(
@@ -1180,7 +1186,7 @@ bash\t/etc/profile.d/bash_completion.sh
                 },
             )
             .with_command(
-                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
                 ExecResult {
                     stdout: file_ownership_output.into(),
                     exit_code: 0,
@@ -1241,14 +1247,17 @@ bash\t/etc/profile.d/bash_completion.sh
         // bash owns /etc/profile.d/bash_completion.sh.
         // Non-/etc paths are included but should be filtered to owned_paths.
         let file_ownership_output = "\
-setup\t/etc/bashrc
-setup\t/etc/profile
-setup\t/etc/hosts
-setup\t/etc/services
-httpd\t/etc/httpd/conf/httpd.conf
-httpd\t/usr/sbin/httpd
-bash\t/etc/profile.d/bash_completion.sh
-bash\t/usr/bin/bash
+@@setup
+/etc/bashrc
+/etc/profile
+/etc/hosts
+/etc/services
+@@httpd
+/etc/httpd/conf/httpd.conf
+/usr/sbin/httpd
+@@bash
+/etc/profile.d/bash_completion.sh
+/usr/bin/bash
 ";
         MockExecutor::new()
             // RPM package query
@@ -1262,7 +1271,7 @@ bash\t/usr/bin/bash
             )
             // RPM file ownership query
             .with_command(
-                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
                 ExecResult {
                     stdout: file_ownership_output.into(),
                     exit_code: 0,
