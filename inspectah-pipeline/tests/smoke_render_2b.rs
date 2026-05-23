@@ -547,7 +547,7 @@ fn containerfile_containers_flatpak_copy_and_enable() {
         "Containerfile must include COPY flatpak/ for flatpak provisioning"
     );
     assert!(
-        output.contains("RUN systemctl enable flatpak-provision.service"),
+        output.contains("systemctl enable") && output.contains("flatpak-provision.service"),
         "Containerfile must enable the flatpak-provision service"
     );
 }

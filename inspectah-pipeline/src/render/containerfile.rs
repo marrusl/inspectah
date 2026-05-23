@@ -1502,8 +1502,14 @@ mod tests {
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("systemctl enable httpd.service sshd.service"));
-        assert!(output.contains("systemctl disable cups.service"));
+        assert!(
+            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            "enable must use multi-line continuation"
+        );
+        assert!(
+            output.contains("systemctl disable \\\n    cups.service"),
+            "disable must use multi-line continuation"
+        );
         // Preset-matching units from enabled_units/disabled_units must NOT appear
         assert!(
             !output.contains("chronyd"),
@@ -1933,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn test_service_single_line_under_4() {
+    fn test_service_multi_line_even_under_4() {
         use inspectah_core::types::services::{
             PresetDefault, ServiceStateChange, ServiceUnitState,
         };
@@ -1963,12 +1969,8 @@ mod tests {
         });
         let output = render_containerfile(&snap, None);
         assert!(
-            output.contains("systemctl enable httpd.service sshd.service"),
-            "2 services should be single line"
-        );
-        assert!(
-            !output.contains("\\"),
-            "2 services should not use backslash continuation"
+            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            "2 services must use multi-line continuation"
         );
     }
 
@@ -2003,12 +2005,12 @@ mod tests {
         });
         let output = render_containerfile(&snap, None);
         assert!(
-            output.contains("systemctl mask cups.service"),
-            "masked service must produce systemctl mask, got:\n{}",
+            output.contains("systemctl mask \\\n    cups.service"),
+            "masked service must produce systemctl mask with continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("systemctl enable httpd.service"),
+            output.contains("systemctl enable \\\n    httpd.service"),
             "enabled service must still work alongside masked"
         );
     }
@@ -2281,16 +2283,16 @@ mod tests {
 
         let output = render_containerfile(&snap, None);
         assert!(
-            output.contains("systemctl enable httpd.service"),
-            "enabled service must produce systemctl enable"
+            output.contains("systemctl enable \\\n    httpd.service"),
+            "enabled service must produce systemctl enable with continuation"
         );
         assert!(
-            output.contains("systemctl mask cups.service"),
-            "masked service must produce systemctl mask"
+            output.contains("systemctl mask \\\n    cups.service"),
+            "masked service must produce systemctl mask with continuation"
         );
         assert!(
-            output.contains("systemctl disable avahi-daemon.service"),
-            "disabled service must produce systemctl disable"
+            output.contains("systemctl disable \\\n    avahi-daemon.service"),
+            "disabled service must produce systemctl disable with continuation"
         );
     }
 }

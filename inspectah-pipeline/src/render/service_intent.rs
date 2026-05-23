@@ -144,22 +144,18 @@ enum PresenceDecision {
 // systemctl_lines — format a RUN block (unchanged from containerfile.rs)
 // ---------------------------------------------------------------------------
 
-/// Format a `RUN systemctl enable/disable/mask` block. When the unit count
-/// exceeds 3, use backslash line-continuation for readability.
+/// Format a `RUN systemctl enable/disable/mask` block using multi-line
+/// backslash continuation for consistency with the `RUN dnf install` style.
 fn systemctl_lines(verb: &str, units: &[String]) -> Vec<String> {
-    if units.len() <= 3 {
-        vec![format!("RUN systemctl {} {}", verb, units.join(" "))]
-    } else {
-        let mut lines = vec![format!("RUN systemctl {} \\", verb)];
-        for (i, u) in units.iter().enumerate() {
-            if i < units.len() - 1 {
-                lines.push(format!("    {} \\", u));
-            } else {
-                lines.push(format!("    {}", u));
-            }
+    let mut lines = vec![format!("RUN systemctl {} \\", verb)];
+    for (i, u) in units.iter().enumerate() {
+        if i < units.len() - 1 {
+            lines.push(format!("    {} \\", u));
+        } else {
+            lines.push(format!("    {}", u));
         }
-        lines
     }
+    lines
 }
 
 // ---------------------------------------------------------------------------

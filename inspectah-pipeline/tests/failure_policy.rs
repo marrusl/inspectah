@@ -226,7 +226,7 @@ fn degraded_section_contributes_to_containerfile_with_fixme() {
 
     // Services content IS present (partial data was routed)
     assert!(
-        output.contains("systemctl enable httpd.service"),
+        output.contains("systemctl enable") && output.contains("httpd.service"),
         "degraded services content must appear in Containerfile"
     );
 

@@ -133,11 +133,11 @@ fn services_in_containerfile() {
     let output = containerfile::render_containerfile(&snap, None);
 
     assert!(
-        output.contains("systemctl enable httpd.service"),
+        output.contains("systemctl enable") && output.contains("httpd.service"),
         "Containerfile must contain systemctl enable for httpd.service"
     );
     assert!(
-        output.contains("systemctl disable cups.service"),
+        output.contains("systemctl disable") && output.contains("cups.service"),
         "Containerfile must contain systemctl disable for cups.service"
     );
     assert!(
@@ -566,7 +566,7 @@ fn render_all_with_all_sections() {
     // Cross-check: Containerfile references services
     let cf = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
     assert!(
-        cf.contains("systemctl enable httpd.service"),
+        cf.contains("systemctl enable") && cf.contains("httpd.service"),
         "render_all Containerfile must contain services data"
     );
 
