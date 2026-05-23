@@ -166,14 +166,15 @@ describe("VariantView", () => {
     expect(unconfirm).toHaveBeenCalledWith(configItemId);
   });
 
-  it("auto-confirms via ack.markChanged when variant changed", async () => {
+  it("does NOT auto-confirm when variant changed — user must explicitly review", async () => {
     const user = userEvent.setup();
     const markChanged = vi.fn();
+    const confirm = vi.fn();
 
     render(
       <VariantView
         item={makeItem()}
-        ack={makeAck({ markChanged })}
+        ack={makeAck({ markChanged, confirm })}
         onSelectVariant={vi.fn()}
         diffHook={makeDiffHook()}
       />,
@@ -182,7 +183,8 @@ describe("VariantView", () => {
     const radios = screen.getAllByRole("radio");
     await user.click(radios[1]);
 
-    expect(markChanged).toHaveBeenCalledWith(configItemId);
+    expect(markChanged).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("shows 'Diff vs selected' link on non-selected variants", () => {

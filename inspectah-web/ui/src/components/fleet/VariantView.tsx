@@ -33,7 +33,6 @@ export function VariantView({
   const handleSelect = (hash: string) => {
     if (hash !== selectedHash) {
       onSelectVariant(item.item_id, hash);
-      ack.markChanged(item.item_id);
     }
   };
 
