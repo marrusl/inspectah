@@ -77,7 +77,6 @@ export function FleetItemRow({
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
-  const showAttention = item.attention.level !== "none";
 
   const handleToggle = () => {
     onToggle(item.item_id, !item.include);
@@ -134,14 +133,6 @@ export function FleetItemRow({
         </span>
       )}
 
-      {showAttention && (
-        <span
-          className={`fleet-item-row__attention fleet-item-row__attention--${item.attention.level}`}
-          data-testid="attention-badge"
-        >
-          {attentionDisplayLabel(item.attention.level)}
-        </span>
-      )}
     </div>
   );
 }

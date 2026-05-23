@@ -232,35 +232,9 @@ describe("FleetItemRow", () => {
     });
   });
 
-  it("renders attention badge for non-none levels", () => {
-    const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
-      attention: { level: "needs_review", reason: "variant_conflict", prevalence: 2 },
-    });
-
-    render(
-      <FleetItemRow
-        item={item}
-        isDecisionSection={true}
-        onToggle={vi.fn()}
-        ack={defaultAck}
-      />,
-    );
-
-    const badge = screen.getByTestId("attention-badge");
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveClass("fleet-item-row__attention--needs_review");
-    expect(badge).toHaveTextContent("Needs review");
-  });
-
-  it("renders formatted attention labels for all levels", () => {
-    const levels = [
-      { level: "needs_review", expected: "Needs review" },
-      { level: "informational", expected: "Info" },
-      { level: "routine", expected: "Routine" },
-    ];
-
-    for (const { level, expected } of levels) {
+  it("does not render attention badges in fleet item rows", () => {
+    const levels = ["needs_review", "informational", "routine"];
+    for (const level of levels) {
       const item = makeItem({
         item_id: { kind: "Package", key: { name_arch: `test-${level}.x86_64` } },
         attention: { level, reason: "test", prevalence: 1 },
@@ -275,8 +249,7 @@ describe("FleetItemRow", () => {
         />,
       );
 
-      const badge = screen.getByTestId("attention-badge");
-      expect(badge).toHaveTextContent(expected);
+      expect(screen.queryByTestId("attention-badge")).not.toBeInTheDocument();
       unmount();
     }
   });
