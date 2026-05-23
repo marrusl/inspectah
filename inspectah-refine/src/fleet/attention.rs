@@ -1,5 +1,4 @@
 use crate::types::{AttentionLevel, AttentionScore, FleetAttention, FleetContext, ItemId};
-use inspectah_core::types::fleet::PrevalenceZone;
 
 /// Compute a fleet-aware attention score for an item.
 ///

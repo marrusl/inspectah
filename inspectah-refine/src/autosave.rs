@@ -104,5 +104,5 @@ pub fn compute_tarball_hash(tarball: &Path) -> Result<ContentHash, std::io::Erro
         hasher.update(&buf[..n]);
     }
     let hash = format!("{:x}", hasher.finalize());
-    ContentHash::new(hash).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    ContentHash::new(hash).map_err(std::io::Error::other)
 }

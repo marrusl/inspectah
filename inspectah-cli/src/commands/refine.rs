@@ -29,7 +29,7 @@ pub enum SessionChoice {
 }
 
 pub(crate) enum ResolveResult {
-    Session(RefineSession),
+    Session(Box<RefineSession>),
     Quit,
 }
 
@@ -49,14 +49,14 @@ pub(crate) fn resolve_session(
                     Ok(Some(s)) => {
                         let ops_count = s.view().stats.ops_applied;
                         eprintln!("Resumed session ({ops_count} ops active).");
-                        Ok(ResolveResult::Session(s))
+                        Ok(ResolveResult::Session(Box::new(s)))
                     }
                     Err(e) => {
                         eprintln!("Warning: could not resume: {e}");
                         eprintln!("Starting fresh session.");
                         let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
                         s.set_tarball_path(tarball.to_path_buf());
-                        Ok(ResolveResult::Session(s))
+                        Ok(ResolveResult::Session(Box::new(s)))
                     }
                     Ok(None) => unreachable!("sidecar was just verified to exist"),
                 }
@@ -66,7 +66,7 @@ pub(crate) fn resolve_session(
                 eprintln!("Discarded previous session.");
                 let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
                 s.set_tarball_path(tarball.to_path_buf());
-                Ok(ResolveResult::Session(s))
+                Ok(ResolveResult::Session(Box::new(s)))
             }
             SessionChoice::Quit => Ok(ResolveResult::Quit),
         }
@@ -78,11 +78,11 @@ pub(crate) fn resolve_session(
         eprintln!("Discarded previous session.");
         let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
         s.set_tarball_path(tarball.to_path_buf());
-        Ok(ResolveResult::Session(s))
+        Ok(ResolveResult::Session(Box::new(s)))
     } else {
         let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
         s.set_tarball_path(tarball.to_path_buf());
-        Ok(ResolveResult::Session(s))
+        Ok(ResolveResult::Session(Box::new(s)))
     }
 }
 
@@ -148,7 +148,7 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
     };
 
     let session = match resolve_session(&args.tarball, args.fresh, choice, fresh_confirmed)? {
-        ResolveResult::Session(s) => s,
+        ResolveResult::Session(s) => *s,
         ResolveResult::Quit => {
             eprintln!("Quit.");
             return Ok(());

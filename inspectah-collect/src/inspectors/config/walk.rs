@@ -113,6 +113,11 @@ const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
     "/etc/tuned/active_profile",
     "/etc/tuned/profile_mode",
     "/etc/tuned/bootcmdline",
+    // CA bundle symlinks — these are RPM-owned by ca-certificates but the
+    // ownership check fails because rpm reports the canonical path
+    // (/etc/pki/tls/certs/), not the symlink path (/etc/ssl/certs/).
+    "/etc/ssl/certs/ca-bundle.crt",
+    "/etc/ssl/certs/ca-bundle.trust.crt",
 ];
 
 /// Glob patterns for system-generated files (fnmatch-style).
@@ -145,9 +150,9 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/systemd/system/*.requires/*",
     "/etc/systemd/user/*.wants/*",
     "/etc/systemd/user/*.requires/*",
-    "/etc/systemd/system/*.service.d/*.conf",
-    "/etc/systemd/system/*.timer.d/*.conf",
-    "/etc/systemd/system/*.socket.d/*.conf",
+    // NOTE: Drop-in overrides (*.service.d/*.conf, *.timer.d/*.conf,
+    // *.socket.d/*.conf) are intentionally NOT excluded — they are
+    // user-created config that is migration-relevant.
     "/etc/tuned/*/tuned.conf",
     "/etc/systemd/sleep.conf.d/*",
     "/etc/lvm/archive/*",
@@ -158,6 +163,19 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/NetworkManager/system-connections/*.nmconnection.bak",
     "/etc/sysconfig/network-scripts/readme-*",
     "/etc/pm/sleep.d/*",
+];
+
+/// Subtree prefixes for system-generated noise.
+/// These are package-manager internals, desktop/session infrastructure, and
+/// other runtime-generated trees that are never migration-relevant.
+const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
+    // Package manager internals — dnf/yum configs from RPM scriptlets,
+    // irrelevant on image-mode systems where dnf doesn't run at runtime
+    "/etc/yum/",
+    "/etc/rpm/",
+    // Desktop/interactive login session systemd units created by
+    // systemd-rpm-macros running `systemctl --global enable`
+    "/etc/xdg/systemd/",
 ];
 
 /// Cross-inspector ownership exclusions.
@@ -181,6 +199,13 @@ pub fn is_excluded_unowned(path: &str) -> bool {
         }
     }
 
+    // Subtree prefix exclusion (system-generated noise)
+    for prefix in UNOWNED_EXCLUDE_PREFIX {
+        if path.starts_with(prefix) {
+            return true;
+        }
+    }
+
     // Cross-inspector ownership exclusion
     for prefix in CROSS_INSPECTOR_EXCLUDE_PREFIXES {
         if path.starts_with(prefix) {
@@ -188,7 +213,36 @@ pub fn is_excluded_unowned(path: &str) -> bool {
         }
     }
 
+    // Systemd unit alias symlinks: files directly under /etc/systemd/system/
+    // that are NOT inside a .d/ drop-in directory. Alias symlinks (e.g.,
+    // dbus-org.fedoraproject.FirewallD1.service) are created by `systemctl
+    // enable` — the service inspector already captures enabled services.
+    // Drop-in overrides (e.g., sshd.service.d/override.conf) ARE user config.
+    if is_systemd_unit_alias(path) {
+        return true;
+    }
+
     false
+}
+
+/// Returns `true` if the path is a systemd unit alias symlink —
+/// a file directly under `/etc/systemd/system/` whose path does NOT
+/// pass through a `.d/` drop-in directory.
+///
+/// Examples:
+///   `/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service` → true (alias)
+///   `/etc/systemd/system/sshd.service.d/override.conf` → false (drop-in)
+///   `/etc/systemd/system/multi-user.target.wants/sshd.service` → false (handled by glob)
+fn is_systemd_unit_alias(path: &str) -> bool {
+    const PREFIX: &str = "/etc/systemd/system/";
+    if let Some(rest) = path.strip_prefix(PREFIX) {
+        // If the remainder contains '/', it's inside a subdirectory (drop-in
+        // .d/ dir or .wants/.requires, which are already glob-excluded).
+        // Only bare filenames directly under the prefix are alias symlinks.
+        !rest.is_empty() && !rest.contains('/')
+    } else {
+        false
+    }
 }
 
 /// Matches a path against a glob pattern.
@@ -481,6 +535,51 @@ mod tests {
     }
 
     // ---- DHCP filtering ----
+
+    // ---- Noise filter tests ----
+
+    #[test]
+    fn test_yum_subtree_excluded() {
+        assert!(is_excluded_unowned("/etc/yum/protected.d/setup.conf"));
+        assert!(is_excluded_unowned("/etc/yum/vars/releasever"));
+        assert!(is_excluded_unowned("/etc/rpm/macros.dist"));
+    }
+
+    #[test]
+    fn test_xdg_systemd_excluded() {
+        assert!(is_excluded_unowned("/etc/xdg/systemd/user/dbus.service"));
+        assert!(is_excluded_unowned(
+            "/etc/xdg/systemd/user/sockets.target.wants/dbus.socket"
+        ));
+    }
+
+    #[test]
+    fn test_systemd_alias_symlinks_excluded() {
+        // Alias symlinks directly under /etc/systemd/system/ are excluded
+        assert!(is_excluded_unowned(
+            "/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service"
+        ));
+        assert!(is_excluded_unowned(
+            "/etc/systemd/system/display-manager.service"
+        ));
+    }
+
+    #[test]
+    fn test_systemd_dropin_not_excluded() {
+        // Drop-in overrides inside .d/ directories are user config — keep them
+        assert!(!is_excluded_unowned(
+            "/etc/systemd/system/sshd.service.d/override.conf"
+        ));
+        assert!(!is_excluded_unowned(
+            "/etc/systemd/system/docker.service.d/http-proxy.conf"
+        ));
+    }
+
+    #[test]
+    fn test_ca_bundle_symlinks_excluded() {
+        assert!(is_excluded_unowned("/etc/ssl/certs/ca-bundle.crt"));
+        assert!(is_excluded_unowned("/etc/ssl/certs/ca-bundle.trust.crt"));
+    }
 
     #[test]
     fn test_dhcp_connection_paths() {
