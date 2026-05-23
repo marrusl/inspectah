@@ -270,6 +270,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     can_redo: fleetView.can_redo,
   };
 
+  // Compute total items across all sections
+  const totalItems = fleetView.sections.reduce(
+    (sum, section) => sum + sectionItems(section).length,
+    0,
+  );
+
   return (
     <div data-testid="fleet-app">
       <AppShell
@@ -292,6 +298,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         onSearchNavigate={handleSearchNavigate}
         toolbarExtra={<AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />}
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
+        fleetSummary={{
+          hostCount: fleet.host_count,
+          totalItems,
+          needsReviewCount: ack.unackedCount,
+        }}
+        isFleetMode
       >
         {({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => {
           // Sync filterText reset with shell's filterClearCounter

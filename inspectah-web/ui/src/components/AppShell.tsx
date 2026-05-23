@@ -10,6 +10,7 @@ import { ExportDialog } from "./ExportDialog";
 import type { RefineStats, ContextSection } from "../api/types";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
+import type { FleetSummary } from "./StatsBar";
 
 const LS_PANEL_KEY = "inspectah-cf-panel-open";
 
@@ -79,6 +80,10 @@ export interface AppShellProps {
   toolbarExtra?: React.ReactNode;
   /** Hamburger button for mobile responsive layout. */
   hamburger?: React.ReactNode;
+  /** Fleet-mode one-line summary for StatsBar. */
+  fleetSummary?: FleetSummary;
+  /** When true, Containerfile panel defaults to open regardless of viewport width. */
+  isFleetMode?: boolean;
 }
 
 /**
@@ -116,8 +121,12 @@ export function AppShell({
   extraShortcuts,
   toolbarExtra,
   hamburger,
+  fleetSummary,
+  isFleetMode = false,
 }: AppShellProps) {
-  const [cfPanelOpen, setCfPanelOpen] = useState(initialPanelOpen);
+  const [cfPanelOpen, setCfPanelOpen] = useState(() =>
+    isFleetMode ? readPanelPref() : initialPanelOpen(),
+  );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -201,6 +210,7 @@ export function AppShell({
         onExport={handleExport}
         isPending={isPending}
         hamburger={hamburger}
+        fleetSummary={fleetSummary}
       />
       {toolbarExtra && (
         <div className="inspectah-toolbar-extra" data-testid="toolbar-extra">

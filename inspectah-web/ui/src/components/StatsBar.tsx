@@ -10,6 +10,12 @@ import {
 import { UndoIcon, RedoIcon, ExportIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
 
+export interface FleetSummary {
+  hostCount: number;
+  totalItems: number;
+  needsReviewCount: number;
+}
+
 export interface StatsBarProps {
   stats: RefineStats | null;
   /** Number of NeedsReview items the user has viewed/triaged. */
@@ -20,6 +26,8 @@ export interface StatsBarProps {
   isPending: boolean;
   /** Hamburger menu button rendered at < 1024px. */
   hamburger?: React.ReactNode;
+  /** When set, render a fleet-oriented one-line summary instead of single-host counters. */
+  fleetSummary?: FleetSummary;
 }
 
 function stat(value: number | null | undefined, fallback = "-"): string {
@@ -34,6 +42,7 @@ export function StatsBar({
   onExport,
   isPending,
   hamburger,
+  fleetSummary,
 }: StatsBarProps) {
   const needsReviewTotal = stats?.needs_review_count ?? null;
   const remaining = needsReviewTotal != null
@@ -51,38 +60,54 @@ export function StatsBar({
           <ToolbarItem>{hamburger}</ToolbarItem>
         )}
         <ToolbarGroup align={{ default: "alignStart" }}>
-          <ToolbarItem>
-            <Content component="small">
-              <strong>Packages:</strong>{" "}
-              {stat(stats?.included_packages)} included /{" "}
-              {stat(stats?.excluded_packages)} excluded
-            </Content>
-          </ToolbarItem>
-          <ToolbarItem>
-            <Content component="small">
-              <strong>Configs:</strong>{" "}
-              {stat(stats?.included_configs)} included /{" "}
-              {stat(stats?.excluded_configs)} excluded
-            </Content>
-          </ToolbarItem>
-          <ToolbarItem>
-            <Content component="small">
-              <strong>Triage:</strong>{" "}
-              {showCompletionSignal ? (
-                isComplete ? (
-                  <Label color="green">All actionable items reviewed</Label>
+          {fleetSummary ? (
+            <ToolbarItem>
+              <Content component="small" data-testid="fleet-stats-summary">
+                <strong>{fleetSummary.hostCount}</strong> hosts{" · "}
+                <strong>{fleetSummary.totalItems.toLocaleString()}</strong> items{" · "}
+                {fleetSummary.needsReviewCount > 0 ? (
+                  <Label color="blue">{fleetSummary.needsReviewCount} need review</Label>
                 ) : (
-                  <Label color="blue">{remaining} items remaining</Label>
-                )
-              ) : (
-                <>
-                  {remaining != null ? String(remaining) : "-"} of{" "}
-                  {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
-                  to review
-                </>
-              )}
-            </Content>
-          </ToolbarItem>
+                  <Label color="green">All reviewed</Label>
+                )}
+              </Content>
+            </ToolbarItem>
+          ) : (
+            <>
+              <ToolbarItem>
+                <Content component="small">
+                  <strong>Packages:</strong>{" "}
+                  {stat(stats?.included_packages)} included /{" "}
+                  {stat(stats?.excluded_packages)} excluded
+                </Content>
+              </ToolbarItem>
+              <ToolbarItem>
+                <Content component="small">
+                  <strong>Configs:</strong>{" "}
+                  {stat(stats?.included_configs)} included /{" "}
+                  {stat(stats?.excluded_configs)} excluded
+                </Content>
+              </ToolbarItem>
+              <ToolbarItem>
+                <Content component="small">
+                  <strong>Triage:</strong>{" "}
+                  {showCompletionSignal ? (
+                    isComplete ? (
+                      <Label color="green">All actionable items reviewed</Label>
+                    ) : (
+                      <Label color="blue">{remaining} items remaining</Label>
+                    )
+                  ) : (
+                    <>
+                      {remaining != null ? String(remaining) : "-"} of{" "}
+                      {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
+                      to review
+                    </>
+                  )}
+                </Content>
+              </ToolbarItem>
+            </>
+          )}
         </ToolbarGroup>
         <ToolbarGroup align={{ default: "alignEnd" }}>
           <ToolbarItem>
