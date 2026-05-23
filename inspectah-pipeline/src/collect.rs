@@ -374,10 +374,12 @@ fn route_section(snapshot: &mut InspectionSnapshot, section: SectionData) {
 mod tests {
     use super::*;
     use inspectah_collect::executor::mock::MockExecutor;
+    use inspectah_collect::inspectors::config::ConfigInspector;
     use inspectah_collect::inspectors::rpm::RpmInspector;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::inspector::InspectorOutput;
     use inspectah_core::types::completeness::SourceSystemKind;
+    use inspectah_core::types::config::ConfigFileKind;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::redaction::{Confidence, RedactionHint};
     use inspectah_core::types::system::SourceSystem;
@@ -1219,6 +1221,175 @@ bash\t/etc/profile.d/bash_completion.sh
             httpd_va.package.as_deref(),
             Some("httpd"),
             "RpmVaEntry.package should be populated from file ownership"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end: RPM + Config inspectors through collect pipeline
+    // -----------------------------------------------------------------------
+
+    /// Build a MockExecutor that satisfies both RpmInspector and ConfigInspector,
+    /// with a mix of RPM-owned and unowned files in /etc.
+    fn build_e2e_config_mock() -> MockExecutor {
+        let rpm_qa_output = "\
+0:setup-2.13.7-10.el9.noarch
+0:bash-5.2.26-3.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+";
+        // File ownership: setup owns /etc/bashrc, /etc/profile, /etc/hosts, /etc/services.
+        // httpd owns /etc/httpd/conf/httpd.conf.
+        // bash owns /etc/profile.d/bash_completion.sh.
+        // Non-/etc paths are included but should be filtered to owned_paths.
+        let file_ownership_output = "\
+setup\t/etc/bashrc
+setup\t/etc/profile
+setup\t/etc/hosts
+setup\t/etc/services
+httpd\t/etc/httpd/conf/httpd.conf
+httpd\t/usr/sbin/httpd
+bash\t/etc/profile.d/bash_completion.sh
+bash\t/usr/bin/bash
+";
+        MockExecutor::new()
+            // RPM package query
+            .with_command(
+                "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+                ExecResult {
+                    stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // RPM file ownership query
+            .with_command(
+                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                ExecResult {
+                    stdout: file_ownership_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // /etc directory tree: mix of RPM-owned and unowned files
+            .with_dir(
+                "/etc",
+                vec![
+                    "bashrc",
+                    "profile",
+                    "hosts",
+                    "services",
+                    "httpd",
+                    "profile.d",
+                    "custom-app.conf",
+                    "myapp",
+                ],
+            )
+            .with_dir("/etc/httpd", vec!["conf"])
+            .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
+            .with_dir("/etc/profile.d", vec!["bash_completion.sh"])
+            .with_dir("/etc/myapp", vec!["config.yaml"])
+            // RPM-owned files (should be filtered OUT of config output)
+            .with_file("/etc/bashrc", "# /etc/bashrc\n")
+            .with_file("/etc/profile", "# /etc/profile\n")
+            .with_file("/etc/hosts", "127.0.0.1 localhost\n")
+            .with_file("/etc/services", "# /etc/services\n")
+            .with_file("/etc/httpd/conf/httpd.conf", "ServerRoot /etc/httpd\n")
+            .with_file("/etc/profile.d/bash_completion.sh", "# bash completion\n")
+            // Genuinely unowned files (should REMAIN in config output)
+            .with_file("/etc/custom-app.conf", "setting=value\n")
+            .with_file("/etc/myapp/config.yaml", "key: value\n")
+            // dnf history (config inspector needs this for orphan detection)
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+    }
+
+    #[test]
+    fn test_e2e_config_filters_rpm_owned_files() {
+        let exec = build_e2e_config_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ConfigInspector::new()),
+        ];
+        let pipeline = collect(&source, &exec, &inspectors, None);
+        let snap = &pipeline.state.snapshot;
+
+        // RPM section must be present (Wave 1 succeeded)
+        assert!(snap.rpm.is_some(), "RPM section must be populated");
+        let rpm = snap.rpm.as_ref().unwrap();
+        assert!(
+            !rpm.file_ownership.is_empty(),
+            "file_ownership must be populated for owned_paths extraction"
+        );
+
+        // Config section must be present (Wave 2 succeeded)
+        assert!(snap.config.is_some(), "Config section must be populated");
+        let config = snap.config.as_ref().unwrap();
+
+        // Collect paths and kinds for assertions
+        let config_paths: Vec<&str> = config.files.iter().map(|f| f.path.as_str()).collect();
+
+        // RPM-owned files must NOT appear (they should be filtered by is_rpm_owned)
+        assert!(
+            !config_paths.contains(&"/etc/bashrc"),
+            "/etc/bashrc is RPM-owned (setup) — must not appear as Unowned"
+        );
+        assert!(
+            !config_paths.contains(&"/etc/profile"),
+            "/etc/profile is RPM-owned (setup) — must not appear as Unowned"
+        );
+        assert!(
+            !config_paths.contains(&"/etc/hosts"),
+            "/etc/hosts is RPM-owned (setup) — must not appear as Unowned"
+        );
+        assert!(
+            !config_paths.contains(&"/etc/services"),
+            "/etc/services is RPM-owned (setup) — must not appear as Unowned"
+        );
+        assert!(
+            !config_paths.contains(&"/etc/httpd/conf/httpd.conf"),
+            "/etc/httpd/conf/httpd.conf is RPM-owned (httpd) — must not appear as Unowned"
+        );
+        assert!(
+            !config_paths.contains(&"/etc/profile.d/bash_completion.sh"),
+            "/etc/profile.d/bash_completion.sh is RPM-owned (bash) — must not appear as Unowned"
+        );
+
+        // Genuinely unowned files MUST appear with kind Unowned
+        let custom_app = config
+            .files
+            .iter()
+            .find(|f| f.path == "/etc/custom-app.conf")
+            .expect("/etc/custom-app.conf must appear as unowned");
+        assert_eq!(
+            custom_app.kind,
+            ConfigFileKind::Unowned,
+            "custom-app.conf must be classified as Unowned"
+        );
+
+        let myapp_config = config
+            .files
+            .iter()
+            .find(|f| f.path == "/etc/myapp/config.yaml")
+            .expect("/etc/myapp/config.yaml must appear as unowned");
+        assert_eq!(
+            myapp_config.kind,
+            ConfigFileKind::Unowned,
+            "myapp/config.yaml must be classified as Unowned"
+        );
+
+        // Only unowned files should be in the output
+        assert_eq!(
+            config.files.len(),
+            2,
+            "only the 2 genuinely unowned files should appear (not the 6 RPM-owned ones)"
         );
     }
 }
