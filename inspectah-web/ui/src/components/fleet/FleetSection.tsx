@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 import type { FleetSection, FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
+import type { UseFleetDiffResult } from "../../hooks/useFleetDiff";
 import { ZoneGroup } from "./ZoneGroup";
 import { FleetItemRow, itemDisplayName } from "./FleetItemRow";
+import { VariantView } from "./VariantView";
+import { ItemDetailPane } from "./ItemDetailPane";
 
 export interface NavTarget {
   sectionId: string;
@@ -20,6 +23,12 @@ export interface FleetSectionContentProps {
   onForceExpandVariant?: (itemId: ItemId) => void;
   pendingNavTarget?: NavTarget | null;
   onNavTargetConsumed?: () => void;
+  /** Currently expanded item for inline variant view. */
+  expandedItemId?: ItemId | null;
+  /** Callback when a variant option is selected. */
+  onSelectVariant?: (itemId: ItemId, hash: string) => void;
+  /** Diff hook for variant comparison. */
+  diffHook?: UseFleetDiffResult;
 }
 
 function filterItems(items: FleetItem[], filterText: string): FleetItem[] {
@@ -61,6 +70,9 @@ export function FleetSectionContent({
   onForceExpandVariant,
   pendingNavTarget,
   onNavTargetConsumed,
+  expandedItemId,
+  onSelectVariant,
+  diffHook,
 }: FleetSectionContentProps) {
   const [forceExpandZone, setForceExpandZone] = useState<string | null>(null);
   const [revealCounter, setRevealCounter] = useState(0);
@@ -80,19 +92,11 @@ export function FleetSectionContent({
       setForceExpandZone(zone);
     }
 
-    // Auto-expand the variant view for the target item (force-open, not toggle).
-    // Only for decision section config items — context items don't get editable variants.
+    // Auto-expand the detail/variant view for the target item (force-open, not toggle).
+    // Only for decision section items — context items don't get editable variants.
     const expandFn = onForceExpandVariant ?? onExpandVariant;
     if (expandFn && section.is_decision_section) {
-      const allItems = section.items ?? [
-        ...(section.zones?.consensus.items ?? []),
-        ...(section.zones?.near_consensus.items ?? []),
-        ...(section.zones?.divergent.items ?? []),
-      ];
-      const targetItem = allItems.find((i) => itemIdKey(i.item_id) === targetKey);
-      if (targetItem?.variants) {
-        expandFn(pendingNavTarget.itemId);
-      }
+      expandFn(pendingNavTarget.itemId);
     }
 
     setRevealCounter((c) => c + 1);
@@ -123,14 +127,36 @@ export function FleetSectionContent({
 
   const rowProps = { isDecisionSection, onToggle, ack, onExpandVariant };
 
+  const isItemExpanded = (item: FleetItem) =>
+    expandedItemId != null &&
+    JSON.stringify(item.item_id) === JSON.stringify(expandedItemId);
+
   // Flat mode: section has items directly (fleet-of-2 or no zones)
   if (!section.zones) {
     const filtered = filterItems(section.items ?? [], filterText);
     return (
       <div className="fleet-section" data-testid="fleet-section">
-        {filtered.map((item) => (
-          <FleetItemRow key={itemIdKey(item.item_id)} item={item} {...rowProps} />
-        ))}
+        {filtered.map((item) => {
+          const key = itemIdKey(item.item_id);
+          const expanded = isItemExpanded(item);
+          const hasVariants = item.variants != null && item.variants.count > 1;
+          return (
+            <div key={key}>
+              <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
+              {expanded && hasVariants && isDecisionSection && onSelectVariant && diffHook && (
+                <VariantView
+                  item={item}
+                  ack={ack}
+                  onSelectVariant={onSelectVariant}
+                  diffHook={diffHook}
+                />
+              )}
+              {expanded && !hasVariants && isDecisionSection && (
+                <ItemDetailPane item={item} />
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -151,30 +177,48 @@ export function FleetSectionContent({
   const suppressHeaders = populatedZones <= 1;
 
   const renderItems = (items: FleetItem[]) =>
-    items.map((item) => (
-      <FleetItemRow key={itemIdKey(item.item_id)} item={item} {...rowProps} />
-    ));
+    items.map((item) => {
+      const key = itemIdKey(item.item_id);
+      const expanded = isItemExpanded(item);
+      const hasVariants = item.variants != null && item.variants.count > 1;
+      return (
+        <div key={key}>
+          <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
+          {expanded && hasVariants && isDecisionSection && onSelectVariant && diffHook && (
+            <VariantView
+              item={item}
+              ack={ack}
+              onSelectVariant={onSelectVariant}
+              diffHook={diffHook}
+            />
+          )}
+          {expanded && !hasVariants && isDecisionSection && (
+            <ItemDetailPane item={item} />
+          )}
+        </div>
+      );
+    });
 
   if (suppressHeaders) {
     return (
       <div className="fleet-section" data-testid="fleet-section">
-        {renderItems(consensusFiltered)}
-        {renderItems(nearConsensusFiltered)}
         {renderItems(divergentFiltered)}
+        {renderItems(nearConsensusFiltered)}
+        {renderItems(consensusFiltered)}
       </div>
     );
   }
 
   return (
     <div className="fleet-section" data-testid="fleet-section">
-      {consensusFiltered.length > 0 && (
+      {divergentFiltered.length > 0 && (
         <ZoneGroup
-          zone="consensus"
-          count={zones.consensus.count}
-          defaultExpanded={false}
-          forceExpanded={forceExpandZone === "consensus"}
+          zone="divergent"
+          count={zones.divergent.count}
+          defaultExpanded={true}
+          forceExpanded={forceExpandZone === "divergent"}
         >
-          {renderItems(consensusFiltered)}
+          {renderItems(divergentFiltered)}
         </ZoneGroup>
       )}
       {nearConsensusFiltered.length > 0 && (
@@ -187,14 +231,14 @@ export function FleetSectionContent({
           {renderItems(nearConsensusFiltered)}
         </ZoneGroup>
       )}
-      {divergentFiltered.length > 0 && (
+      {consensusFiltered.length > 0 && (
         <ZoneGroup
-          zone="divergent"
-          count={zones.divergent.count}
-          defaultExpanded={true}
-          forceExpanded={forceExpandZone === "divergent"}
+          zone="consensus"
+          count={zones.consensus.count}
+          defaultExpanded={false}
+          forceExpanded={forceExpandZone === "consensus"}
         >
-          {renderItems(divergentFiltered)}
+          {renderItems(consensusFiltered)}
         </ZoneGroup>
       )}
     </div>
