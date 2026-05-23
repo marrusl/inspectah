@@ -26,8 +26,9 @@ The current codebase has two divergent package views:
 
 Users lose coherent "what comes from where" context when switching to fleet.
 The `source_repo` data exists on every `PackageEntry` in fleet mode but the
-UI ignores it. Meanwhile, single-machine has features (dep tree, attention
-levels) that add complexity without serving the migration use case.
+UI ignores it. Meanwhile, single-machine has features (dep tree, per-repo
+accordion grouping) that add structural complexity without serving the core
+migration use case: deciding what packages and repos to carry forward.
 
 This spec unifies both views into a single layout, removing features that
 don't serve migration triage and adding repo context to fleet.
@@ -60,16 +61,30 @@ don't serve migration triage and adding repo context to fleet.
 
 ### Repo Control Bar
 
-A compact summary of all repos, always visible above the scrollable
-package list. Outside the scroll region.
+Always visible above the scrollable package list, outside the scroll
+region. Two-row layout that separates static context from interactive
+controls:
+
+**Row 1 — Distro repos (static context):** Plain inline text, not
+clickable. Muted color, not reduced opacity (context, not disabled).
+Example: `baseos 12 · appstream 28 · anaconda 3`
+
+**Row 2 — Toggleable repos (interactive pills):** Colored pill shapes
+with package counts and toggle indicators. Green pills for
+official-optional repos, amber pills for third-party repos. Clickable
+to enable/disable.
 
 **Three repo tiers:**
 
-| Tier | Examples | Repo bar treatment | Toggle | Badge color |
-|------|----------|-------------------|--------|-------------|
-| Distro | baseos, appstream, fedora, updates, anaconda, extras | Plain text name + count | Locked — "always included" | — |
-| Official-optional | crb, rhel-extensions | Colored name + count | Toggleable | Green |
-| Third-party | epel, COPRs, custom repos | Colored name + count | Toggleable | Amber |
+| Tier | Examples | Repo bar treatment | Toggle | Color |
+|------|----------|-------------------|--------|-------|
+| Distro | baseos, appstream, fedora, updates, anaconda, extras | Plain text (row 1) | Not interactive | Muted gray |
+| Official-optional | crb, rhel-extensions | Pill with count (row 2) | Toggleable | Green |
+| Third-party | epel, COPRs, custom repos | Pill with count (row 2) | Toggleable | Amber |
+
+The two-row split makes affordance self-evident from form factor: text is
+static, pills are interactive. No convention to learn. Tab order skips
+row 1 entirely — keyboard lands only on toggleable pills in row 2.
 
 **No support status labels.** No "third-party" or "unsupported" text. The
 color is the only signal. Users of this tool already know what EPEL and CRB
@@ -78,9 +93,20 @@ are.
 **Toggle behavior:**
 - Disabling a repo excludes all its packages from the containerfile output
   and moves them to the excluded zone.
-- Re-enabling restores packages to the active list at their sorted position.
+- Re-enabling restores packages to the active list **with their prior
+  per-package checkbox state preserved.** If the user had unchecked 3 of 8
+  EPEL packages before disabling the repo, re-enabling restores 5 checked
+  and 3 unchecked. The repo toggle is a lens, not an eraser — it controls
+  repo-level scope without destroying per-package decisions.
 - No confirmation dialog — the action is reversible with one click.
+- No warning when disabling a repo with per-package edits — the action is
+  visually self-documenting (all packages visibly move to the excluded zone)
+  and fully reversible.
 - Uses the existing `RefinementOp::ExcludeRepo` / `IncludeRepo` operations.
+- **Fleet toggle semantics:** The toggle operates on the merged fleet
+  output, not per-host. If only 2 of 50 hosts have EPEL, disabling EPEL
+  excludes those 2 hosts' EPEL packages from the containerfile. The other
+  48 hosts never had EPEL packages — nothing changes for them.
 
 **Protected repos (distro tier):** baseos, BaseOS, appstream, AppStream,
 anaconda, fedora, updates, updates-testing, extras. CRB is explicitly
@@ -165,14 +191,22 @@ non-distro repo is toggled off.
 - Reduced opacity (~40%)
 - Separated from the active list by a subtle border
 
-**States:**
-- **Empty:** "No excluded packages" text
+**Visibility:**
+- **Hidden** until at least one repo has been toggled off. No "No excluded
+  packages" noise in the default state.
+- **Visible** once any repo is disabled. Remains visible if the user
+  re-enables all repos (showing empty state) so the feature stays
+  discoverable after first use.
+
+**States (when visible):**
+- **Empty (all repos re-enabled):** "No excluded packages" text
 - **Non-empty:** Full list of excluded packages with their repo names
 - **Large (50+ packages):** Collapsed by default with "Show N excluded
   packages" expander button
 
 **Re-enabling a repo** removes its packages from the excluded zone and
-returns them to the active list at their appropriate sorted position.
+returns them to the active list at their appropriate sorted position,
+with prior per-package checkbox state preserved.
 
 ### What Was Removed
 
@@ -203,15 +237,18 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 ### Repo Toggle Switches
 - `role="switch"`, `aria-checked="true|false"`
 - Label includes repo name: "EPEL repository: enabled"
-- Distro repos: `aria-disabled="true"` with description "always included",
-  or skip in tab order entirely
-- On toggle, trigger `aria-live="polite"` announcement:
-  "N packages excluded from [repo name]" (or inverse on re-enable)
+- Distro repos are plain text (row 1), not buttons — they are not in
+  the tab order at all, not `aria-disabled`
+- On disable, trigger `aria-live="polite"` announcement:
+  "N packages excluded from [repo name]"
+- On re-enable: "EPEL enabled. N packages restored — M included, K excluded"
+  (confirms both the action and the preserved per-package state)
 
 ### Sort Headers
 - Focusable buttons with `aria-sort="ascending|descending|none"`
 - Enter or Space toggles sort direction
-- Arrow keys move between column headers
+- Left/Right arrow keys move between the two column headers (wrapping
+  at boundary)
 - Screen reader announcement: "Packages, sorted ascending" /
   "Prevalence, sortable"
 
@@ -233,16 +270,18 @@ repo column. The repo bar handles repo-level actions (enable/disable).
   tier-first sort clusters repos by tier regardless of color perception.
 - Prevalence colors (green/amber/red) are reinforced by the numeric N/M
   count on every row — the number is the primary signal, color is secondary.
-- Ensure all colored text meets 4.5:1 contrast ratio against the dark
-  background. Muted distro text (#555 on #1b1d21) must be verified —
-  adjust if below threshold.
+- All colored text must meet 4.5:1 contrast ratio against the dark
+  background. Muted distro text must use at minimum #888 on #1b1d21
+  (~4.6:1). #555 on #1b1d21 is ~2.1:1 — far below threshold.
 
 ### General
 - Focus stays on the control that was activated (toggle, sort header) —
   don't chase moving packages
-- Checkbox state preserved across sort operations
-- Tab order: repo bar toggles → column headers → package checkboxes →
-  excluded zone expander
+- Checkbox state preserved across sort operations. Space toggles
+  individual checkboxes. Shift+Click range selection is not supported
+  in v1.
+- Tab order: repo bar toggle pills (row 2) → column headers → package
+  checkboxes → excluded zone expander. Distro text (row 1) is skipped.
 - `@media (prefers-reduced-motion: reduce)` — disable any transitions
   on sort reorder or excluded zone movement
 
