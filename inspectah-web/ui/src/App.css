@@ -1,5 +1,13 @@
 /* inspectah refine — app shell layout */
 
+/* Ensure the full viewport chain has no gaps */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
 .inspectah-page {
   height: 100vh;
   display: flex;
