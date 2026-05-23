@@ -21,7 +21,6 @@ import { AppShell } from "./AppShell";
 import { FleetSidebar } from "./fleet/FleetSidebar";
 import { FleetBanner } from "./fleet/FleetBanner";
 import { FleetSectionContent } from "./fleet/FleetSection";
-import { VariantView } from "./fleet/VariantView";
 import { itemDisplayName } from "./fleet/FleetItemRow";
 
 export interface FleetAppProps {
@@ -227,11 +226,6 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   const fleetView = view!;
 
   const activeFleetSection = fleetView.sections.find((s) => s.id === activeSection);
-  const expandedItem = expandedItemId
-    ? fleetView.sections
-        .flatMap(sectionItems)
-        .find((item) => JSON.stringify(item.item_id) === JSON.stringify(expandedItemId))
-    : null;
 
   const searchContextSections = buildFleetSearchSections(fleetView.sections);
 
@@ -365,15 +359,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
               onForceExpandVariant={handleForceExpandVariant}
               pendingNavTarget={pendingNavTarget}
               onNavTargetConsumed={handleNavTargetConsumed}
+              expandedItemId={expandedItemId}
+              onSelectVariant={handleSelectVariant}
+              diffHook={diffHook}
             />
-            {expandedItem && expandedItem.variants && activeFleetSection?.is_decision_section && (
-              <VariantView
-                item={expandedItem}
-                ack={ack}
-                onSelectVariant={handleSelectVariant}
-                diffHook={diffHook}
-              />
-            )}
           </div>
           </>
           );
