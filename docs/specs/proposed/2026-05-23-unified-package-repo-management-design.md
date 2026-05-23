@@ -93,16 +93,14 @@ are.
 **Toggle behavior:**
 - Disabling a repo excludes all its packages from the containerfile output
   and moves them to the excluded zone.
-- Re-enabling restores packages to the active list **with their prior
-  per-package checkbox state preserved.** If the user had unchecked 3 of 8
-  EPEL packages before disabling the repo, re-enabling restores 5 checked
-  and 3 unchecked. The repo toggle is a lens, not an eraser — it controls
-  repo-level scope without destroying per-package decisions.
+- Re-enabling restores all packages from that repo to `include=true`
+  (the engine's default). Any per-package unchecks the user made before
+  disabling are **not preserved** — the user re-unchecks the few packages
+  they don't want. This matches the engine's `ExcludeRepo`/`IncludeRepo`
+  semantics, which operate all-or-nothing on the repo's package set.
 - No confirmation dialog — the action is reversible with one click.
-- No warning when disabling a repo with per-package edits — the action is
-  visually self-documenting (all packages visibly move to the excluded zone)
-  and fully reversible.
-- Uses the existing `RefinementOp::ExcludeRepo` / `IncludeRepo` operations.
+- Uses the existing `RefinementOp::ExcludeRepo` / `IncludeRepo` operations
+  without modification.
 - **Fleet toggle semantics:** The toggle operates on the merged fleet
   output, not per-host. If only 2 of 50 hosts have EPEL, disabling EPEL
   excludes those 2 hosts' EPEL packages from the containerfile. The other
@@ -141,6 +139,17 @@ because the shift occurs between deliberate mode switches, not within a
 single mode. The recognition cue (colored text, same font treatment) is
 spatially stable within each mode.
 
+**Fleet repo provenance:** The merged fleet snapshot assigns one
+`source_repo` per `name.arch`. When the same package comes from different
+repos across hosts (e.g., `nginx` from `epel` on 3 hosts and `appstream`
+on 2), this is treated as a **repo variant** — the same pattern used for
+conflicting config file content. The package row shows a variant indicator
+alongside the repo text, and the user can inspect which hosts sourced the
+package from which repo. The majority repo is shown as the default; the
+user's repo selection determines which repo file is included in the
+containerfile. Packages with a single consistent repo across all hosts
+(the common case) show no variant indicator.
+
 **Prevalence display (fleet only):** Right-aligned N/M count, color-coded:
 - Green: consensus (all hosts)
 - Amber: near-consensus (most hosts)
@@ -172,10 +181,14 @@ Each mode has two independently sortable columns.
   Inactive column: header text in muted gray, no chevron.
 - Secondary sort is always the other column (e.g., prevalence sort breaks
   ties alphabetically).
-- Default on load: alphabetical ascending in both modes.
-- **Sort resets on mode switch.** If the user sorts by prevalence in fleet,
+- **Default on load:** alphabetical ascending in single-machine.
+  **Prevalence ascending (rarest first) in fleet** — divergent items
+  surface at the top by default, giving the fleet view an immediate
+  triage-first posture without structural zone grouping.
+- **Sort resets on mode switch.** If the user changes sort in fleet,
   switches to single-machine, then returns to fleet, sort resets to
-  alphabetical. Sort is a transient exploration action, not a preference.
+  the mode's default. Sort is a transient exploration action, not a
+  preference.
 
 **No sort in the excluded zone.** Excluded packages are always listed
 alphabetically within the zone.
@@ -206,7 +219,7 @@ non-distro repo is toggled off.
 
 **Re-enabling a repo** removes its packages from the excluded zone and
 returns them to the active list at their appropriate sorted position,
-with prior per-package checkbox state preserved.
+all set to `include=true` (engine default).
 
 ### What Was Removed
 
@@ -241,8 +254,7 @@ repo column. The repo bar handles repo-level actions (enable/disable).
   the tab order at all, not `aria-disabled`
 - On disable, trigger `aria-live="polite"` announcement:
   "N packages excluded from [repo name]"
-- On re-enable: "EPEL enabled. N packages restored — M included, K excluded"
-  (confirms both the action and the preserved per-package state)
+- On re-enable: "EPEL enabled. N packages restored"
 
 ### Sort Headers
 - Focusable buttons with `aria-sort="ascending|descending|none"`
@@ -330,10 +342,10 @@ repo column. The repo bar handles repo-level actions (enable/disable).
   operating on the view data — no server round-trips for sort/filter
 
 **Performance:**
-- Virtualize the package list when it exceeds 50 items. Rendering 200+
-  DOM rows degrades scroll performance. Use a virtual/windowed list that
-  renders only visible rows plus a small buffer. The sort and checkbox
-  state operate on the data array, not the DOM.
+- No list virtualization in v1. Render all package rows in the DOM.
+  If performance degrades with large package lists (200+), revisit with
+  a virtual/windowed list in a follow-up. Premature optimization risk
+  outweighs the speculative performance concern.
 
 ### Migration Path
 
