@@ -222,12 +222,29 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 - When collapsed, screen reader announces the count
 - When expanded, focus stays on the expander button
 
+### Focus Ring
+- All interactive elements (toggles, sort headers, checkboxes, expander)
+  must show a visible focus ring: `focus-visible: 3-4px` ring in accent
+  blue. Never remove `outline` without a replacement.
+
+### Color-Only Indicator Mitigation
+- Repo tier colors (gray/green/amber) must NOT be the sole differentiator.
+  The repo bar provides non-color context (locked label vs toggle), and
+  tier-first sort clusters repos by tier regardless of color perception.
+- Prevalence colors (green/amber/red) are reinforced by the numeric N/M
+  count on every row — the number is the primary signal, color is secondary.
+- Ensure all colored text meets 4.5:1 contrast ratio against the dark
+  background. Muted distro text (#555 on #1b1d21) must be verified —
+  adjust if below threshold.
+
 ### General
 - Focus stays on the control that was activated (toggle, sort header) —
   don't chase moving packages
 - Checkbox state preserved across sort operations
 - Tab order: repo bar toggles → column headers → package checkboxes →
   excluded zone expander
+- `@media (prefers-reduced-motion: reduce)` — disable any transitions
+  on sort reorder or excluded zone movement
 
 ## Implementation Notes
 
@@ -272,6 +289,12 @@ repo column. The repo bar handles repo-level actions (enable/disable).
   and the drawer rendering in `architect.html`
 - Sorting, toggling, and excluded zone management are client-side JS
   operating on the view data — no server round-trips for sort/filter
+
+**Performance:**
+- Virtualize the package list when it exceeds 50 items. Rendering 200+
+  DOM rows degrades scroll performance. Use a virtual/windowed list that
+  renders only visible rows plus a small buffer. The sort and checkbox
+  state operate on the data array, not the DOM.
 
 ### Migration Path
 
