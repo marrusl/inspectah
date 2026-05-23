@@ -121,17 +121,20 @@
 
 .fleet-item-row__attention--needs_review {
   background-color: var(--pf-t--global--color--status--warning--100, #fef6e7);
-  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  color: #795600;
+  border: 1px solid #c58c00;
 }
 
 .fleet-item-row__attention--informational {
   background-color: var(--pf-t--global--color--status--info--100, #e7f1fa);
-  color: var(--pf-t--global--color--status--info--default, #06c);
+  color: #004080;
+  border: 1px solid #004080;
 }
 
 .fleet-item-row__attention--routine {
   background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
-  color: var(--pf-t--global--color--status--success--default, #3e8635);
+  color: #1e4620;
+  border: 1px solid #2d6a30;
 }
 
 /* ─── Fleet zone group ───────────────────────────────────────────────── */
@@ -238,10 +241,15 @@
 
 /* ─── Fleet sidebar active state ─────────────────────────────────────── */
 
-.inspectah-sidebar .pf-v6-c-nav__item.pf-m-current {
-  border-left: 3px solid var(--pf-t--global--color--brand--default);
+/* PF6 NavItem sets .pf-m-current on the <a>/<button> link child, not the <li>.
+   Target the link element and style the parent <li> via :has() for the left border. */
+.inspectah-sidebar .pf-v6-c-nav__link.pf-m-current {
   background-color: var(--pf-t--global--background--color--secondary--default);
   font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-sidebar .pf-v6-c-nav__item:has(.pf-m-current) {
+  border-left: 3px solid var(--pf-t--global--color--brand--default);
 }
 
 /* ─── Fleet sidebar ack progress ─────────────────────────────────────── */
