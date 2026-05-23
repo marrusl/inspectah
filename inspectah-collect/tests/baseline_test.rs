@@ -46,6 +46,11 @@ fn fail_result(msg: &str) -> ExecResult {
 /// Build a MockExecutor wired for the happy path.
 fn happy_mock() -> MockExecutor {
     MockExecutor::new()
+        // which podman — pre-check for podman availability
+        .with_command_prefix(
+            "nsenter -t 1 -m -u -i -n -- which podman",
+            ok_result(),
+        )
         // pull
         .with_command_prefix(
             &format!("nsenter -t 1 -m -u -i -n -- podman pull {}", TEST_IMAGE),
@@ -116,42 +121,47 @@ fn baseline_command_ordering() {
 
     let log = mock.command_log();
     assert!(
-        log.len() >= 6,
-        "expected at least 6 commands, got {}",
+        log.len() >= 7,
+        "expected at least 7 commands, got {}",
         log.len()
     );
 
-    // Verify ordering: pull, create, start, exec, rm, inspect.
+    // Verify ordering: which, pull, create, start, exec, rm, inspect.
     assert!(
-        log[0].contains("podman pull"),
-        "first command should be pull, got: {}",
+        log[0].contains("which podman"),
+        "first command should be which podman, got: {}",
         log[0]
     );
     assert!(
-        log[1].contains("podman create"),
-        "second command should be create, got: {}",
+        log[1].contains("podman pull"),
+        "second command should be pull, got: {}",
         log[1]
     );
     assert!(
-        log[2].contains("podman start"),
-        "third command should be start, got: {}",
+        log[2].contains("podman create"),
+        "third command should be create, got: {}",
         log[2]
     );
     assert!(
-        log[3].contains("podman exec") && log[3].contains("rpm"),
-        "fourth command should be exec rpm, got: {}",
+        log[3].contains("podman start"),
+        "fourth command should be start, got: {}",
         log[3]
     );
     assert!(
-        log[4].contains("podman rm -f"),
-        "fifth command should be rm -f, got: {}",
+        log[4].contains("podman exec") && log[4].contains("rpm"),
+        "fifth command should be exec rpm, got: {}",
         log[4]
+    );
+    assert!(
+        log[5].contains("podman rm -f"),
+        "sixth command should be rm -f, got: {}",
+        log[5]
     );
     // The inspect is on the IMAGE ref, not the container name.
     assert!(
-        log[5].contains("podman inspect") && log[5].contains(TEST_IMAGE),
-        "sixth command should inspect the image, got: {}",
-        log[5]
+        log[6].contains("podman inspect") && log[6].contains(TEST_IMAGE),
+        "seventh command should inspect the image, got: {}",
+        log[6]
     );
 }
 
@@ -164,7 +174,7 @@ fn baseline_create_includes_entrypoint_and_network_none() {
     assert!(result.is_ok());
 
     let log = mock.command_log();
-    let create_cmd = &log[1];
+    let create_cmd = &log[2]; // index 2: which(0), pull(1), create(2)
     assert!(
         create_cmd.contains("--entrypoint"),
         "create must include --entrypoint, got: {}",
@@ -179,7 +189,9 @@ fn baseline_create_includes_entrypoint_and_network_none() {
 
 #[test]
 fn baseline_pull_fails_no_rm_attempted() {
-    let mock = MockExecutor::new().with_command_prefix(
+    let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
+        .with_command_prefix(
         "nsenter -t 1 -m -u -i -n -- podman pull",
         fail_result("pull failed: unauthorized"),
     );
@@ -204,6 +216,7 @@ fn baseline_pull_fails_no_rm_attempted() {
 #[test]
 fn baseline_create_fails_no_rm_attempted() {
     let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
@@ -229,6 +242,7 @@ fn baseline_create_fails_no_rm_attempted() {
 #[test]
 fn baseline_start_fails_rm_runs() {
     let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
@@ -259,6 +273,7 @@ fn baseline_start_fails_rm_runs() {
 #[test]
 fn baseline_exec_fails_rm_runs() {
     let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
@@ -291,6 +306,10 @@ fn baseline_exec_fails_rm_runs() {
 fn baseline_digest_fallback_repo_digests() {
     // Primary digest returns empty, fallback returns repo digest with @.
     let mock = MockExecutor::new()
+        .with_command_prefix(
+            "nsenter -t 1 -m -u -i -n -- which podman",
+            ok_result(),
+        )
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman pull",
             ok_result(),
@@ -347,6 +366,7 @@ glibc\t0\t2.34\t83.el9\taarch64
 ";
 
     let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
