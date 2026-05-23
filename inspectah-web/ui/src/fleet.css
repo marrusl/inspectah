@@ -167,7 +167,11 @@
   margin-bottom: var(--pf-t--global--spacer--md);
   border: 1px solid;
   border-left-width: 4px;
-  color: var(--pf-t--global--text--color--regular);
+  color: var(--pf-t--global--text--color--regular, #151515);
+}
+
+.fleet-banner button {
+  color: inherit;
 }
 
 .fleet-banner--success {
