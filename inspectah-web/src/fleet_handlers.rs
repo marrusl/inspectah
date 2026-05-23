@@ -445,7 +445,7 @@ fn build_fleet_sections(
                 let fp = pkg.entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: pkg.entry.include,
+                    include: fleet_include_default(fp),
                     attention: build_attention_dto(&pkg.attention, fa),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -482,6 +482,25 @@ fn build_fleet_sections(
                     VariantSelection::Selected | VariantSelection::Only
                 )
             })
+            .filter(|cfg| {
+                // Filter out default/unmodified configs to reduce noise.
+                // Only show configs that were actually modified by users.
+                // A path is kept if ANY variant is user-modified; skipped
+                // only when ALL variants are default kinds.
+                use inspectah_core::types::config::ConfigFileKind;
+                let dominated_by_defaults = entries_by_path
+                    .get(cfg.entry.path.as_str())
+                    .map(|entries| {
+                        entries.iter().all(|e| {
+                            matches!(
+                                e.kind,
+                                ConfigFileKind::RpmOwnedDefault | ConfigFileKind::BaselineMatch
+                            )
+                        })
+                    })
+                    .unwrap_or(false);
+                !dominated_by_defaults
+            })
             .map(|cfg| {
                 let item_id = ItemId::Config {
                     path: cfg.entry.path.clone(),
@@ -497,7 +516,7 @@ fn build_fleet_sections(
 
                 FleetItem {
                     item_id,
-                    include: cfg.entry.include,
+                    include: fleet_include_default(fp),
                     attention: build_attention_dto(&cfg.attention, fa),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
