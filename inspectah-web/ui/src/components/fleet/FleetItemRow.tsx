@@ -8,6 +8,17 @@ export interface FleetItemRowProps {
   onToggle: (itemId: ItemId, include: boolean) => void;
   ack: UseVariantAckResult;
   onExpandVariant?: (itemId: ItemId) => void;
+  /** Whether this row's inline variant view is expanded. */
+  isExpanded?: boolean;
+}
+
+export function attentionDisplayLabel(level: string): string {
+  switch (level) {
+    case "needs_review": return "Needs review";
+    case "informational": return "Info";
+    case "routine": return "Routine";
+    default: return level.replace(/_/g, " ");
+  }
 }
 
 export function itemDisplayName(itemId: ItemId): string {
@@ -61,6 +72,7 @@ export function FleetItemRow({
   onToggle,
   ack: _ack,
   onExpandVariant,
+  isExpanded = false,
 }: FleetItemRowProps) {
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
@@ -77,7 +89,7 @@ export function FleetItemRow({
   };
 
   const handleRowClick = () => {
-    if (isDecisionSection && hasVariants) onExpandVariant?.(item.item_id);
+    if (isDecisionSection) onExpandVariant?.(item.item_id);
   };
 
   return (
@@ -111,9 +123,9 @@ export function FleetItemRow({
           className="fleet-item-row__variants"
           onClick={handleVariantClick}
           type="button"
-          aria-expanded={false}
+          aria-expanded={isExpanded}
         >
-          {item.variants!.count} variants <span className="fleet-item-row__variants-chevron" aria-hidden="true">&#9656;</span>
+          {item.variants!.count} variants <span className={`fleet-item-row__variants-chevron${isExpanded ? " fleet-item-row__variants-chevron--expanded" : ""}`} aria-hidden="true">&#9656;</span>
         </button>
       )}
       {hasVariants && !isDecisionSection && (
@@ -127,7 +139,7 @@ export function FleetItemRow({
           className={`fleet-item-row__attention fleet-item-row__attention--${item.attention.level}`}
           data-testid="attention-badge"
         >
-          {item.attention.level}
+          {attentionDisplayLabel(item.attention.level)}
         </span>
       )}
     </div>

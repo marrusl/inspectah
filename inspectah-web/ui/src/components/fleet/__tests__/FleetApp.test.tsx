@@ -206,6 +206,7 @@ describe("FleetSidebar", () => {
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
     confirm: vi.fn(),
+    unconfirm: vi.fn(),
     markChanged: vi.fn(),
     unackedCount: 2,
     totalCount: 4,

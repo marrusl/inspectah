@@ -9,6 +9,7 @@ const defaultAck: UseVariantAckResult = {
   isAcked: () => false,
   getStatus: () => "unreviewed" as const,
   confirm: vi.fn(),
+  unconfirm: vi.fn(),
   markChanged: vi.fn(),
   unackedCount: 0,
   totalCount: 0,
@@ -234,7 +235,7 @@ describe("FleetItemRow", () => {
   it("renders attention badge for non-none levels", () => {
     const item = makeItem({
       item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
-      attention: { level: "high", reason: "variant_conflict", prevalence: 2 },
+      attention: { level: "needs_review", reason: "variant_conflict", prevalence: 2 },
     });
 
     render(
@@ -248,7 +249,36 @@ describe("FleetItemRow", () => {
 
     const badge = screen.getByTestId("attention-badge");
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveClass("fleet-item-row__attention--high");
+    expect(badge).toHaveClass("fleet-item-row__attention--needs_review");
+    expect(badge).toHaveTextContent("Needs review");
+  });
+
+  it("renders formatted attention labels for all levels", () => {
+    const levels = [
+      { level: "needs_review", expected: "Needs review" },
+      { level: "informational", expected: "Info" },
+      { level: "routine", expected: "Routine" },
+    ];
+
+    for (const { level, expected } of levels) {
+      const item = makeItem({
+        item_id: { kind: "Package", key: { name_arch: `test-${level}.x86_64` } },
+        attention: { level, reason: "test", prevalence: 1 },
+      });
+
+      const { unmount } = render(
+        <FleetItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+        />,
+      );
+
+      const badge = screen.getByTestId("attention-badge");
+      expect(badge).toHaveTextContent(expected);
+      unmount();
+    }
   });
 
   it("does not render attention badge for none level", () => {

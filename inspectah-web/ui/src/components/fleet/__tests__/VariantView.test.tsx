@@ -35,6 +35,7 @@ function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult 
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
     confirm: vi.fn(),
+    unconfirm: vi.fn(),
     markChanged: vi.fn(),
     unackedCount: 0,
     totalCount: 0,
@@ -104,7 +105,7 @@ describe("VariantView", () => {
     expect(onSelect).toHaveBeenCalledWith(configItemId, "bbb222");
   });
 
-  it("shows Confirm button", () => {
+  it("shows 'Mark as reviewed' button when unreviewed", () => {
     render(
       <VariantView
         item={makeItem()}
@@ -114,10 +115,10 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /confirm/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /mark as reviewed/i })).toBeInTheDocument();
   });
 
-  it("calls ack.confirm when Confirm clicked", async () => {
+  it("calls ack.confirm when 'Mark as reviewed' clicked", async () => {
     const user = userEvent.setup();
     const confirm = vi.fn();
 
@@ -130,8 +131,39 @@ describe("VariantView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /confirm/i }));
+    await user.click(screen.getByRole("button", { name: /mark as reviewed/i }));
     expect(confirm).toHaveBeenCalledWith(configItemId);
+  });
+
+  it("shows 'Reviewed' indicator when item is acked", () => {
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck({ isAcked: () => true })}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    expect(screen.getByTestId("variant-reviewed-indicator")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /mark as reviewed/i })).not.toBeInTheDocument();
+  });
+
+  it("calls ack.unconfirm when 'Reviewed' indicator clicked", async () => {
+    const user = userEvent.setup();
+    const unconfirm = vi.fn();
+
+    render(
+      <VariantView
+        item={makeItem()}
+        ack={makeAck({ isAcked: () => true, unconfirm })}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+      />,
+    );
+
+    await user.click(screen.getByTestId("variant-reviewed-indicator"));
+    expect(unconfirm).toHaveBeenCalledWith(configItemId);
   });
 
   it("auto-confirms via ack.markChanged when variant changed", async () => {

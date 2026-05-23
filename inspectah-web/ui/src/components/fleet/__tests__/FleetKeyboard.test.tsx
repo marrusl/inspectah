@@ -37,6 +37,7 @@ function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult 
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
     confirm: vi.fn(),
+    unconfirm: vi.fn(),
     markChanged: vi.fn(),
     unackedCount: 0,
     totalCount: 0,

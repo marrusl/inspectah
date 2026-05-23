@@ -37,8 +37,14 @@ export function VariantView({
     }
   };
 
+  const isReviewed = ack.isAcked(item.item_id);
+
   const handleConfirm = () => {
-    ack.confirm(item.item_id);
+    if (isReviewed) {
+      ack.unconfirm(item.item_id);
+    } else {
+      ack.confirm(item.item_id);
+    }
   };
 
   const handleDiffVsSelected = (targetHash: string) => {
@@ -129,9 +135,21 @@ export function VariantView({
       </div>
 
       <div className="variant-view__actions">
-        <Button variant="primary" onClick={handleConfirm}>
-          Confirm
-        </Button>
+        {isReviewed ? (
+          <button
+            type="button"
+            className="variant-view__reviewed-indicator"
+            onClick={handleConfirm}
+            data-testid="variant-reviewed-indicator"
+            aria-label="Undo review"
+          >
+            Reviewed
+          </button>
+        ) : (
+          <Button variant="primary" onClick={handleConfirm}>
+            Mark as reviewed
+          </Button>
+        )}
       </div>
 
       {showDiff && (

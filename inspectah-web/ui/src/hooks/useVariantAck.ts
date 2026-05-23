@@ -10,6 +10,8 @@ export interface UseVariantAckResult {
   getStatus: (itemId: ItemId) => AckStatus;
   /** Confirm an item (operator explicitly acknowledges current selection). */
   confirm: (itemId: ItemId) => void;
+  /** Remove confirmation (toggle back to unreviewed). */
+  unconfirm: (itemId: ItemId) => void;
   /** Mark as changed (auto-called when variant selection changes). */
   markChanged: (itemId: ItemId) => void;
   /** Count of unacked items (for banner/toolbar display). */
@@ -104,6 +106,18 @@ export function useVariantAck(
     [updateItem],
   );
 
+  const unconfirm = useCallback(
+    (id: ItemId) => {
+      setAckMap((prev) => {
+        const next = new Map(prev);
+        next.delete(itemKey(id));
+        persistToStorage(storageKey, next);
+        return next;
+      });
+    },
+    [storageKey],
+  );
+
   const markChanged = useCallback(
     (id: ItemId) => updateItem(id, "changed"),
     [updateItem],
@@ -122,5 +136,5 @@ export function useVariantAck(
 
   const totalCount = actionableIds.length;
 
-  return { isAcked, getStatus, confirm, markChanged, unackedCount, totalCount };
+  return { isAcked, getStatus, confirm, unconfirm, markChanged, unackedCount, totalCount };
 }
