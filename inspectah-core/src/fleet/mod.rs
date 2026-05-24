@@ -184,7 +184,11 @@ pub fn merge_snapshots(
     merged.redaction_hints = merged_hints;
 
     // Merge each section via adapters
-    merged.rpm = merge_rpm_sections(rpm_sections, total, &hostnames, baseline_host_idx);
+    let rpm_merge_result = merge_rpm_sections(rpm_sections, total, &hostnames, baseline_host_idx);
+    if let Some((rpm_section, repo_conflicts)) = rpm_merge_result {
+        merged.rpm = Some(rpm_section);
+        merged.rpm_repo_conflicts = repo_conflicts;
+    }
     merged.config = merge_config_sections(config_sections, total, &hostnames);
     merged.services = merge_service_sections(service_sections, total, &hostnames);
     merged.network = merge_network_sections(network_sections, total, &hostnames);
@@ -437,7 +441,7 @@ mod tests {
         let counts = compute_section_host_counts(&[s1, s2]);
         assert_eq!(counts.get("rpm"), Some(&2));
         assert_eq!(counts.get("config"), Some(&1));
-        assert!(counts.get("services").is_none());
+        assert!(!counts.contains_key("services"));
     }
 
     #[test]

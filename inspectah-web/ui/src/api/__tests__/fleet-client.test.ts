@@ -44,6 +44,7 @@ const mockFleetView: FleetViewResponse = {
                 zone: "Consensus",
                 prevalence: 0.8,
               },
+              source_repo: "appstream",
               prevalence: {
                 count: 4,
                 total: 5,
@@ -81,6 +82,8 @@ const mockFleetView: FleetViewResponse = {
       },
     },
   ],
+  repo_groups: [],
+  repo_conflict_count: 0,
 };
 
 const mockDiffRequest: FleetDiffRequest = {

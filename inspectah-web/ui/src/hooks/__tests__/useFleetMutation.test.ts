@@ -15,6 +15,8 @@ const MOCK_FLEET_VIEW: FleetViewResponse = {
     informational_variant_count: 0,
   },
   sections: [],
+  repo_groups: [],
+  repo_conflict_count: 0,
 };
 
 const MOCK_FLEET_VIEW_2: FleetViewResponse = {

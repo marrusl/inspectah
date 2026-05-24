@@ -954,7 +954,7 @@ fn test_merge_rpm_sections_packages_merged() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     assert_eq!(result.packages_added.len(), 2);
     let httpd = result
@@ -984,7 +984,7 @@ fn test_merge_rpm_sections_dedup_strings() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     assert_eq!(result.dnf_history_removed, vec!["pkg-a", "pkg-b", "pkg-c"]);
     assert_eq!(result.multiarch_packages, vec!["glibc", "openssl"]);
@@ -1013,7 +1013,7 @@ fn test_merge_rpm_sections_version_changes_dedup() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     // Should be deduped to 1 entry
     assert_eq!(result.version_changes.len(), 1);
@@ -1029,7 +1029,7 @@ fn test_merge_rpm_sections_passthrough_scalars() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into()];
-    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, Some(0)).unwrap();
 
     assert!(result.no_baseline);
     assert_eq!(
@@ -1833,7 +1833,7 @@ fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
     let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
 
     // Baseline host is index 1 (host-b), NOT index 0 (host-a)
-    let result = merge_rpm_sections(
+    let (result, _) = merge_rpm_sections(
         vec![Some(s_a), Some(s_b), Some(s_c)],
         3,
         &hostnames,
@@ -1867,7 +1867,7 @@ fn test_merge_rpm_sections_no_baseline_gives_defaults() {
     let hostnames: Vec<String> = vec!["host-a".into()];
 
     // baseline_host_idx = None means no baseline was selected
-    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, None).unwrap();
+    let (result, _) = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, None).unwrap();
 
     assert_eq!(result.base_image, None);
     assert_eq!(result.baseline_package_names, None);

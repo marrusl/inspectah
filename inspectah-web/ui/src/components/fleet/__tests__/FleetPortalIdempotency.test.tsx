@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { FleetApp } from "../../FleetApp";
 import type {
   FleetViewResponse,
@@ -90,12 +91,13 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-function packageItemWithVariants(): FleetItem {
+function configItemWithVariants(): FleetItem {
   return {
-    item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+    item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
     include: true,
     attention: { level: "high", reason: "variant", prevalence: 2 },
     prevalence: { count: 2, total: 3 },
+    source_repo: "",
     variants: {
       count: 2,
       selected: "aaa111",
@@ -108,11 +110,11 @@ function packageItemWithVariants(): FleetItem {
 }
 
 function makeFleetViewWithVariants(): FleetViewResponse {
-  const item = packageItemWithVariants();
+  const item = configItemWithVariants();
   const actionable: ActionableVariantItem[] = [
     {
       item_id: item.item_id,
-      section_id: "packages",
+      section_id: "config_files",
       variant_count: 2,
       max_host_spread: 2,
     },
@@ -134,9 +136,17 @@ function makeFleetViewWithVariants(): FleetViewResponse {
         id: "packages",
         display_name: "Packages",
         is_decision_section: true,
+        items: [],
+      },
+      {
+        id: "config_files",
+        display_name: "Config Files",
+        is_decision_section: true,
         items: [item],
       },
     ],
+    repo_groups: [],
+    repo_conflict_count: 0,
   };
 }
 
@@ -162,12 +172,16 @@ describe("portal idempotency", () => {
       expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
     });
 
-    // FleetBanner should be visible with actionable variants
+    // Navigate to config_files section so the banner shows the config item
+    const configNav = screen.getByText("Config Files");
+    await userEvent.click(configNav);
+
+    // FleetBanner should be visible with actionable variants for this section
     const banner = screen.getByTestId("fleet-banner");
     expect(banner).toBeInTheDocument();
 
-    // Find the banner navigate button by its aria-label
-    const navButton = screen.getByRole("button", { name: /navigate to httpd/i });
+    // Find the banner navigate button by its aria-label (config path)
+    const navButton = screen.getByRole("button", { name: /navigate to \/etc\/httpd/i });
     expect(navButton).toBeInTheDocument();
 
     // First click — should open the variant view via portal navigation

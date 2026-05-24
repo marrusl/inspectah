@@ -20,6 +20,7 @@ function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetIte
     include: true,
     attention: { level: "none", reason: "", prevalence: 1 },
     prevalence: { count: 2, total: 3 },
+    source_repo: "",
     ...overrides,
   };
 }

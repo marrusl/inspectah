@@ -87,6 +87,8 @@ describe("App router", () => {
           items: [],
         },
       ],
+      repo_groups: [],
+      repo_conflict_count: 0,
     });
 
     render(<App />);
@@ -144,7 +146,6 @@ describe("App router", () => {
       },
       generation: 0,
       repo_groups: [],
-      leaf_dep_tree: {},
       version_changes: [],
       users_groups_decisions: [],
       session_is_sensitive: false,

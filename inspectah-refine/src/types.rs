@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use inspectah_core::types::config::ConfigFileEntry;
-use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone};
+use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
@@ -181,6 +181,14 @@ pub enum RepoProvenance {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoTier {
+    Distro,
+    OfficialOptional,
+    ThirdParty,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionTag {
     pub level: AttentionLevel,
@@ -258,11 +266,16 @@ pub struct FleetContext {
     /// false for fleet-of-2 (zones suppressed, variant ops available),
     /// true for fleet-of-3+ (zones active).
     pub zones_active: bool,
+    /// Repo-source conflicts from the fleet merge. Maps `name.arch` identity
+    /// keys to the distinct repos with host counts. Only populated when the
+    /// same package was installed from different repos across hosts.
+    pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>,
 }
 
 /// Operating mode of the refine session, determined at construction time
 /// from the presence/absence of `FleetSnapshotMeta` in the snapshot.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum RefineMode {
     SingleHost,
     Fleet(FleetContext),

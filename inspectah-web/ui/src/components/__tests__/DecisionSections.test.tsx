@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AttentionGroup } from "../AttentionGroup";
 import { DecisionItem } from "../DecisionItem";
@@ -72,7 +72,6 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
-  leaf_dep_tree: {},
   version_changes: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
@@ -121,6 +120,7 @@ function makeViewResponse(overrides: {
   config_files?: RefinedConfig[];
   stats?: Partial<RefineStats>;
   repo_groups?: RepoGroupInfo[];
+  baseline_summary?: ViewResponse["baseline_summary"];
 } = {}): ViewResponse {
   return {
     packages: overrides.packages ?? [],
@@ -129,10 +129,10 @@ function makeViewResponse(overrides: {
     stats: { ...MOCK_STATS, ...overrides.stats },
     generation: 1,
     repo_groups: overrides.repo_groups ?? [],
-    leaf_dep_tree: {},
     version_changes: [],
-  users_groups_decisions: [],
-  session_is_sensitive: false,
+    users_groups_decisions: [],
+    session_is_sensitive: false,
+    ...(overrides.baseline_summary ? { baseline_summary: overrides.baseline_summary } : {}),
   };
 }
 
@@ -1332,18 +1332,19 @@ describe("Grid ARIA attributes", () => {
 
 // ---- Tier-aware card treatment tests ----
 
-describe("Tier-aware card treatment", () => {
-  it("renders Tier 1 packages as collapsed summary", () => {
+describe("Unified package view in MainContent", () => {
+  it("renders RepoBar and PackageList for packages section", () => {
     const view = makeViewResponse({
       packages: [
         makePkg({ source_repo: "baseos" }, [{ level: "routine", reason: "package_baseline_match", detail: null }]),
       ],
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByText(/baseline packages/i)).toBeInTheDocument();
+    expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
   });
 
-  it("shows repo source badge for verified Tier 2", () => {
+  it("shows repo name in PackageList row", () => {
     const view = makeViewResponse({
       packages: [
         makePkg({ source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
@@ -1353,18 +1354,6 @@ describe("Tier-aware card treatment", () => {
     expect(screen.getByText("appstream")).toBeInTheDocument();
   });
 
-  it("shows 'Baseline Unavailable' for provenance-unavailable Tier 2", () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg({ attention: [] } as any, [{ level: "informational", reason: "package_provenance_unavailable", detail: null }]),
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    // Banner text contains "baseline unavailable"; badge text is inside a collapsed group.
-    // Match the banner specifically.
-    expect(screen.getByText(/all added packages shown as NeedsReview/i)).toBeInTheDocument();
-  });
-
   it("shows baseline unavailable banner when baseline_summary is absent", () => {
     const view = makeViewResponse({
       stats: { baseline_available: false },
@@ -1372,148 +1361,62 @@ describe("Tier-aware card treatment", () => {
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
     expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
   });
+
+  it("shows baseline info banner when baseline_summary is present", () => {
+    const view = makeViewResponse({
+      baseline_summary: {
+        image_ref: "registry.example.com/rhel:9.4",
+        image_digest: "sha256:abcdef123456",
+        strategy: "rpm",
+        baseline_count: 100,
+        user_added_count: 5,
+        review_count: 2,
+      },
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText(/Baseline compared against/)).toBeInTheDocument();
+  });
 });
 
 // ---- Repo group header tests ----
 
-describe("Repo group headers", () => {
-  it("groups Tier 2 packages by repo with header", async () => {
+describe("RepoBar in MainContent", () => {
+  it("renders RepoBar with repo pills from view data", () => {
     const view = makeViewResponse({
       packages: [
         makePkg({ name: "httpd", source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
         makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
       ],
       repo_groups: [
-        { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
-        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+        { section_id: "appstream", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+        { section_id: "epel", provenance: "verified" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
       ],
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
 
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // With repo-first grouping, repo group headers appear directly (no attention group)
-    expect(screen.getByTestId("repo-group-appstream")).toBeInTheDocument();
-    expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
-    // Distro repos show no label; non-distro shows "Third-party"
-    expect(screen.queryByText("Distro")).not.toBeInTheDocument();
-    expect(screen.getByText("Third-party")).toBeInTheDocument();
+    // RepoBar renders pill buttons for toggleable (non-distro) repos with counts
+    const repoBar = screen.getByTestId("repo-bar");
+    expect(repoBar).toBeInTheDocument();
+    expect(within(repoBar).getByText(/epel \(1\)/)).toBeInTheDocument();
   });
 
-  it("shows toggle for verified third-party, no toggle for distro", async () => {
+  it("renders PackageList with all packages from view data", () => {
     const view = makeViewResponse({
       packages: [
         makePkg({ name: "httpd", source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
         makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
       ],
       repo_groups: [
-        { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
-        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+        { section_id: "appstream", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+        { section_id: "epel", provenance: "verified" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
       ],
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
 
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // With repo-first grouping, headers are directly visible
-    // Only the epel group should have a repo toggle (verified + third-party)
-    expect(screen.getByRole("switch", { name: /toggle epel repo/i })).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: /toggle appstream repo/i })).not.toBeInTheDocument();
-  });
-
-  it("does not show toggle for unverified provenance", async () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg({ name: "mystery", source_repo: "custom" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
-      ],
-      repo_groups: [
-        { section_id: "custom", provenance: "incomplete" as const, is_distro: false, package_count: 1, enabled: true },
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // With repo-first grouping, headers are directly visible
-    // All non-distro repos show "Third-party" regardless of provenance
-    expect(screen.getByText("Third-party")).toBeInTheDocument();
-    expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: /toggle custom repo/i })).not.toBeInTheDocument();
-  });
-
-  it("reverts toggle and shows alert on backend failure", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-
-    // Make /api/op fail for ExcludeRepo
-    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
-      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ ids: [] }),
-        });
-      }
-      if (url === "/api/viewed" && opts?.method === "POST") {
-        return Promise.resolve({ ok: true, status: 204 });
-      }
-      if (url === "/api/op") {
-        return Promise.resolve({
-          ok: false,
-          status: 422,
-          json: () => Promise.resolve({ error: "repo exclusion failed" }),
-        });
-      }
-      if (url === "/api/view") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(MOCK_VIEW),
-        });
-      }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
-    });
-
-    const view = makeViewResponse({
-      packages: [
-        makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
-      ],
-      repo_groups: [
-        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
-      ],
-    });
-
-    const onMutationError = vi.fn();
-
-    render(
-      <MainContent
-        {...defaultMainContentProps}
-        viewData={view}
-        onMutationError={onMutationError}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // With repo-first grouping, repo toggle is directly visible
-    const repoToggle = screen.getByRole("switch", { name: /toggle epel repo/i });
-    await user.click(repoToggle);
-
-    // Wait for error alert to appear
-    await waitFor(() => {
-      expect(screen.getByText(/Error: repo exclusion failed/)).toBeInTheDocument();
-    });
-
-    // Toggle should revert (checked again since it was enabled and op failed)
-    expect(repoToggle).toBeChecked();
-
-    vi.useRealTimers();
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
+    // Both packages render as rows
+    expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
+    expect(screen.getByText("epel-release.x86_64")).toBeInTheDocument();
   });
 });
 
@@ -1642,46 +1545,6 @@ describe("No Decision/Full toggle", () => {
 // ---- Search auto-reveal tests ----
 
 describe("Search auto-reveal for collapsed groups", () => {
-  it("auto-expands baseline summary when revealItemId matches a baseline package", async () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg(
-          { name: "glibc", source_repo: "baseos" },
-          [{ level: "routine", reason: "package_baseline_match", detail: null }],
-        ),
-      ],
-    });
-    const { rerender } = render(
-      <MainContent {...defaultMainContentProps} viewData={view} />,
-    );
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // Baseline summary should be collapsed — item not visible
-    expect(screen.getByTestId("baseline-summary")).toBeInTheDocument();
-    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
-
-    // Set revealItemId to the baseline package
-    rerender(
-      <MainContent
-        {...defaultMainContentProps}
-        viewData={view}
-        revealItemId="packages:glibc.x86_64"
-      />,
-    );
-
-    // Baseline summary should auto-expand, item should be visible
-    await waitFor(() => {
-      expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
-    });
-    // The item should have a data-testid for focus targeting
-    expect(
-      screen.getByTestId("decision-item-packages:glibc.x86_64"),
-    ).toBeInTheDocument();
-  });
-
   it("auto-expands config-managed summary when revealItemId matches a managed config", async () => {
     const view = makeViewResponse({
       config_files: [
@@ -1725,46 +1588,17 @@ describe("Search auto-reveal for collapsed groups", () => {
       screen.getByTestId("decision-item-configs:/etc/default.conf"),
     ).toBeInTheDocument();
   });
-
-  it("does not expand unrelated summaries when revealItemId targets a different item", async () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg(
-          { name: "glibc", source_repo: "baseos" },
-          [{ level: "routine", reason: "package_baseline_match", detail: null }],
-        ),
-        makePkg(
-          { name: "httpd", source_repo: "appstream" },
-          [{ level: "needs_review", reason: "package_user_added", detail: null }],
-        ),
-      ],
-    });
-    render(
-      <MainContent
-        {...defaultMainContentProps}
-        viewData={view}
-        revealItemId="packages:httpd.x86_64"
-      />,
-    );
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    // The baseline summary should stay collapsed since revealItemId targets httpd, not glibc
-    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
-  });
 });
 
 // ---- Repo-first package grouping tests ----
 
 describe("Repo-first package grouping", () => {
   const repoGroups: RepoGroupInfo[] = [
-    { section_id: "baseos", provenance: "verified" as const, is_distro: true, package_count: 2, enabled: true },
-    { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
-    { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 2, enabled: true },
-    { section_id: "custom", provenance: "incomplete" as const, is_distro: false, package_count: 1, enabled: true },
-    { section_id: "disabled-repo", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: false },
+    { section_id: "baseos", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
+    { section_id: "appstream", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+    { section_id: "epel", provenance: "verified" as const, is_distro: false, tier: "third_party" as const, package_count: 2, enabled: true },
+    { section_id: "custom", provenance: "incomplete" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
+    { section_id: "disabled-repo", provenance: "verified" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false },
   ];
 
   it("groups packages by repo instead of attention level", async () => {
@@ -2000,8 +1834,8 @@ describe("Repo-first package grouping", () => {
 describe("Disabled repo behavior", () => {
   it("disabled repos sort after enabled repos", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "epel-pkg", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
@@ -2016,7 +1850,7 @@ describe("Disabled repo behavior", () => {
 
   it("disabled repo header count matches visible include:false rows, not backend package_count", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 10, enabled: false },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 10, enabled: false },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
@@ -2030,7 +1864,7 @@ describe("Disabled repo behavior", () => {
 
   it("disabled repos start collapsed because they are disabled", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
@@ -2042,7 +1876,7 @@ describe("Disabled repo behavior", () => {
 
   it("hides per-package toggles in disabled repos when expanded", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
@@ -2285,8 +2119,8 @@ describe("RepoGroupHeader updated labels", () => {
 
 describe("Repo-first keyboard navigation", () => {
   const REPO_GROUPS: RepoGroupInfo[] = [
-    { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-    { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+    { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
   ];
 
   it("repo headers are in the flat roving arrow-key sequence", async () => {
@@ -2330,8 +2164,8 @@ describe("Repo-first keyboard navigation", () => {
 
   it("skips collapsed repo group packages (only header in sequence)", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
@@ -2351,7 +2185,7 @@ describe("Repo-first keyboard navigation", () => {
 
   it("Tab from a no-switch repo header does not dead-end", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
@@ -2366,7 +2200,7 @@ describe("Repo-first keyboard navigation", () => {
 
   it("Space is inert on repo header row", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
@@ -2383,7 +2217,7 @@ describe("Repo-first keyboard navigation", () => {
   it("focus stays on repo header after expand/collapse/disable/re-enable", async () => {
     const onViewUpdate = vi.fn().mockResolvedValue(undefined);
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
@@ -2403,8 +2237,8 @@ describe("Repo-first keyboard navigation", () => {
 
   it("focus resets to first repo header after filter clear", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
@@ -2427,8 +2261,8 @@ describe("Repo-first keyboard navigation", () => {
 describe("Repo-first filter and reveal", () => {
   it("auto-expands only matching repo groups when filter is active", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
@@ -2450,8 +2284,8 @@ describe("Repo-first filter and reveal", () => {
 
   it("non-matching repo groups do NOT force-expand when filter is active", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-      { section_id: "custom", provenance: "incomplete", is_distro: false, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
+      { section_id: "custom", provenance: "incomplete", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "baseos-pkg", source_repo: "baseos" }, [ROUTINE_TAG]) },
@@ -2472,21 +2306,21 @@ describe("Repo-first filter and reveal", () => {
       { type: "package", data: makePkg({ name: "htop", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
     ];
     const { rerender } = render(
-      <DecisionList items={items} sectionLabel="Packages" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+      <DecisionList items={items} sectionLabel="Packages" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
     );
     await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
     // Disabled repo starts collapsed
     expect(screen.queryByText("htop.x86_64")).not.toBeInTheDocument();
     // Filter matches — disabled repo should force-expand
     rerender(
-      <DecisionList items={items} sectionLabel="Packages" filterText="htop" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+      <DecisionList items={items} sectionLabel="Packages" filterText="htop" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
     );
     expect(screen.getByText("htop.x86_64")).toBeInTheDocument();
   });
 
   it("two-ancestor reveal: revealItemId expands both repo group and routine summary", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 2, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]) },
@@ -2503,7 +2337,7 @@ describe("Repo-first filter and reveal", () => {
 
   it("DecisionList-level revealItemId expands routine summary to reveal target", async () => {
     const repoGroups: RepoGroupInfo[] = [
-      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 3, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 3, enabled: true },
     ];
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "httpd", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
@@ -2523,34 +2357,23 @@ describe("Repo-first filter and reveal", () => {
 
 // ---- AttentionSummary in MainContent tests ----
 
-describe("AttentionSummary in MainContent", () => {
-  it("shows attention summary on packages section", () => {
+describe("Package section uses unified components", () => {
+  it("packages section renders RepoBar + PackageList instead of AttentionSummary", () => {
     const view = makeViewResponse({
       packages: [
         makePkg({ name: "httpd", source_repo: "epel" }, [NEEDS_REVIEW_TAG]),
         makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]),
       ],
       repo_groups: [
-        { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
-        { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+        { section_id: "epel", provenance: "verified", is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
+        { section_id: "baseos", provenance: "verified", is_distro: true, tier: "distro" as const, package_count: 1, enabled: true },
       ],
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByTestId("attention-summary")).toBeInTheDocument();
-    expect(screen.getByText("1 package needs review across 1 repo")).toBeInTheDocument();
-  });
-
-  it("shows all-clear when no review items", () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]),
-      ],
-      repo_groups: [
-        { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByText("All actionable items reviewed")).toBeInTheDocument();
+    // Unified components render instead of AttentionSummary
+    expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("attention-summary")).not.toBeInTheDocument();
   });
 
   it("does not show attention summary on configs section", () => {

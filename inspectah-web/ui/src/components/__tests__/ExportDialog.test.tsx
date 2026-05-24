@@ -36,7 +36,6 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 7,
   repo_groups: [],
-  leaf_dep_tree: {},
   version_changes: [],
   users_groups_decisions: [],
   session_is_sensitive: false,

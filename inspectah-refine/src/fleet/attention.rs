@@ -43,6 +43,7 @@ mod tests {
             zones,
             total_hosts: 5,
             zones_active: true,
+            repo_conflicts: HashMap::new(),
         }
     }
 

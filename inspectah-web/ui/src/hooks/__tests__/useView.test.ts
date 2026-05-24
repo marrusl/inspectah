@@ -23,7 +23,6 @@ const MOCK_VIEW: ViewResponse = {
   },
   generation: 1,
   repo_groups: [],
-  leaf_dep_tree: {},
   version_changes: [],
   users_groups_decisions: [],
   session_is_sensitive: false,

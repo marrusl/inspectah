@@ -2,17 +2,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 
-use crate::types::RepoProvenance;
+use crate::types::{RepoProvenance, RepoTier};
 
 /// Repo section IDs considered part of the base distribution.
 pub const DISTRO_REPOS: &[&str] = &[
     "baseos",
     "appstream",
-    "crb",
     "fedora",
     "updates",
+    "updates-testing",
+    "extras",
     "anaconda",
 ];
+
+/// Red Hat repos that are official but user-toggleable (not part of the base image).
+pub const OFFICIAL_OPTIONAL_REPOS: &[&str] = &["crb", "codeready-builder", "rhel-extensions"];
 
 /// A parsed INI section from a repo file.
 struct RepoSection {
@@ -132,7 +136,20 @@ impl RepoIndex {
 
     /// Check whether a section ID is a well-known distro repo.
     pub fn is_distro_repo(section_id: &str) -> bool {
-        DISTRO_REPOS.contains(&section_id)
+        DISTRO_REPOS.contains(&section_id.to_lowercase().as_str())
+    }
+
+    /// Classify a repo section ID into its tier.
+    pub fn repo_tier(section_id: &str) -> RepoTier {
+        let lower = section_id.to_lowercase();
+        let id = lower.as_str();
+        if DISTRO_REPOS.contains(&id) {
+            RepoTier::Distro
+        } else if OFFICIAL_OPTIONAL_REPOS.contains(&id) {
+            RepoTier::OfficialOptional
+        } else {
+            RepoTier::ThirdParty
+        }
     }
 }
 
@@ -190,6 +207,7 @@ fn parse_repo_sections(content: &str) -> Vec<RepoSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::RepoTier;
 
     #[test]
     fn test_parse_single_section() {
@@ -234,8 +252,29 @@ mod tests {
     fn test_is_distro_repo() {
         assert!(RepoIndex::is_distro_repo("baseos"));
         assert!(RepoIndex::is_distro_repo("appstream"));
+        assert!(RepoIndex::is_distro_repo("BaseOS")); // case-insensitive
+        assert!(RepoIndex::is_distro_repo("updates-testing"));
+        assert!(RepoIndex::is_distro_repo("extras"));
         assert!(!RepoIndex::is_distro_repo("epel"));
         assert!(!RepoIndex::is_distro_repo("custom-internal"));
+        assert!(!RepoIndex::is_distro_repo("crb")); // CRB is now official-optional
+    }
+
+    #[test]
+    fn test_repo_tier() {
+        assert_eq!(RepoIndex::repo_tier("baseos"), RepoTier::Distro);
+        assert_eq!(RepoIndex::repo_tier("appstream"), RepoTier::Distro);
+        assert_eq!(RepoIndex::repo_tier("AppStream"), RepoTier::Distro); // case-insensitive
+        assert_eq!(RepoIndex::repo_tier("updates-testing"), RepoTier::Distro);
+        assert_eq!(RepoIndex::repo_tier("extras"), RepoTier::Distro);
+        assert_eq!(RepoIndex::repo_tier("crb"), RepoTier::OfficialOptional);
+        assert_eq!(RepoIndex::repo_tier("CRB"), RepoTier::OfficialOptional); // case-insensitive
+        assert_eq!(
+            RepoIndex::repo_tier("rhel-extensions"),
+            RepoTier::OfficialOptional
+        );
+        assert_eq!(RepoIndex::repo_tier("epel"), RepoTier::ThirdParty);
+        assert_eq!(RepoIndex::repo_tier("copr:mytools"), RepoTier::ThirdParty);
     }
 
     #[test]

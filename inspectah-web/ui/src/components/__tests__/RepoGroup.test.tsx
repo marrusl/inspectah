@@ -8,6 +8,7 @@ const baseRepo: RepoGroupInfo = {
   section_id: "epel",
   provenance: "verified",
   is_distro: false,
+  tier: "third_party",
   package_count: 5,
   enabled: true,
 };

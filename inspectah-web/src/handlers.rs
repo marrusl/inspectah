@@ -11,7 +11,7 @@ use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance, UserPasswordOp};
+use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance, RepoTier, UserPasswordOp};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -74,6 +74,7 @@ pub struct RepoGroupInfo {
     pub section_id: String,
     pub provenance: RepoProvenance,
     pub is_distro: bool,
+    pub tier: RepoTier,
     pub package_count: usize,
     pub enabled: bool,
 }
@@ -85,7 +86,6 @@ pub struct ViewResponse {
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
-    pub leaf_dep_tree: std::collections::HashMap<String, Vec<String>>,
     pub users_groups_decisions: Vec<serde_json::Value>,
     pub session_is_sensitive: bool,
 }
@@ -239,17 +239,6 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
                 .collect()
         })
         .unwrap_or_default();
-    let is_fleet = session
-        .snapshot()
-        .rpm
-        .as_ref()
-        .map(|rpm| rpm.packages_added.iter().any(|p| p.fleet.is_some()))
-        .unwrap_or(false);
-    let leaf_dep_tree: std::collections::HashMap<String, Vec<String>> = if is_fleet {
-        std::collections::HashMap::new()
-    } else {
-        serde_json::from_value(session.leaf_dep_tree()).unwrap_or_default()
-    };
     let users_groups_decisions = session
         .snapshot_projected()
         .users_groups
@@ -261,14 +250,13 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         repo_groups,
         baseline_summary,
         version_changes,
-        leaf_dep_tree,
         users_groups_decisions,
         session_is_sensitive,
     }
 }
 
 /// Build `RepoGroupInfo` entries from the session's repo index and current view.
-fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
+pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let view = session.view();
     let repo_index = session.repo_index();
     let changes = session.pending_changes();
@@ -301,11 +289,13 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
             } else {
                 RepoIndex::is_distro_repo(&section_id)
             };
+            let tier = RepoIndex::repo_tier(&section_id);
             let enabled = !excluded.contains(section_id.as_str());
             RepoGroupInfo {
                 section_id,
                 provenance,
                 is_distro,
+                tier,
                 package_count,
                 enabled,
             }
@@ -2210,6 +2200,7 @@ mod tests {
             .expect("should have appstream group");
         assert!(appstream.is_distro);
         assert_eq!(appstream.provenance, RepoProvenance::Verified);
+        assert_eq!(appstream.tier, RepoTier::Distro);
         assert!(appstream.enabled);
 
         let baseos = groups
@@ -2217,12 +2208,14 @@ mod tests {
             .find(|g| g.section_id == "baseos")
             .expect("should have baseos group");
         assert!(baseos.is_distro);
+        assert_eq!(baseos.tier, RepoTier::Distro);
 
         let epel = groups
             .iter()
             .find(|g| g.section_id == "epel")
             .expect("should have epel group");
         assert!(!epel.is_distro);
+        assert_eq!(epel.tier, RepoTier::ThirdParty);
         // epel has packages but no repo file -> Incomplete
         assert_eq!(epel.provenance, RepoProvenance::Incomplete);
         assert!(epel.enabled);
