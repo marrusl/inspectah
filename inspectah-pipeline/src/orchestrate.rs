@@ -3,6 +3,7 @@
 //! Provides the top-level `run_pipeline` function used by both the CLI and E2E tests.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
@@ -41,7 +42,7 @@ pub fn run_pipeline(
     hostname: &str,
 ) -> Result<(InspectionSnapshot, std::path::PathBuf), PipelineError> {
     // Collect
-    let collected = collect(source, executor, inspectors, None, &NullProgress);
+    let collected = collect(source, executor, inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Validate
     let validated = validate(collected)?;

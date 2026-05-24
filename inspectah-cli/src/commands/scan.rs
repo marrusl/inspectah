@@ -10,6 +10,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -319,15 +321,37 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     let progress = TerminalProgress::new(mode, color);
     let scan_start = std::time::Instant::now();
 
+    // Install SIGINT handler so Ctrl-C exits cleanly with code 130.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_hook = cancelled.clone();
+    ctrlc::set_handler(move || {
+        cancelled_hook.store(true, Ordering::SeqCst);
+    })
+    .expect("failed to install SIGINT handler");
+
     let collected = collect(
         &source,
         &executor,
         &inspectors,
         baseline_data.as_ref(),
         &progress,
+        &cancelled,
     );
 
     progress.finalize();
+
+    // If user pressed Ctrl-C, report partial results and exit 130.
+    if cancelled.load(Ordering::SeqCst) {
+        let elapsed = scan_start.elapsed();
+        print_completion(
+            &ScanOutcome::Interrupted,
+            elapsed,
+            &collected.state.snapshot,
+            None,
+            false,
+        );
+        return Ok(ScanOutcome::Interrupted);
+    }
 
     // Derive exit outcome from collection completeness
     let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
