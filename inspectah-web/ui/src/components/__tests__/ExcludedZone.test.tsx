@@ -10,8 +10,9 @@ describe("ExcludedZone", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows empty state after toggle and re-enable", () => {
+  it("shows empty state with header and message after toggle and re-enable", () => {
     render(<ExcludedZone packages={[]} hasEverToggled={true} />);
+    expect(screen.getByText(/excluded · 0 packages/i)).toBeInTheDocument();
     expect(screen.getByText(/no excluded packages/i)).toBeInTheDocument();
   });
 
@@ -69,5 +70,41 @@ describe("ExcludedZone", () => {
 
     expect(contentRegion).not.toHaveAttribute("hidden");
     expect(screen.getByText("pkg-0")).toBeInTheDocument();
+  });
+
+  it("expander stays mounted after expand with aria-expanded='true'", () => {
+    const pkgs = Array.from({ length: 55 }, (_, i) => ({
+      name: `pkg-${i}`,
+      repo: "epel",
+    }));
+    render(<ExcludedZone packages={pkgs} hasEverToggled={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /show 55 excluded/i }));
+
+    const expander = screen.getByRole("button", { name: /hide 55 excluded/i });
+    expect(expander).toBeInTheDocument();
+    expect(expander).toHaveAttribute("aria-expanded", "true");
+    expect(expander).toHaveAttribute("aria-controls", "excluded-zone-content");
+  });
+
+  it("focus remains on expander after toggling", () => {
+    const pkgs = Array.from({ length: 55 }, (_, i) => ({
+      name: `pkg-${i}`,
+      repo: "epel",
+    }));
+    render(<ExcludedZone packages={pkgs} hasEverToggled={true} />);
+
+    const expandBtn = screen.getByRole("button", { name: /show 55 excluded/i });
+    expandBtn.focus();
+    fireEvent.click(expandBtn);
+
+    // After expand, the button is still mounted (now "Hide") and retains focus
+    const collapseBtn = screen.getByRole("button", { name: /hide 55 excluded/i });
+    expect(collapseBtn).toHaveFocus();
+  });
+
+  it("empty state renders excluded-zone testid for spatial consistency", () => {
+    render(<ExcludedZone packages={[]} hasEverToggled={true} />);
+    expect(screen.getByTestId("excluded-zone")).toBeInTheDocument();
   });
 });

@@ -103,11 +103,14 @@ export function RepoBar({
             </button>
           ))}
 
-          {conflictCount != null && conflictCount > 0 && (
-            <Label color="orange" isCompact aria-live="polite">
-              {conflictCount} conflicts
-            </Label>
-          )}
+          {conflictCount != null && conflictCount > 0 && (() => {
+            const visibleConflicts = conflictCount - (dismissedCount ?? 0);
+            return visibleConflicts > 0 ? (
+              <Label color="orange" isCompact aria-live="polite">
+                {visibleConflicts} {visibleConflicts === 1 ? "conflict" : "conflicts"}
+              </Label>
+            ) : null;
+          })()}
 
           {dismissedCount != null && dismissedCount > 0 && onRestoreDismissed && (
             <Button

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
 import { RepoConflictPopover } from "./fleet/RepoConflictPopover";
@@ -251,6 +251,7 @@ interface PackageRowProps {
 
 function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
+  const checkboxRef = useRef<HTMLInputElement>(null);
 
   return (
     <div
@@ -273,6 +274,7 @@ function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: Package
         }}
       >
         <input
+          ref={checkboxRef}
           type="checkbox"
           role="checkbox"
           checked={pkg.include}
@@ -292,6 +294,7 @@ function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: Package
                 entries={pkg.repo_conflict}
                 isDismissed={dismissed}
                 onDismiss={onDismiss}
+                focusTargetRef={checkboxRef}
               />
             )}
           </>

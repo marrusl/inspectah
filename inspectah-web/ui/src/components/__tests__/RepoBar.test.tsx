@@ -57,4 +57,20 @@ describe("RepoBar", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /show.*dismissed/i })).not.toBeInTheDocument();
   });
+
+  it("badge shows visible conflict count (total minus dismissed)", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={5} dismissedCount={2} onRestoreDismissed={vi.fn()} />);
+    expect(screen.getByText(/3 conflicts/i)).toBeInTheDocument();
+    expect(screen.queryByText(/5 conflicts/i)).not.toBeInTheDocument();
+  });
+
+  it("badge hidden when all conflicts are dismissed", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={3} onRestoreDismissed={vi.fn()} />);
+    expect(screen.queryByText(/conflicts/i)).not.toBeInTheDocument();
+  });
+
+  it("badge uses singular 'conflict' when visibleConflicts is 1", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={2} dismissedCount={1} onRestoreDismissed={vi.fn()} />);
+    expect(screen.getByText("1 conflict")).toBeInTheDocument();
+  });
 });

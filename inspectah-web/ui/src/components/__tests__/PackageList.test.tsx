@@ -608,4 +608,39 @@ describe("PackageList", () => {
     // Count reset to 0
     expect(onDismissedCountChange).toHaveBeenCalledWith(0);
   });
+
+  // --- Focus handoff after dismiss ---
+
+  it("fleet: focus moves to package checkbox after conflict dismiss", async () => {
+    const pkgs = [
+      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+        repo_conflict: [
+          { repo: "baseos", host_count: 2 },
+          { repo: "appstream", host_count: 1 },
+        ],
+      }),
+    ];
+    render(
+      <PackageList
+        mode="fleet"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Open popover
+    const trigger = screen.getByRole("button", { name: /repo conflict/i });
+    fireEvent.click(trigger);
+    // Click dismiss
+    const dismissBtn = screen.getByText("Dismiss");
+    fireEvent.click(dismissBtn);
+
+    // Wait for rAF focus handoff
+    await new Promise((r) => requestAnimationFrame(r));
+
+    // Focus should land on the package checkbox
+    const checkbox = screen.getByRole("checkbox", { name: "httpd" });
+    expect(document.activeElement).toBe(checkbox);
+  });
 });
