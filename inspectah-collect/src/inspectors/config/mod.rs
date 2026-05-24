@@ -54,8 +54,10 @@ impl Inspector for ConfigInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
+        use inspectah_core::types::progress::{MetricKind, ProgressEvent, StepId, StepOutcome};
+
         let rpm_state = match ctx.rpm_state {
             None => {
                 return Err(InspectorError::Failed {
@@ -66,6 +68,7 @@ impl Inspector for ConfigInspector {
         };
 
         let exec = ctx.executor;
+        let inspector_id = InspectorId::Config;
         let mut warnings: Vec<Warning> = Vec::new();
         let hints: Vec<RedactionHint> = Vec::new();
         let mut degraded_reasons: Vec<String> = Vec::new();
@@ -101,6 +104,10 @@ impl Inspector for ConfigInspector {
         //    Files with only metadata changes (mtime, mode, etc.) are
         //    classified as RpmOwnedDefault and skipped — defaults don't
         //    belong in the snapshot, same as base-image packages.
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::ApplyingRpmVerification,
+        });
         let mut rpm_va_paths: HashSet<String> = HashSet::new();
         let mut va_entries: Vec<(&str, &str, Option<&str>)> = Vec::new();
         for entry in rpm_state.verification_results() {
@@ -143,8 +150,17 @@ impl Inspector for ConfigInspector {
                 ..Default::default()
             });
         }
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::ApplyingRpmVerification,
+            outcome: StepOutcome::Complete,
+        });
 
         // 2) Unowned files: in /etc but not RPM-owned
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::WalkingFilesystem,
+        });
         match walk_etc_recursive(exec, "/etc") {
             Ok(files) => {
                 for rel_path in files {
@@ -190,8 +206,17 @@ impl Inspector for ConfigInspector {
                 // /etc walk failed for other reasons — continue with what we have
             }
         }
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::WalkingFilesystem,
+            outcome: StepOutcome::Complete,
+        });
 
         // 3) Orphaned configs from removed packages
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::ClassifyingConfigs,
+        });
         detect_orphaned_configs(
             exec,
             rpm_state,
@@ -203,6 +228,18 @@ impl Inspector for ConfigInspector {
 
         // Sort all files by path for deterministic output
         section.files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // Emit count of all config files found (modified + unowned + orphaned)
+        progress.emit(ProgressEvent::Metric {
+            inspector: inspector_id,
+            kind: MetricKind::ConfigsModified,
+            value: section.files.len(),
+        });
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::ClassifyingConfigs,
+            outcome: StepOutcome::Complete,
+        });
 
         // Check for degraded state
         if !degraded_reasons.is_empty() {
@@ -1217,5 +1254,84 @@ mod tests {
             classify_rpm_va_kind("........."),
             ConfigFileKind::RpmOwnedDefault
         );
+    }
+
+    #[test]
+    fn test_config_inspector_emits_progress_events() {
+        use inspectah_core::traits::progress::VecProgress;
+        use inspectah_core::types::progress::{MetricKind, ProgressEvent, StepId};
+
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["app.conf"])
+            .with_file("/etc/app.conf", "setting=value\n")
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ConfigInspector::new();
+        let progress = VecProgress::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &progress);
+        assert!(result.is_ok(), "inspect should succeed");
+
+        let events = progress.events();
+
+        // Verify the three step-started events appear in order
+        let step_ids: Vec<&StepId> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::StepStarted { step, .. } => Some(step),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            step_ids,
+            &[
+                &StepId::ApplyingRpmVerification,
+                &StepId::WalkingFilesystem,
+                &StepId::ClassifyingConfigs,
+            ]
+        );
+
+        // Verify each step has a matching StepFinished
+        let finished_ids: Vec<&StepId> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::StepFinished { step, .. } => Some(step),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished_ids,
+            &[
+                &StepId::ApplyingRpmVerification,
+                &StepId::WalkingFilesystem,
+                &StepId::ClassifyingConfigs,
+            ]
+        );
+
+        // Verify ConfigsModified metric is emitted
+        let has_metric = events.iter().any(|e| {
+            matches!(
+                e,
+                ProgressEvent::Metric {
+                    kind: MetricKind::ConfigsModified,
+                    ..
+                }
+            )
+        });
+        assert!(has_metric, "should emit ConfigsModified metric");
     }
 }
