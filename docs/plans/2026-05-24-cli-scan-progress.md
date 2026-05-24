@@ -384,7 +384,81 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 4: Emit Inspector Lifecycle Events from collect()
+### Task 4: Align Collector Wave Model to Spec
+
+**Files:**
+- Modify: `inspectah-pipeline/src/collect.rs`
+
+The approved spec says wave 1 is RPM alone, wave 2 is all other
+inspectors. The current `is_wave2()` classifier puts only
+ScheduledTasks, Config, Selinux, and NonRpmSoftware in wave 2 —
+everything else (Services, Storage, Kernel, Network, Containers,
+Users) runs alongside RPM in wave 1. This is a spec mismatch.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+#[test]
+fn test_wave_partition_rpm_alone_in_wave1() {
+    // All non-RPM inspectors must be wave 2
+    assert!(is_wave2(InspectorId::Services));
+    assert!(is_wave2(InspectorId::Storage));
+    assert!(is_wave2(InspectorId::KernelBoot));
+    assert!(is_wave2(InspectorId::Network));
+    assert!(is_wave2(InspectorId::Containers));
+    assert!(is_wave2(InspectorId::UsersGroups));
+    assert!(is_wave2(InspectorId::ScheduledTasks));
+    assert!(is_wave2(InspectorId::Config));
+    assert!(is_wave2(InspectorId::Selinux));
+    assert!(is_wave2(InspectorId::NonRpmSoftware));
+
+    // Only RPM is wave 1
+    assert!(!is_wave2(InspectorId::Rpm));
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p inspectah-pipeline test_wave_partition_rpm_alone`
+Expected: FAIL — Services, Storage, etc. are currently wave 1
+
+- [ ] **Step 3: Change is_wave2() to make RPM the only wave-1 inspector**
+
+```rust
+fn is_wave2(id: InspectorId) -> bool {
+    !matches!(id, InspectorId::Rpm)
+}
+```
+
+- [ ] **Step 4: Update the existing is_wave2 classifier test**
+
+Replace the old `test_is_wave2_classifier` test with the new
+assertions from step 1. Remove the assertions that Services,
+Network, Storage, etc. are wave-1.
+
+- [ ] **Step 5: Run all tests**
+
+Run: `cargo test -p inspectah-pipeline`
+Expected: all tests pass. Wave-2 inspectors that don't need
+`rpm_state` (Services, Storage, etc.) will now receive
+`rpm_state: Some(...)` — this is correct, they simply ignore it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add inspectah-pipeline/src/collect.rs
+git commit -m "feat(pipeline): RPM alone in wave 1, all others wave 2
+
+Aligns collector wave model to approved scan progress spec.
+Non-RPM-dependent inspectors now also run in wave 2, receiving
+enriched context with rpm_state. They ignore it — no behavior change.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+---
+
+### Task 5: Emit Inspector Lifecycle Events from collect()
 
 **Files:**
 - Modify: `inspectah-pipeline/src/collect.rs`
@@ -718,12 +792,61 @@ use inspectah_core::types::progress::{
 };
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Write degraded sub-step test**
+
+Test that when `dnf` is unavailable (dep tree resolution degrades),
+the `ResolvingDepTree` step emits `StepFinished` with
+`StepOutcome::Degraded { reason }` rather than `Complete`:
+
+```rust
+#[test]
+fn test_rpm_degraded_dep_tree_emits_degraded_step() {
+    // Build mock where dnf repoquery --userinstalled fails
+    let exec = build_test_mock()
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult { exit_code: 1, ..Default::default() },
+        );
+    let progress = VecProgress::new();
+    // ... run inspect ...
+
+    let events = progress.events();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        ProgressEvent::StepFinished {
+            step: StepId::ResolvingDepTree,
+            outcome: StepOutcome::Degraded { .. },
+            ..
+        }
+    )));
+}
+```
+
+- [ ] **Step 5: Add degraded emission to RPM sub-steps**
+
+In the dep-tree classification code, when `classify_leaf_auto` returns
+a degraded result (leaf_packages is None), emit:
+
+```rust
+progress.emit(ProgressEvent::StepFinished {
+    inspector: inspector_id,
+    step: StepId::ResolvingDepTree,
+    outcome: StepOutcome::Degraded {
+        reason: "dnf unavailable, dependency tree incomplete".into(),
+    },
+});
+```
+
+Apply the same pattern to other sub-steps that can degrade:
+- `ResolvingSourceRepos` — when dnf repoquery fails and falls back to rpm -qi
+- `VerifyingIntegrity` — when rpm -Va is not available
+
+- [ ] **Step 6: Run tests**
 
 Run: `cargo test -p inspectah-collect inspectors::rpm`
-Expected: all tests pass including the new progress event test
+Expected: all tests pass including happy-path and degraded-path tests
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add inspectah-collect/src/inspectors/rpm/mod.rs
@@ -1080,84 +1203,250 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 11: TerminalProgress Renderer — Rich Mode
+### Task 12: TerminalProgress Renderer — Rich Mode
 
 **Files:**
 - Create: `inspectah-cli/src/progress/rich.rs`
 
-- [ ] **Step 1: Implement RichRenderer**
+- [ ] **Step 1: Define the state model (separate from rendering)**
 
-Full block-redraw checklist renderer. Key behaviors:
+```rust
+/// In-memory state model for the checklist. Updated by events,
+/// read by the renderer. All access goes through a Mutex.
+struct ChecklistState {
+    inspectors: Vec<InspectorRow>,
+    scan_start: Instant,
+}
 
-- Track all inspector rows and their states in an in-memory model
-- On each progress event or periodic tick (~100ms), cursor-up to
-  block start and rewrite all lines
-- Braille spinner animation cycling on tick
-- Elapsed timer on active inspectors (>3-4s threshold)
-- Terminal overflow: truncate pending items if block exceeds
-  terminal height minus 2, show `... and N more`
-- Final scrollback: print the completed checklist as permanent
-  output when scan finishes (no cursor-up on final render)
+struct InspectorRow {
+    id: InspectorId,
+    display_name: &'static str,
+    display_order: usize,
+    state: RowState,
+    started_at: Option<Instant>,
+    sub_steps: Vec<SubStepRow>,  // RPM/Config: populated upfront
+    probes: Vec<ProbeRow>,       // Non-RPM: populated on discovery
+}
 
-The tick is driven by a background thread that sends a `Tick` signal
-to the renderer. The renderer's `handle()` method processes both
-`ProgressEvent` and `Tick` variants.
+enum RowState {
+    Pending,
+    Active,
+    Complete { detail: String, elapsed: Duration },
+    Skipped { reason: String },
+    Degraded { reason: String, detail: String, elapsed: Duration },
+    Failed { reason: String },
+    Interrupted,
+}
+```
 
-- [ ] **Step 2: Test the state model**
+- [ ] **Step 2: Implement the concurrency model**
 
-Test the in-memory state model independently of terminal output:
-inspector state transitions, sub-step tracking, overflow calculation.
+```rust
+/// RichRenderer owns a Mutex<ChecklistState> and a Mutex<Stderr>.
+/// Two sources write to it:
+/// 1. Inspector threads (via ProgressSink::emit) — update state
+/// 2. Tick thread — triggers redraw
+///
+/// Locking order (must always acquire in this order):
+/// 1. state_lock (Mutex<ChecklistState>)
+/// 2. stderr_lock (Mutex<Stderr>)
+///
+/// The emit() method: lock state, update, lock stderr, redraw, unlock both.
+/// The tick thread:   lock state (read), lock stderr, redraw, unlock both.
+///
+/// This is safe because both paths acquire locks in the same order.
+struct RichRenderer {
+    state: Mutex<ChecklistState>,
+    stderr: Mutex<std::io::Stderr>,
+    use_color: bool,
+    tick_handle: Option<std::thread::JoinHandle<()>>,
+    stop_tick: Arc<AtomicBool>,
+}
+```
 
-- [ ] **Step 3: Test final scrollback output**
+The tick thread runs a loop: sleep 100ms, check `stop_tick`, lock
+state + stderr, call `redraw()`. When `finalize()` is called (scan
+complete), set `stop_tick`, join the tick thread, print the final
+scrollback render.
 
-Capture the final render and assert it matches expected checklist
-format with correct symbols, counts, and timing.
+- [ ] **Step 3: Implement block redraw**
 
-- [ ] **Step 4: Run tests**
+The `redraw()` method:
+1. Read `ChecklistState`
+2. Compute block height (inspectors + expanded sub-steps/probes)
+3. If block > terminal height - 2, truncate pending items
+4. Cursor-up to block start (`\x1b[{n}A`)
+5. Print all lines (clear each line first with `\x1b[2K`)
+6. Cursor at bottom of block
+
+Elapsed timer: for active rows where `started_at.elapsed() > 3.5s`,
+append `(Ns)` to the line.
+
+Spinner: cycle through braille frames `['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']`
+based on `tick_count % 10`.
+
+- [ ] **Step 4: Implement finalize**
+
+```rust
+fn finalize(&mut self) {
+    // Stop tick thread
+    self.stop_tick.store(true, Ordering::SeqCst);
+    if let Some(handle) = self.tick_handle.take() {
+        handle.join().ok();
+    }
+    // Final scrollback: print completed state as permanent output
+    // No cursor-up — this is the durable artifact
+    let state = self.state.lock().unwrap();
+    let mut stderr = self.stderr.lock().unwrap();
+    // Clear the in-progress block first (cursor-up + clear lines)
+    // Then print final state
+    render_final(&state, &mut stderr, self.use_color);
+}
+```
+
+- [ ] **Step 5: Test the state model (no terminal)**
+
+```rust
+#[test]
+fn test_state_model_transitions() {
+    let mut state = ChecklistState::new(/* 11 inspectors */);
+    state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+    assert!(matches!(state.inspectors[0].state, RowState::Active));
+
+    state.handle_event(ProgressEvent::InspectorFinished {
+        id: InspectorId::Rpm,
+        outcome: InspectorOutcome::Complete,
+    });
+    assert!(matches!(state.inspectors[0].state, RowState::Complete { .. }));
+}
+
+#[test]
+fn test_overflow_truncates_pending() {
+    let state = ChecklistState::new(/* 11 inspectors */);
+    // With terminal height 10 and 11 inspectors + sub-steps,
+    // overflow should hide pending items
+    let lines = state.render_lines(10);
+    assert!(lines.last().unwrap().contains("... and"));
+}
+```
+
+- [ ] **Step 6: Test final scrollback output**
+
+Capture the final render into a `Vec<u8>` and assert format.
+
+- [ ] **Step 7: Run tests**
 
 Run: `cargo test -p inspectah-cli progress::rich`
 Expected: pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add inspectah-cli/src/progress/rich.rs
 git commit -m "feat(cli): add rich-mode progress renderer
 
-Block-redraw checklist with braille spinners, elapsed timers,
-cursor-up refresh, terminal overflow handling, and clean final
-scrollback artifact. 100ms background tick for animation.
+Block-redraw checklist with Mutex<State> + Mutex<Stderr> locking
+model. Braille spinners, elapsed timers, cursor-up refresh,
+terminal overflow, and clean final scrollback artifact. 100ms
+background tick thread with stop flag.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
 ---
 
-### Task 12: TerminalProgress Dispatcher + Mode Detection
+### Task 13: TerminalProgress Dispatcher + Mode Detection + CLI Flag
 
 **Files:**
 - Modify: `inspectah-cli/src/progress/mod.rs`
+- Modify: `inspectah-cli/src/commands/scan.rs` (add `--progress` flag)
+- Modify: `inspectah-cli/src/commands/pull_progress.rs` (respect mode)
 
-- [ ] **Step 1: Implement TerminalProgress**
+- [ ] **Step 1: Add --progress flag to ScanArgs**
 
-The top-level `ProgressSink` implementor that detects the rendering
-mode and dispatches events to the appropriate renderer.
+```rust
+/// Progress display mode: rich (default TTY), plain (durable), flat (non-TTY)
+#[arg(long, value_name = "MODE")]
+pub progress: Option<ProgressMode>,
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+pub enum ProgressMode {
+    Rich,
+    Plain,
+    Flat,
+}
+```
+
+- [ ] **Step 2: Implement mode detection with flag + env + TTY**
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Rich,
+    Plain,
+    Flat,
+}
+
+/// Resolve rendering mode from CLI flag, env var, and TTY detection.
+/// Priority: --progress flag > INSPECTAH_PROGRESS env > auto-detect.
+pub fn detect_mode(cli_flag: Option<&ProgressMode>) -> Mode {
+    // CLI flag takes precedence
+    if let Some(flag) = cli_flag {
+        return match flag {
+            ProgressMode::Rich => Mode::Rich,
+            ProgressMode::Plain => Mode::Plain,
+            ProgressMode::Flat => Mode::Flat,
+        };
+    }
+
+    // Env var
+    if let Ok(val) = std::env::var("INSPECTAH_PROGRESS") {
+        return match val.to_lowercase().as_str() {
+            "plain" => Mode::Plain,
+            "flat" => Mode::Flat,
+            "rich" => Mode::Rich,
+            _ => Mode::Rich,  // unknown value → default
+        };
+    }
+
+    // Auto-detect from TTY
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let is_dumb = std::env::var("TERM")
+        .map(|t| t == "dumb")
+        .unwrap_or(false);
+
+    if !is_tty || is_dumb {
+        Mode::Flat
+    } else {
+        Mode::Rich
+    }
+}
+
+/// Whether to use ANSI color (independent of mode).
+pub fn use_color() -> bool {
+    std::env::var("NO_COLOR").is_err()
+}
+```
+
+- [ ] **Step 3: Implement TerminalProgress**
 
 ```rust
 pub struct TerminalProgress {
-    inner: Box<dyn Renderer>,
+    inner: Box<dyn Renderer + Send + Sync>,
 }
 
 impl TerminalProgress {
-    pub fn new() -> Self {
-        let mode = detect_mode();
-        let inner: Box<dyn Renderer> = match mode {
-            Mode::Rich => Box::new(RichRenderer::new()),
-            Mode::Plain => Box::new(PlainRenderer::new()),
+    pub fn new(mode: Mode, use_color: bool) -> Self {
+        let inner: Box<dyn Renderer + Send + Sync> = match mode {
+            Mode::Rich => Box::new(RichRenderer::new(use_color)),
+            Mode::Plain => Box::new(PlainRenderer::new(use_color)),
             Mode::Flat => Box::new(FlatRenderer::new()),
         };
         Self { inner }
     }
+
+    /// Expose the resolved mode so pull_progress can use the same decision.
+    pub fn mode(&self) -> Mode { /* stored during construction */ }
 }
 
 impl ProgressSink for TerminalProgress {
@@ -1167,27 +1456,45 @@ impl ProgressSink for TerminalProgress {
 }
 ```
 
-Mode detection:
-- `INSPECTAH_PROGRESS=plain` or `--progress=plain` → Plain
-- `!is_terminal(stderr)` or `$TERM == dumb` → Flat
-- Otherwise → Rich
+- [ ] **Step 4: Thread mode into pull_progress**
 
-`NO_COLOR` strips color in Rich and Plain modes but does not change
-the rendering mode.
+The resolved `Mode` from scan must also govern pull viewport behavior:
+- `Mode::Rich` → TTY viewport with dynamic height
+- `Mode::Plain` → sequential pull lines (no viewport)
+- `Mode::Flat` → sequential pull lines (no viewport)
 
-- [ ] **Step 2: Test mode detection**
+Pass `mode` to the pull-progress rendering path so `--progress=plain`
+disables the pull viewport consistently with scan progress.
 
-Test with env var overrides: `INSPECTAH_PROGRESS=plain`,
-`NO_COLOR=1`, `TERM=dumb`.
+- [ ] **Step 5: Test mode detection**
 
-- [ ] **Step 3: Commit**
+```rust
+#[test]
+fn test_mode_detection_cli_flag_overrides_env() {
+    std::env::set_var("INSPECTAH_PROGRESS", "flat");
+    let mode = detect_mode(Some(&ProgressMode::Plain));
+    assert_eq!(mode, Mode::Plain);
+    std::env::remove_var("INSPECTAH_PROGRESS");
+}
+
+#[test]
+fn test_mode_detection_env_overrides_tty() {
+    std::env::set_var("INSPECTAH_PROGRESS", "plain");
+    let mode = detect_mode(None);
+    assert_eq!(mode, Mode::Plain);
+    std::env::remove_var("INSPECTAH_PROGRESS");
+}
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add inspectah-cli/src/progress/mod.rs
-git commit -m "feat(cli): add TerminalProgress dispatcher with mode detection
+git add inspectah-cli/src/progress/mod.rs inspectah-cli/src/commands/scan.rs inspectah-cli/src/commands/pull_progress.rs
+git commit -m "feat(cli): add --progress flag and unified mode detection
 
-Detects rich/plain/flat mode from TTY state, INSPECTAH_PROGRESS env,
-and TERM value. NO_COLOR strips color without changing mode.
+CLI flag > INSPECTAH_PROGRESS env > TTY auto-detect. Mode governs
+both scan progress and pull viewport rendering. NO_COLOR is
+independent of mode — strips color only.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -1237,7 +1544,12 @@ fn print_completion(
             eprintln!("  {nf} failed, {nd} degraded (see report for details)");
         }
         ScanOutcome::Interrupted => {
-            eprintln!("Scan interrupted after {secs:.1}s — (partial)");
+            let partial = build_summary_counts(snapshot);
+            if partial.is_empty() {
+                eprintln!("Scan interrupted after {secs:.1}s");
+            } else {
+                eprintln!("Scan interrupted after {secs:.1}s — {partial} (partial)");
+            }
             eprintln!("No report written.");
             return;
         }
@@ -1370,7 +1682,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ```rust
 #[test]
 fn viewport_height_scales_with_terminal() {
-    assert_eq!(viewport_height(80), 24);  // 80 * 0.3 = 24 -> capped at 16
+    assert_eq!(viewport_height(80), 16);  // 80 * 0.3 = 24 -> capped at 16
     assert_eq!(viewport_height(50), 15);  // 50 * 0.3 = 15
     assert_eq!(viewport_height(24), 8);   // 24 * 0.3 = 7.2 -> floored at 8
     assert_eq!(viewport_height(10), 8);   // 10 * 0.3 = 3 -> floored at 8
@@ -1422,16 +1734,23 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 16: SIGINT Cancellation Token
+### Task 17: SIGINT Cancellation Token
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/scan.rs`
 - Modify: `inspectah-pipeline/src/collect.rs`
+- Modify: `inspectah-cli/Cargo.toml`
 
-- [ ] **Step 1: Add cancellation token parameter to collect()**
+The approved spec requires: CLI owns signal handler, `collect()`
+receives cancellation token, completed results before SIGINT are
+kept, in-flight results are discarded. The cutoff rule must be
+deterministic: a result is "completed before cancel" if and only if
+its thread's `join()` returned `Ok` AND `cancelled` was `false` at
+the moment `join()` returned.
+
+- [ ] **Step 1: Add cancellation token to collect() signature**
 
 ```rust
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn collect(
@@ -1444,15 +1763,67 @@ pub fn collect(
 ) -> Pipeline<Collected> {
 ```
 
-Check `cancelled` before wave-2 launch and before each inspector
-spawn. If set, skip remaining inspectors.
-
-After joining each handle, if `cancelled` was set before the handle
-completed, discard the result.
-
-- [ ] **Step 2: Install SIGINT handler in scan command**
+- [ ] **Step 2: Add cancellation checks to wave execution**
 
 ```rust
+// Between wave 1 and wave 2:
+if cancelled.load(Ordering::SeqCst) {
+    // Skip wave 2 entirely. Emit Interrupted for all wave-2 inspectors.
+    for insp in &wave2 {
+        progress.emit(ProgressEvent::InspectorFinished {
+            id: insp.id(),
+            outcome: InspectorOutcome::Interrupted,
+        });
+    }
+    // Jump to completeness computation
+} else {
+    // Wave 2: spawn all, then join
+    std::thread::scope(|s| {
+        let handles: Vec<_> = wave2
+            .iter()
+            .map(|inspector| {
+                progress.emit(ProgressEvent::InspectorStarted(inspector.id()));
+                s.spawn(|| inspector.inspect(&enriched_ctx, progress))
+            })
+            .collect();
+
+        for (inspector, handle) in wave2.iter().zip(handles) {
+            let result = handle.join();
+            // Cutoff rule: check cancelled AFTER join returns.
+            // If cancelled is true, discard this result regardless
+            // of whether the thread finished "in time."
+            if cancelled.load(Ordering::SeqCst) {
+                progress.emit(ProgressEvent::InspectorFinished {
+                    id: inspector.id(),
+                    outcome: InspectorOutcome::Interrupted,
+                });
+                continue; // don't route to snapshot
+            }
+            // Not cancelled: handle normally
+            handle_result(
+                inspector.as_ref(), result,
+                &mut snapshot, &mut failed, &mut degraded,
+                &mut wave2_rpm, progress,
+            );
+        }
+    });
+}
+```
+
+**Why check after join, not before spawn:** Threads are already
+running via `thread::scope`. We can't un-spawn them. The only
+reliable cutoff is at join time. If `cancelled` is true when we
+join a handle, we discard that result even if the thread finished
+before the signal — this is simpler and deterministic. The cost is
+potentially discarding one or two already-complete results, which
+is acceptable for a SIGINT path.
+
+- [ ] **Step 3: Install SIGINT handler in scan command**
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 let cancelled = Arc::new(AtomicBool::new(false));
 let cancelled_clone = cancelled.clone();
 ctrlc::set_handler(move || {
@@ -1460,37 +1831,91 @@ ctrlc::set_handler(move || {
 }).expect("failed to install SIGINT handler");
 ```
 
-Add `ctrlc = "3"` to `inspectah-cli/Cargo.toml` dependencies.
+Add `ctrlc = "3"` to `inspectah-cli/Cargo.toml`.
 
-Pass `&cancelled` to `collect()`.
+After `collect()` returns, check `cancelled`:
+```rust
+if cancelled.load(Ordering::SeqCst) {
+    print_completion(&ScanOutcome::Interrupted, elapsed, &snapshot, None, false);
+    return Ok(ScanOutcome::Interrupted);
+}
+```
 
-After `collect()` returns, if `cancelled` is set, return
-`Ok(ScanOutcome::Interrupted)`.
+- [ ] **Step 4: Write cancellation test**
 
-- [ ] **Step 3: Emit Interrupted events for skipped inspectors**
+```rust
+#[test]
+fn test_collect_respects_cancellation_between_waves() {
+    let exec = build_test_mock();
+    let source = SourceSystem::PackageBased {
+        os_release: test_os_release(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let progress = VecProgress::new();
 
-After `collect()` returns, the CLI emits `InspectorFinished` with
-`InspectorOutcome::Interrupted` for any inspectors that were not
-started or whose results were discarded.
+    // Set cancelled before wave 2 would run
+    // (RPM is wave 1 — it will complete; wave 2 should be skipped)
+    // Use a mock inspector that sets cancelled during wave 1
+    struct CancellingRpm {
+        flag: *const AtomicBool,
+    }
+    unsafe impl Send for CancellingRpm {}
+    unsafe impl Sync for CancellingRpm {}
+    impl Inspector for CancellingRpm {
+        fn id(&self) -> InspectorId { InspectorId::Rpm }
+        fn applicable_to(&self) -> &[SourceSystemKind] {
+            &[SourceSystemKind::PackageBased]
+        }
+        fn inspect(&self, ctx: &InspectionContext<'_>, _progress: &dyn ProgressSink)
+            -> Result<InspectorOutput, InspectorError>
+        {
+            // Set cancel flag during RPM execution
+            unsafe { &*self.flag }.store(true, Ordering::SeqCst);
+            // Return a valid RPM output
+            RpmInspector::new().inspect(ctx, _progress)
+        }
+    }
 
-- [ ] **Step 4: Update all test call sites**
+    let cancelling = CancellingRpm { flag: &cancelled };
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(cancelling),
+        Box::new(ServicesInspector::new()),
+    ];
+    let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
+
+    // RPM should have completed (wave 1)
+    assert!(pipeline.state.snapshot.rpm.is_some());
+
+    // Services should NOT have run (wave 2 skipped)
+    let events = progress.events();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        ProgressEvent::InspectorFinished {
+            id: InspectorId::Services,
+            outcome: InspectorOutcome::Interrupted,
+        }
+    )));
+}
+```
+
+- [ ] **Step 5: Update all test call sites**
 
 Add `&AtomicBool::new(false)` to every `collect()` call in tests.
 
-- [ ] **Step 5: Build and test**
+- [ ] **Step 6: Build and test**
 
 Run: `cargo build && cargo test`
 Expected: pass
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add inspectah-cli/Cargo.toml inspectah-cli/src/commands/scan.rs inspectah-pipeline/src/collect.rs
 git commit -m "feat(cli): add SIGINT cancellation with exit code 130
 
 CLI owns the signal handler, passes AtomicBool token to collect().
-Completed results before SIGINT are kept, in-flight discarded.
-Interrupted inspectors get InspectorFinished::Interrupted events.
+Deterministic cutoff: check cancelled after join(), discard if set.
+Wave-2 skipped entirely if cancelled between waves.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -1501,20 +1926,24 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 Spec coverage verified against `2026-05-24-cli-scan-progress-design.md`:
 
-- [x] Full checklist with 11 inspectors — Task 9-12, 14
-- [x] Nested sub-checklists: RPM (6) — Task 5, Config (3) — Task 6, Non-RPM (discoveries) — Task 7
-- [x] Visual states: pending/active/complete/skipped/degraded/failed/interrupted — Tasks 1, 9-11
-- [x] Three rendering modes: rich/plain/flat — Tasks 9-12
-- [x] `NO_COLOR` strips color only — Task 12
+- [x] Full checklist with 11 inspectors — Tasks 10-13, 15
+- [x] Nested sub-checklists: RPM (6) — Task 6, Config (3) — Task 7, Non-RPM (discoveries) — Task 8
+- [x] Visual states: pending/active/complete/skipped/degraded/failed/interrupted — Tasks 1, 6-7 (degraded sub-steps), 10-12
+- [x] Three rendering modes: rich/plain/flat — Tasks 10-13
+- [x] `NO_COLOR` strips color only — Task 13
 - [x] Typed ProgressEvent model — Task 1
 - [x] ProgressSink: Send + Sync — Task 2
 - [x] Inspector trait change — Task 3
-- [x] collect() lifecycle events — Task 4
-- [x] Exit codes: 0/1/2/130 — Task 8
-- [x] Completion output for all paths — Task 13
-- [x] Pull viewport dynamic height — Task 15
-- [x] SIGINT cancellation — Task 16
-- [x] Two-wave parallel model acknowledged — Task 4, 11, 12
-- [x] Reason strings on degraded/failed/skipped — Task 1 (types), Task 4 (emission)
-- [x] Non-RPM per-mode probe behavior — Task 7 (events), Tasks 9-11 (rendering)
-- [x] Periodic tick for rich mode — Task 11
+- [x] Wave model: RPM alone in wave 1 — Task 4
+- [x] collect() lifecycle events — Task 5
+- [x] Exit codes: 0/1/2/130 — Task 9
+- [x] Completion output for all paths including interrupted partial counts — Task 14
+- [x] Pull viewport dynamic height — Task 16
+- [x] SIGINT cancellation with deterministic cutoff — Task 17
+- [x] --progress CLI flag threaded through scan and pull-progress — Task 13
+- [x] Reason strings on degraded/failed/skipped — Task 1 (types), Task 5 (emission)
+- [x] Non-RPM per-mode probe behavior — Task 8 (events), Tasks 10-12 (rendering)
+- [x] Periodic tick for rich mode — Task 12
+- [x] Rich mode concurrency: Mutex<State> + Mutex<Stderr> with defined lock order — Task 12
+- [x] Sub-step degraded/failed tests for RPM — Task 6
+- [x] Viewport test assertions match spec (cap 16) — Task 16
