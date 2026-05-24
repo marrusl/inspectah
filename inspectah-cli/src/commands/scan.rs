@@ -28,6 +28,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -462,6 +463,114 @@ fn read_bootc_status_ref(executor: &dyn Executor) -> Option<String> {
         .map(String::from)
 }
 
+/// Build a human-readable summary of section item counts.
+///
+/// Returns a comma-separated string like "847 packages, 12 configs, 4 services, 2 containers".
+/// Sections with zero items are omitted. Returns an empty string when all sections are absent
+/// or empty (used by the interrupted path to detect whether any inspectors completed).
+fn build_summary_counts(snapshot: &InspectionSnapshot) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(rpm) = &snapshot.rpm {
+        let count = rpm.packages_added.len();
+        if count > 0 {
+            parts.push(format!("{count} packages"));
+        }
+    }
+    if let Some(config) = &snapshot.config {
+        let count = config.files.len();
+        if count > 0 {
+            parts.push(format!("{count} configs"));
+        }
+    }
+    if let Some(services) = &snapshot.services {
+        let count = services.state_changes.len();
+        if count > 0 {
+            parts.push(format!("{count} services"));
+        }
+    }
+    if let Some(containers) = &snapshot.containers {
+        let count = containers.running_containers.len();
+        if count > 0 {
+            parts.push(format!("{count} containers"));
+        }
+    }
+
+    parts.join(", ")
+}
+
+/// Render the scan completion block to stderr.
+///
+/// Output varies by `ScanOutcome`:
+/// - **Clean / Degraded / Incomplete**: summary counts, optional degraded/failed detail,
+///   report path and next-step hint.
+/// - **Interrupted**: partial counts (if any inspectors completed), no report written.
+fn print_completion(
+    outcome: &ScanOutcome,
+    elapsed: std::time::Duration,
+    snapshot: &InspectionSnapshot,
+    output_path: Option<&std::path::Path>,
+    inspect_only: bool,
+) {
+    let secs = elapsed.as_secs_f64();
+    let counts = build_summary_counts(snapshot);
+
+    match outcome {
+        ScanOutcome::Clean => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+        }
+        ScanOutcome::Degraded => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+            if let Completeness::Partial {
+                degraded_sections, ..
+            } = &snapshot.completeness
+            {
+                eprintln!(
+                    "  {} degraded (see report for details)",
+                    degraded_sections.len()
+                );
+            }
+        }
+        ScanOutcome::Incomplete => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+            if let Completeness::Incomplete {
+                failed_sections,
+                degraded_sections,
+                ..
+            } = &snapshot.completeness
+            {
+                let mut detail = Vec::new();
+                if !failed_sections.is_empty() {
+                    detail.push(format!("{} failed", failed_sections.len()));
+                }
+                if !degraded_sections.is_empty() {
+                    detail.push(format!("{} degraded", degraded_sections.len()));
+                }
+                eprintln!("  {} (see report for details)", detail.join(", "));
+            }
+        }
+        ScanOutcome::Interrupted => {
+            if counts.is_empty() {
+                eprintln!("Scan interrupted after {secs:.1}s");
+            } else {
+                eprintln!("Scan interrupted after {secs:.1}s — {counts} (partial)");
+            }
+            eprintln!("No report written.");
+            return;
+        }
+    }
+
+    // Report path and next-step hint
+    if let Some(path) = output_path {
+        if inspect_only {
+            eprintln!("Output: {}", path.display());
+        } else {
+            eprintln!("Report: {}", path.display());
+            eprintln!("To review: inspectah refine {}", path.display());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +620,88 @@ VARIANT_ID="workstation"
             Box::new(NonRpmInspector::new()),
         ];
         assert_eq!(inspectors.len(), 11);
+    }
+
+    #[test]
+    fn test_build_summary_counts_full() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::containers::{ContainerSection, RunningContainer};
+        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let mut snapshot = InspectionSnapshot::default();
+
+        // 3 packages
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = vec![
+            PackageEntry::default(),
+            PackageEntry::default(),
+            PackageEntry::default(),
+        ];
+        snapshot.rpm = Some(rpm);
+
+        // 2 configs
+        let mut config = ConfigSection::default();
+        config.files = vec![ConfigFileEntry::default(), ConfigFileEntry::default()];
+        snapshot.config = Some(config);
+
+        // 4 services
+        let svc = || ServiceStateChange {
+            unit: "test.service".into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Enable),
+            include: true,
+            owning_package: None,
+            fleet: None,
+            attention_reason: None,
+        };
+        let mut services = ServiceSection::default();
+        services.state_changes = vec![svc(), svc(), svc(), svc()];
+        snapshot.services = Some(services);
+
+        // 1 container
+        let mut containers = ContainerSection::default();
+        containers.running_containers = vec![RunningContainer::default()];
+        snapshot.containers = Some(containers);
+
+        assert_eq!(
+            build_summary_counts(&snapshot),
+            "3 packages, 2 configs, 4 services, 1 containers"
+        );
+    }
+
+    #[test]
+    fn test_build_summary_counts_empty() {
+        let snapshot = InspectionSnapshot::default();
+        assert_eq!(build_summary_counts(&snapshot), "");
+    }
+
+    #[test]
+    fn test_build_summary_counts_partial() {
+        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+        let mut snapshot = InspectionSnapshot::default();
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = (0..847).map(|_| PackageEntry::default()).collect();
+        snapshot.rpm = Some(rpm);
+
+        assert_eq!(build_summary_counts(&snapshot), "847 packages");
+    }
+
+    #[test]
+    fn test_build_summary_counts_skips_empty_sections() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::RpmSection;
+
+        let mut snapshot = InspectionSnapshot::default();
+        // RPM section present but no packages_added
+        snapshot.rpm = Some(RpmSection::default());
+        // Config section present but no files
+        snapshot.config = Some(ConfigSection::default());
+
+        assert_eq!(build_summary_counts(&snapshot), "");
     }
 
     #[test]
