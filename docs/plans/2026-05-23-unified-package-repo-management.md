@@ -437,29 +437,46 @@ let repo_conflicts = {
 
 Return `Some((merged_rpm_section, repo_conflicts))`.
 
-**Explicit carrier chain (file-by-file):**
+**Explicit carrier chain (one path, no either/or):**
 
-1. `inspectah-core/src/fleet/merge.rs` — `merge_rpm_sections()` returns
+1. `inspectah-core/src/fleet/merge.rs` — `merge_rpm_sections()` return
+   type changes from `Option<RpmSection>` to
    `Option<(RpmSection, HashMap<String, Vec<RepoSourceEntry>>)>`.
+
 2. `inspectah-core/src/fleet/mod.rs` — `merge_snapshots()` destructures
-   the tuple, stores `repo_conflicts` on a new field of its return value
-   (the merged `InspectionSnapshot` gains a transient side-channel, or
-   the conflict map is returned alongside the snapshot).
-3. `inspectah-refine/src/types.rs` — Add
-   `pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field to
-   `FleetContext`. Populated by the session constructor that calls
-   `merge_snapshots()`.
-4. `inspectah-refine/src/session.rs` — `RefineSession::new()` (or the
-   fleet-specific constructor) threads `repo_conflicts` from the merge
-   output into `FleetContext`.
+   the tuple. The conflict map is stored on a **new field** on the
+   returned `InspectionSnapshot`:
+   `pub rpm_repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>`.
+   This field defaults to an empty map for single-machine snapshots.
+   This is the carrier across the core→refine boundary — not a
+   side-channel, not a separate return value.
+
+3. `inspectah-refine/src/session.rs` — `RefineSession::new()` reads
+   `snapshot.rpm_repo_conflicts` and copies it into `FleetContext`.
+   This happens in the existing fleet-detection branch of `new()`
+   (the same block that populates `fleet_meta`, `fleet_context`, etc.).
+   No new constructor needed.
+
+4. `inspectah-refine/src/types.rs` — `FleetContext` gains:
+   `pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>`.
+   Populated by step 3. Immutable after session construction — not
+   modified by refinement operations.
+
 5. `inspectah-web/src/fleet_handlers.rs` — `build_fleet_view_response()`
-   reads `ctx.repo_conflicts` from `session.fleet_context()`. Maps each
-   entry to `RepoSourceEntryDto` on the corresponding `FleetItem`. No
-   conflict computation at this layer.
-6. `inspectah-web/tests/fleet_api_test.rs` — Proves the full vertical:
-   construct a fleet snapshot with mixed repos → start session → GET
-   `/api/fleet/view` → assert `source_repo`, `repo_conflict`,
-   `repo_conflict_count` on the JSON response.
+   reads `ctx.repo_conflicts` via `session.fleet_context()`. For each
+   RPM `FleetItem`, looks up `name.arch` in the map. Present → set
+   `repo_conflict` to `Some(entries)`. Absent → `None`. Counts
+   `repo_conflicts.len()` for `repo_conflict_count`. No conflict
+   computation at this layer.
+
+6. `inspectah-web/tests/fleet_api_test.rs` — Proves the full vertical.
+   **Test setup must start from per-host snapshots**, not a
+   handcrafted merged fixture. Build individual `InspectionSnapshot`
+   values for each host (with different `source_repo` values on the
+   same package), pass them through `merge_snapshots()`, construct
+   `RefineSession::new()` from the merged result, build `AppState`,
+   then GET `/api/fleet/view` and assert `source_repo`,
+   `repo_conflict`, `repo_conflict_count` on the JSON response.
 
 - [ ] **Step 4: Write test for non-conflicting and tie-breaking behavior**
 
