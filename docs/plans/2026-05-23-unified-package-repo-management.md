@@ -19,13 +19,16 @@
 | File | Responsibility |
 |------|---------------|
 | `inspectah-refine/src/repo_index.rs` | Remove CRB from DISTRO_REPOS, add `repo_tier()` classification method |
-| `inspectah-refine/src/types.rs` | Add `RepoTier` enum |
+| `inspectah-refine/src/types.rs` | Add `RepoTier` enum, add `repo_conflicts` field to `FleetContext` |
+| `inspectah-refine/src/session.rs` | Thread `snapshot.rpm_repo_conflicts` into `FleetContext` in `RefineSession::new()` |
 | `inspectah-web/src/handlers.rs` | Add `tier` field to `RepoGroupInfo`, remove `leaf_dep_tree` from `ViewResponse` |
-| `inspectah-web/src/fleet_handlers.rs` | Add `repo_groups` and `source_repo` + `repo_conflict` to fleet response |
-| `inspectah-core/src/fleet/merge.rs` | Track per-repo host counts during package merge |
+| `inspectah-web/src/fleet_handlers.rs` | Add `repo_groups` and `source_repo` + `repo_conflict` to fleet response (read from `FleetContext`, map only) |
+| `inspectah-core/src/fleet/merge.rs` | Compute per-repo host counts during package merge, return alongside `RpmSection` |
+| `inspectah-core/src/fleet/mod.rs` | Destructure merge tuple, store conflicts on `InspectionSnapshot.rpm_repo_conflicts` |
+| `inspectah-core/src/snapshot.rs` | Add `rpm_repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field to `InspectionSnapshot` |
 | `inspectah-core/src/types/fleet.rs` | Add `RepoSourceEntry` struct |
 | `inspectah-web/tests/api_test.rs` | Update existing tests for new fields |
-| `inspectah-web/tests/fleet_api_test.rs` | Add repo-conflict and repo_groups tests |
+| `inspectah-web/tests/fleet_api_test.rs` | Add repo-conflict and repo_groups tests (setup from per-host snapshots through `merge_snapshots()`) |
 
 ### TypeScript/React (create or modify)
 
@@ -276,8 +279,12 @@ git commit -m "feat(web): add tier to RepoGroupInfo, remove leaf_dep_tree from V
 ### Task 3: Track repo-source conflicts during fleet merge
 
 **Files:**
-- Modify: `inspectah-core/src/types/fleet.rs`
-- Modify: `inspectah-core/src/fleet/merge.rs`
+- Modify: `inspectah-core/src/types/fleet.rs` (add `RepoSourceEntry`)
+- Modify: `inspectah-core/src/fleet/merge.rs` (compute conflicts, change return type)
+- Modify: `inspectah-core/src/fleet/mod.rs` (destructure tuple in `merge_snapshots()`)
+- Modify: `inspectah-core/src/snapshot.rs` (add `rpm_repo_conflicts` field to `InspectionSnapshot`)
+- Modify: `inspectah-refine/src/types.rs` (add `repo_conflicts` field to `FleetContext`)
+- Modify: `inspectah-refine/src/session.rs` (thread `snapshot.rpm_repo_conflicts` into `FleetContext`)
 
 - [ ] **Step 1: Add RepoSourceEntry struct to fleet types**
 
@@ -334,26 +341,8 @@ fn test_package_merge_tracks_repo_conflict() {
     };
 
     let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
-    let merged = merge_rpm_sections(
-        vec![Some(host_a_rpm), Some(host_b_rpm), Some(host_c_rpm)],
-        3,
-        &hostnames,
-        None,
-    )
-    .unwrap();
 
-    let nginx = merged
-        .packages_added
-        .iter()
-        .find(|p| p.name == "nginx")
-        .unwrap();
-
-    // Majority repo wins
-    assert_eq!(nginx.source_repo, "epel");
-
-    // After Step 3, merge_rpm_sections returns a tuple:
-    // (RpmSection, HashMap<String, Vec<RepoSourceEntry>>)
-    // Destructure and verify conflict data:
+    // merge_rpm_sections returns (RpmSection, HashMap) — final API shape
     let (merged, repo_conflicts) = merge_rpm_sections(
         vec![Some(host_a_rpm), Some(host_b_rpm), Some(host_c_rpm)],
         3,
@@ -575,8 +564,14 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add inspectah-core/src/types/fleet.rs inspectah-core/src/fleet/merge.rs
-git commit -m "feat(core): add repo-conflict detection during fleet merge"
+git add inspectah-core/src/types/fleet.rs inspectah-core/src/fleet/merge.rs \
+       inspectah-core/src/fleet/mod.rs inspectah-core/src/snapshot.rs \
+       inspectah-refine/src/types.rs inspectah-refine/src/session.rs
+git commit -m "feat(core): add repo-conflict detection during fleet merge
+
+Carrier chain: merge.rs computes → mod.rs stores on
+InspectionSnapshot.rpm_repo_conflicts → session.rs copies into
+FleetContext.repo_conflicts. Handler reads, never computes."
 ```
 
 ---
@@ -633,18 +628,22 @@ pub struct FleetViewResponse {
 
 - [ ] **Step 3: Populate the new fields in build_fleet_view_response()**
 
-**Canonical data flow (one path, no handler-side computation):**
+**Canonical data flow (matches Task 3 carrier chain exactly):**
 1. `merge_rpm_sections()` (inspectah-core) computes repo conflicts
-2. `merge_snapshots()` stores them on `FleetContext.repo_conflicts`
-3. `build_fleet_view_response()` (inspectah-web) reads from `FleetContext`
-4. Handler only MAPS data — no conflict detection at the web layer
+2. `merge_snapshots()` stores them on `InspectionSnapshot.rpm_repo_conflicts`
+3. `RefineSession::new()` copies `snapshot.rpm_repo_conflicts` into
+   `FleetContext.repo_conflicts`
+4. `build_fleet_view_response()` (inspectah-web) reads from
+   `session.fleet_context().repo_conflicts`
+5. Handler only MAPS data — no conflict detection at the web layer
 
 Import `build_repo_groups` from handlers (make it `pub` if needed).
 
 In `build_fleet_view_response()`:
 1. Call `build_repo_groups(session)` to get repo groups
-2. Read `ctx.repo_conflicts` from `FleetContext` — this was populated
-   during merge (Task 3). No `detect_repo_conflicts()` call here.
+2. Read `ctx.repo_conflicts` from `session.fleet_context()` — this was
+   populated via `InspectionSnapshot.rpm_repo_conflicts` → `RefineSession::new()`
+   → `FleetContext` (Task 3). No conflict computation here.
 3. Pass the conflict map through to `build_fleet_sections()` so each
    `FleetItem` for an RPM package can look up its `repo_conflict` by
    `name.arch` key
