@@ -142,13 +142,36 @@ spatially stable within each mode.
 **Fleet repo provenance:** The merged fleet snapshot assigns one
 `source_repo` per `name.arch`. When the same package comes from different
 repos across hosts (e.g., `nginx` from `epel` on 3 hosts and `appstream`
-on 2), this is treated as a **repo variant** — the same pattern used for
-conflicting config file content. The package row shows a variant indicator
-alongside the repo text, and the user can inspect which hosts sourced the
-package from which repo. The majority repo is shown as the default; the
-user's repo selection determines which repo file is included in the
-containerfile. Packages with a single consistent repo across all hosts
-(the common case) show no variant indicator.
+on 2), the UI shows a **dismissable repo-source warning** — not a
+selectable variant.
+
+**Why not user-selectable?** Per-package repo selection is unenforceable.
+The Containerfile's `dnf install` line does not control which repo
+provides a package — dnf's SAT solver resolves based on repo priority,
+version, and cost. Mechanisms like `--repo=` or `excludepkgs=` exist but
+fragment the Containerfile into multiple transactions (slower builds,
+larger layers) and create brittle repo-file manipulation. The user's
+real action lever is the repo toggle: disable the repo you don't want.
+
+**Warning behavior (fleet only):**
+- An inline warning icon (triangle-exclamation) appears in the repo
+  column for any package with mixed repo sources across hosts.
+- Hover or focus reveals a tooltip: "nginx found in epel (3 hosts)
+  and appstream (2 hosts)." Show repos and host counts — the split
+  ratio matters for judging severity.
+- The majority repo is shown as the row's repo text.
+- Warnings are **session-scoped dismissable**: dismiss per-row via the
+  tooltip's close action. A "Show N dismissed" toggle or chip restores
+  visibility. Not permanently dismissable — fleet composition changes
+  between scans.
+- Packages with a single consistent repo across all hosts (the common
+  case) show no warning icon.
+
+**Frequency in practice:** Uncommon for distro packages (baseos and
+appstream have disjoint package sets by design, EPEL policy avoids
+overriding RHEL). More common with COPRs, vendor repos (PGDG, MariaDB),
+and packages graduating from EPEL to RHEL during minor releases.
+Estimated 5-15% of packages in a heterogeneous fleet.
 
 **Prevalence display (fleet only):** Right-aligned N/M count, color-coded:
 - Green: consensus (all hosts)
@@ -264,6 +287,17 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 - Screen reader announcement: "Packages, sorted ascending" /
   "Prevalence, sortable"
 
+### Repo-Source Warning (Fleet Only)
+- Warning icon is focusable (`tabindex="0"` or native button)
+- On focus, tooltip content announced via `aria-describedby`:
+  "nginx found in epel, 3 hosts, and appstream, 2 hosts"
+- Dismiss action: Escape closes tooltip, visible dismiss button (X)
+  inside tooltip is keyboard-reachable. Announced as "Dismiss repo
+  conflict warning for nginx"
+- `role="status"` on tooltip container for live-region announcement
+- Dismissed state: row `aria-label` updates to remove conflict mention
+- "Show N dismissed" toggle is a standard checkbox, announced naturally
+
 ### Excluded Zone
 - Count updated via `aria-live="polite"` when packages move in/out
 - Expander button (when 50+ packages): `aria-expanded="true|false"`,
@@ -315,12 +349,25 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 - `FleetItem` already has prevalence data — no changes needed
 - `source_repo` on `PackageEntry` is already populated — just needs to be
   included in the fleet JSON response if not already
+- Add a `repo_conflict: Option<Vec<RepoSourceEntry>>` field to `FleetItem`
+  for packages where merged hosts disagree on `source_repo`. Each entry:
+  `{ repo: String, host_count: usize }`. `None` when all hosts agree
+  (the common case). This drives the inline warning icon — display-only,
+  no selection or mutation ops required
 
 **`inspectah-core/src/types/rpm.rs`:**
 - No changes to `PackageEntry`
 
+**`inspectah-core/src/fleet/merge.rs`:**
+- During fleet merge, when the same `name.arch` has different `source_repo`
+  values across hosts, record the per-repo host counts in a new field on
+  the merged `PackageEntry` (or a side-channel map). The majority repo
+  becomes the merged entry's `source_repo`. This data feeds the UI's
+  repo-conflict warning — no variant ops, no selection, display only.
+
 **`inspectah-refine`:**
-- `ExcludeRepo` / `IncludeRepo` ops already exist — no changes needed
+- `ExcludeRepo` / `IncludeRepo` ops already exist — no changes needed.
+  No new variant ops for repo selection — the warning is informational.
 - CRB must be reclassified: update `is_distro_repo()` to exclude CRB
 
 ### Frontend Changes
@@ -330,6 +377,8 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 - Package list component (renders rows with checkbox + name + context column)
 - Sort header component (two-column sortable, mode-aware)
 - Excluded zone component
+- Repo-conflict warning icon + tooltip (fleet only, renders from
+  `repo_conflict` field — display-only, dismissable, session-scoped)
 
 **Mode-specific rendering:**
 - Single-machine: right column = repo name text
@@ -364,3 +413,12 @@ the flat drawer in architect.html. No backwards-compatibility shims.
   a filter. Not needed for v1.
 - **Mixed-arch fleet warnings** — deferred. Show a confidence note if
   fleet contains mixed architectures, but design is out of scope here.
+- **Per-package repo selection** — intentionally excluded. dnf's SAT
+  solver controls repo resolution at build time; per-package repo pinning
+  would require fragmenting the Containerfile's `dnf install` into
+  multiple transactions or brittle repo-file manipulation. The repo
+  toggle (enable/disable entire repo) is the correct granularity.
+  Repo-source conflicts are surfaced as dismissable warnings, not
+  actionable selections.
+- **List virtualization** — deferred. Ship without it, revisit if
+  performance degrades with 200+ package lists.
