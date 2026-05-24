@@ -47,10 +47,7 @@ fn fail_result(msg: &str) -> ExecResult {
 fn happy_mock() -> MockExecutor {
     MockExecutor::new()
         // which podman — pre-check for podman availability
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- which podman",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         // pull
         .with_command_prefix(
             &format!("nsenter -t 1 -m -u -i -n -- podman pull {}", TEST_IMAGE),
@@ -192,9 +189,9 @@ fn baseline_pull_fails_no_rm_attempted() {
     let mock = MockExecutor::new()
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
         .with_command_prefix(
-        "nsenter -t 1 -m -u -i -n -- podman pull",
-        fail_result("pull failed: unauthorized"),
-    );
+            "nsenter -t 1 -m -u -i -n -- podman pull",
+            fail_result("pull failed: unauthorized"),
+        );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
     let result = extract_baseline(&mock, &normalized, &mut |_| {});

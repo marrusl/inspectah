@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::kernelboot::{
     ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
@@ -42,7 +43,11 @@ impl Inspector for KernelbootInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
         let mut redaction_hints = Vec::new();
         let mut primary_failure: Option<String> = None;
@@ -538,6 +543,7 @@ mod tests {
 
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
 
@@ -610,7 +616,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -643,7 +649,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -677,7 +683,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -711,7 +717,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         assert!(
             result.is_ok(),
             "all files readable → must succeed, got: {result:?}"

@@ -4,6 +4,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -110,7 +111,9 @@ fn happy_path() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::KernelBoot(s) => s,
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),
@@ -160,7 +163,9 @@ fn sysctl_three_way_diff() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::KernelBoot(s) => s,
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),
@@ -232,7 +237,7 @@ fn lsmod_failure_returns_degraded() {
         baseline_data: None,
     };
 
-    let result = KernelbootInspector::new().inspect(&ctx);
+    let result = KernelbootInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -288,7 +293,7 @@ fn partial_failure_dracut_unreadable() {
         baseline_data: None,
     };
 
-    let result = KernelbootInspector::new().inspect(&ctx);
+    let result = KernelbootInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -344,7 +349,9 @@ fn tuned_not_installed() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::KernelBoot(s) => s,
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),
@@ -393,7 +400,9 @@ fn config_snippet_with_secret() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
 
     assert!(
         !output.redaction_hints.is_empty(),
@@ -446,7 +455,9 @@ fn cmdline_with_password() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
 
     let hint = output
         .redaction_hints
@@ -492,7 +503,9 @@ fn empty_system() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::KernelBoot(s) => s,
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),
@@ -528,7 +541,9 @@ fn kernelboot_snapshot() {
         baseline_data: None,
     };
 
-    let output = KernelbootInspector::new().inspect(&ctx).unwrap();
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::KernelBoot(s) => s,
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),

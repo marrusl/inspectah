@@ -26,6 +26,7 @@ use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspecto
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -274,7 +275,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
-    let collected = collect(&source, &executor, &inspectors, baseline_data.as_ref());
+    let collected = collect(
+        &source,
+        &executor,
+        &inspectors,
+        baseline_data.as_ref(),
+        &NullProgress,
+    );
     eprintln!("Scanning host {hostname}... done");
 
     // Step 5: Validate

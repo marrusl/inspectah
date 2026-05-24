@@ -1,4 +1,4 @@
-use inspectah_refine::fleet::diff::{compute_batch_diff, compute_diff, ChangeKind, DiffError};
+use inspectah_refine::fleet::diff::{ChangeKind, DiffError, compute_batch_diff, compute_diff};
 use inspectah_refine::types::ContentHash;
 
 #[test]

@@ -23,6 +23,7 @@ use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -176,7 +177,7 @@ fn test_services_inspector_correctness() {
     };
 
     let output = ServicesInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("services inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -230,7 +231,7 @@ fn test_storage_inspector_vs_golden() {
     };
 
     let output = StorageInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("storage inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -291,7 +292,7 @@ fn test_kernelboot_inspector_correctness() {
     };
 
     let output = KernelbootInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("kernelboot inspector should succeed on full fixture set");
 
     let section = match &output.section {

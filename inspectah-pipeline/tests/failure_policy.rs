@@ -21,6 +21,7 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
+use inspectah_core::traits::progress::{NullProgress, ProgressSink};
 use inspectah_core::types::completeness::{
     Completeness, InspectorId, SectionData, SourceSystemKind,
 };
@@ -142,7 +143,11 @@ impl Inspector for SuccessInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         Ok(InspectorOutput {
             section: self.section.clone(),
             warnings: vec![],
@@ -163,7 +168,11 @@ impl Inspector for DegradedServicesInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         Err(InspectorError::Degraded {
             partial: Box::new(InspectorOutput {
                 section: SectionData::Services(ServiceSection {
@@ -190,7 +199,11 @@ impl Inspector for FailedServicesInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         Err(InspectorError::Failed {
             reason: "permission denied".into(),
         })
@@ -209,7 +222,11 @@ impl Inspector for PanickingInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         panic!("intentional panic for failure policy test");
     }
 }
@@ -362,7 +379,7 @@ fn all_success_produces_complete() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     assert_eq!(
         pipeline.state.snapshot.completeness,
@@ -385,7 +402,7 @@ fn one_degraded_produces_partial() {
         Box::new(DegradedServicesInspector),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     match &pipeline.state.snapshot.completeness {
         Completeness::Partial {
@@ -420,7 +437,7 @@ fn one_failed_produces_incomplete() {
         Box::new(FailedServicesInspector),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     match &pipeline.state.snapshot.completeness {
         Completeness::Incomplete {
@@ -466,7 +483,7 @@ fn panicking_inspector_produces_failed_status() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // Non-panicking inspectors must succeed
     assert!(
@@ -621,7 +638,7 @@ fn test_scheduled_permission_denied_degraded() {
         Box::new(ScheduledTasksInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -662,7 +679,7 @@ fn test_scheduled_not_found_silent() {
         Box::new(ScheduledTasksInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -708,7 +725,7 @@ fn test_config_rpm_va_failure_degraded() {
         baseline_data: None,
     };
 
-    let result = inspector.inspect(&ctx);
+    let result = inspector.inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, .. }) => {
             assert!(
@@ -743,7 +760,7 @@ fn test_config_etc_permission_denied_degraded() {
         Box::new(ConfigInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -820,7 +837,7 @@ fn test_selinux_semanage_unavailable_degraded() {
         Box::new(SelinuxInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -902,7 +919,7 @@ fn test_selinux_audit_permission_denied_degraded() {
         Box::new(SelinuxInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -954,7 +971,7 @@ fn test_nonrpm_readelf_unavailable_degraded() {
         Box::new(NonRpmInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -1009,7 +1026,7 @@ fn test_nonrpm_scan_dir_not_found_silent() {
         Box::new(NonRpmInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -1056,7 +1073,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Failed { reason }) => {
                 assert!(
@@ -1082,7 +1099,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match &result {
             Err(InspectorError::Failed { reason }) => {
                 panic!(

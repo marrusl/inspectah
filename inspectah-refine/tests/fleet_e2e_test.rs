@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection};
+use inspectah_core::types::fleet::{
+    FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection,
+};
 use inspectah_refine::fleet::attention::score_fleet_attention;
 use inspectah_refine::fleet::diff::compute_diff;
 use inspectah_refine::fleet::variant_summary;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{
-    AttentionLevel, AttentionScore, ContentHash, ItemId, RefinementOp,
-};
+use inspectah_refine::types::{AttentionLevel, AttentionScore, ContentHash, ItemId, RefinementOp};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -161,9 +161,21 @@ fn summary_counts_paths_with_variants() {
         summary.paths_with_variants, 2,
         "should count only paths with 2+ variants",
     );
-    assert!(summary.variant_distribution.contains_key("/etc/app/main.conf"));
-    assert!(summary.variant_distribution.contains_key("/etc/app/db.conf"));
-    assert!(!summary.variant_distribution.contains_key("/etc/app/logging.conf"));
+    assert!(
+        summary
+            .variant_distribution
+            .contains_key("/etc/app/main.conf")
+    );
+    assert!(
+        summary
+            .variant_distribution
+            .contains_key("/etc/app/db.conf")
+    );
+    assert!(
+        !summary
+            .variant_distribution
+            .contains_key("/etc/app/logging.conf")
+    );
 }
 
 #[test]
@@ -308,11 +320,7 @@ fn fleet_refine_full_lifecycle() {
 
     let proj = session.snapshot_projected();
     let main_variants = variants_for_path(&proj, "/etc/app/main.conf");
-    assert_eq!(
-        main_variants.len(),
-        4,
-        "edit should add a fourth variant",
-    );
+    assert_eq!(main_variants.len(), 4, "edit should add a fourth variant",);
     assert_eq!(
         main_variants
             .iter()
@@ -326,8 +334,8 @@ fn fleet_refine_full_lifecycle() {
     // -----------------------------------------------------------------------
     // 7. Compute diff between original alpha and edited content
     // -----------------------------------------------------------------------
-    let diff_result = compute_diff("setting=alpha", edited_content, 3)
-        .expect("diff should succeed");
+    let diff_result =
+        compute_diff("setting=alpha", edited_content, 3).expect("diff should succeed");
     assert!(
         diff_result.stats.insertions > 0 || diff_result.stats.deletions > 0,
         "diff must show changes between alpha and edited content",

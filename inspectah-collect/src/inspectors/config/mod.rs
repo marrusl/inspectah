@@ -7,6 +7,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::redaction::RedactionHint;
@@ -50,7 +51,11 @@ impl Inspector for ConfigInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let rpm_state = match ctx.rpm_state {
             None => {
                 return Err(InspectorError::Failed {
@@ -535,6 +540,7 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::config::ConfigCategory;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmVaEntry};
@@ -644,7 +650,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             assert_eq!(section.files.len(), 1);
@@ -683,7 +689,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             assert_eq!(section.files.len(), 1);
@@ -745,7 +751,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             // oldpkg.conf should appear — either as Unowned (step 2 catches it
@@ -805,7 +811,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             // Should find modified base.conf (different content in /etc vs /usr/etc)
@@ -852,7 +858,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         assert!(
             output.warnings.iter().any(|w| w.message.contains("FUTURE")),
@@ -891,7 +897,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, partial }) => {
                 assert!(
@@ -928,7 +934,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed on empty /etc");
         if let SectionData::Config(ref section) = output.section {
             assert!(section.files.is_empty());
@@ -965,7 +971,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             assert_eq!(section.files.len(), 1);
@@ -1008,7 +1014,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             let has_dhcp = section.files.iter().any(|f| f.path.contains("eth0"));
@@ -1046,7 +1052,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             let tmpfiles_entry = section
@@ -1107,7 +1113,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             for file in &section.files {
@@ -1136,7 +1142,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Failed { reason }) => {
                 assert!(

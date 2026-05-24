@@ -11,6 +11,7 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::{NullProgress, ProgressSink};
 use inspectah_core::types::completeness::{
     Completeness, InspectorId, SectionData, SourceSystemKind,
 };
@@ -80,7 +81,11 @@ impl Inspector for DelayedInspector {
         ]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         std::thread::sleep(self.delay);
         Ok(InspectorOutput {
             section: self.section.clone(),
@@ -102,7 +107,11 @@ impl Inspector for PanickingInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         panic!("intentional panic for containment test");
     }
 }
@@ -133,7 +142,11 @@ impl Inspector for PackageOnlyInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         self.called.fetch_add(1, Ordering::SeqCst);
         Ok(InspectorOutput {
             section: SectionData::Network(Default::default()),
@@ -157,7 +170,11 @@ impl Inspector for FailingInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         Err(InspectorError::Failed {
             reason: "simulated failure".into(),
         })
@@ -195,7 +212,7 @@ fn independent_inspectors_run_concurrently() {
     ];
 
     let start = Instant::now();
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
     let elapsed = start.elapsed();
 
     // All three sections must be populated
@@ -273,7 +290,7 @@ fn rpm_failure_propagates() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // Services should succeed
     assert!(
@@ -322,7 +339,7 @@ fn inspector_panic_contained() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // Non-panicking inspectors must succeed
     assert!(
@@ -370,7 +387,7 @@ fn orchestrator_skips_inapplicable() {
     // Since Inspector requires ownership via Box, we use AtomicU32 inside the inspector.
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(PackageOnlyInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // No sections should be populated (PackageOnly inspector was skipped)
     assert!(
@@ -438,7 +455,7 @@ fn three_wave_model_rpm_runs_in_wave1() {
     let source = package_based_source();
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // Wave 1 proof: RPM inspector ran and produced section data
     assert!(
@@ -496,7 +513,7 @@ fn three_wave_model_enriched_context_api_path() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
     // Both inspectors ran in Wave 1
     assert!(

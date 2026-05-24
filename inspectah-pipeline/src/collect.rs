@@ -5,6 +5,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::system::SourceSystem;
@@ -26,6 +27,7 @@ pub fn collect(
     executor: &dyn Executor,
     inspectors: &[Box<dyn Inspector>],
     baseline: Option<&BaselineData>,
+    progress: &dyn ProgressSink,
 ) -> Pipeline<Collected> {
     let mut snapshot = InspectionSnapshot::new();
     let mut failed: Vec<InspectorId> = Vec::new();
@@ -90,7 +92,7 @@ pub fn collect(
     std::thread::scope(|s| {
         let handles: Vec<_> = wave1
             .iter()
-            .map(|inspector| s.spawn(|| inspector.inspect(&base_ctx)))
+            .map(|inspector| s.spawn(|| inspector.inspect(&base_ctx, progress)))
             .collect();
 
         for (inspector, handle) in wave1.iter().zip(handles) {
@@ -131,7 +133,7 @@ pub fn collect(
         std::thread::scope(|s| {
             let handles: Vec<_> = wave2
                 .iter()
-                .map(|inspector| s.spawn(|| inspector.inspect(&enriched_ctx)))
+                .map(|inspector| s.spawn(|| inspector.inspect(&enriched_ctx, progress)))
                 .collect();
 
             // Wave 2 inspectors don't produce RpmState, so pass a
@@ -378,6 +380,7 @@ mod tests {
     use inspectah_collect::inspectors::rpm::RpmInspector;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::inspector::InspectorOutput;
+    use inspectah_core::traits::progress::{NullProgress, ProgressSink};
     use inspectah_core::types::completeness::SourceSystemKind;
     use inspectah_core::types::config::ConfigFileKind;
     use inspectah_core::types::os::OsRelease;
@@ -393,7 +396,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            _ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             Err(InspectorError::Failed {
                 reason: "test failure".into(),
             })
@@ -409,7 +416,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            _ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::Network(Default::default()),
@@ -430,7 +441,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            _ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             Err(InspectorError::Skipped {
                 reason: "not applicable".into(),
             })
@@ -468,7 +483,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // Pipeline produced a Collected state with rpm data
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -501,7 +516,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // rpm section should be None (failed)
         assert!(pipeline.state.snapshot.rpm.is_none());
@@ -524,7 +539,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // RPM routed correctly
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -542,7 +557,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
         let snap = &pipeline.state.snapshot;
 
         // os_release must be populated from the source system
@@ -584,7 +599,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
         let snap = &pipeline.state.snapshot;
 
         // os_release and system_type still set
@@ -613,7 +628,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -630,7 +645,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(FailingInspector)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
@@ -656,7 +671,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(DegradedInspector)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // Partial data should be routed
         assert!(
@@ -687,7 +702,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(SkippedInspector)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -708,7 +723,7 @@ mod tests {
             Box::new(DegradedInspector),
             Box::new(SkippedInspector),
         ];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
@@ -740,7 +755,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            _ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             Ok(InspectorOutput {
                 section: SectionData::Services(Default::default()),
                 warnings: vec![],
@@ -762,7 +781,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            _ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::KernelBoot(Default::default()),
@@ -786,7 +809,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(HintingInspector)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         assert_eq!(
             pipeline.state.snapshot.redaction_hints.len(),
@@ -811,7 +834,7 @@ mod tests {
             Box::new(RpmInspector::new()),
             Box::new(DegradedWithHintsInspector),
         ];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         assert_eq!(
             pipeline.state.snapshot.redaction_hints.len(),
@@ -875,7 +898,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             let has_state = ctx.rpm_state.is_some();
             *self.received_rpm_state.lock().unwrap() = Some(has_state);
 
@@ -917,7 +944,7 @@ mod tests {
         let (probe, flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // The probe should have been called (it's a Wave 2 inspector)
         let received = flag.lock().unwrap();
@@ -952,7 +979,7 @@ mod tests {
         let (probe, flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let _pipeline = collect(&source, &exec, &inspectors, None);
+        let _pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // The probe should have received None (RPM failed)
         let received = flag.lock().unwrap();
@@ -974,7 +1001,7 @@ mod tests {
         let (probe, _flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // RPM section should be present with packages
         let rpm = pipeline.state.snapshot.rpm.as_ref().unwrap();
@@ -1015,7 +1042,11 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(
+            &self,
+            ctx: &InspectionContext<'_>,
+            _progress: &dyn ProgressSink,
+        ) -> Result<InspectorOutput, InspectorError> {
             if let Some(rpm_state) = ctx.rpm_state {
                 *self.captured.lock().unwrap() = Some(rpm_state.clone());
                 Ok(InspectorOutput {
@@ -1088,7 +1119,7 @@ mod tests {
         let (probe, captured) = OwnershipProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         // RPM section should contain file_ownership data
         let rpm = pipeline
@@ -1209,7 +1240,7 @@ mod tests {
         let (probe, captured) = OwnershipProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let _pipeline = collect(&source, &exec, &inspectors, None);
+        let _pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
 
         let rpm_state = captured
             .lock()
@@ -1327,7 +1358,7 @@ mod tests {
             Box::new(RpmInspector::new()),
             Box::new(ConfigInspector::new()),
         ];
-        let pipeline = collect(&source, &exec, &inspectors, None);
+        let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
         let snap = &pipeline.state.snapshot;
 
         // RPM section must be present (Wave 1 succeeded)

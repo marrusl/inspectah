@@ -8,6 +8,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::network::NetworkInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::network::NetworkSection;
 use inspectah_core::types::os::OsRelease;
@@ -108,7 +109,7 @@ fn test_network_inspector_happy_path() {
         baseline_data: None,
     };
 
-    let result = NetworkInspector::new().inspect(&ctx);
+    let result = NetworkInspector::new().inspect(&ctx, &NullProgress);
 
     // The DNF proxy fixture contains proxy_password, which emits a redaction
     // hint, and that is fine. Extract the section regardless of Ok/Degraded.
@@ -210,7 +211,7 @@ fn test_network_inspector_nm_not_found() {
     };
 
     let output = NetworkInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed when NM is not installed");
 
     let section = match &output.section {
@@ -262,7 +263,7 @@ fn test_network_inspector_degraded_permissions() {
         baseline_data: None,
     };
 
-    let result = NetworkInspector::new().inspect(&ctx);
+    let result = NetworkInspector::new().inspect(&ctx, &NullProgress);
 
     match result {
         Err(InspectorError::Degraded { partial, reason }) => {
@@ -292,7 +293,7 @@ fn test_network_inspector_json_roundtrip() {
         baseline_data: None,
     };
 
-    let result = NetworkInspector::new().inspect(&ctx);
+    let result = NetworkInspector::new().inspect(&ctx, &NullProgress);
 
     let output = match result {
         Ok(o) => o,

@@ -437,9 +437,7 @@ impl RefineSession {
             let mut count = 0usize;
 
             // Config variants
-            if let (Some(orig_cfg), Some(proj_cfg)) =
-                (&self.original.config, &projected.config)
-            {
+            if let (Some(orig_cfg), Some(proj_cfg)) = (&self.original.config, &projected.config) {
                 // Check for selection changes in original entries
                 for orig_entry in &orig_cfg.files {
                     if let Some(proj_entry) = proj_cfg.files.iter().find(|e| {
@@ -461,17 +459,14 @@ impl RefineSession {
                             && ContentHash::from_content(e.content.as_bytes())
                                 == ContentHash::from_content(proj_entry.content.as_bytes())
                     });
-                    if !in_original
-                        && proj_entry.variant_selection != VariantSelection::Only
-                    {
+                    if !in_original && proj_entry.variant_selection != VariantSelection::Only {
                         count += 1;
                     }
                 }
             }
 
             // Drop-in variants
-            if let (Some(orig_svc), Some(proj_svc)) =
-                (&self.original.services, &projected.services)
+            if let (Some(orig_svc), Some(proj_svc)) = (&self.original.services, &projected.services)
             {
                 for orig_entry in &orig_svc.drop_ins {
                     if let Some(proj_entry) = proj_svc.drop_ins.iter().find(|e| {
@@ -492,9 +487,7 @@ impl RefineSession {
                             && ContentHash::from_content(e.content.as_bytes())
                                 == ContentHash::from_content(proj_entry.content.as_bytes())
                     });
-                    if !in_original
-                        && proj_entry.variant_selection != VariantSelection::Only
-                    {
+                    if !in_original && proj_entry.variant_selection != VariantSelection::Only {
                         count += 1;
                     }
                 }
@@ -523,9 +516,7 @@ impl RefineSession {
                             && ContentHash::from_content(e.content.as_bytes())
                                 == ContentHash::from_content(proj_entry.content.as_bytes())
                     });
-                    if !in_original
-                        && proj_entry.variant_selection != VariantSelection::Only
-                    {
+                    if !in_original && proj_entry.variant_selection != VariantSelection::Only {
                         count += 1;
                     }
                 }
@@ -541,16 +532,14 @@ impl RefineSession {
                             .unwrap_or_default()
                             .as_bytes(),
                     );
-                    if let Some(proj_entry) =
-                        proj_cont.compose_files.iter().find(|e| {
-                            e.path == orig_entry.path
-                                && ContentHash::from_content(
-                                    serde_json::to_string(&e.images)
-                                        .unwrap_or_default()
-                                        .as_bytes(),
-                                ) == orig_hash
-                        })
-                    {
+                    if let Some(proj_entry) = proj_cont.compose_files.iter().find(|e| {
+                        e.path == orig_entry.path
+                            && ContentHash::from_content(
+                                serde_json::to_string(&e.images)
+                                    .unwrap_or_default()
+                                    .as_bytes(),
+                            ) == orig_hash
+                    }) {
                         if proj_entry.variant_selection != orig_entry.variant_selection {
                             count += 1;
                         }

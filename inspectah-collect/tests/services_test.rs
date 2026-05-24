@@ -4,6 +4,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::services::{PresetDefault, ServiceAction, ServiceUnitState};
@@ -80,7 +81,9 @@ fn happy_path_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -194,7 +197,9 @@ fn preset_first_match_wins() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -241,7 +246,9 @@ fn preset_glob_matching() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -270,7 +277,9 @@ fn dropin_files_collected() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -298,7 +307,7 @@ fn systemctl_missing_returns_degraded() {
         baseline_data: None,
     };
 
-    let result = ServicesInspector::new().inspect(&ctx);
+    let result = ServicesInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -340,7 +349,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
         baseline_data: None,
     };
 
-    let result = ServicesInspector::new().inspect(&ctx);
+    let result = ServicesInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -388,7 +397,9 @@ fn empty_system_returns_empty_section() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -437,7 +448,9 @@ fn dropin_with_secret_produces_redaction_hint() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
 
     // Should produce a redaction hint for DB_PASSWORD but not APP_PORT
     assert_eq!(
@@ -463,7 +476,9 @@ fn services_snapshot() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -485,7 +500,9 @@ fn preset_matched_units_captures_matches() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -588,7 +605,9 @@ fn preset_matched_units_empty_when_no_preset_rules() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected SectionData::Services, got {:?}", other),
@@ -642,7 +661,9 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -699,7 +720,9 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -756,7 +779,9 @@ fn test_owning_package_batch_query_populates_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -815,7 +840,9 @@ fn test_owning_package_fallback_checks_etc_systemd_path() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -882,7 +909,9 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -941,7 +970,9 @@ fn test_unowned_unit_keeps_owning_package_none() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Services(s) => s,
         other => panic!("expected Services section, got {other:?}"),
