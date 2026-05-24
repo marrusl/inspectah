@@ -1,6 +1,6 @@
 # CLI Scan Progress UX — Design Spec
 
-**Status:** Approved (revision 4, approved 2026-05-24)
+**Status:** Approved (revision 5, approved 2026-05-24)
 **Date:** 2026-05-24
 **ROADMAP ref:** "CLI UX: Scan Progress Reporting (MEDIUM)", "CLI UX: Baseline Pull Viewport Height (LOW)"
 
@@ -639,10 +639,19 @@ to `collect()` as a cancellation token. `collect()` checks the flag:
   completed before the flag was set are kept. Results from threads
   still running when the flag was set are joined and discarded.
 
-**Cutoff policy:** Results that completed before SIGINT are preserved
-in the snapshot. Results in-flight at SIGINT time are discarded —
-they are not marked interrupted, they are simply absent. The snapshot
-records which inspectors ran and which did not via `completeness`.
+**Cutoff policy:** Deterministic join-time check. `collect()` joins
+wave-2 handles sequentially. After each `join()` returns, it checks
+the cancellation flag. If the flag is set, the result is discarded
+regardless of whether the thread finished before or after the signal.
+Results from handles already joined before the flag was set are kept.
+
+This means 1-2 already-complete fast inspectors may be discarded if
+their `join()` happens to be reached after the signal. This is
+acceptable for a user-interrupt path — the user hit Ctrl-C and
+expects incomplete output.
+
+If the flag is set between wave-1 and wave-2, wave-2 is skipped
+entirely.
 
 **Event emission on SIGINT:** After `collect()` returns, the CLI
 emits `InspectorFinished { outcome: Interrupted }` for all

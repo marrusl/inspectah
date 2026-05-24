@@ -620,7 +620,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 5: Add Progress Events to RPM Inspector
+### Task 6: Add Progress Events to RPM Inspector
 
 **Files:**
 - Modify: `inspectah-collect/src/inspectors/rpm/mod.rs`
@@ -871,7 +871,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 6: Add Progress Events to Config Inspector
+### Task 7: Add Progress Events to Config Inspector
 
 **Files:**
 - Modify: `inspectah-collect/src/inspectors/config/mod.rs`
@@ -920,7 +920,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 7: Add Probe Events to Non-RPM Inspector
+### Task 8: Add Probe Events to Non-RPM Inspector
 
 **Files:**
 - Modify: `inspectah-collect/src/inspectors/nonrpm.rs`
@@ -1021,7 +1021,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 8: ScanOutcome Enum and Exit Codes
+### Task 9: ScanOutcome Enum and Exit Codes
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/scan.rs`
@@ -1108,7 +1108,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 9: TerminalProgress Renderer — Flat Mode
+### Task 10: TerminalProgress Renderer — Flat Mode
 
 Start with flat mode (simplest — no ANSI, no cursor). This validates
 the rendering pipeline before adding complexity.
@@ -1174,7 +1174,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 10: TerminalProgress Renderer — Plain Mode
+### Task 11: TerminalProgress Renderer — Plain Mode
 
 **Files:**
 - Create: `inspectah-cli/src/progress/plain.rs`
@@ -1511,7 +1511,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 13: Completion Output
+### Task 14: Completion Output
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/scan.rs`
@@ -1601,7 +1601,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 14: Wire TerminalProgress into Scan Command
+### Task 15: Wire TerminalProgress into Scan Command
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/scan.rs`
@@ -1682,7 +1682,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 15: Pull Viewport Dynamic Height
+### Task 16: Pull Viewport Dynamic Height
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/pull_progress.rs`
