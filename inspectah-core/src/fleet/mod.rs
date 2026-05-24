@@ -441,7 +441,7 @@ mod tests {
         let counts = compute_section_host_counts(&[s1, s2]);
         assert_eq!(counts.get("rpm"), Some(&2));
         assert_eq!(counts.get("config"), Some(&1));
-        assert!(counts.get("services").is_none());
+        assert!(!counts.contains_key("services"));
     }
 
     #[test]

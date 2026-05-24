@@ -1,5 +1,5 @@
 use inspectah_core::types::fleet::PrevalenceZone;
-use inspectah_refine::types::{AttentionLevel, AttentionScore, FleetAttention};
+use inspectah_refine::types::{AttentionLevel, FleetAttention};
 
 #[test]
 fn divergent_sorts_before_consensus_regardless_of_attention() {
