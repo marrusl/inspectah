@@ -701,100 +701,83 @@ fn find_item_in_section<'a>(
 // ---------------------------------------------------------------------------
 
 fn fleet_state_with_packages() -> Arc<AppState> {
-    use inspectah_core::types::fleet::RepoSourceEntry;
+    use inspectah_core::fleet::merge_snapshots;
+    use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
-    let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "web-tier".into(),
-        host_count: 3,
-        hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
-        merged_at: "2026-05-21T12:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                include: true,
-                fleet: Some(FleetPrevalence {
-                    count: 3,
-                    total: 3,
-                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
-                }),
-                ..Default::default()
-            },
-            PackageEntry {
-                name: "epel-release".into(),
-                arch: "noarch".into(),
-                state: PackageState::Added,
-                source_repo: "epel".into(),
-                include: true,
-                fleet: Some(FleetPrevalence {
-                    count: 3,
-                    total: 3,
-                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
-                }),
-                ..Default::default()
-            },
-            // nginx has a repo conflict: epel on 2 hosts, appstream on 1
-            PackageEntry {
-                name: "nginx".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "epel".into(),
-                include: true,
-                fleet: Some(FleetPrevalence {
-                    count: 3,
-                    total: 3,
-                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
-                }),
-                ..Default::default()
-            },
-        ],
-        repo_files: vec![
-            RepoFile {
-                path: "/etc/yum.repos.d/centos.repo".into(),
-                content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
-                    .into(),
-                include: true,
-                ..Default::default()
-            },
-            RepoFile {
-                path: "/etc/yum.repos.d/epel.repo".into(),
-                content: "[epel]\nname=EPEL 9\n".into(),
-                include: true,
-                ..Default::default()
-            },
-        ],
-        leaf_packages: Some(vec![
-            "httpd.x86_64".into(),
-            "epel-release.noarch".into(),
-            "nginx.x86_64".into(),
-        ]),
-        ..Default::default()
-    });
-    // Populate repo conflict for nginx — same package from different repos
-    // across hosts. This simulates the carrier chain from Task 3.
-    snap.rpm_repo_conflicts.insert(
-        "nginx.x86_64".into(),
-        vec![
-            RepoSourceEntry {
-                repo: "epel".into(),
-                host_count: 2,
-            },
-            RepoSourceEntry {
-                repo: "appstream".into(),
-                host_count: 1,
-            },
-        ],
-    );
+    // Build individual per-host snapshots and pass through merge_snapshots()
+    // to exercise the full vertical: merge computes → snapshot stores →
+    // session copies → handler maps.
+    let make_host = |hostname: &str,
+                     nginx_repo: &str,
+                     nginx_version: &str|
+     -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.meta
+            .insert("hostname".into(), serde_json::json!(hostname));
+        snap.os_release = Some(OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "epel-release".into(),
+                    arch: "noarch".into(),
+                    state: PackageState::Added,
+                    source_repo: "epel".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: nginx_repo.into(),
+                    version: nginx_version.into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            repo_files: vec![
+                RepoFile {
+                    path: "/etc/yum.repos.d/centos.repo".into(),
+                    content:
+                        "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
+                            .into(),
+                    include: true,
+                    ..Default::default()
+                },
+                RepoFile {
+                    path: "/etc/yum.repos.d/epel.repo".into(),
+                    content: "[epel]\nname=EPEL 9\n".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        snap
+    };
+
+    // nginx: epel on web-01 and web-02 (different versions), appstream on web-03
+    let s1 = make_host("web-01", "epel", "1.24.0");
+    let s2 = make_host("web-02", "epel", "1.25.0");
+    let s3 = make_host("web-03", "appstream", "1.22.0");
+
+    let (merged, _warnings) =
+        merge_snapshots(vec![s1, s2, s3], None).expect("merge should succeed");
+
     Arc::new(AppState {
-        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        session: Arc::new(Mutex::new(RefineSession::new(merged))),
         sections_cache: OnceLock::new(),
     })
 }
