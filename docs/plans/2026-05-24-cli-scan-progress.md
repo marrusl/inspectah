@@ -10,6 +10,16 @@
 
 **Spec:** `docs/specs/proposed/2026-05-24-cli-scan-progress-design.md` (approved revision 4)
 
+**Implementer:** Tang (Rust Systems Engineer). All tasks are Tang's
+lane — this is pure Rust/CLI work across inspectah-core,
+inspectah-collect, inspectah-pipeline, and inspectah-cli.
+
+**Dispatch rule:** When dispatching Tang for any task, READ the full
+contents of `team/tang.md` AND `team/context.md` and include them in
+the agent prompt. Do not summarize or reference by name only. Tang's
+persona defines code standards, clippy rules, testing strategy, and
+architectural decision-making rules that govern implementation.
+
 ---
 
 ### Task 1: Define Progress Event Types
