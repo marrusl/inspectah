@@ -448,9 +448,10 @@ describe("PackageList", () => {
     let rows = screen.getAllByTestId(/^package-row-/);
     expect(rows[0]).toHaveAttribute("data-testid", "package-row-bash");
 
-    // Click left column again → toggle to desc → zsh first
+    // Click left column button → toggle to desc → zsh first
     const pkgHeader = screen.getByRole("columnheader", { name: /packages/i });
-    fireEvent.click(pkgHeader);
+    const pkgBtn = within(pkgHeader).getByRole("button");
+    fireEvent.click(pkgBtn);
     rows = screen.getAllByTestId(/^package-row-/);
     expect(rows[0]).toHaveAttribute("data-testid", "package-row-zsh");
   });

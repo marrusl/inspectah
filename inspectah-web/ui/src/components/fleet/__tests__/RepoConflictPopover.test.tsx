@@ -142,11 +142,37 @@ describe("RepoConflictPopover", () => {
 
     const dialog = screen.getByRole("dialog");
     const dismissBtn = within(dialog).getByRole("button", {
-      name: /dismiss/i,
+      name: /dismiss conflict warning for nginx/i,
     });
     await user.click(dismissBtn);
 
     expect(onDismiss).toHaveBeenCalledWith("nginx.x86_64");
+  });
+
+  it("dismiss button has package-specific aria-label", async () => {
+    const user = userEvent.setup();
+    render(
+      <RepoConflictPopover
+        packageName="nginx"
+        identityKey="nginx.x86_64"
+        entries={entries}
+        isDismissed={false}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /repo conflict for nginx/i }),
+    );
+
+    const dialog = screen.getByRole("dialog");
+    const dismissBtn = within(dialog).getByRole("button", {
+      name: /dismiss conflict warning for nginx/i,
+    });
+    expect(dismissBtn).toHaveAttribute(
+      "aria-label",
+      "Dismiss conflict warning for nginx",
+    );
   });
 
   it("Escape closes popover without dismissing", async () => {

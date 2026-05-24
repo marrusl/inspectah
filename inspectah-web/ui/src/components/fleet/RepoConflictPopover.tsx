@@ -8,6 +8,8 @@ export interface RepoConflictPopoverProps {
   entries: RepoSourceEntry[];
   isDismissed: boolean;
   onDismiss: (key: string) => void;
+  /** Ref to the element that should receive focus after dismiss (e.g., the row's checkbox) */
+  focusTargetRef?: React.RefObject<HTMLElement | null>;
 }
 
 export function RepoConflictPopover({
@@ -16,6 +18,7 @@ export function RepoConflictPopover({
   entries,
   isDismissed,
   onDismiss,
+  focusTargetRef,
 }: RepoConflictPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -36,7 +39,21 @@ export function RepoConflictPopover({
   const dismiss = useCallback(() => {
     setIsOpen(false);
     onDismiss(identityKey);
-  }, [onDismiss, identityKey]);
+    // After dismiss the trigger is removed, so move focus to the provided target
+    // (e.g., the row's checkbox) or the next focusable element in the row
+    requestAnimationFrame(() => {
+      if (focusTargetRef?.current) {
+        focusTargetRef.current.focus();
+      } else {
+        // Fallback: find the next focusable sibling in the parent row
+        const row = triggerRef.current?.closest("[data-testid]");
+        const focusable = row?.querySelector<HTMLElement>(
+          'input, button, [tabindex]:not([tabindex="-1"])',
+        );
+        focusable?.focus();
+      }
+    });
+  }, [onDismiss, identityKey, focusTargetRef]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -119,6 +136,7 @@ function PopoverDialog({
           ref={dismissRef as React.RefObject<HTMLButtonElement>}
           type="button"
           className="repo-conflict-popover__dismiss"
+          aria-label={`Dismiss conflict warning for ${packageName}`}
           onClick={onDismiss}
         >
           Dismiss

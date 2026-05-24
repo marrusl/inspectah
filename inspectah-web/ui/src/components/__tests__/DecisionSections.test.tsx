@@ -1394,10 +1394,10 @@ describe("RepoBar in MainContent", () => {
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
 
-    // RepoBar renders pill buttons for toggleable (non-distro) repos
+    // RepoBar renders pill buttons for toggleable (non-distro) repos with counts
     const repoBar = screen.getByTestId("repo-bar");
     expect(repoBar).toBeInTheDocument();
-    expect(within(repoBar).getByText("epel")).toBeInTheDocument();
+    expect(within(repoBar).getByText(/epel \(1\)/)).toBeInTheDocument();
   });
 
   it("renders PackageList with all packages from view data", () => {

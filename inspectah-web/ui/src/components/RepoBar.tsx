@@ -68,8 +68,11 @@ export function RepoBar({
             color: "var(--pf-t--global--text--color--subtle)",
           }}
         >
-          {distroRepos.map((repo) => (
-            <span key={repo.section_id}>{repo.section_id}</span>
+          {distroRepos.map((repo, i) => (
+            <span key={repo.section_id}>
+              {i > 0 && " · "}
+              {repo.section_id} ({repo.package_count})
+            </span>
           ))}
         </div>
       )}
@@ -89,19 +92,19 @@ export function RepoBar({
               key={repo.section_id}
               role="switch"
               aria-checked={repo.enabled}
-              aria-label={repo.section_id}
+              aria-label={`${repo.section_id} (${repo.package_count})`}
               onClick={() => onToggle(repo.section_id)}
               style={{
                 ...pillBase,
                 ...(tierStyles[repo.tier] ?? {}),
               }}
             >
-              {repo.section_id}
+              {repo.section_id} ({repo.package_count})
             </button>
           ))}
 
           {conflictCount != null && conflictCount > 0 && (
-            <Label color="orange" isCompact>
+            <Label color="orange" isCompact aria-live="polite">
               {conflictCount} conflicts
             </Label>
           )}

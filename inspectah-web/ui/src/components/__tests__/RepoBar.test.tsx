@@ -11,18 +11,20 @@ const mockRepos: RepoGroupInfo[] = [
 ];
 
 describe("RepoBar", () => {
-  it("renders distro repos as plain text in row 1", () => {
+  it("renders distro repos with package counts in row 1", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
-    expect(screen.getByText(/baseos/)).toBeInTheDocument();
-    expect(screen.getByText(/appstream/)).toBeInTheDocument();
+    expect(screen.getByText(/baseos \(12\)/)).toBeInTheDocument();
+    expect(screen.getByText(/appstream \(28\)/)).toBeInTheDocument();
   });
 
-  it("renders toggleable repos as pills in row 2", () => {
+  it("renders toggleable repos as pills with package counts in row 2", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
-    const crbPill = screen.getByRole("switch", { name: /crb/i });
+    const crbPill = screen.getByRole("switch", { name: /crb \(4\)/i });
     expect(crbPill).toBeInTheDocument();
-    const epelPill = screen.getByRole("switch", { name: /epel/i });
+    expect(crbPill.textContent).toContain("crb (4)");
+    const epelPill = screen.getByRole("switch", { name: /epel \(8\)/i });
     expect(epelPill).toBeInTheDocument();
+    expect(epelPill.textContent).toContain("epel (8)");
   });
 
   it("distro repos have no toggle", () => {
@@ -37,7 +39,7 @@ describe("RepoBar", () => {
     expect(onToggle).toHaveBeenCalledWith("epel");
   });
 
-  it("shows conflict count badge when provided", () => {
+  it("shows conflict count badge with aria-live when provided", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />);
     expect(screen.getByText(/3 conflicts/i)).toBeInTheDocument();
   });

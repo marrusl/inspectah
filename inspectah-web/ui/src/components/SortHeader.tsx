@@ -42,38 +42,50 @@ export function SortHeader({
     [],
   );
 
+  const leftSortDir = ariaSortValue("left", activeColumn, direction);
+  const rightSortDir = ariaSortValue("right", activeColumn, direction);
+
+  function sortLabel(label: string, sortDir: "ascending" | "descending" | "none"): string {
+    if (sortDir === "none") return `Sort by ${label}`;
+    return `Sort by ${label}, currently ${sortDir === "ascending" ? "ascending" : "descending"}`;
+  }
+
   return (
-    <div role="row" className="inspectah-sort-header">
-      <button
-        ref={leftRef}
-        role="columnheader"
-        aria-sort={ariaSortValue("left", activeColumn, direction)}
-        className="inspectah-sort-header__column"
-        onClick={() => onSort("left")}
-        onKeyDown={(e) => handleKeyDown(e, "left")}
-      >
-        {leftLabel}
-        {activeColumn === "left" && (
-          <span className="inspectah-sort-header__chevron" aria-hidden="true">
-            {" "}{chevron(direction)}
-          </span>
-        )}
-      </button>
-      <button
-        ref={rightRef}
-        role="columnheader"
-        aria-sort={ariaSortValue("right", activeColumn, direction)}
-        className="inspectah-sort-header__column"
-        onClick={() => onSort("right")}
-        onKeyDown={(e) => handleKeyDown(e, "right")}
-      >
-        {rightLabel}
-        {activeColumn === "right" && (
-          <span className="inspectah-sort-header__chevron" aria-hidden="true">
-            {" "}{chevron(direction)}
-          </span>
-        )}
-      </button>
+    <div role="grid" aria-label="Sort controls" className="inspectah-sort-header">
+      <div role="row">
+        <div role="columnheader" aria-sort={leftSortDir}>
+          <button
+            ref={leftRef}
+            className="inspectah-sort-header__column"
+            aria-label={sortLabel(leftLabel, leftSortDir)}
+            onClick={() => onSort("left")}
+            onKeyDown={(e) => handleKeyDown(e, "left")}
+          >
+            {leftLabel}
+            {activeColumn === "left" && (
+              <span className="inspectah-sort-header__chevron" aria-hidden="true">
+                {" "}{chevron(direction)}
+              </span>
+            )}
+          </button>
+        </div>
+        <div role="columnheader" aria-sort={rightSortDir}>
+          <button
+            ref={rightRef}
+            className="inspectah-sort-header__column"
+            aria-label={sortLabel(rightLabel, rightSortDir)}
+            onClick={() => onSort("right")}
+            onKeyDown={(e) => handleKeyDown(e, "right")}
+          >
+            {rightLabel}
+            {activeColumn === "right" && (
+              <span className="inspectah-sort-header__chevron" aria-hidden="true">
+                {" "}{chevron(direction)}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

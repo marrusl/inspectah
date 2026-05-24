@@ -42,6 +42,7 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
       style={{ opacity: 0.55 }}
     >
       <div
+        aria-live="polite"
         style={{
           fontSize: "var(--pf-t--global--font--size--body--sm)",
           color: "var(--pf-t--global--text--color--subtle)",
@@ -57,33 +58,35 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
           variant="link"
           isInline
           aria-expanded={false}
+          aria-controls="excluded-zone-content"
           onClick={() => setExpanded(true)}
           style={{ fontSize: "var(--pf-t--global--font--size--body--sm)" }}
         >
           Show {packages.length} excluded
         </Button>
-      ) : (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
-          }}
-        >
-          {packages.map((pkg) => (
-            <span
-              key={`${pkg.repo}/${pkg.name}`}
-              style={{
-                textDecoration: "line-through",
-                color: "var(--pf-t--global--text--color--subtle)",
-                fontSize: "var(--pf-t--global--font--size--body--sm)",
-              }}
-            >
-              {pkg.name}
-            </span>
-          ))}
-        </div>
-      )}
+      ) : null}
+      <div
+        id="excluded-zone-content"
+        hidden={collapsed}
+        style={{
+          display: collapsed ? "none" : "flex",
+          flexWrap: "wrap",
+          gap: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+        }}
+      >
+        {packages.map((pkg) => (
+          <span
+            key={`${pkg.repo}/${pkg.name}`}
+            style={{
+              textDecoration: "line-through",
+              color: "var(--pf-t--global--text--color--subtle)",
+              fontSize: "var(--pf-t--global--font--size--body--sm)",
+            }}
+          >
+            {pkg.name}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
