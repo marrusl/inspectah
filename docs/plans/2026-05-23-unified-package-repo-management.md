@@ -80,13 +80,15 @@ pub const DISTRO_REPOS: &[&str] = &[
     "anaconda",
 ];
 ```
-to:
+to (removes CRB, adds `updates-testing` and `extras` per accepted spec):
 ```rust
 pub const DISTRO_REPOS: &[&str] = &[
     "baseos",
     "appstream",
     "fedora",
     "updates",
+    "updates-testing",
+    "extras",
     "anaconda",
 ];
 ```
@@ -98,16 +100,27 @@ Below the `DISTRO_REPOS` constant, add:
 pub const OFFICIAL_OPTIONAL_REPOS: &[&str] = &["crb", "codeready-builder", "rhel-extensions"];
 ```
 
-Add a public method to `RepoIndex`:
+Add a public method to `RepoIndex`. **Case-insensitive** — lowercase the
+input before matching, consistent with how `RepoIndex::build()` normalizes
+section IDs:
 ```rust
 pub fn repo_tier(section_id: &str) -> RepoTier {
-    if DISTRO_REPOS.contains(&section_id) {
+    let lower = section_id.to_lowercase();
+    let id = lower.as_str();
+    if DISTRO_REPOS.contains(&id) {
         RepoTier::Distro
-    } else if OFFICIAL_OPTIONAL_REPOS.contains(&section_id) {
+    } else if OFFICIAL_OPTIONAL_REPOS.contains(&id) {
         RepoTier::OfficialOptional
     } else {
         RepoTier::ThirdParty
     }
+}
+```
+
+Also update `is_distro_repo()` to be case-insensitive for consistency:
+```rust
+pub fn is_distro_repo(section_id: &str) -> bool {
+    DISTRO_REPOS.contains(&section_id.to_lowercase().as_str())
 }
 ```
 
@@ -119,6 +132,9 @@ The existing `test_is_distro_repo` test asserts CRB is distro. Update it:
 fn test_is_distro_repo() {
     assert!(RepoIndex::is_distro_repo("baseos"));
     assert!(RepoIndex::is_distro_repo("appstream"));
+    assert!(RepoIndex::is_distro_repo("BaseOS")); // case-insensitive
+    assert!(RepoIndex::is_distro_repo("updates-testing"));
+    assert!(RepoIndex::is_distro_repo("extras"));
     assert!(!RepoIndex::is_distro_repo("epel"));
     assert!(!RepoIndex::is_distro_repo("custom-internal"));
     assert!(!RepoIndex::is_distro_repo("crb")); // CRB is now official-optional
@@ -131,7 +147,11 @@ Add a new test for `repo_tier`:
 fn test_repo_tier() {
     assert_eq!(RepoIndex::repo_tier("baseos"), RepoTier::Distro);
     assert_eq!(RepoIndex::repo_tier("appstream"), RepoTier::Distro);
+    assert_eq!(RepoIndex::repo_tier("AppStream"), RepoTier::Distro); // case-insensitive
+    assert_eq!(RepoIndex::repo_tier("updates-testing"), RepoTier::Distro);
+    assert_eq!(RepoIndex::repo_tier("extras"), RepoTier::Distro);
     assert_eq!(RepoIndex::repo_tier("crb"), RepoTier::OfficialOptional);
+    assert_eq!(RepoIndex::repo_tier("CRB"), RepoTier::OfficialOptional); // case-insensitive
     assert_eq!(RepoIndex::repo_tier("rhel-extensions"), RepoTier::OfficialOptional);
     assert_eq!(RepoIndex::repo_tier("epel"), RepoTier::ThirdParty);
     assert_eq!(RepoIndex::repo_tier("copr:mytools"), RepoTier::ThirdParty);
@@ -338,43 +358,42 @@ fn test_package_merge_tracks_repo_conflict() {
 Run: `cargo test -p inspectah-core -- test_package_merge_tracks_repo_conflict`
 Expected: PASS (baseline — the majority-repo assertion should already work since merge picks the first-seen/most-prevalent value).
 
-- [ ] **Step 3: Add repo_sources field to collect per-repo host counts**
+- [ ] **Step 3: Compute repo conflicts inside merge_rpm_sections()**
 
-The `merge_items` function in `merge.rs` is generic. For packages specifically, we need to collect `source_repo` diversity during merge. The cleanest approach is a post-merge scan.
+**Why inside the merge layer:** The web handler (`fleet_handlers.rs`)
+cannot call a post-merge scan because `FleetContext` does not retain
+per-host RPM sections after `merge_snapshots()`. The merge function is
+the only point where per-host sections are available. Compute conflicts
+here and return them alongside the merged output.
 
-Add a new public function in `merge.rs`:
+Change `merge_rpm_sections()` return type from `Option<RpmSection>` to
+`Option<(RpmSection, HashMap<String, Vec<RepoSourceEntry>>)>`. The
+conflict map keys are `name.arch` identity keys; values are the distinct
+repos with their host counts (only entries with 2+ distinct repos).
+
+Add the conflict-detection logic inside `merge_rpm_sections()`, after
+`merge_items()` produces `packages_added` but before the function
+returns. At this point, the original `sections: Vec<Option<RpmSection>>`
+parameter is still in scope:
 
 ```rust
-/// Scan merged packages for repo-source conflicts.
-/// Returns a map from identity key (name.arch) to the list of distinct
-/// repo sources with their host counts. Only entries with 2+ distinct
-/// repos are included (no-conflict packages are omitted).
-pub fn detect_repo_conflicts(
-    merged_packages: &[PackageEntry],
-    original_sections: &[Option<RpmSection>],
-    hostnames: &[String],
-) -> HashMap<String, Vec<RepoSourceEntry>> {
+let repo_conflicts = {
     let mut conflicts: HashMap<String, Vec<RepoSourceEntry>> = HashMap::new();
-
-    for pkg in merged_packages {
+    for pkg in &packages_added {
         let key = format!("{}.{}", pkg.name, pkg.arch);
         let mut repo_counts: HashMap<String, usize> = HashMap::new();
-
-        for (idx, section) in original_sections.iter().enumerate() {
-            if let Some(rpm) = section {
-                for host_pkg in &rpm.packages_added {
-                    if host_pkg.name == pkg.name
-                        && host_pkg.arch == pkg.arch
-                        && !host_pkg.source_repo.is_empty()
-                    {
-                        *repo_counts
-                            .entry(host_pkg.source_repo.to_lowercase())
-                            .or_insert(0) += 1;
-                    }
+        for section in sections.iter().flatten() {
+            for host_pkg in &section.packages_added {
+                if host_pkg.name == pkg.name
+                    && host_pkg.arch == pkg.arch
+                    && !host_pkg.source_repo.is_empty()
+                {
+                    *repo_counts
+                        .entry(host_pkg.source_repo.to_lowercase())
+                        .or_insert(0) += 1;
                 }
             }
         }
-
         if repo_counts.len() >= 2 {
             let mut entries: Vec<RepoSourceEntry> = repo_counts
                 .into_iter()
@@ -384,10 +403,23 @@ pub fn detect_repo_conflicts(
             conflicts.insert(key, entries);
         }
     }
-
     conflicts
-}
+};
 ```
+
+Return `Some((merged_rpm_section, repo_conflicts))`.
+
+Update all callers of `merge_rpm_sections()` (in `merge_snapshots()`)
+to destructure the tuple and store `repo_conflicts` on the output.
+Add a `pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field
+to whatever struct carries the merged fleet state (likely a new field on
+the `InspectionSnapshot` fleet metadata, or on `FleetContext` in
+`inspectah-refine`). The web handler reads it from there.
+
+**Important:** Update the `FleetContext` struct in
+`inspectah-refine/src/types.rs` to include a
+`repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field so the
+web handler can access it without needing the original per-host sections.
 
 - [ ] **Step 4: Write test for detect_repo_conflicts**
 
@@ -553,7 +585,53 @@ Create a helper `fleet_state_with_packages()` that builds a fleet snapshot with 
 Run: `cargo test -p inspectah-web -- fleet_view_includes_repo_groups`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write ExcludeRepo/IncludeRepo round-trip test for fleet**
+
+This test proves that repo disable/re-enable correctly flows through to
+the fleet view's `FleetItem.include` state. The fleet handler must source
+include state from the projected/refined snapshot, not from raw prevalence.
+
+```rust
+#[tokio::test]
+async fn fleet_exclude_repo_round_trip() {
+    let state = fleet_state_with_packages(); // includes epel packages
+    let app = app(state);
+
+    // 1. Get initial view — epel packages should be included
+    let (_, initial) = get_json(&app, "/api/fleet/view").await;
+    // Find an epel package in the sections and verify include=true
+    // (exact path depends on section structure)
+
+    // 2. Apply ExcludeRepo for epel
+    let (status, _) = post_json(&app, "/api/op", json!({
+        "op": "ExcludeRepo",
+        "target": { "section_id": "epel" }
+    })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 3. Get fleet view again — epel packages should have include=false
+    let (_, after_exclude) = get_json(&app, "/api/fleet/view").await;
+    // Verify epel packages are exclude=false in the response
+
+    // 4. Apply IncludeRepo for epel
+    let (status, _) = post_json(&app, "/api/op", json!({
+        "op": "IncludeRepo",
+        "target": { "section_id": "epel" }
+    })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 5. Get fleet view — all epel packages should be include=true
+    let (_, after_include) = get_json(&app, "/api/fleet/view").await;
+    // Verify all epel packages have include=true (engine default reset)
+}
+```
+
+Run: `cargo test -p inspectah-web -- fleet_exclude_repo_round_trip`
+Expected: PASS. If it fails, the `fleet_handlers.rs` include-state
+sourcing needs to be fixed to read from the projected/refined snapshot
+(via `session.snapshot_projected()`) rather than raw prevalence.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add inspectah-web/src/fleet_handlers.rs inspectah-web/src/handlers.rs inspectah-web/tests/fleet_api_test.rs
@@ -949,7 +1027,41 @@ Key test cases:
 
 - [ ] **Step 2: Implement RepoConflictPopover**
 
-A button-triggered popover disclosure. The trigger is a native `<button>` with a warning icon. Popover content shows repo names and host counts. Dismiss action removes the trigger from the row for the session. Session-scoped state managed via React state (lifted to parent).
+A button-triggered popover disclosure with complete interaction contract:
+
+**Trigger:** Native `<button>` with warning icon. Attributes:
+`aria-haspopup="dialog"`, `aria-expanded="true|false"`. Accessible name:
+"Repo conflict for {packageName} — {N} sources".
+
+**Popover:** `role="dialog"`, `aria-label="Repo source conflict for
+{packageName}"`. Content: repo names with host counts, one per line.
+Dismiss button inside.
+
+**Focus landing:** When popover opens, focus moves to the dismiss button
+inside the popover (first interactive element).
+
+**Close without dismiss (Escape):** Popover closes, focus returns to
+the trigger button. Warning icon remains visible.
+
+**Dismiss:** Dismiss button inside popover. On activation: popover closes,
+trigger button is removed from DOM, focus moves to the next focusable
+element in the row (the package checkbox). Warning is hidden for the
+session.
+
+**Session-scoped dismissed state:** Lifted to the parent `PackageList`
+component as `Set<string>` of dismissed identity keys (name.arch).
+Passed down as prop. Not persisted beyond the session.
+
+**"Show N dismissed" restore control:** Rendered in the `RepoBar`
+component next to the conflict-count badge. When activated, clears the
+dismissed set. All previously dismissed warnings reappear. Accessible
+name: "Show {N} dismissed repo conflict warnings". Standard toggle
+button.
+
+**Conflict-first surfacing:** When the PackageList is in fleet mode with
+default prevalence-ascending sort, packages with `repo_conflict` sort
+to the top of their prevalence group. This ensures consensus-but-repo-
+split packages are not buried below divergent packages.
 
 - [ ] **Step 3: Run tests, commit**
 
@@ -971,9 +1083,36 @@ git commit -m "feat(ui): add RepoConflictPopover with button-triggered disclosur
 
 This is the largest task. It replaces existing package rendering in both modes with the new shared components (RepoBar, PackageList, SortHeader, ExcludedZone).
 
-- [ ] **Step 1: Identify current package rendering code paths**
+- [ ] **Step 1: Identify and map current package rendering code paths**
 
-Read the current `MainContent.tsx` and `FleetApp.tsx` to understand where package lists are rendered. Identify which components to replace vs keep.
+**Single-machine path (to be replaced):**
+- `MainContent.tsx` — container, renders package sections
+- `DecisionList.tsx` — renders attention-grouped package items
+- `PackageDetail.tsx` — per-package detail view
+- `DependencyModal.tsx` — dep tree modal (removed entirely)
+- `AttentionSummary.tsx` — attention level indicators (removed from this view)
+- `RepoGroup.tsx` — existing repo group accordion (replaced by RepoBar)
+
+**Fleet path (to be replaced):**
+- `FleetApp.tsx` — fleet container
+- `fleet/FleetSection.tsx` — renders fleet sections with zone groups
+- `fleet/FleetItemRow.tsx` — individual fleet item rendering
+- `fleet/ZoneGroup.tsx` — divergent/near-consensus/consensus grouping (removed)
+
+**Legacy tests to update or remove:**
+- `__tests__/DecisionSections.test.tsx` — update or remove
+- `__tests__/DependencyModal.test.tsx` — remove
+- `__tests__/AttentionSummary.test.tsx` — remove from package context
+- `__tests__/RepoGroup.test.tsx` — remove (replaced by RepoBar tests)
+- `fleet/__tests__/FleetSection.test.tsx` — update
+- `fleet/__tests__/ZoneGroup.test.tsx` — remove
+
+**Components to KEEP unchanged:**
+- `AppShell.tsx` — outer shell, sidebar, navigation
+- `ContainerfilePanel.tsx` — containerfile preview
+- `fleet/FleetBanner.tsx` — fleet summary banner
+- `fleet/FleetSidebar.tsx` — fleet selection sidebar
+- `fleet/DiffDrawer.tsx` — variant diff comparison
 
 - [ ] **Step 2: Wire RepoBar + PackageList into single-machine view**
 
@@ -1045,15 +1184,72 @@ Expected: All tests pass across all crates.
 Run: `cd inspectah-web/ui && npx vitest run`
 Expected: All tests pass.
 
-- [ ] **Step 4: Manual smoke test (if possible)**
+- [ ] **Step 4: Vertical round-trip assertions**
+
+Write integration tests (Rust API tests or Vitest) proving these
+end-to-end contracts:
+
+**ExcludeRepo/IncludeRepo round-trip:**
+1. Single-machine: ExcludeRepo("epel") → view response shows epel
+   packages with `include=false` → IncludeRepo("epel") → all back to
+   `include=true`
+2. Fleet: same round-trip via fleet view endpoint
+
+**source_repo / repo_conflict / repo_conflict_count vertical:**
+1. Fleet with packages from mixed repos → fleet view response includes
+   `source_repo` on each FleetItem, `repo_conflict` on split packages,
+   `repo_conflict_count` matching the number of conflicted packages
+2. Single repo package → `repo_conflict` is `null`
+
+**Excluded zone three visibility states:**
+1. Fresh session → excluded zone not rendered
+2. Disable repo → zone appears with packages
+3. Re-enable repo → zone shows "No excluded packages"
+
+**Dismissed warning badge update:**
+1. Fleet with 3 conflicts → `repo_conflict_count=3`
+2. Dismiss 1 warning → "Show 1 dismissed" restore control appears
+3. Restore → all 3 warnings visible again
+
+- [ ] **Step 5: Accessibility walkthrough**
+
+Verify the following keyboard/screen-reader contracts (manual or e2e):
+
+**Tab order:** Repo bar toggle pills → sort column headers → package
+checkboxes → repo-conflict popover triggers → excluded zone expander.
+Distro text (row 1) is skipped.
+
+**Focus restoration:**
+- Repo-conflict popover Escape → focus returns to trigger button
+- Repo-conflict popover dismiss → focus moves to package checkbox
+- Repo toggle → focus stays on toggle pill
+
+**Live announcements (aria-live="polite"):**
+- Repo disable: "N packages excluded from epel"
+- Repo enable: "epel enabled. N packages restored"
+- Excluded zone count updates on toggle
+- Conflict count badge updates on dismiss/restore
+
+**Non-color cues:**
+- Distro repo text: no underline
+- Official-optional repo text: dotted underline
+- Third-party repo text: solid underline
+- Prevalence: N/M numeric count present (not color-only)
+
+**Reduced motion:**
+- With `prefers-reduced-motion: reduce` active, verify no transitions
+  on sort reorder or excluded zone movement
+
+- [ ] **Step 6: Manual smoke test**
 
 Start the refine server with a test snapshot and verify:
 - Single-machine: repo bar shows, package list renders with repo column, sort works
 - Fleet: repo bar shows, prevalence column renders, default sort is rarest-first
 - Repo toggle: disabling a repo moves packages to excluded zone
 - Re-enabling: packages return, all set to included
+- Repo-conflict warning: visible on split packages, popover opens, dismiss works
 
-- [ ] **Step 5: Final commit**
+- [ ] **Step 7: Final commit**
 
 ```bash
 git add -A
