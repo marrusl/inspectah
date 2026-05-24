@@ -337,13 +337,7 @@ fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut R
 
 /// Classify whether an inspector belongs to Wave 2 (depends on RPM state).
 fn is_wave2(id: InspectorId) -> bool {
-    matches!(
-        id,
-        InspectorId::ScheduledTasks
-            | InspectorId::Config
-            | InspectorId::Selinux
-            | InspectorId::NonRpmSoftware
-    )
+    !matches!(id, InspectorId::Rpm)
 }
 
 /// Map a SourceSystem variant to the corresponding SystemType for the snapshot.
@@ -853,23 +847,20 @@ mod tests {
 
     #[test]
     fn test_is_wave2_classifier() {
-        // Wave 2 inspectors
+        // Only RPM is wave 1
+        assert!(!is_wave2(InspectorId::Rpm));
+
+        // All others are wave 2
+        assert!(is_wave2(InspectorId::Services));
+        assert!(is_wave2(InspectorId::Storage));
+        assert!(is_wave2(InspectorId::KernelBoot));
+        assert!(is_wave2(InspectorId::Network));
+        assert!(is_wave2(InspectorId::Containers));
+        assert!(is_wave2(InspectorId::UsersGroups));
         assert!(is_wave2(InspectorId::ScheduledTasks));
         assert!(is_wave2(InspectorId::Config));
         assert!(is_wave2(InspectorId::Selinux));
         assert!(is_wave2(InspectorId::NonRpmSoftware));
-
-        // Wave 1 inspectors
-        assert!(!is_wave2(InspectorId::Rpm));
-        assert!(!is_wave2(InspectorId::Services));
-        assert!(!is_wave2(InspectorId::Network));
-        assert!(!is_wave2(InspectorId::Storage));
-        assert!(!is_wave2(InspectorId::Containers));
-        assert!(!is_wave2(InspectorId::KernelBoot));
-        assert!(!is_wave2(InspectorId::UsersGroups));
-        assert!(!is_wave2(InspectorId::Hardware));
-        assert!(!is_wave2(InspectorId::Ostree));
-        assert!(!is_wave2(InspectorId::OsRelease));
     }
 
     /// Mock Wave 2 inspector that records whether it received rpm_state.
