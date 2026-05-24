@@ -969,6 +969,25 @@ pub fn merge_rpm_sections(
         conflicts
     };
 
+    // Reconcile source_repo with repo-majority winner: for any package
+    // that appears in the conflict map, overwrite its source_repo with the
+    // winning repo (highest host_count, alphabetical tie-break — same sort
+    // already applied above). merge_items picks the representative by
+    // full-payload prevalence, which can disagree with repo majority when
+    // the majority repo is split across multiple payload variants.
+    let packages_added = {
+        let mut pkgs = packages_added;
+        for pkg in &mut pkgs {
+            let key = format!("{}.{}", pkg.name, pkg.arch);
+            if let Some(entries) = repo_conflicts.get(&key)
+                && let Some(winner) = entries.first()
+            {
+                pkg.source_repo = winner.repo.clone();
+            }
+        }
+        pkgs
+    };
+
     Some((
         RpmSection {
             packages_added,
@@ -1768,13 +1787,98 @@ mod tests {
             .iter()
             .find(|p| p.name == "nginx")
             .expect("nginx should be in merged output");
-        assert_eq!(nginx.source_repo, "epel");
+        // At equal host_count, alphabetical tie-break makes appstream the
+        // winner — reconciliation overwrites source_repo accordingly.
+        assert_eq!(nginx.source_repo, "appstream");
 
         let conflict = &conflicts["nginx.x86_64"];
         assert_eq!(conflict.len(), 2);
         assert_eq!(conflict[0].repo, "appstream"); // alpha first at equal count
         assert_eq!(conflict[0].host_count, 1);
         assert_eq!(conflict[1].repo, "epel");
+        assert_eq!(conflict[1].host_count, 1);
+    }
+
+    /// Regression: when the majority repo is split across multiple payload
+    /// variants (different versions), merge_items picks the representative
+    /// by full-payload prevalence which may disagree with repo majority.
+    /// The reconciliation step must overwrite source_repo with the
+    /// repo-majority winner.
+    #[test]
+    fn test_merge_source_repo_follows_majority_not_payload() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        // host-a: nginx from appstream, version 1.0
+        let host_a_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "appstream".into(),
+                version: "1.0".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // host-b: nginx from epel, version 1.1
+        let host_b_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "epel".into(),
+                version: "1.1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // host-c: nginx from epel, version 1.2
+        let host_c_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "epel".into(),
+                version: "1.2".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+
+        let (merged, repo_conflicts) = merge_rpm_sections(
+            vec![Some(host_a_rpm), Some(host_b_rpm), Some(host_c_rpm)],
+            3,
+            &hostnames,
+            None,
+        )
+        .expect("merge should succeed");
+
+        let nginx = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "nginx")
+            .expect("nginx should be in merged output");
+
+        // Repo majority is epel (2/3), but payload prevalence is 1/1/1
+        // so merge_items could pick any payload. The reconciliation step
+        // must overwrite source_repo with the repo-majority winner.
+        assert_eq!(
+            nginx.source_repo, "epel",
+            "source_repo must follow repo majority (epel), not payload prevalence"
+        );
+
+        // Verify conflict map is correct
+        assert!(repo_conflicts.contains_key("nginx.x86_64"));
+        let conflict = &repo_conflicts["nginx.x86_64"];
+        assert_eq!(conflict.len(), 2);
+        assert_eq!(conflict[0].repo, "epel");
+        assert_eq!(conflict[0].host_count, 2);
+        assert_eq!(conflict[1].repo, "appstream");
         assert_eq!(conflict[1].host_count, 1);
     }
 }
