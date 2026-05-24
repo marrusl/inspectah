@@ -424,7 +424,10 @@ let repo_conflicts = {
                 .into_iter()
                 .map(|(repo, host_count)| RepoSourceEntry { repo, host_count })
                 .collect();
-            entries.sort_by(|a, b| b.host_count.cmp(&a.host_count));
+            entries.sort_by(|a, b| {
+                b.host_count.cmp(&a.host_count)
+                    .then_with(|| a.repo.cmp(&b.repo)) // alpha tie-break
+            });
             conflicts.insert(key, entries);
         }
     }
@@ -434,17 +437,29 @@ let repo_conflicts = {
 
 Return `Some((merged_rpm_section, repo_conflicts))`.
 
-Update all callers of `merge_rpm_sections()` (in `merge_snapshots()`)
-to destructure the tuple and store `repo_conflicts` on the output.
-Add a `pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field
-to whatever struct carries the merged fleet state (likely a new field on
-the `InspectionSnapshot` fleet metadata, or on `FleetContext` in
-`inspectah-refine`). The web handler reads it from there.
+**Explicit carrier chain (file-by-file):**
 
-**Important:** Update the `FleetContext` struct in
-`inspectah-refine/src/types.rs` to include a
-`repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field so the
-web handler can access it without needing the original per-host sections.
+1. `inspectah-core/src/fleet/merge.rs` — `merge_rpm_sections()` returns
+   `Option<(RpmSection, HashMap<String, Vec<RepoSourceEntry>>)>`.
+2. `inspectah-core/src/fleet/mod.rs` — `merge_snapshots()` destructures
+   the tuple, stores `repo_conflicts` on a new field of its return value
+   (the merged `InspectionSnapshot` gains a transient side-channel, or
+   the conflict map is returned alongside the snapshot).
+3. `inspectah-refine/src/types.rs` — Add
+   `pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field to
+   `FleetContext`. Populated by the session constructor that calls
+   `merge_snapshots()`.
+4. `inspectah-refine/src/session.rs` — `RefineSession::new()` (or the
+   fleet-specific constructor) threads `repo_conflicts` from the merge
+   output into `FleetContext`.
+5. `inspectah-web/src/fleet_handlers.rs` — `build_fleet_view_response()`
+   reads `ctx.repo_conflicts` from `session.fleet_context()`. Maps each
+   entry to `RepoSourceEntryDto` on the corresponding `FleetItem`. No
+   conflict computation at this layer.
+6. `inspectah-web/tests/fleet_api_test.rs` — Proves the full vertical:
+   construct a fleet snapshot with mixed repos → start session → GET
+   `/api/fleet/view` → assert `source_repo`, `repo_conflict`,
+   `repo_conflict_count` on the JSON response.
 
 - [ ] **Step 4: Write test for non-conflicting and tie-breaking behavior**
 
@@ -491,7 +506,7 @@ fn test_merge_no_conflict_single_repo() {
 fn test_merge_repo_conflict_tie() {
     use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
 
-    // 50/50 split — tie-break: highest-count first, then alphabetical
+    // 50/50 split — tie-break: count desc, then repo name alphabetical
     let sections = vec![
         Some(RpmSection {
             packages_added: vec![PackageEntry {
@@ -518,13 +533,21 @@ fn test_merge_repo_conflict_tie() {
     ];
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (_, conflicts) =
+    let (merged, conflicts) =
         merge_rpm_sections(sections, 2, &hostnames, None).unwrap();
 
+    // Merged row's source_repo: merge_items picks first-seen by sorted
+    // hostname, so host-a's "epel" wins the merged PackageEntry
+    let nginx = merged.packages_added.iter()
+        .find(|p| p.name == "nginx").unwrap();
+    assert_eq!(nginx.source_repo, "epel");
+
+    // Conflict entries: equal count, alphabetical tie-break
     let conflict = &conflicts["nginx.x86_64"];
     assert_eq!(conflict.len(), 2);
-    // Both have count 1 — sorted by count desc, then stable
+    assert_eq!(conflict[0].repo, "appstream"); // alpha first at equal count
     assert_eq!(conflict[0].host_count, 1);
+    assert_eq!(conflict[1].repo, "epel");
     assert_eq!(conflict[1].host_count, 1);
 }
 ```
@@ -1315,20 +1338,28 @@ Expected: All tests pass.
 
 - [ ] **Step 4: Vertical round-trip assertions**
 
-Write integration tests (Rust API tests or Vitest) proving these
-end-to-end contracts:
+All vertical proofs are Rust API integration tests in
+`inspectah-web/tests/fleet_api_test.rs` (fleet) and
+`inspectah-web/tests/api_test.rs` (single-machine). These prove the
+full merge → session → handler → JSON response chain.
 
-**ExcludeRepo/IncludeRepo round-trip:**
-1. Single-machine: ExcludeRepo("epel") → view response shows epel
-   packages with `include=false` → IncludeRepo("epel") → all back to
-   `include=true`
-2. Fleet: same round-trip via fleet view endpoint
+**ExcludeRepo/IncludeRepo round-trip** (`fleet_api_test.rs`):
+1. Single-machine (`api_test.rs`): ExcludeRepo("epel") → GET `/api/view`
+   → assert epel packages have `include=false` AND
+   `repo_groups[epel].enabled=false` → IncludeRepo("epel") → assert
+   all back to `include=true` AND `enabled=true`
+2. Fleet (`fleet_api_test.rs`): same round-trip via `/api/fleet/view`
+   (already written in Task 4 Step 5)
 
-**source_repo / repo_conflict / repo_conflict_count vertical:**
-1. Fleet with packages from mixed repos → fleet view response includes
-   `source_repo` on each FleetItem, `repo_conflict` on split packages,
-   `repo_conflict_count` matching the number of conflicted packages
-2. Single repo package → `repo_conflict` is `null`
+**source_repo / repo_conflict / repo_conflict_count** (`fleet_api_test.rs`):
+1. Construct fleet snapshot with: `nginx` from epel on 2 hosts +
+   appstream on 1 host, `bash` from baseos on all 3 hosts
+2. GET `/api/fleet/view` → assert:
+   - `nginx` FleetItem has `source_repo: "epel"` (majority)
+   - `nginx` FleetItem has `repo_conflict` array with 2 entries
+   - `bash` FleetItem has `source_repo: "baseos"`
+   - `bash` FleetItem has `repo_conflict: null`
+   - Top-level `repo_conflict_count == 1`
 
 **Excluded zone three visibility states:**
 1. Fresh session → excluded zone not rendered
