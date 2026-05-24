@@ -43,7 +43,7 @@ impl Inspector for ScheduledTasksInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
         let rpm_state = match ctx.rpm_state {
             None => {
@@ -129,6 +129,13 @@ impl Inspector for ScheduledTasksInspector {
         for timer in &section.systemd_timers {
             check_command_redaction(&timer.exec_start, &timer.path, &mut hints);
         }
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::ScheduledTasks,
+            kind: inspectah_core::types::progress::MetricKind::TimersFound,
+            value: section.systemd_timers.len(),
+        });
 
         if !warnings.is_empty() || !degraded_reasons.is_empty() {
             // Add degraded file count warning if applicable

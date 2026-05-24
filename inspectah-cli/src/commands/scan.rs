@@ -28,7 +28,6 @@ use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspecto
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
-use inspectah_core::traits::progress::ProgressSink;
 use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -344,18 +343,9 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
     progress.finalize();
 
-    // If user pressed Ctrl-C, emit Interrupted for inspectors that never
-    // ran or whose results were discarded, then report partial results.
+    // SIGINT is a cancellation — no output, no partial counts.
     if cancelled.load(Ordering::SeqCst) {
-        emit_interrupted_for_missing(&collected.state.snapshot, &inspectors, &progress);
-        let elapsed = scan_start.elapsed();
-        print_completion(
-            &ScanOutcome::Interrupted,
-            elapsed,
-            &collected.state.snapshot,
-            None,
-            false,
-        );
+        eprintln!("Scan cancelled. No report written.");
         return Ok(ScanOutcome::Interrupted);
     }
 
@@ -420,10 +410,18 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).context("failed to create output directory")?;
                 }
-                std::fs::write(path, &json)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                let elapsed = scan_start.elapsed();
-                print_completion(&outcome, elapsed, &snapshot, Some(path.as_path()), true);
+                match std::fs::write(path, &json) {
+                    Ok(()) => {
+                        let elapsed = scan_start.elapsed();
+                        print_completion(&outcome, elapsed, &snapshot, Some(path.as_path()), true);
+                    }
+                    Err(e) => {
+                        let elapsed = scan_start.elapsed();
+                        print_completion(&outcome, elapsed, &snapshot, None, true);
+                        eprintln!("Error: failed to write output: {e}");
+                        return Err(anyhow::anyhow!("failed to write {}", path.display()).context(e));
+                    }
+                }
             }
             None => {
                 println!("{json}");
@@ -508,42 +506,6 @@ fn read_bootc_status_ref(executor: &dyn Executor) -> Option<String> {
         .get("image")?
         .as_str()
         .map(String::from)
-}
-
-/// Emit `InspectorFinished { outcome: Interrupted }` for every inspector
-/// whose section is absent from the snapshot. Called by the CLI layer after
-/// `collect()` returns when SIGINT was received — `collect()` itself only
-/// emits events for inspectors it actually ran.
-fn emit_interrupted_for_missing(
-    snapshot: &InspectionSnapshot,
-    inspectors: &[Box<dyn Inspector>],
-    progress: &TerminalProgress,
-) {
-    use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
-
-    for inspector in inspectors {
-        let id = inspector.id();
-        let has_data = match id {
-            inspectah_core::types::completeness::InspectorId::Rpm => snapshot.rpm.is_some(),
-            inspectah_core::types::completeness::InspectorId::Config => snapshot.config.is_some(),
-            inspectah_core::types::completeness::InspectorId::Services => snapshot.services.is_some(),
-            inspectah_core::types::completeness::InspectorId::Network => snapshot.network.is_some(),
-            inspectah_core::types::completeness::InspectorId::Storage => snapshot.storage.is_some(),
-            inspectah_core::types::completeness::InspectorId::ScheduledTasks => snapshot.scheduled_tasks.is_some(),
-            inspectah_core::types::completeness::InspectorId::Containers => snapshot.containers.is_some(),
-            inspectah_core::types::completeness::InspectorId::NonRpmSoftware => snapshot.non_rpm_software.is_some(),
-            inspectah_core::types::completeness::InspectorId::KernelBoot => snapshot.kernel_boot.is_some(),
-            inspectah_core::types::completeness::InspectorId::Selinux => snapshot.selinux.is_some(),
-            inspectah_core::types::completeness::InspectorId::UsersGroups => snapshot.users_groups.is_some(),
-            _ => true, // unknown IDs — assume present to avoid false Interrupted
-        };
-        if !has_data {
-            progress.emit(ProgressEvent::InspectorFinished {
-                id,
-                outcome: InspectorOutcome::Interrupted,
-            });
-        }
-    }
 }
 
 /// Build a human-readable summary of section item counts.
@@ -633,12 +595,9 @@ fn print_completion(
             }
         }
         ScanOutcome::Interrupted => {
-            if counts.is_empty() {
-                eprintln!("Scan interrupted after {secs:.1}s");
-            } else {
-                eprintln!("Scan interrupted after {secs:.1}s — {counts} (partial)");
-            }
-            eprintln!("No report written.");
+            // SIGINT path never reaches print_completion — the early
+            // return in run_scan() handles it directly. This arm exists
+            // only for exhaustive matching.
             return;
         }
     }
