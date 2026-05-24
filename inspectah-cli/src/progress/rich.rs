@@ -154,6 +154,29 @@ impl ChecklistState {
                     self.rows[idx].state = RowState::Active;
                     self.rows[idx].started_at = Some(Instant::now());
                     self.rows[idx].last_metric = None;
+
+                    // Pre-populate sub-steps so the full checklist is
+                    // visible upfront (not lazily on StepStarted).
+                    match id {
+                        InspectorId::Rpm => {
+                            self.rows[idx].sub_steps = vec![
+                                SubStepRow { step: StepId::QueryingPackages, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::ClassifyingPackages, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::ResolvingSourceRepos, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::ResolvingDepTree, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::VerifyingIntegrity, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::MappingFileOwnership, state: RowState::Pending, metric: None },
+                            ];
+                        }
+                        InspectorId::Config => {
+                            self.rows[idx].sub_steps = vec![
+                                SubStepRow { step: StepId::ApplyingRpmVerification, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::WalkingFilesystem, state: RowState::Pending, metric: None },
+                                SubStepRow { step: StepId::ClassifyingConfigs, state: RowState::Pending, metric: None },
+                            ];
+                        }
+                        _ => {}
+                    }
                 }
             }
             ProgressEvent::InspectorFinished { id, outcome } => {
@@ -162,6 +185,32 @@ impl ChecklistState {
                         .started_at
                         .map(|t| t.elapsed())
                         .unwrap_or_default();
+
+                    // Reconcile child sub-steps: any still Active or
+                    // Pending should inherit the parent's terminal state.
+                    for sub in &mut self.rows[idx].sub_steps {
+                        let still_open = matches!(sub.state, RowState::Active | RowState::Pending);
+                        if !still_open {
+                            continue;
+                        }
+                        sub.state = match &outcome {
+                            InspectorOutcome::Complete => RowState::Complete {
+                                elapsed: Duration::ZERO,
+                            },
+                            InspectorOutcome::Failed { reason } => RowState::Failed {
+                                reason: reason.clone(),
+                            },
+                            InspectorOutcome::Interrupted => RowState::Interrupted,
+                            InspectorOutcome::Degraded { reason } => RowState::Degraded {
+                                reason: reason.clone(),
+                                elapsed: Duration::ZERO,
+                            },
+                            InspectorOutcome::Skipped { reason } => RowState::Skipped {
+                                reason: reason.clone(),
+                            },
+                        };
+                    }
+
                     self.rows[idx].state = match outcome {
                         InspectorOutcome::Complete => RowState::Complete { elapsed },
                         InspectorOutcome::Skipped { reason } => RowState::Skipped { reason },
@@ -176,11 +225,21 @@ impl ChecklistState {
             }
             ProgressEvent::StepStarted { inspector, step } => {
                 if let Some(idx) = self.find_row(inspector) {
-                    self.rows[idx].sub_steps.push(SubStepRow {
-                        step,
-                        state: RowState::Active,
-                        metric: None,
-                    });
+                    // If the sub-step was pre-populated (Pending), transition
+                    // it to Active. Otherwise append a new row (backwards compat).
+                    if let Some(sub) = self.rows[idx]
+                        .sub_steps
+                        .iter_mut()
+                        .find(|s| s.step == step)
+                    {
+                        sub.state = RowState::Active;
+                    } else {
+                        self.rows[idx].sub_steps.push(SubStepRow {
+                            step,
+                            state: RowState::Active,
+                            metric: None,
+                        });
+                    }
                 }
             }
             ProgressEvent::StepFinished {
@@ -354,12 +413,15 @@ impl ChecklistState {
                         format!("       {sym} {step_name:<36} interrupted")
                     }
                     RowState::Pending => {
-                        // Sub-steps shouldn't be pending, but handle gracefully
                         format!("       \u{00b7} {step_name}")
                     }
                 };
+                let sub_cat = match &sub.state {
+                    RowState::Pending => LineCategory::Pending,
+                    _ => LineCategory::Visible,
+                };
                 all_lines.push(sub_line);
-                line_categories.push(LineCategory::Visible);
+                line_categories.push(sub_cat);
             }
 
             // Probe rows (Non-RPM)
@@ -683,7 +745,7 @@ mod tests {
             inspector: InspectorId::Rpm,
             step: StepId::QueryingPackages,
         });
-        assert_eq!(state.rows[0].sub_steps.len(), 1);
+        assert_eq!(state.rows[0].sub_steps.len(), 6); // pre-populated
         assert!(matches!(state.rows[0].sub_steps[0].state, RowState::Active));
 
         state.handle_event(ProgressEvent::Metric {
@@ -827,10 +889,10 @@ mod tests {
         });
 
         let lines = state.render_lines();
-        // Line 0 is the RPM inspector, line 1 is the sub-step
-        assert_eq!(lines.len(), 12); // 11 inspectors + 1 sub-step
+        // Line 0 is the RPM inspector, lines 1..6 are 6 pre-populated sub-steps
+        assert_eq!(lines.len(), 17); // 11 inspectors + 6 RPM sub-steps
 
-        // Sub-step line should be indented with 7 spaces
+        // First sub-step line should be indented with 7 spaces
         assert!(
             lines[1].starts_with("       "),
             "expected 7-space indent, got: {:?}",
@@ -1075,5 +1137,182 @@ mod tests {
             step2_line.contains("done"),
             "step 2 should say 'done', got: {step2_line}"
         );
+    }
+
+    #[test]
+    fn rpm_substeps_visible_upfront() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+
+        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
+        assert_eq!(rpm_row.sub_steps.len(), 6, "RPM should have 6 pre-populated sub-steps");
+        assert!(
+            rpm_row.sub_steps.iter().all(|s| matches!(s.state, RowState::Pending)),
+            "all RPM sub-steps should start as Pending"
+        );
+    }
+
+    #[test]
+    fn config_substeps_visible_upfront() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Config));
+
+        let cfg_row = state.rows.iter().find(|r| r.id == InspectorId::Config).unwrap();
+        assert_eq!(cfg_row.sub_steps.len(), 3, "Config should have 3 pre-populated sub-steps");
+        assert!(
+            cfg_row.sub_steps.iter().all(|s| matches!(s.state, RowState::Pending)),
+            "all Config sub-steps should start as Pending"
+        );
+    }
+
+    #[test]
+    fn step_started_transitions_prepopulated_row() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+
+        // StepStarted should transition the pre-populated Pending row
+        // to Active, not push a duplicate.
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        assert_eq!(state.rows[0].sub_steps.len(), 6, "should not push a duplicate");
+        assert!(matches!(state.rows[0].sub_steps[0].state, RowState::Active));
+        // Remaining sub-steps stay Pending.
+        assert!(matches!(state.rows[0].sub_steps[1].state, RowState::Pending));
+    }
+
+    #[test]
+    fn interrupted_parent_reconciles_children() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+
+        // Complete the first step normally
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        state.handle_event(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+
+        // Start the second step (it becomes Active)
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ClassifyingPackages,
+        });
+
+        // Parent finishes as Interrupted without finishing remaining steps
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Interrupted,
+        });
+
+        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
+
+        // Step 0 (QueryingPackages) was already Complete — stays Complete
+        assert!(
+            matches!(rpm_row.sub_steps[0].state, RowState::Complete { .. }),
+            "completed step should stay complete"
+        );
+        // Step 1 (ClassifyingPackages) was Active → Interrupted
+        assert!(
+            matches!(rpm_row.sub_steps[1].state, RowState::Interrupted),
+            "active step should become interrupted"
+        );
+        // Steps 2..5 were Pending → Interrupted
+        for sub in &rpm_row.sub_steps[2..] {
+            assert!(
+                matches!(sub.state, RowState::Interrupted),
+                "pending step {:?} should become interrupted, got {:?}",
+                sub.step,
+                sub.state
+            );
+        }
+    }
+
+    #[test]
+    fn failed_parent_reconciles_children() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Config));
+
+        // Start but don't finish any steps
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Config,
+            step: StepId::ApplyingRpmVerification,
+        });
+
+        // Parent fails
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Config,
+            outcome: InspectorOutcome::Failed {
+                reason: "rpm -Va crashed".to_string(),
+            },
+        });
+
+        let cfg_row = state.rows.iter().find(|r| r.id == InspectorId::Config).unwrap();
+
+        // Active step → Failed
+        assert!(
+            matches!(cfg_row.sub_steps[0].state, RowState::Failed { .. }),
+            "active step should become failed"
+        );
+        // Pending steps → Failed
+        for sub in &cfg_row.sub_steps[1..] {
+            assert!(
+                matches!(sub.state, RowState::Failed { .. }),
+                "pending step {:?} should become failed, got {:?}",
+                sub.step,
+                sub.state
+            );
+        }
+    }
+
+    #[test]
+    fn complete_parent_reconciles_remaining_pending() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+
+        // Complete only the first step
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        state.handle_event(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+
+        // Parent completes (remaining sub-steps never fired individually)
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
+
+        // Remaining pending sub-steps should be swept to Complete
+        for sub in &rpm_row.sub_steps[1..] {
+            assert!(
+                matches!(sub.state, RowState::Complete { .. }),
+                "pending step {:?} should become complete on parent complete, got {:?}",
+                sub.step,
+                sub.state
+            );
+        }
+    }
+
+    #[test]
+    fn non_substep_inspector_unaffected() {
+        // Inspectors without pre-populated sub-steps (e.g., Services)
+        // should not have any sub-steps added by InspectorStarted.
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Services));
+
+        let svc_row = state.rows.iter().find(|r| r.id == InspectorId::Services).unwrap();
+        assert!(svc_row.sub_steps.is_empty(), "Services should have no sub-steps");
     }
 }
