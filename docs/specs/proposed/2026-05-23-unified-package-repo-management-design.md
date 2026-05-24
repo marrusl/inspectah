@@ -106,10 +106,13 @@ are.
   excludes those 2 hosts' EPEL packages from the containerfile. The other
   48 hosts never had EPEL packages — nothing changes for them.
 
-**Protected repos (distro tier):** baseos, BaseOS, appstream, AppStream,
-anaconda, fedora, updates, updates-testing, extras. CRB is explicitly
-excluded from this list — it is toggleable (see below). This aligns with
-the existing `RepoIndex::is_distro_repo()` logic minus CRB.
+**Protected repos (distro tier):** The canonical list is the
+`DISTRO_REPOS` constant in `inspectah-refine/src/repo_index.rs`. As of
+this spec, that constant contains: `baseos`, `appstream`, `fedora`,
+`updates`, `anaconda`. CRB is removed from this list by this spec (see
+below). Repo IDs are compared lowercase — `BaseOS` and `baseos` match
+the same entry. If `updates-testing` or `extras` need protection, they
+should be added to the constant at implementation time.
 
 **CRB classification change:** CRB moves from distro (locked) to
 official-optional (toggleable). `is_distro_repo()` must be updated to
