@@ -7,6 +7,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::selinux::SelinuxSection;
@@ -134,7 +135,7 @@ fn test_selinux_inspector_happy_path() {
     };
 
     let output = SelinuxInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("selinux inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -267,7 +268,7 @@ fn test_selinux_inspector_disabled() {
 
     // When semanage fails, it falls back to sysfs booleans.
     // If neither works, Degraded is returned.
-    let result = SelinuxInspector::new().inspect(&ctx);
+    let result = SelinuxInspector::new().inspect(&ctx, &NullProgress);
 
     let section = match &result {
         Ok(output) => match &output.section {
@@ -323,7 +324,7 @@ fn test_selinux_inspector_degraded_no_semanage() {
         baseline_data: None,
     };
 
-    let result = SelinuxInspector::new().inspect(&ctx);
+    let result = SelinuxInspector::new().inspect(&ctx, &NullProgress);
 
     // Should succeed or degrade -- both are acceptable
     let section = match &result {
@@ -362,7 +363,7 @@ fn test_selinux_inspector_json_roundtrip() {
     };
 
     let output = SelinuxInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed");
 
     let section = match &output.section {

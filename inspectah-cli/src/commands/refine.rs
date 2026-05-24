@@ -44,23 +44,21 @@ pub(crate) fn resolve_session(
     if !fresh && session_path.exists() {
         let choice = choice.unwrap_or(SessionChoice::Quit);
         match choice {
-            SessionChoice::Resume => {
-                match RefineSession::resume_from(tarball) {
-                    Ok(Some(s)) => {
-                        let ops_count = s.view().stats.ops_applied;
-                        eprintln!("Resumed session ({ops_count} ops active).");
-                        Ok(ResolveResult::Session(Box::new(s)))
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: could not resume: {e}");
-                        eprintln!("Starting fresh session.");
-                        let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
-                        s.set_tarball_path(tarball.to_path_buf());
-                        Ok(ResolveResult::Session(Box::new(s)))
-                    }
-                    Ok(None) => unreachable!("sidecar was just verified to exist"),
+            SessionChoice::Resume => match RefineSession::resume_from(tarball) {
+                Ok(Some(s)) => {
+                    let ops_count = s.view().stats.ops_applied;
+                    eprintln!("Resumed session ({ops_count} ops active).");
+                    Ok(ResolveResult::Session(Box::new(s)))
                 }
-            }
+                Err(e) => {
+                    eprintln!("Warning: could not resume: {e}");
+                    eprintln!("Starting fresh session.");
+                    let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
+                    s.set_tarball_path(tarball.to_path_buf());
+                    Ok(ResolveResult::Session(Box::new(s)))
+                }
+                Ok(None) => unreachable!("sidecar was just verified to exist"),
+            },
             SessionChoice::Fresh => {
                 let _ = std::fs::remove_file(&session_path);
                 eprintln!("Discarded previous session.");
@@ -268,8 +266,7 @@ mod tests {
     fn resolve_with_session_resume_loads_session() {
         let (_dir, tarball) = setup_with_session();
 
-        let result =
-            resolve_session(&tarball, false, Some(SessionChoice::Resume), false).unwrap();
+        let result = resolve_session(&tarball, false, Some(SessionChoice::Resume), false).unwrap();
         assert!(matches!(result, ResolveResult::Session(_)));
     }
 
@@ -279,18 +276,19 @@ mod tests {
         let session_path = inspectah_refine::autosave::session_file_path(&tarball);
         assert!(session_path.exists(), "sidecar must exist before test");
 
-        let result =
-            resolve_session(&tarball, false, Some(SessionChoice::Fresh), false).unwrap();
+        let result = resolve_session(&tarball, false, Some(SessionChoice::Fresh), false).unwrap();
         assert!(matches!(result, ResolveResult::Session(_)));
-        assert!(!session_path.exists(), "sidecar must be deleted after fresh");
+        assert!(
+            !session_path.exists(),
+            "sidecar must be deleted after fresh"
+        );
     }
 
     #[test]
     fn resolve_with_session_quit_returns_quit() {
         let (_dir, tarball) = setup_with_session();
 
-        let result =
-            resolve_session(&tarball, false, Some(SessionChoice::Quit), false).unwrap();
+        let result = resolve_session(&tarball, false, Some(SessionChoice::Quit), false).unwrap();
         assert!(matches!(result, ResolveResult::Quit));
     }
 
@@ -311,6 +309,9 @@ mod tests {
 
         let result = resolve_session(&tarball, true, None, false).unwrap();
         assert!(matches!(result, ResolveResult::Quit));
-        assert!(session_path.exists(), "sidecar must survive when not confirmed");
+        assert!(
+            session_path.exists(),
+            "sidecar must survive when not confirmed"
+        );
     }
 }

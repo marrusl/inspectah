@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
@@ -62,7 +63,11 @@ impl Inspector for SelinuxInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let rpm_state = match ctx.rpm_state {
             None => {
                 return Err(InspectorError::Failed {
@@ -507,6 +512,7 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
     use std::collections::HashSet;
@@ -561,7 +567,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         // May be Ok or Degraded (due to semanage unavailable)
         let section = extract_section(&result);
         assert_eq!(section.mode, "Enforcing");
@@ -590,7 +596,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.mode, "Permissive");
     }
@@ -618,7 +624,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.mode, "Disabled");
     }
@@ -640,7 +646,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.mode, "Enforcing");
     }
@@ -700,7 +706,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.custom_modules.len(), 3);
         // Should be sorted
@@ -738,7 +744,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert!(section.custom_modules.is_empty());
     }
@@ -814,7 +820,7 @@ ftpd_full_access               (off  ,   off)  Allow ftpd full access\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         // httpd_can_network_connect: current=on, default=off -> non-default
         // container_manage_cgroup: current=off, default=on -> non-default
@@ -874,7 +880,7 @@ SELinux fcontext                                   type               Context\n\
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.fcontext_rules.len(), 3);
         assert!(section.fcontext_rules[0].contains("/opt/myapp"));
@@ -948,7 +954,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         // Only custom-compliance.rules should be included (audit.rules is RPM-owned)
         assert_eq!(section.audit_rules.len(), 1);
@@ -1000,7 +1006,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.audit_rules.len(), 2);
         // Sorted by path
@@ -1045,7 +1051,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         // Only custom-app should be included (sshd is RPM-owned)
         assert_eq!(section.pam_configs.len(), 1);
@@ -1084,7 +1090,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         // Both custom PAM configs included (neither RPM-owned nor excluded)
         assert_eq!(section.pam_configs.len(), 2);
@@ -1123,7 +1129,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert!(section.fips_mode);
     }
@@ -1153,7 +1159,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert!(!section.fips_mode);
     }
@@ -1175,7 +1181,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         // Should be degraded since getenforce fails and sysfs unavailable,
         // plus semanage unavailable
         let section = extract_section(&result);
@@ -1203,7 +1209,7 @@ redis_port_t                    tcp      6380\n";
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Failed { reason }) => {
                 assert!(

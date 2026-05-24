@@ -1,0 +1,12 @@
+0000000000000000000000000000000000000000 bde1d154f213b00d47dc3bf99dc0b78e055e35ea Mark Russell <mrussell@redhat.com> 1779037346 -0400	branch: Created from HEAD
+bde1d154f213b00d47dc3bf99dc0b78e055e35ea 912fbd8772c9fbdc622686bf5bcf60c51dfae513 Mark Russell <mrussell@redhat.com> 1779038083 -0400	commit: feat(web): update RepoGroupHeader for row-owned interaction model
+912fbd8772c9fbdc622686bf5bcf60c51dfae513 9194621da3d0b4dfb88accc6a37faac79aa0ac2a Mark Russell <mrussell@redhat.com> 1779038378 -0400	commit: feat(web): add AttentionSummary component
+9194621da3d0b4dfb88accc6a37faac79aa0ac2a 778f67875327d5654615178b0fc48ff246eb26a3 Mark Russell <mrussell@redhat.com> 1779038630 -0400	commit: feat(web): add RepoGroup collapsible component
+778f67875327d5654615178b0fc48ff246eb26a3 c41360571053ddc0fe67030ee96c12982da36df9 Mark Russell <mrussell@redhat.com> 1779038941 -0400	commit: feat(web): add RoutineSummary component with real DecisionItem rows
+c41360571053ddc0fe67030ee96c12982da36df9 95ba7afab43af9fc3e73ccf0eebc5dda7ba2c7f9 Mark Russell <mrussell@redhat.com> 1779039455 -0400	commit: feat(web): refactor DecisionList for repo-first package grouping
+95ba7afab43af9fc3e73ccf0eebc5dda7ba2c7f9 92ac0916193365011aec54eaa91a6654d7ce6f1b Mark Russell <mrussell@redhat.com> 1779039927 -0400	commit: feat(web): disabled repo behavior with visible-row counts
+92ac0916193365011aec54eaa91a6654d7ce6f1b 3ca96a648fefca609f056f1c2a5a32d929bc2f01 Mark Russell <mrussell@redhat.com> 1779040067 -0400	commit: feat(web): wire AttentionSummary into Packages section
+3ca96a648fefca609f056f1c2a5a32d929bc2f01 15f4b06ac5808bf105620d168821371b20ebd504 Mark Russell <mrussell@redhat.com> 1779040466 -0400	commit: feat(web): keyboard navigation with repo headers in roving sequence
+15f4b06ac5808bf105620d168821371b20ebd504 0dd97eec6280d8403373a54e6778d18c36f4f890 Mark Russell <mrussell@redhat.com> 1779040765 -0400	commit: feat(web): match-scoped filter and two-ancestor reveal with App-level proof
+0dd97eec6280d8403373a54e6778d18c36f4f890 733a090e8b9153a6dc4524e036a64f1f59ed43bb Mark Russell <mrussell@redhat.com> 1779040860 -0400	commit: test(web): verify config section unchanged after repo-first refactor
+733a090e8b9153a6dc4524e036a64f1f59ed43bb ed090bc5151cdc3175aa5c4e028105df2b9b83aa Mark Russell <mrussell@redhat.com> 1779040986 -0400	commit: refactor(web): fix stale tests and remove dead code after repo-first migration

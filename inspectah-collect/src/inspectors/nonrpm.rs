@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
@@ -81,7 +82,11 @@ impl Inspector for NonRpmInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         // Wave 2 ordering contract: require rpm_state presence.
         // None means RPM inspector failed entirely.
         // Some(_) means proceed — but we deliberately do NOT call any rpm_state methods.
@@ -1035,6 +1040,7 @@ mod tests {
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::inspector::{InspectionContext, Inspector, RpmState};
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
 
@@ -1539,7 +1545,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed on empty system");
         if let SectionData::NonRpmSoftware(section) = &output.section {
             assert!(section.items.is_empty(), "should have no items");
@@ -1579,7 +1585,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, partial }) => {
                 assert!(

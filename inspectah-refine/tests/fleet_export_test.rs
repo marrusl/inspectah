@@ -7,7 +7,7 @@ use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSe
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
-use inspectah_refine::session::{render_refine_export, RefineSession};
+use inspectah_refine::session::{RefineSession, render_refine_export};
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
 /// Build a single-host snapshot (no fleet_meta) with one config file.
@@ -154,7 +154,10 @@ fn fleet_export_creates_variant_files() {
     let files = tarball_file_set(&tarball_path);
 
     // fleet/variants/ must exist with files for each Alternative entry
-    let variant_files: Vec<_> = files.iter().filter(|f| f.starts_with("fleet/variants/")).collect();
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
     assert!(
         variant_files.len() >= 2,
         "expected at least 2 variant files (one per Alternative config), got {}: {variant_files:?}",
@@ -258,7 +261,10 @@ fn fleet_export_selected_not_in_variants() {
     render_refine_export(&snap, &tarball_path).unwrap();
 
     let files = tarball_file_set(&tarball_path);
-    let variant_files: Vec<_> = files.iter().filter(|f| f.starts_with("fleet/variants/")).collect();
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
 
     // Selected httpd variant content is "MaxClients 256" — should NOT be in variants/
     for vf in &variant_files {
@@ -401,7 +407,9 @@ fn export_includes_dropin_alternative_variants() {
     // Should have a variant file for the drop-in Alternative
     let dropin_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/"))
+        .filter(|f| {
+            f.starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/")
+        })
         .collect();
     assert!(
         !dropin_variants.is_empty(),
@@ -466,18 +474,19 @@ fn export_variant_paths_use_directory_hierarchy() {
         .filter(|f| f.starts_with("fleet/variants/"))
         .collect();
 
-    assert!(
-        !variant_files.is_empty(),
-        "must have variant files to test"
-    );
+    assert!(!variant_files.is_empty(), "must have variant files to test");
 
     // Verify directory hierarchy: paths should use real directories, not underscores
     assert!(
-        variant_files.iter().any(|f| f.starts_with("fleet/variants/etc/httpd/conf/httpd.conf/")),
+        variant_files
+            .iter()
+            .any(|f| f.starts_with("fleet/variants/etc/httpd/conf/httpd.conf/")),
         "expected directory hierarchy for httpd.conf, got: {variant_files:?}"
     );
     assert!(
-        variant_files.iter().any(|f| f.starts_with("fleet/variants/etc/sysctl.conf/")),
+        variant_files
+            .iter()
+            .any(|f| f.starts_with("fleet/variants/etc/sysctl.conf/")),
         "expected directory hierarchy for sysctl.conf, got: {variant_files:?}"
     );
 
@@ -500,10 +509,16 @@ fn export_dropin_variant_paths_use_directory_hierarchy() {
     render_refine_export(&snap, &tarball_path).unwrap();
 
     let files = tarball_file_set(&tarball_path);
-    let variant_files: Vec<_> = files.iter().filter(|f| f.starts_with("fleet/variants/")).collect();
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
 
     assert!(
-        variant_files.iter().any(|f| f.starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/")),
+        variant_files
+            .iter()
+            .any(|f| f
+                .starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/")),
         "expected directory hierarchy for drop-in, got: {variant_files:?}"
     );
 }
@@ -517,10 +532,15 @@ fn export_quadlet_variant_paths_use_directory_hierarchy() {
     render_refine_export(&snap, &tarball_path).unwrap();
 
     let files = tarball_file_set(&tarball_path);
-    let variant_files: Vec<_> = files.iter().filter(|f| f.starts_with("fleet/variants/")).collect();
+    let variant_files: Vec<_> = files
+        .iter()
+        .filter(|f| f.starts_with("fleet/variants/"))
+        .collect();
 
     assert!(
-        variant_files.iter().any(|f| f.starts_with("fleet/variants/etc/containers/systemd/app.container/")),
+        variant_files
+            .iter()
+            .any(|f| f.starts_with("fleet/variants/etc/containers/systemd/app.container/")),
         "expected directory hierarchy for quadlet, got: {variant_files:?}"
     );
 }

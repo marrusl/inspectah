@@ -162,6 +162,10 @@ Rename `inspectah-refine/tests/phase6_integration_test.rs` to `baseline_integrat
 
 Audit and remove defensive backward-compatibility code added during the Rust rewrite. Before 1.0, old tarballs are not sacred — users re-scan. Remove: legacy snapshot field sniffing, dual-carrier fallbacks, serde(default) shims for fields that only existed in transitional schemas, and any "if old format, try X" branching. The goal is a clean codebase where every code path serves the current schema, not historical ones.
 
+### Go Compat Removal from Rust Codebase (MEDIUM — pre-cutover)
+
+Audit the Rust codebase for Go-compatibility shims, parity test fixtures, schema compat code, and output-matching workarounds that exist only to maintain equivalence with the Go implementation during the transition. Once the Rust binary is the sole path, these are dead weight. Includes: Go-referencing test data, output-format compat checks, dual-format snapshot loading, and any code gated on "match Go behavior." Distinct from the Pre-1.0 Compat Sweep (which targets old Rust schema transitions) — this targets Go-era artifacts specifically.
+
 ### CLI Cutover
 
 Rust binary becomes primary `inspectah` command. Go binary deprecated.
@@ -169,5 +173,6 @@ Rust binary becomes primary `inspectah` command. Go binary deprecated.
 ### Post-Cutover
 
 - Architect v2 (multi-artifact decomposition)
+- Remove Go source tree (`cmd/`, `go.mod`, `go.sum`) — see also nit-list
 - TUI mode
 - `inspectah build` command

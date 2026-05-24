@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::containers::{ComposeFile, ComposeService, ContainerSection, QuadletUnit};
+use inspectah_core::types::containers::{
+    ComposeFile, ComposeService, ContainerSection, QuadletUnit,
+};
 use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
@@ -44,9 +46,7 @@ fn make_variant_snapshot(
                 fleet: Some(FleetPrevalence {
                     count: count_a,
                     total: host_count as i32,
-                    hosts: (0..count_a as usize)
-                        .map(|i| format!("host-{i}"))
-                        .collect(),
+                    hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
                 }),
                 ..Default::default()
             },
@@ -70,7 +70,11 @@ fn make_variant_snapshot(
 }
 
 /// Build a fleet snapshot with a single "Only" config variant.
-fn make_single_variant_snapshot(path: &str, content: &str, host_count: usize) -> InspectionSnapshot {
+fn make_single_variant_snapshot(
+    path: &str,
+    content: &str,
+    host_count: usize,
+) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::default();
     snap.fleet_meta = Some(FleetSnapshotMeta {
         label: "test".into(),
@@ -123,11 +127,19 @@ fn select_variant_swaps_selected_and_alternative() {
     let variants = variants_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_a)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
     assert_eq!(
-        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_b)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 
@@ -145,11 +157,19 @@ fn select_variant_swaps_selected_and_alternative() {
     let variants = variants_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_b)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
     assert_eq!(
-        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_a)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 }
@@ -172,7 +192,11 @@ fn select_variant_already_selected_is_noop_but_harmless() {
     let proj = session.snapshot_projected();
     let variants = variants_for_path(&proj, path);
     assert_eq!(
-        variants.iter().find(|v| v.content == "aaa").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "aaa")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
 }
@@ -208,7 +232,11 @@ fn edit_variant_creates_new_user_variant() {
 
     // The previously-Selected original-a should now be Alternative
     assert_eq!(
-        variants.iter().find(|v| v.content == "original-a").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "original-a")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 }
@@ -238,7 +266,11 @@ fn edit_variant_converges_with_existing_content() {
     assert_eq!(variants.len(), 2, "convergence should not create duplicate");
     // content_b should now be Selected (converged edit selects it)
     assert_eq!(
-        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_b)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
 }
@@ -256,7 +288,10 @@ fn edit_variant_based_on_nonexistent_hash_rejected() {
         content: "new-content".into(),
         based_on: Some(bogus_hash),
     });
-    assert!(result.is_err(), "EditVariant with bogus based_on hash must be rejected");
+    assert!(
+        result.is_err(),
+        "EditVariant with bogus based_on hash must be rejected"
+    );
 }
 
 #[test]
@@ -279,12 +314,20 @@ fn edit_variant_on_only_item_transitions_to_selected_alternative() {
 
     // User edit becomes Selected
     assert_eq!(
-        variants.iter().find(|v| v.content == "user-edit").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "user-edit")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
     // Original becomes Alternative
     assert_eq!(
-        variants.iter().find(|v| v.content == "only-content").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "only-content")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 }
@@ -366,7 +409,11 @@ fn discard_selected_falls_back_to_original_selection() {
     let variants = variants_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == "high-prev").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "high-prev")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
         "fallback should select the most-prevalent host-sourced variant",
     );
@@ -383,7 +430,10 @@ fn discard_host_sourced_variant_fails() {
         item_id: ItemId::Config { path: path.into() },
         variant: hash_a,
     });
-    assert!(result.is_err(), "discarding a host-sourced variant should fail");
+    assert!(
+        result.is_err(),
+        "discarding a host-sourced variant should fail"
+    );
 }
 
 #[test]
@@ -500,7 +550,11 @@ fn undo_edit_variant_removes_user_content() {
     assert!(!variants.iter().any(|v| v.content == "user-edit"));
     // Original selection should be restored
     assert_eq!(
-        variants.iter().find(|v| v.content == "aaa").unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == "aaa")
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
 }
@@ -624,9 +678,7 @@ fn make_dropin_variant_snapshot(
                 fleet: Some(FleetPrevalence {
                     count: count_a,
                     total: host_count as i32,
-                    hosts: (0..count_a as usize)
-                        .map(|i| format!("host-{i}"))
-                        .collect(),
+                    hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
                 }),
             },
             SystemdDropIn {
@@ -679,9 +731,7 @@ fn make_quadlet_variant_snapshot(
                 fleet: Some(FleetPrevalence {
                     count: count_a,
                     total: host_count as i32,
-                    hosts: (0..count_a as usize)
-                        .map(|i| format!("host-{i}"))
-                        .collect(),
+                    hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
                 }),
                 ..Default::default()
             },
@@ -756,10 +806,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
 }
 
 /// Helper to find all DropIn entries for a given path in a projected snapshot.
-fn dropins_for_path(
-    snap: &InspectionSnapshot,
-    path: &str,
-) -> Vec<SystemdDropIn> {
+fn dropins_for_path(snap: &InspectionSnapshot, path: &str) -> Vec<SystemdDropIn> {
     snap.services
         .as_ref()
         .map(|s| {
@@ -773,10 +820,7 @@ fn dropins_for_path(
 }
 
 /// Helper to find all Quadlet entries for a given path in a projected snapshot.
-fn quadlets_for_path(
-    snap: &InspectionSnapshot,
-    path: &str,
-) -> Vec<QuadletUnit> {
+fn quadlets_for_path(snap: &InspectionSnapshot, path: &str) -> Vec<QuadletUnit> {
     snap.containers
         .as_ref()
         .map(|c| {
@@ -790,10 +834,7 @@ fn quadlets_for_path(
 }
 
 /// Helper to find all Compose entries for a given path in a projected snapshot.
-fn compose_for_path(
-    snap: &InspectionSnapshot,
-    path: &str,
-) -> Vec<ComposeFile> {
+fn compose_for_path(snap: &InspectionSnapshot, path: &str) -> Vec<ComposeFile> {
     snap.containers
         .as_ref()
         .map(|c| {
@@ -824,7 +865,11 @@ fn select_variant_dropin_swaps_selection() {
     let variants = dropins_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_a)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
 
@@ -842,11 +887,19 @@ fn select_variant_dropin_swaps_selection() {
     let variants = dropins_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_b)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
     assert_eq!(
-        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_a)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 }
@@ -902,7 +955,11 @@ fn discard_variant_dropin_removes_user_variant() {
 
     let proj = session.snapshot_projected();
     let variants = dropins_for_path(&proj, path);
-    assert_eq!(variants.len(), 2, "discard should remove the user drop-in variant");
+    assert_eq!(
+        variants.len(),
+        2,
+        "discard should remove the user drop-in variant"
+    );
     assert!(!variants.iter().any(|v| v.content == "user-dropin"));
 }
 
@@ -932,11 +989,19 @@ fn select_variant_quadlet_works() {
     let variants = quadlets_for_path(&proj, path);
     assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants.iter().find(|v| v.content == content_b).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_b)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Selected,
     );
     assert_eq!(
-        variants.iter().find(|v| v.content == content_a).unwrap().variant_selection,
+        variants
+            .iter()
+            .find(|v| v.content == content_a)
+            .unwrap()
+            .variant_selection,
         VariantSelection::Alternative,
     );
 }
@@ -978,9 +1043,7 @@ fn select_variant_compose_works() {
         service: "web".into(),
         image: "nginx:1.25".into(),
     }];
-    let hash_b = ContentHash::from_content(
-        serde_json::to_string(&alt_images).unwrap().as_bytes(),
-    );
+    let hash_b = ContentHash::from_content(serde_json::to_string(&alt_images).unwrap().as_bytes());
 
     session
         .apply(RefinementOp::SelectVariant {
@@ -1022,7 +1085,10 @@ fn edit_variant_compose_rejected() {
         content: "should-not-work".into(),
         based_on: None,
     });
-    assert!(result.is_err(), "EditVariant must be rejected for Compose items");
+    assert!(
+        result.is_err(),
+        "EditVariant must be rejected for Compose items"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Compose"),
@@ -1134,7 +1200,10 @@ fn discard_variant_compose_rejected() {
         item_id: ItemId::Compose { path: path.into() },
         variant: bogus,
     });
-    assert!(result.is_err(), "DiscardVariant must be rejected for Compose items");
+    assert!(
+        result.is_err(),
+        "DiscardVariant must be rejected for Compose items"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Compose"),

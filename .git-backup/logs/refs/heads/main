@@ -1,0 +1,78 @@
+c1a336b1159b6c0925e0be3cab505623e4240439 66e7559357e30b5bad64191cec7c044a1bcdbbf4 Mark Russell <mrussell@redhat.com> 1776526955 -0400	commit: refactor: rename package directory and pyproject.toml from yoinkc to inspectah
+66e7559357e30b5bad64191cec7c044a1bcdbbf4 c4398b90ecb05aafcbedb350be48c6d0c4e29d6c Mark Russell <mrussell@redhat.com> 1776526978 -0400	commit: refactor: update all Python imports from yoinkc to inspectah
+c4398b90ecb05aafcbedb350be48c6d0c4e29d6c 3deb4161b00e45433c0712af6366288f38622994 Mark Russell <mrussell@redhat.com> 1776527054 -0400	commit: refactor: update all test files from yoinkc to inspectah
+3deb4161b00e45433c0712af6366288f38622994 ea25a271fd5ba6f3084e049be8ca992acabe01ca Mark Russell <mrussell@redhat.com> 1776527068 -0400	commit: refactor: rename CLI scripts and Containerfile from yoinkc to inspectah
+ea25a271fd5ba6f3084e049be8ca992acabe01ca b0ef80112802765f8f389616ee1a32d483d9cc21 Mark Russell <mrussell@redhat.com> 1776527077 -0400	commit: refactor: rename RPM spec and COPR config from yoinkc to inspectah
+b0ef80112802765f8f389616ee1a32d483d9cc21 165a38db11f3d0bf10630ce49f91743f9d863bfa Mark Russell <mrussell@redhat.com> 1776527084 -0400	commit: refactor: rename shell completion files from yoinkc to inspectah
+165a38db11f3d0bf10630ce49f91743f9d863bfa 8eb298d618dc7e11f735e15c3bf5f50f620020a3 Mark Russell <mrussell@redhat.com> 1776527092 -0400	commit: refactor: update CI workflows from yoinkc to inspectah
+8eb298d618dc7e11f735e15c3bf5f50f620020a3 162fcf832c663f11ceee24a80e8e8bd4dc4a53cc Mark Russell <mrussell@redhat.com> 1776527116 -0400	commit: refactor: update all documentation from yoinkc to inspectah
+162fcf832c663f11ceee24a80e8e8bd4dc4a53cc 977ebc552afd91cf9168340e2f204ef35472aef1 Mark Russell <mrussell@redhat.com> 1776527149 -0400	commit: refactor: catch remaining yoinkc references in test/build scripts
+977ebc552afd91cf9168340e2f204ef35472aef1 7d07d7fedb6e364c540244959eab95a3c7d98297 Mark Russell <mrussell@redhat.com> 1776527255 -0400	commit: refactor: update all yoinkc references in Jinja templates
+7d07d7fedb6e364c540244959eab95a3c7d98297 d216c915221f089e4acf1f68e765d575dfce2828 Mark Russell <mrussell@redhat.com> 1776529619 -0400	commit: release: bump version to 0.5.1
+d216c915221f089e4acf1f68e765d575dfce2828 f81fc0ef7d97c4eae8274943515b9cd303e9a7e3 Mark Russell <mrussell@redhat.com> 1777149643 -0400	merge rename-inspect-to-scan: Fast-forward
+f81fc0ef7d97c4eae8274943515b9cd303e9a7e3 51e86864706aa47ee6c426fe0c996fd55f8d348a Mark Russell <mrussell@redhat.com> 1777150088 -0400	commit: fix(packaging): skip fixture-dependent test in RPM builds
+51e86864706aa47ee6c426fe0c996fd55f8d348a ba8d4521146cebf13daf53c42cdf01b7b52eb74a Mark Russell <mrussell@redhat.com> 1777150374 -0400	commit: fix(packaging): revert license format for EL10 compatibility
+ba8d4521146cebf13daf53c42cdf01b7b52eb74a 03d566a4ff15e22b6ec534e977a4a735590a7e8a Mark Russell <mrussell@redhat.com> 1777153197 -0400	commit: feat(spec): add Go CLI wrapper design spec
+03d566a4ff15e22b6ec534e977a4a735590a7e8a e30c7e0997c6f8cc5402f2be93af5721e7f3b72b Mark Russell <mrussell@redhat.com> 1777154450 -0400	commit: feat(plan): add Go CLI wrapper implementation plan
+e30c7e0997c6f8cc5402f2be93af5721e7f3b72b 663e2688fb741dcf8afcc6a4bf0e0dbaf65ae89e Mark Russell <mrussell@redhat.com> 1777154807 -0400	commit: feat(cli): bootstrap Go CLI wrapper
+663e2688fb741dcf8afcc6a4bf0e0dbaf65ae89e bca059b79de1bec8e1eb8bddef894de75c409298 Mark Russell <mrussell@redhat.com> 1777154856 -0400	commit: feat(cli): add platform detection and macOS scan gating
+bca059b79de1bec8e1eb8bddef894de75c409298 036ccbb3d6c09ca5879563e702b2c7c838308793 Mark Russell <mrussell@redhat.com> 1777154924 -0400	commit: feat(cli): add structured error types and translation
+036ccbb3d6c09ca5879563e702b2c7c838308793 1baf165837b4f54dc76f7be74be5db415713c62e Mark Russell <mrussell@redhat.com> 1777155023 -0400	commit: feat(cli): add path resolution for host/container mapping
+1baf165837b4f54dc76f7be74be5db415713c62e 6e51f48d8a9bdabf9cd198b8dd186431bdf9073b Mark Russell <mrussell@redhat.com> 1777155055 -0400	commit: feat(cli): add version normalization and image ref construction
+6e51f48d8a9bdabf9cd198b8dd186431bdf9073b a463bf97352db80c2d337b6cd9fc4e52294ae5cc Mark Russell <mrussell@redhat.com> 1777155136 -0400	commit: feat(cli): add image resolution, PodmanRunner interface, config pin
+a463bf97352db80c2d337b6cd9fc4e52294ae5cc 53d4acba47f25b13bd92203e22c9238218b9d29d Mark Russell <mrussell@redhat.com> 1777158888 -0400	commit: feat(cli): add image pull, progress streaming, and presence check
+53d4acba47f25b13bd92203e22c9238218b9d29d 534463694594421ed66fa9bd9ad5bfce2cdf508a Mark Russell <mrussell@redhat.com> 1777159079 -0400	commit: feat(cli): add scan subcommand with exec strategy
+534463694594421ed66fa9bd9ad5bfce2cdf508a 1d1a3cc77ee9513044a87337b272b17085078aad Mark Russell <mrussell@redhat.com> 1777159252 -0400	commit: feat(cli): add fleet, refine, architect, build, image subcommands
+1d1a3cc77ee9513044a87337b272b17085078aad d5158db0693c3832e7b3092c200111ba4fdd65e7 Mark Russell <mrussell@redhat.com> 1777159350 -0400	commit: feat(cli): add integration tests and CI workflow
+d5158db0693c3832e7b3092c200111ba4fdd65e7 18df114b3970cbb295582789b717e617028ebc48 Mark Russell <mrussell@redhat.com> 1777159383 -0400	commit: feat(packaging): add RPM spec for Go CLI wrapper
+18df114b3970cbb295582789b717e617028ebc48 80e4beb89c6d22a787d9d4635d0cc8f579e1ed11 Mark Russell <mrussell@redhat.com> 1777159631 -0400	commit: feat(cli): register Python CLI flags for tab completion
+80e4beb89c6d22a787d9d4635d0cc8f579e1ed11 99c1fd4cb436e8f606a705fe9cbd4f74c93781ed Mark Russell <mrussell@redhat.com> 1777159664 -0400	commit: refactor(packaging): rename to inspectah, update description
+99c1fd4cb436e8f606a705fe9cbd4f74c93781ed 4df5e34795f9aba750696ba1731fa7f0f44749da Mark Russell <mrussell@redhat.com> 1777160006 -0400	commit: fix(cli): address code review findings
+4df5e34795f9aba750696ba1731fa7f0f44749da 2d83c1c8622bcd741beacdcaa8cbadaaf4496798 Mark Russell <mrussell@redhat.com> 1777162236 -0400	commit: feat(cli): implement Fern's output UX spec
+2d83c1c8622bcd741beacdcaa8cbadaaf4496798 5aafba528c25a97a7dec667b824821997f951f21 Mark Russell <mrussell@redhat.com> 1777162241 -0400	commit (amend): feat(cli): implement Fern's output UX spec
+5aafba528c25a97a7dec667b824821997f951f21 7aa71d9e2b11e4d9c17a7d0326cb5c217258d7bb Mark Russell <mrussell@redhat.com> 1777162246 -0400	commit (amend): feat(cli): implement Fern's output UX spec
+7aa71d9e2b11e4d9c17a7d0326cb5c217258d7bb 749291bac15c764216de95d90096ce7e8ceabd6a Mark Russell <mrussell@redhat.com> 1777176961 -0400	commit: feat(packaging): switch COPR build from Python RPM to Go binary RPM
+749291bac15c764216de95d90096ce7e8ceabd6a b0f8b785663a72233792e305a6cfb8578edd8496 Mark Russell <mrussell@redhat.com> 1777177640 -0400	commit: fix(packaging): disable debuginfo for stripped Go binary
+b0f8b785663a72233792e305a6cfb8578edd8496 ebd32e52d01f3a9646144c7ea414cec18d5c6e28 Mark Russell <mrussell@redhat.com> 1777214507 -0400	commit: fix(preflight): wrap all podman calls with nsenter for container mode
+ebd32e52d01f3a9646144c7ea414cec18d5c6e28 616eb570817b41f7e4e82148694812a867dcc7d5 Mark Russell <mrussell@redhat.com> 1777214623 -0400	commit: fix(preflight): satisfy type checker for optional member access
+616eb570817b41f7e4e82148694812a867dcc7d5 058557ec515c76b42687fbed3ff696f0df3b8fe8 Mark Russell <mrussell@redhat.com> 1777216574 -0400	commit: docs(spec): inspectah build subcommand design
+058557ec515c76b42687fbed3ff696f0df3b8fe8 088d714165d320c79cfa725442e818c72d003a3e Mark Russell <mrussell@redhat.com> 1777217556 -0400	commit: docs(spec): address review findings on build subcommand design
+088d714165d320c79cfa725442e818c72d003a3e c93240e37e0be493f56fb1c2180dd6c53ca1dced Mark Russell <mrussell@redhat.com> 1777217683 -0400	commit: docs(spec): address residual review items
+c93240e37e0be493f56fb1c2180dd6c53ca1dced 17391f05a4466a5fa360a398d63a9ea616d1e654 Mark Russell <mrussell@redhat.com> 1777218252 -0400	commit: docs(spec): address round 2 review findings
+17391f05a4466a5fa360a398d63a9ea616d1e654 213724acf1c6fba8bb45f6a15919557dded7656a Mark Russell <mrussell@redhat.com> 1777219654 -0400	commit: docs(spec): address round 3 review findings
+213724acf1c6fba8bb45f6a15919557dded7656a ad0daef54ff815bd34244c0cd7c9105c9e7b8f89 Mark Russell <mrussell@redhat.com> 1777220679 -0400	commit: docs(spec): address round 4 review findings
+ad0daef54ff815bd34244c0cd7c9105c9e7b8f89 3107083e80428dc7fccafc7ff4f00b942dd5437e Mark Russell <mrussell@redhat.com> 1777221158 -0400	commit: docs(spec): restructure entitlement as platform-specific decision matrix
+3107083e80428dc7fccafc7ff4f00b942dd5437e 37822034c2536538ee0f429b2f56f16689250a3b Mark Russell <mrussell@redhat.com> 1777221692 -0400	commit: docs(spec): close classifier and --no-entitlements contract gaps
+37822034c2536538ee0f429b2f56f16689250a3b 99dbe11057b4453adc1234c1b97cb0a7e77bd6b3 Mark Russell <mrussell@redhat.com> 1777221762 -0400	commit: docs(spec): restore macOS entitled builds, drop follow-on dependency
+99dbe11057b4453adc1234c1b97cb0a7e77bd6b3 38f59126bfd92a35d598dab97ee69a46c77e310c Mark Russell <mrussell@redhat.com> 1777222300 -0400	commit: docs(spec): ensure macOS -v mount paths are under $HOME
+38f59126bfd92a35d598dab97ee69a46c77e310c 887a3f53e98d5ac0ea4700e3e471df2614a16c55 Mark Russell <mrussell@redhat.com> 1777222918 -0400	commit: docs(spec): mark build subcommand spec as approved
+887a3f53e98d5ac0ea4700e3e471df2614a16c55 6fbfad22835a65af2f0992b4d75b1d46cded96dc Mark Russell <mrussell@redhat.com> 1777223406 -0400	commit: docs(plan): inspectah build subcommand implementation plan
+6fbfad22835a65af2f0992b4d75b1d46cded96dc f3e8456d4b712c8017f59ac424f71db7642716e3 Mark Russell <mrussell@redhat.com> 1777225630 -0400	commit: docs(plan): address review findings on build implementation plan
+f3e8456d4b712c8017f59ac424f71db7642716e3 bf13d5ead67ef3e8fc51b5368a4999eb85d97145 Mark Russell <mrussell@redhat.com> 1777228022 -0400	commit: docs(plan,spec): address round 2 review findings
+bf13d5ead67ef3e8fc51b5368a4999eb85d97145 2a6253a8e3b245090efb84be1b1068bc344a468b Mark Russell <mrussell@redhat.com> 1777229515 -0400	commit: docs(plan): address round 3 review findings
+2a6253a8e3b245090efb84be1b1068bc344a468b 33c8b2897d8f3ed1ffed8ece34cf0233f2ef59d2 Mark Russell <mrussell@redhat.com> 1777229989 -0400	commit: docs(plan): add post-strip duplicate collision test
+33c8b2897d8f3ed1ffed8ece34cf0233f2ef59d2 eb47e5d644cbf53fc51e902479013de7d28cbe85 Mark Russell <mrussell@redhat.com> 1777232803 -0400	merge feat/build-subcommand: Fast-forward
+eb47e5d644cbf53fc51e902479013de7d28cbe85 94b3a0cc5fceba411614aa4d696db60d058341c4 Mark Russell <mrussell@redhat.com> 1777233812 -0400	commit: chore(cli): bump wrapper version to 0.2.0
+94b3a0cc5fceba411614aa4d696db60d058341c4 c143b354cc8892583e0fe87aac7a1b11eb1c9555 Mark Russell <mrussell@redhat.com> 1777234428 -0400	commit: chore(packaging): bump spec version to 0.2.0
+c143b354cc8892583e0fe87aac7a1b11eb1c9555 34c0d759abd65f6869e16bdcf6be6bf8a5eba4b6 Mark Russell <mrussell@redhat.com> 1777235982 -0400	commit: refactor(ci): simplify Homebrew tap update for Go formula
+34c0d759abd65f6869e16bdcf6be6bf8a5eba4b6 47f2b81d24136c5477803f5652a284510dfffd2e Mark Russell <mrussell@redhat.com> 1777236194 -0400	commit: refactor: move root docs to docs/reference/
+47f2b81d24136c5477803f5652a284510dfffd2e 7a80657f913dcbc92be5cf20b55ca3150b46eb0e Mark Russell <mrussell@redhat.com> 1777237085 -0400	commit: fix(build): report linux as build OS on macOS cross-arch warning
+7a80657f913dcbc92be5cf20b55ca3150b46eb0e 4a34859b63425b572fa95a1d25e730a4d37907a7 Mark Russell <mrussell@redhat.com> 1777238068 -0400	commit: fix(scan): bail early with clear message when not running as root
+4a34859b63425b572fa95a1d25e730a4d37907a7 c45ed0d030b817bf204d50403ee1fbbf937d5554 Mark Russell <mrussell@redhat.com> 1777238889 -0400	commit: feat(build): add cross-architecture package substitution
+c45ed0d030b817bf204d50403ee1fbbf937d5554 c091f344885a1ce1e64d7f43532748542928a622 Mark Russell <mrussell@redhat.com> 1777258116 -0400	commit: docs: update all docs for Go CLI wrapper and new installation paths
+c091f344885a1ce1e64d7f43532748542928a622 90f9afdc406d9f7020ee945ea52df5a478070da4 Mark Russell <mrussell@redhat.com> 1777258544 -0400	commit: docs(readme): reorder sections, move legacy install to bottom
+90f9afdc406d9f7020ee945ea52df5a478070da4 b94269c3ac374af930880c6c071a4e72f9126f67 Mark Russell <mrussell@redhat.com> 1777259561 -0400	commit: docs(spec): image reference validation design
+b94269c3ac374af930880c6c071a4e72f9126f67 91dbab8cd587ca08bc6fde50a737bc340917de72 Mark Russell <mrussell@redhat.com> 1777260147 -0400	commit: docs(spec): revise image ref validation per team review
+91dbab8cd587ca08bc6fde50a737bc340917de72 3e1652c67a3eac117dab60807eb1f581ffa908b9 Mark Russell <mrussell@redhat.com> 1777261238 -0400	commit: docs(spec): anchor image ref validation to distribution/reference
+3e1652c67a3eac117dab60807eb1f581ffa908b9 9a3ef07300b48ad917346c18f44b40b3a8ab4b8d Mark Russell <mrussell@redhat.com> 1777262300 -0400	commit: docs(spec): fix validation signatures, shorthand, and timing
+9a3ef07300b48ad917346c18f44b40b3a8ab4b8d a0ed573ad236dd9f2e0c3ae4168742c8bfb7452e Mark Russell <mrussell@redhat.com> 1777263084 -0400	commit: docs(spec): scope image validation to container commands only
+a0ed573ad236dd9f2e0c3ae4168742c8bfb7452e 415df5b7d0437221cda6293bcb0540c3125b790f Mark Russell <mrussell@redhat.com> 1777300451 -0400	commit: fix(build): harden cross-arch inference against comments and cleanup leaks
+415df5b7d0437221cda6293bcb0540c3125b790f ffd153f7389a1cce81a1cf630a94946498b30260 Mark Russell <mrussell@redhat.com> 1777314885 -0400	commit: fix(cli): add cache-buster to browser URL on refine/architect launch
+ffd153f7389a1cce81a1cf630a94946498b30260 789c7704b5ce21caff59bcd374679acf8b038f42 Mark Russell <mrussell@redhat.com> 1777332211 -0400	commit: fix(build): update release workflow for Go CLI packaging
+789c7704b5ce21caff59bcd374679acf8b038f42 937f8345414c0fc89573adbef7ae62360b980c39 Mark Russell <mrussell@redhat.com> 1777334533 -0400	commit: chore: bump version to 0.2.1
+937f8345414c0fc89573adbef7ae62360b980c39 c50a351cccd9f10895158dc097bc29262ac79e0f Mark Russell <mrussell@redhat.com> 1777336198 -0400	commit: chore: bump version to 0.2.2
+c50a351cccd9f10895158dc097bc29262ac79e0f 4ccad7cdd53ee433efbf071fd765c5389baab626 Mark Russell <mrussell@redhat.com> 1777347488 -0400	commit: docs(spec): Go-native port design
+4ccad7cdd53ee433efbf071fd765c5389baab626 334158591a0bc6d7c4ced13b7103449d2f82fadd Mark Russell <mrussell@redhat.com> 1778368570 -0400	merge go-port: Fast-forward
+334158591a0bc6d7c4ced13b7103449d2f82fadd 9ce7284a80f06c9db478008f26f177831cbe869b Mark Russell <mrussell@redhat.com> 1778368801 -0400	commit: chore: remove Python artifacts after Go port promotion
+9ce7284a80f06c9db478008f26f177831cbe869b d79fa99defad8888fdcbd0d021f14af53b9ccf05 Mark Russell <mrussell@redhat.com> 1778369869 -0400	commit: chore: clean up gitignore for Go-only repo
+d79fa99defad8888fdcbd0d021f14af53b9ccf05 c8784253b3029ae7ef979df2299f670f221983a6 Mark Russell <mrussell@redhat.com> 1778383907 -0400	commit: spec(rust-rewrite): add design spec for inspectah Rust rewrite

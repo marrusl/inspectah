@@ -11,6 +11,7 @@
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -91,7 +92,7 @@ fn test_users_inspector_happy_path() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
     let (section, _degraded) = extract_section(result);
 
@@ -169,7 +170,7 @@ fn test_users_inspector_shadow_strips_hashes() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
     let (section, _) = extract_section(result);
 
     // Verify no shadow entry contains a raw hash.
@@ -215,7 +216,7 @@ fn test_users_inspector_gshadow_strips_passwords() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
     let (section, _) = extract_section(result);
 
     let all_gshadow = section.gshadow_entries.join("\n");
@@ -254,7 +255,7 @@ fn test_users_inspector_classification() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
     let (section, _) = extract_section(result);
 
     // Build a name -> classification map.
@@ -336,7 +337,7 @@ fn test_users_inspector_groups_no_strategy() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
     let (section, _) = extract_section(result);
 
     for group in &section.groups {
@@ -367,7 +368,7 @@ fn test_users_inspector_degraded_shadow() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
     match result {
         Err(InspectorError::Degraded { partial, reason }) => {
@@ -404,7 +405,7 @@ fn test_users_inspector_json_roundtrip() {
         baseline_data: None,
     };
 
-    let result = UsersGroupsInspector::new().inspect(&ctx);
+    let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
     let (section, _) = extract_section(result);
 

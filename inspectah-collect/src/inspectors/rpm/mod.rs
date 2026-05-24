@@ -8,6 +8,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::system::SourceSystem;
@@ -155,7 +156,10 @@ impl RpmInspector {
             } else if !line.is_empty()
                 && let Some(ref pkg) = current_package
             {
-                pkg_map.entry(pkg.clone()).or_default().push(line.to_string());
+                pkg_map
+                    .entry(pkg.clone())
+                    .or_default()
+                    .push(line.to_string());
             }
         }
 
@@ -223,7 +227,11 @@ impl Inspector for RpmInspector {
         ]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
 
         // 1. Query packages
@@ -568,6 +576,7 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
 
     fn test_os_release() -> OsRelease {
@@ -678,7 +687,7 @@ mod tests {
             rpm_state: None,
             baseline_data: None,
         };
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Rpm(rpm) = &output.section {
             // gpg-pubkey filtered, 4 real packages remain — all Added (no baseline)
             assert_eq!(rpm.packages_added.len(), 4);
@@ -761,7 +770,7 @@ mod tests {
             rpm_state: None,
             baseline_data: None,
         };
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Rpm(rpm) = &output.section {
             assert!(rpm.rpm_va.is_empty(), "bootc should skip rpm -Va");
         } else {
@@ -788,7 +797,7 @@ mod tests {
             rpm_state: None,
             baseline_data: None,
         };
-        let result = RpmInspector::new().inspect(&ctx);
+        let result = RpmInspector::new().inspect(&ctx, &NullProgress);
         assert!(matches!(result, Err(InspectorError::Failed { .. })));
     }
 
@@ -902,7 +911,7 @@ mod tests {
             rpm_state: None,
             baseline_data: Some(&baseline_data),
         };
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
 
         if let SectionData::Rpm(rpm) = &output.section {
             // All host packages stay in packages_added (same-EVR = Added, not BaseImageOnly)
@@ -1133,7 +1142,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         let SectionData::Rpm(rpm) = &output.section else {
             panic!("expected SectionData::Rpm");
         };
@@ -1186,7 +1195,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         let SectionData::Rpm(rpm) = &output.section else {
             panic!("expected SectionData::Rpm");
         };
@@ -1445,7 +1454,7 @@ mod tests {
             baseline_data: Some(&baseline_data),
         };
 
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         let SectionData::Rpm(rpm) = &output.section else {
             panic!("expected SectionData::Rpm");
         };
@@ -1531,7 +1540,7 @@ mod tests {
             baseline_data: Some(&baseline_data),
         };
 
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         let SectionData::Rpm(rpm) = &output.section else {
             panic!("expected SectionData::Rpm");
         };
@@ -1695,7 +1704,7 @@ mod tests {
             baseline_data: Some(&baseline_data),
         };
 
-        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         let SectionData::Rpm(rpm) = &output.section else {
             panic!("expected SectionData::Rpm");
         };
@@ -1774,11 +1783,7 @@ mod tests {
 
         let tzdata = entries.iter().find(|e| e.package_name == "tzdata");
         assert!(tzdata.is_some(), "tzdata package should exist");
-        assert_eq!(
-            tzdata.unwrap().paths.len(),
-            1,
-            "tzdata should own 1 file"
-        );
+        assert_eq!(tzdata.unwrap().paths.len(), 1, "tzdata should own 1 file");
     }
 
     #[test]

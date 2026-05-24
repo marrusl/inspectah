@@ -6,6 +6,7 @@
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
 use inspectah_core::types::os::OsRelease;
@@ -187,7 +188,7 @@ fn test_config_inspector_happy_path() {
     };
 
     let output = ConfigInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("config inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -267,7 +268,7 @@ fn test_config_inspector_no_etc() {
     };
 
     let output = ConfigInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed with no /etc");
 
     let section = match &output.section {
@@ -295,7 +296,7 @@ fn test_config_inspector_degraded_permissions() {
         baseline_data: None,
     };
 
-    let result = ConfigInspector::new().inspect(&ctx);
+    let result = ConfigInspector::new().inspect(&ctx, &NullProgress);
 
     match result {
         Ok(_) => {
@@ -329,7 +330,7 @@ fn test_config_inspector_json_roundtrip() {
     };
 
     let output = ConfigInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed");
 
     let section = match &output.section {

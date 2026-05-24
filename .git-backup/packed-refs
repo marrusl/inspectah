@@ -1,0 +1,20 @@
+# pack-refs with: peeled fully-peeled sorted 
+44dfdf2baebbb26734ec39a5fd0a5a7cee9d7ae1 refs/heads/feature/leaf-package-filter
+ed090bc5151cdc3175aa5c4e028105df2b9b83aa refs/heads/feature/unified-repo-view
+c8784253b3029ae7ef979df2299f670f221983a6 refs/heads/main
+f81fc0ef7d97c4eae8274943515b9cd303e9a7e3 refs/heads/rename-inspect-to-scan
+7d563eae0e0c00f366807e9daca6cad81ee440bc refs/heads/rust
+e0a72538de5df0a57af70c53acab3bd1062207f1 refs/original/refs/heads/visual-consistency-pass
+c8784253b3029ae7ef979df2299f670f221983a6 refs/remotes/origin/main
+ed76359f6b421b847b260d771cfbc02b6b1f8b82 refs/remotes/origin/rust
+f530c158b1e731f0461699069d66c8020154e8f5 refs/remotes/origin/visual-consistency-pass
+6b56beb8c5e8c847fcca621b42c2595ffb67b553 refs/tags/v0.5.0-rc1
+d216c915221f089e4acf1f68e765d575dfce2828 refs/tags/v0.5.1
+130ba5105811036f88b676fd69ea219d0322b227 refs/tags/v0.6-python-final
+^4ccad7cdd53ee433efbf071fd765c5389baab626
+47f2b81d24136c5477803f5652a284510dfffd2e refs/tags/v0.6.0
+6aaad0205c6e0bb07722e245216db3c6f28e0e1c refs/tags/v0.7.0
+^d79fa99defad8888fdcbd0d021f14af53b9ccf05
+eb6817ec7a6b35483bad8fd3b4d007ba7ee09d84 refs/tags/v0.7.0-rc1
+ac05ddd506fa1030f7eda6d0dac5c61c4a47e8cf refs/tags/v0.8.0-alpha.2
+^29facf531daf017875c9893c9ba954f7f06790b2

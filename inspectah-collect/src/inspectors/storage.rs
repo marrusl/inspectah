@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::storage::{
@@ -67,7 +68,11 @@ impl Inspector for StorageInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
 
         // 1. Read /etc/fstab — primary source, failure is fatal.

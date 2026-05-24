@@ -8,6 +8,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::containers::ContainerSection;
 use inspectah_core::types::os::OsRelease;
@@ -134,7 +135,7 @@ fn test_containers_inspector_happy_path() {
         baseline_data: None,
     };
 
-    let result = ContainersInspector::new().inspect(&ctx);
+    let result = ContainersInspector::new().inspect(&ctx, &NullProgress);
 
     // Compose fixture has POSTGRES_PASSWORD, which triggers a degraded hint
     // from the anchor/alias check. Extract section regardless.
@@ -225,7 +226,7 @@ fn test_containers_inspector_empty_system() {
         baseline_data: None,
     };
 
-    let result = ContainersInspector::new().inspect(&ctx);
+    let result = ContainersInspector::new().inspect(&ctx, &NullProgress);
 
     let output = match result {
         Ok(o) => o,
@@ -298,7 +299,7 @@ fn test_containers_inspector_degraded_podman() {
         baseline_data: None,
     };
 
-    let result = ContainersInspector::new().inspect(&ctx);
+    let result = ContainersInspector::new().inspect(&ctx, &NullProgress);
 
     match result {
         Err(InspectorError::Degraded { partial, reason }) => {
@@ -330,7 +331,7 @@ fn test_containers_inspector_json_roundtrip() {
         baseline_data: None,
     };
 
-    let result = ContainersInspector::new().inspect(&ctx);
+    let result = ContainersInspector::new().inspect(&ctx, &NullProgress);
 
     let output = match result {
         Ok(o) => o,

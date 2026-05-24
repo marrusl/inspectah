@@ -12,6 +12,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::RedactionHint;
 use inspectah_core::types::users::UserGroupSection;
@@ -96,7 +97,11 @@ impl Inspector for UsersGroupsInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
         let warnings: Vec<Warning> = Vec::new();
         let mut hints: Vec<RedactionHint> = Vec::new();
@@ -829,6 +834,7 @@ fn classify_user(user: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::completeness::SectionData;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
@@ -951,7 +957,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             baseline_data: None,
         };
         let inspector = UsersGroupsInspector::new();
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
 
         let output = match result {
             Ok(o) => o,
@@ -982,7 +988,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             baseline_data: None,
         };
         let inspector = UsersGroupsInspector::new();
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
 
         let output = match result {
             Ok(o) => o,
@@ -1020,7 +1026,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         let output = match result {
             Ok(o) => o,
@@ -1163,7 +1169,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
@@ -1190,7 +1196,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         // Should succeed — missing shadow is a silent skip.
         assert!(
@@ -1492,7 +1498,7 @@ nobody:x:65534:
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         match result {
             Err(InspectorError::Failed { reason }) => {
@@ -1515,7 +1521,7 @@ nobody:x:65534:
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         let output = result.expect("should succeed");
         if let SectionData::UsersGroups(section) = &output.section {
@@ -1949,7 +1955,7 @@ devs:x:1002:alice,bob
             rpm_state: None,
             baseline_data: None,
         };
-        let result = UsersGroupsInspector::new().inspect(&ctx);
+        let result = UsersGroupsInspector::new().inspect(&ctx, &NullProgress);
 
         // May be Degraded due to missing gshadow — extract partial.
         let output = match result {
