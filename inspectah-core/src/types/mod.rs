@@ -7,6 +7,7 @@ pub mod network;
 pub mod nonrpm;
 pub mod os;
 pub mod preflight;
+pub mod progress;
 pub mod redaction;
 pub mod rpm;
 pub mod scheduled;
