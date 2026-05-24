@@ -1,6 +1,6 @@
 # CLI Scan Progress UX — Design Spec
 
-**Status:** Proposed (revision 2)
+**Status:** Proposed (revision 4)
 **Date:** 2026-05-24
 **ROADMAP ref:** "CLI UX: Scan Progress Reporting (MEDIUM)", "CLI UX: Baseline Pull Viewport Height (LOW)"
 
@@ -181,20 +181,44 @@ checks run in order:
 6. .env files
 7. git repos
 
-The active scanner shows as a spinner line that disappears when it
-finishes empty, or settles as a checkmark with a count when it finds
-results. If nothing is found across all checks:
+Probe behavior is mode-specific:
+
+**Rich mode:** On `ProbeStarted`, the renderer inserts a spinner line
+below the Non-RPM parent. On `ProbeFinished { outcome: Empty }`, the
+spinner line is removed (cursor-up, clear line). On
+`ProbeFinished { outcome: Found { count } }`, the spinner line is
+replaced with a checkmark + count. Only found probes remain in the
+final scrollback.
+
+**Plain mode:** On `ProbeStarted`, print a started line
+(`▸ pip packages`). On `ProbeFinished { outcome: Found { count } }`,
+print a completion line (`✓ pip packages  12 found`). On
+`ProbeFinished { outcome: Empty }`, print a completion line
+(`– pip packages  none`). All lines are permanent and append-only.
+Empty probes are visible in the transcript — this is correct for an
+audit log.
+
+**Flat mode:** On `ProbeStarted`, print `pip packages...`. On
+`ProbeFinished { outcome: Found { count } }`, print
+`pip packages... 12 found`. On `ProbeFinished { outcome: Empty }`,
+print `pip packages... none`. Same as plain — all probes visible.
+
+If nothing is found across all checks, the parent line shows:
 
 ```
   ✓ Non-RPM packages          none found (0.3s)
 ```
 
+In rich mode, no sub-items remain. In plain/flat mode, 7 `– none`
+lines precede the parent completion line.
+
 **Rationale for the asymmetry:** RPM and Config are structured
 inspection of bounded, known domains — every RHEL box has them.
-Non-RPM is opportunistic detection of situational ecosystems. Showing
-seven "none" lines on a bare database server makes the tool look
-unfocused. The pattern difference reinforces the semantics: structured
-inspection vs. opportunistic detection.
+Non-RPM is opportunistic detection of situational ecosystems. In
+rich mode, showing seven "none" lines on a bare database server makes
+the tool look unfocused — so empty probes are removed. In plain/flat
+mode, the transcript is a durable audit log where confirmed-absent is
+a finding worth recording.
 
 ## 3. Terminal Rendering Modes
 
@@ -210,14 +234,25 @@ AND `$TERM` is not `dumb`.
 
 **Redraw strategy:** The checklist occupies a fixed block of lines on
 stderr. The renderer tracks the block height (number of inspector rows
-plus expanded sub-steps). On each progress event:
+plus expanded sub-steps). Redraws are triggered by two sources:
+
+1. **Progress events:** Each `ProgressEvent` from an inspector
+   triggers a full block redraw.
+2. **Periodic tick:** A background timer thread (or `Instant`-based
+   check in the event loop) triggers a redraw every ~100ms when any
+   inspector is active. This drives spinner animation (braille frame
+   cycling) and elapsed-time counter updates. Without this, long
+   quiet steps (e.g., `rpm -Va` producing no sub-step events) would
+   freeze the display.
+
+On each redraw:
 1. Cursor-up to the start of the block (`\x1b[{n}A`)
 2. Rewrite all lines in the block
 3. Cursor stays at the bottom of the block
 
-This means the entire checklist redraws on each event. This is
-simple, avoids tracking individual line positions, and produces a
-clean final scrollback artifact when the scan completes.
+The tick stops when all inspectors are finished. The tick is a
+rendering concern only — it does not generate `ProgressEvent`s and
+is not visible to inspectors or the collector.
 
 **Terminal overflow:** If the checklist block exceeds terminal height
 minus 2 (reserved for prompt and status), the renderer truncates
@@ -492,20 +527,30 @@ pub enum ProbeOutcome {
 #[derive(Debug, Clone)]
 pub enum InspectorOutcome {
     Complete,
-    Degraded,
-    Skipped,
-    Failed,
+    Degraded { reason: String },
+    Skipped { reason: String },
+    Failed { reason: String },
     Interrupted,
 }
 
 #[derive(Debug, Clone)]
 pub enum StepOutcome {
     Complete,
-    Degraded,
-    Failed,
-    Skipped,
+    Degraded { reason: String },
+    Failed { reason: String },
+    Skipped { reason: String },
     Interrupted,
 }
+
+// Reason strings are derived from InspectorError variants.
+// Examples:
+//   Degraded { reason: "dnf unavailable, dependency tree incomplete" }
+//   Failed { reason: "podman returned exit code 1" }
+//   Skipped { reason: "no container runtime found" }
+//
+// The renderer uses these to print detail text after the status:
+//   ~ RPM packages  847 found (degraded: dnf unavailable) (3.4s)
+//   ✗ Containers    failed: podman returned exit code 1
 
 #[derive(Debug, Clone)]
 pub enum MetricKind {
@@ -580,12 +625,29 @@ Outcome mapping:
 - `Err(InspectorError::Skipped { .. })` → `InspectorOutcome::Skipped`
 - `Err(InspectorError::Degraded { .. })` → `InspectorOutcome::Degraded`
 - `Err(InspectorError::Failed { .. })` → `InspectorOutcome::Failed`
-- SIGINT received → `InspectorOutcome::Interrupted` for all active
-  and pending inspectors. `collect()` installs a SIGINT handler
-  (e.g., `Arc<AtomicBool>`) checked between inspector launches and
-  within wave-2 join loops. When set, remaining inspectors are not
-  started and active threads are joined (their results are discarded
-  or marked interrupted).
+### SIGINT handling
+
+**Owner:** The CLI layer (`main.rs` / `scan.rs`) owns the SIGINT
+handler. `collect()` does not install signal handlers.
+
+**Mechanism:** The CLI installs a SIGINT handler before calling
+`collect()` that sets an `Arc<AtomicBool>` flag. The flag is passed
+to `collect()` as a cancellation token. `collect()` checks the flag:
+- Between wave-1 and wave-2: if set, skip wave-2 entirely.
+- Before each inspector launch within a wave: if set, skip launch.
+- After joining each thread in a wave: results from threads that
+  completed before the flag was set are kept. Results from threads
+  still running when the flag was set are joined and discarded.
+
+**Cutoff policy:** Results that completed before SIGINT are preserved
+in the snapshot. Results in-flight at SIGINT time are discarded —
+they are not marked interrupted, they are simply absent. The snapshot
+records which inspectors ran and which did not via `completeness`.
+
+**Event emission on SIGINT:** After `collect()` returns, the CLI
+emits `InspectorFinished { outcome: Interrupted }` for all
+inspectors that were not started or whose results were discarded.
+This is a CLI-layer concern, not a collector concern.
 
 Progress events are the ephemeral display channel. Outcomes are also
 recorded durably in `snapshot.completeness` — the exit code is
