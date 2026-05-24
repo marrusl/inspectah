@@ -181,6 +181,14 @@ pub enum RepoProvenance {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoTier {
+    Distro,
+    OfficialOptional,
+    ThirdParty,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionTag {
     pub level: AttentionLevel,
