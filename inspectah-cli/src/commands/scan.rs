@@ -26,7 +26,7 @@ use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspecto
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
-use inspectah_core::traits::progress::NullProgress;
+use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
@@ -290,7 +290,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
     // Step 4: Collect — run all inspectors
     let hostname = get_hostname(&executor);
-    eprintln!("Scanning host {hostname}...");
+    eprintln!("Inspecting host {hostname}...");
 
     // Build UserGroupOptions from CLI flags
     let user_group_options = UserGroupOptions {
@@ -312,14 +312,21 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
+
+    let mode = detect_mode(args.progress.as_ref());
+    let color = use_color();
+    let progress = TerminalProgress::new(mode, color);
+    let scan_start = std::time::Instant::now();
+
     let collected = collect(
         &source,
         &executor,
         &inspectors,
         baseline_data.as_ref(),
-        &NullProgress,
+        &progress,
     );
-    eprintln!("Scanning host {hostname}... done");
+
+    progress.finalize();
 
     // Derive exit outcome from collection completeness
     let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
@@ -384,10 +391,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 }
                 std::fs::write(path, &json)
                     .with_context(|| format!("failed to write {}", path.display()))?;
-                eprintln!("Snapshot written to {}", path.display());
+                let elapsed = scan_start.elapsed();
+                print_completion(&outcome, elapsed, &snapshot, Some(path.as_path()), true);
             }
             None => {
                 println!("{json}");
+                let elapsed = scan_start.elapsed();
+                print_completion(&outcome, elapsed, &snapshot, None, true);
             }
         }
         return Ok(outcome);
@@ -425,11 +435,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     create_tarball(render_dir.path(), &tarball_path, &stamp)
         .with_context(|| format!("failed to create tarball at {}", tarball_path.display()))?;
 
-    eprintln!("Output written to {}", tarball_path.display());
-    eprintln!(
-        "To view and edit results, run: inspectah refine {}",
-        tarball_path.display()
-    );
+    let elapsed = scan_start.elapsed();
+    print_completion(&outcome, elapsed, &snapshot, Some(&tarball_path), false);
     Ok(outcome)
 }
 
