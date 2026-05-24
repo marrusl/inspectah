@@ -48,10 +48,12 @@ struct PlainState {
     writer: Box<dyn Write + Send>,
     use_color: bool,
     start_times: HashMap<InspectorId, Instant>,
-    /// Transient metric for the current step — consumed by StepFinished.
-    last_metric: Option<(MetricKind, usize)>,
-    /// Last metric seen for the current inspector — used by the parent completion line.
-    inspector_metric: Option<(MetricKind, usize)>,
+    /// Per-inspector transient metric for the current step — consumed by StepFinished.
+    step_metrics: HashMap<InspectorId, (MetricKind, usize)>,
+    /// Per-inspector last metric — used by the parent completion line.
+    inspector_metrics: HashMap<InspectorId, (MetricKind, usize)>,
+    /// Per-inspector count of probes that found results — for "N ecosystems".
+    probes_found: HashMap<InspectorId, usize>,
 }
 
 impl PlainRenderer {
@@ -65,8 +67,9 @@ impl PlainRenderer {
                 writer,
                 use_color,
                 start_times: HashMap::new(),
-                last_metric: None,
-                inspector_metric: None,
+                step_metrics: HashMap::new(),
+                inspector_metrics: HashMap::new(),
+                probes_found: HashMap::new(),
             }),
         }
     }
@@ -77,8 +80,9 @@ impl PlainRenderer {
         match event {
             ProgressEvent::InspectorStarted(id) => {
                 state.start_times.insert(id, Instant::now());
-                state.last_metric = None;
-                state.inspector_metric = None;
+                state.step_metrics.remove(&id);
+                state.inspector_metrics.remove(&id);
+                state.probes_found.remove(&id);
                 let name = display::display_name(id);
                 let _ = writeln!(state.writer, "\u{25b8} {name}");
             }
@@ -89,38 +93,42 @@ impl PlainRenderer {
                     .remove(&id)
                     .map(|t| t.elapsed().as_secs_f64());
                 let use_color = state.use_color;
+                let insp_metric = state.inspector_metrics.remove(&id);
+                let probes = state.probes_found.remove(&id);
                 let (symbol, suffix) =
-                    format_inspector_outcome(&outcome, elapsed, &state.inspector_metric, use_color);
+                    format_inspector_outcome(&outcome, elapsed, &insp_metric, probes, use_color);
                 let _ = writeln!(state.writer, "{symbol} {name:<40} {suffix}");
-                state.last_metric = None;
-                state.inspector_metric = None;
+                state.step_metrics.remove(&id);
             }
             ProgressEvent::StepStarted { step, .. } => {
                 let name = display::step_name(&step);
                 let _ = writeln!(state.writer, "    \u{25b8} {name}");
             }
-            ProgressEvent::StepFinished { step, outcome, .. } => {
+            ProgressEvent::StepFinished { inspector, step, outcome } => {
                 let name = display::step_name(&step);
                 let use_color = state.use_color;
+                let step_metric = state.step_metrics.remove(&inspector);
                 let (symbol, suffix) =
-                    format_step_outcome(&outcome, &state.last_metric, use_color);
+                    format_step_outcome(&outcome, &step_metric, use_color);
                 let _ = writeln!(
                     state.writer,
                     "    {symbol} {name:<36} {suffix}"
                 );
-                state.last_metric = None;
             }
-            ProgressEvent::Metric { kind, value, .. } => {
-                state.last_metric = Some((kind.clone(), value));
-                state.inspector_metric = Some((kind, value));
+            ProgressEvent::Metric { inspector, kind, value } => {
+                state.step_metrics.insert(inspector, (kind.clone(), value));
+                state.inspector_metrics.insert(inspector, (kind, value));
             }
             ProgressEvent::ProbeStarted { probe, .. } => {
                 let name = display::probe_name(&probe);
                 let _ = writeln!(state.writer, "    \u{25b8} {name}");
             }
             ProgressEvent::ProbeFinished {
-                probe, outcome, ..
+                inspector, probe, outcome,
             } => {
+                if matches!(outcome, ProbeOutcome::Found { .. }) {
+                    *state.probes_found.entry(inspector).or_insert(0) += 1;
+                }
                 let name = display::probe_name(&probe);
                 let use_color = state.use_color;
                 let (symbol, suffix) =
@@ -144,14 +152,19 @@ fn format_inspector_outcome(
     outcome: &InspectorOutcome,
     elapsed: Option<f64>,
     last_metric: &Option<(MetricKind, usize)>,
+    probes_found: Option<usize>,
     use_color: bool,
 ) -> (String, String) {
     match outcome {
         InspectorOutcome::Complete => {
             let sym = colored("\u{2713}", GREEN, use_color);
-            let label = match last_metric {
-                Some((kind, value)) => display::metric_label(kind, *value),
-                None => "done".to_string(),
+            let label = if let Some(count) = probes_found {
+                format!("{count} ecosystems")
+            } else {
+                match last_metric {
+                    Some((kind, value)) => display::metric_label(kind, *value),
+                    None => "done".to_string(),
+                }
             };
             let suf = match elapsed {
                 Some(s) => format!("{label} ({s:.1}s)"),
@@ -616,6 +629,97 @@ mod tests {
         assert!(
             text.contains("degraded: rpm -V timed out"),
             "expected degraded reason, got: {text}"
+        );
+    }
+
+    #[test]
+    fn plain_nonrpm_ecosystems_count() {
+        let (renderer, buf) = test_renderer(false);
+
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Found { count: 12 },
+        });
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+            outcome: ProbeOutcome::Found { count: 5 },
+        });
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: ProbeOutcome::Empty,
+        });
+        renderer.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        // The parent completion line should show "2 ecosystems"
+        let lines: Vec<&str> = text.lines().collect();
+        let done_line = lines
+            .iter()
+            .find(|l| l.contains("Non-RPM") && l.contains('\u{2713}'))
+            .expect("should find NonRpmSoftware done line");
+        assert!(
+            done_line.contains("2 ecosystems"),
+            "expected '2 ecosystems', got: {done_line}"
+        );
+    }
+
+    #[test]
+    fn plain_per_inspector_metric_isolation() {
+        // Two inspectors active at once — RPM metric must not leak to Services.
+        let (renderer, buf) = test_renderer(false);
+
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Services));
+
+        renderer.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        renderer.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 500,
+        });
+        renderer.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+
+        // Services finishes without any metric
+        renderer.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Services,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        let svc_done = lines
+            .iter()
+            .find(|l| l.contains("Services") && l.contains('\u{2713}'))
+            .expect("services done line");
+        assert!(
+            svc_done.contains("done"),
+            "Services should say 'done' not inherit RPM metric, got: {svc_done}"
         );
     }
 

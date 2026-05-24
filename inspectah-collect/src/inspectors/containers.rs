@@ -92,7 +92,7 @@ impl Inspector for ContainersInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
         let mut warnings: Vec<Warning> = Vec::new();
@@ -134,6 +134,13 @@ impl Inspector for ContainersInspector {
 
         // --- Flatpak apps ---
         section.flatpak_apps = detect_flatpak_apps(exec);
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::Containers,
+            kind: inspectah_core::types::progress::MetricKind::ContainersFound,
+            value: section.running_containers.len(),
+        });
 
         let output = InspectorOutput {
             section: SectionData::Containers(section),

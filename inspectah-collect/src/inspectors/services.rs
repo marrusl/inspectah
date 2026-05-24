@@ -214,7 +214,7 @@ impl Inspector for ServicesInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
 
@@ -381,6 +381,13 @@ impl Inspector for ServicesInspector {
 
         // 4b. Resolve owning packages for state_changes entries.
         populate_owning_packages(exec, &mut state_changes);
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::Services,
+            kind: inspectah_core::types::progress::MetricKind::UnitsFound,
+            value: state_changes.len(),
+        });
 
         // 5. Scan drop-in directories
         let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);

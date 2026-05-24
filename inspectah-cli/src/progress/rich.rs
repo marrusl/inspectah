@@ -102,6 +102,8 @@ struct InspectorRow {
     last_metric: Option<(MetricKind, usize)>,
     /// Last metric seen across all steps — used by the parent completion line.
     inspector_metric: Option<(MetricKind, usize)>,
+    /// Count of probes that found results — used by NonRpmSoftware completion.
+    probes_found_count: Option<usize>,
 }
 
 /// In-memory checklist state — the entire model for rich-mode rendering.
@@ -132,6 +134,7 @@ impl ChecklistState {
                 probes: Vec::new(),
                 last_metric: None,
                 inspector_metric: None,
+                probes_found_count: None,
             })
             .collect();
 
@@ -190,6 +193,16 @@ impl ChecklistState {
                         .started_at
                         .map(|t| t.elapsed())
                         .unwrap_or_default();
+
+                    // Non-RPM parent: compute ecosystem count from found probes.
+                    if id == InspectorId::NonRpmSoftware && matches!(outcome, InspectorOutcome::Complete) {
+                        let ecosystems = self.rows[idx]
+                            .probes
+                            .iter()
+                            .filter(|p| matches!(p.state, ProbeRowState::Found { .. }))
+                            .count();
+                        self.rows[idx].probes_found_count = Some(ecosystems);
+                    }
 
                     // Reconcile child sub-steps: any still Active or
                     // Pending should inherit the parent's terminal state.
@@ -333,7 +346,6 @@ impl ChecklistState {
     /// call this directly to assert rendered output.
     fn render_lines(&self) -> Vec<String> {
         let spinner_frame = SPINNER[(self.tick_count as usize) % SPINNER.len()];
-        let total = self.rows.len();
         let use_color = self.use_color;
 
         // Compute max lines available for the checklist block.
@@ -345,46 +357,49 @@ impl ChecklistState {
         // Track which lines are "pending" so we can drop them on overflow.
         let mut line_categories: Vec<LineCategory> = Vec::new();
 
-        for (pos, row) in self.rows.iter().enumerate() {
+        for row in &self.rows {
             let name = display::display_name(row.id);
-            let position = pos + 1;
 
             let line = match &row.state {
                 RowState::Pending => {
-                    let sym = colored("\u{00b7}", DIM, use_color); // middle dot
-                    format!("  {sym} [{position:>2}/{total}] {name}")
+                    let sym = colored("\u{25cc}", DIM, use_color); // ◌
+                    format!("  {sym} {name}")
                 }
                 RowState::Active => {
                     let elapsed_str = self.format_elapsed(row.started_at);
-                    format!("  {spinner_frame} [{position:>2}/{total}] {name}{elapsed_str}")
+                    format!("  {spinner_frame} {name}{elapsed_str}")
                 }
                 RowState::Complete { elapsed } => {
-                    let sym = colored("\u{2713}", GREEN, use_color);
-                    let label = match &row.inspector_metric {
-                        Some((kind, value)) => display::metric_label(kind, *value),
-                        None => "done".to_string(),
+                    let sym = colored("\u{2713}", GREEN, use_color); // ✓
+                    let label = if let Some(count) = row.probes_found_count {
+                        format!("{count} ecosystems")
+                    } else {
+                        match &row.inspector_metric {
+                            Some((kind, value)) => display::metric_label(kind, *value),
+                            None => "done".to_string(),
+                        }
                     };
                     let suf = format_elapsed_suf(*elapsed);
-                    format!("  {sym} [{position:>2}/{total}] {name:<40} {label}{suf}")
+                    format!("  {sym} {name:<40} {label}{suf}")
                 }
                 RowState::Skipped { reason } => {
-                    let sym = colored("\u{2013}", DIM, use_color);
-                    format!("  {sym} [{position:>2}/{total}] {name:<40} skipped ({reason})")
+                    let sym = colored("\u{2013}", DIM, use_color); // –
+                    format!("  {sym} {name:<40} skipped ({reason})")
                 }
                 RowState::Degraded { reason, elapsed } => {
                     let sym = colored("~", YELLOW, use_color);
                     let suf = format_elapsed_suf(*elapsed);
                     format!(
-                        "  {sym} [{position:>2}/{total}] {name:<40} degraded: {reason}{suf}"
+                        "  {sym} {name:<40} degraded: {reason}{suf}"
                     )
                 }
                 RowState::Failed { reason } => {
-                    let sym = colored("\u{2717}", RED, use_color);
-                    format!("  {sym} [{position:>2}/{total}] {name:<40} failed: {reason}")
+                    let sym = colored("\u{2717}", RED, use_color); // ✗
+                    format!("  {sym} {name:<40} failed: {reason}")
                 }
                 RowState::Interrupted => {
-                    let sym = colored("\u{25a0}", RED, use_color);
-                    format!("  {sym} [{position:>2}/{total}] {name:<40} interrupted")
+                    let sym = colored("\u{25a0}", RED, use_color); // ■
+                    format!("  {sym} {name:<40} interrupted")
                 }
             };
 
@@ -825,15 +840,16 @@ mod tests {
         // All 11 inspectors should have lines
         assert_eq!(lines.len(), 11);
 
-        // Pending lines use middle dot
+        // Pending lines use ◌ (dotted circle)
         assert!(
-            lines[0].contains('\u{00b7}'),
-            "expected middle dot for pending, got: {}",
+            lines[0].contains('\u{25cc}'),
+            "expected ◌ for pending, got: {}",
             lines[0]
         );
+        // Rich mode uses glyphs, not [n/total] numbering
         assert!(
-            lines[0].contains("[ 1/11]"),
-            "expected position counter, got: {}",
+            !lines[0].contains("["),
+            "rich mode should not have [n/N] numbering, got: {}",
             lines[0]
         );
         assert!(
@@ -1151,11 +1167,15 @@ mod tests {
             joined.contains("8 repos mapped"),
             "ReposMapped should say '8 repos mapped', got: {joined}"
         );
-        // Parent completion line should show last metric
+        // Parent completion line should show last metric (no [n/N] numbering in rich mode)
         let rpm_line = lines.iter().find(|l| l.contains("RPM packages") && l.contains('\u{2713}')).expect("RPM done line");
         assert!(
             rpm_line.contains("8 repos mapped"),
             "parent completion should show last metric, got: {rpm_line}"
+        );
+        assert!(
+            !rpm_line.contains("["),
+            "rich mode should not have numbering, got: {rpm_line}"
         );
     }
 
@@ -1387,5 +1407,114 @@ mod tests {
 
         let svc_row = state.rows.iter().find(|r| r.id == InspectorId::Services).unwrap();
         assert!(svc_row.sub_steps.is_empty(), "Services should have no sub-steps");
+    }
+
+    #[test]
+    fn rich_no_numbering_in_output() {
+        // Rich mode uses glyphs, not [n/N] numbering (that's flat mode).
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Selinux));
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Selinux,
+            outcome: InspectorOutcome::Skipped {
+                reason: "disabled".to_string(),
+            },
+        });
+
+        let lines = state.render_lines();
+        for line in &lines {
+            assert!(
+                !line.contains("[") || line.contains("..."),
+                "rich mode should not use [n/N] numbering, got: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonrpm_ecosystems_count() {
+        // NonRpmSoftware completion line should show "N ecosystems".
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+
+        // Two probes find results, one is empty
+        state.handle_event(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        state.handle_event(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Found { count: 12 },
+        });
+        state.handle_event(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+        });
+        state.handle_event(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+            outcome: ProbeOutcome::Found { count: 5 },
+        });
+        state.handle_event(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        state.handle_event(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: ProbeOutcome::Empty,
+        });
+
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let lines = state.render_lines();
+        let nonrpm_line = lines
+            .iter()
+            .find(|l| l.contains("Non-RPM") && l.contains('\u{2713}'))
+            .expect("should have NonRpmSoftware done line");
+        assert!(
+            nonrpm_line.contains("2 ecosystems"),
+            "expected '2 ecosystems', got: {nonrpm_line}"
+        );
+    }
+
+    #[test]
+    fn nonrpm_zero_ecosystems() {
+        // When all probes are empty, show "0 ecosystems" (not "done").
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+
+        state.handle_event(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        state.handle_event(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: ProbeOutcome::Empty,
+        });
+
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let lines = state.render_lines();
+        let nonrpm_line = lines
+            .iter()
+            .find(|l| l.contains("Non-RPM") && l.contains('\u{2713}'))
+            .expect("should have NonRpmSoftware done line");
+        assert!(
+            nonrpm_line.contains("0 ecosystems"),
+            "expected '0 ecosystems', got: {nonrpm_line}"
+        );
     }
 }
