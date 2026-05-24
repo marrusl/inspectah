@@ -470,4 +470,141 @@ describe("PackageList", () => {
     );
     expect(screen.queryByTestId("excluded-zone")).not.toBeInTheDocument();
   });
+
+  it("excluded zone stays visible with 'No excluded packages' after repo re-enabled (latched)", () => {
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const pkgs = [
+      makePkg("bash", "baseos"),
+      makePkg("nginx", "epel"),
+    ];
+    // Render with repo disabled — excluded zone appears
+    const { rerender } = render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={[distroRepo, officialRepo, disabledEpel]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("excluded-zone")).toBeInTheDocument();
+
+    // Re-enable the repo — excluded zone should still be visible (latched)
+    rerender(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Zone stays visible, showing "No excluded packages" message
+    expect(screen.getByText("No excluded packages")).toBeInTheDocument();
+  });
+
+  // --- Fleet conflict popover in rows ---
+
+  it("fleet: renders RepoConflictPopover trigger for packages with repo_conflict", () => {
+    const pkgs = [
+      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+        repo_conflict: [
+          { repo: "baseos", host_count: 2 },
+          { repo: "appstream", host_count: 1 },
+        ],
+      }),
+      makeFleetPkg("curl", "baseos", 5, 5),
+    ];
+    render(
+      <PackageList
+        mode="fleet"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // httpd has conflict — popover trigger should be present
+    const httpdRow = screen.getByTestId("package-row-httpd");
+    expect(within(httpdRow).getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+    // curl has no conflict — no popover trigger
+    const curlRow = screen.getByTestId("package-row-curl");
+    expect(within(curlRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+  });
+
+  it("fleet: dismissing a conflict hides popover trigger and reports count", () => {
+    const onDismissedCountChange = vi.fn();
+    const pkgs = [
+      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+        repo_conflict: [
+          { repo: "baseos", host_count: 2 },
+          { repo: "appstream", host_count: 1 },
+        ],
+      }),
+    ];
+    render(
+      <PackageList
+        mode="fleet"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        onDismissedCountChange={onDismissedCountChange}
+      />,
+    );
+    // Click popover trigger to open
+    const trigger = screen.getByRole("button", { name: /repo conflict/i });
+    fireEvent.click(trigger);
+    // Click dismiss button inside popover
+    const dismissBtn = screen.getByText("Dismiss");
+    fireEvent.click(dismissBtn);
+    // Popover trigger should disappear (dismissed)
+    expect(screen.queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+    // Dismissed count reported as 1
+    expect(onDismissedCountChange).toHaveBeenCalledWith(1);
+  });
+
+  it("fleet: onRestoreDismissed clears dismissals and re-shows popover trigger", () => {
+    const onDismissedCountChange = vi.fn();
+    const pkgs = [
+      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+        repo_conflict: [
+          { repo: "baseos", host_count: 2 },
+          { repo: "appstream", host_count: 1 },
+        ],
+      }),
+    ];
+    const { rerender } = render(
+      <PackageList
+        mode="fleet"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        onDismissedCountChange={onDismissedCountChange}
+        onRestoreDismissed={false}
+      />,
+    );
+    // Dismiss the conflict
+    fireEvent.click(screen.getByRole("button", { name: /repo conflict/i }));
+    fireEvent.click(screen.getByText("Dismiss"));
+    expect(screen.queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+
+    // Restore dismissed via prop toggle
+    rerender(
+      <PackageList
+        mode="fleet"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        onDismissedCountChange={onDismissedCountChange}
+        onRestoreDismissed={true}
+      />,
+    );
+    // Popover trigger reappears
+    expect(screen.getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+    // Count reset to 0
+    expect(onDismissedCountChange).toHaveBeenCalledWith(0);
+  });
 });

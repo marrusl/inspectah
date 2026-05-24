@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
+import { RepoConflictPopover } from "./fleet/RepoConflictPopover";
 import type { RepoGroupInfo, RepoTier } from "../api/types";
 
 // --- Types ---
@@ -74,11 +75,13 @@ export function PackageList({
     () => new Set(),
   );
 
-  // Track whether any repo has ever been toggled (for ExcludedZone visibility)
-  const hasEverToggled = useMemo(
-    () => repoGroups.some((r) => !r.is_distro && !r.enabled),
-    [repoGroups],
-  );
+  // Latched: once any non-distro repo is disabled, stays true for the session
+  const [hasEverToggled, setHasEverToggled] = useState(false);
+  useEffect(() => {
+    if (repoGroups.some((r) => !r.is_distro && !r.enabled)) {
+      setHasEverToggled(true);
+    }
+  }, [repoGroups]);
 
   // Report dismissed count to parent
   useEffect(() => {
@@ -246,7 +249,7 @@ interface PackageRowProps {
   onDismiss: (key: string) => void;
 }
 
-function PackageRow({ pkg, mode, tier, onToggle }: PackageRowProps) {
+function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
 
   return (
@@ -278,9 +281,20 @@ function PackageRow({ pkg, mode, tier, onToggle }: PackageRowProps) {
         />
         <span>{pkg.name}</span>
         {mode === "fleet" && (
-          <span data-testid="repo-text" style={style}>
-            {pkg.source_repo}
-          </span>
+          <>
+            <span data-testid="repo-text" style={style}>
+              {pkg.source_repo}
+            </span>
+            {pkg.repo_conflict && pkg.repo_conflict.length > 0 && (
+              <RepoConflictPopover
+                packageName={pkg.name}
+                identityKey={pkg.name}
+                entries={pkg.repo_conflict}
+                isDismissed={dismissed}
+                onDismiss={onDismiss}
+              />
+            )}
+          </>
         )}
       </div>
 

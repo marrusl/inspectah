@@ -21,25 +21,22 @@ export function RepoConflictPopover({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dismissRef = useRef<HTMLButtonElement>(null);
 
-  // Nothing to show
-  if (isDismissed || entries.length === 0) return null;
-
   const accessibleName = `Repo conflict for ${packageName} — ${entries.length} sources`;
 
-  const open = () => {
+  const open = useCallback(() => {
     setIsOpen(true);
-  };
+  }, []);
 
-  const closeToTrigger = () => {
+  const closeToTrigger = useCallback(() => {
     setIsOpen(false);
     // Return focus to trigger after close
     triggerRef.current?.focus();
-  };
+  }, []);
 
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     setIsOpen(false);
     onDismiss(identityKey);
-  };
+  }, [onDismiss, identityKey]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -48,8 +45,11 @@ export function RepoConflictPopover({
         closeToTrigger();
       }
     },
-    [isOpen],
+    [isOpen, closeToTrigger],
   );
+
+  // Nothing to show — all hooks called above, safe to early-return
+  if (isDismissed || entries.length === 0) return null;
 
   return (
     <span

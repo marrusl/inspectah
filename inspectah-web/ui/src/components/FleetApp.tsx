@@ -190,6 +190,16 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     [],
   );
 
+  // --- Dismissed conflict state (bridges PackageList → RepoBar) ---
+  const [dismissedCount, setDismissedCount] = useState(0);
+  const [restoreDismissed, setRestoreDismissed] = useState(false);
+
+  const handleRestoreDismissed = useCallback(() => {
+    setRestoreDismissed(true);
+    // Reset the flag after PackageList consumes it
+    Promise.resolve().then(() => setRestoreDismissed(false));
+  }, []);
+
   // --- Package / repo toggle handlers for unified PackageList ---
 
   // Convert FleetItem[] from the packages section to PackageListPackage[]
@@ -403,6 +413,8 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
                   repos={fleetView.repo_groups}
                   onToggle={handleFleetRepoToggle}
                   conflictCount={fleetView.repo_conflict_count}
+                  dismissedCount={dismissedCount}
+                  onRestoreDismissed={handleRestoreDismissed}
                 />
                 <PackageList
                   mode="fleet"
@@ -410,6 +422,8 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
                   repoGroups={fleetView.repo_groups}
                   onToggle={handleFleetPackageToggle}
                   onRepoToggle={handleFleetRepoToggle}
+                  onDismissedCountChange={setDismissedCount}
+                  onRestoreDismissed={restoreDismissed}
                 />
               </>
             ) : (

@@ -682,4 +682,84 @@ describe("FleetApp integration", () => {
       expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // 11. Fleet conflict dismiss/restore flow (RepoBar ↔ PackageList)
+  // -------------------------------------------------------------------------
+  describe("fleet conflict dismiss/restore flow", () => {
+    function makeConflictView(): FleetViewResponse {
+      return mockFleetViewResponse({
+        repo_conflict_count: 1,
+        repo_groups: [
+          { section_id: "baseos", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
+          { section_id: "epel", provenance: "incomplete" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
+        ],
+        sections: [
+          mockFleetSection("packages", {
+            display_name: "Packages",
+            items: [
+              mockFleetItem({
+                item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+                prevalence: { count: 3, total: 3 },
+                source_repo: "baseos",
+                repo_conflict: [
+                  { repo: "baseos", host_count: 2 },
+                  { repo: "epel", host_count: 1 },
+                ],
+              }),
+              mockFleetItem({
+                item_id: { kind: "Package", key: { name_arch: "curl.x86_64" } },
+                prevalence: { count: 3, total: 3 },
+                source_repo: "baseos",
+              }),
+            ],
+          }),
+          mockFleetSection("config_files", {
+            display_name: "Config Files",
+            is_decision_section: true,
+            items: [],
+          }),
+          mockFleetSection("services", {
+            display_name: "Services",
+            is_decision_section: false,
+            items: [],
+          }),
+        ],
+      });
+    }
+
+    it("conflict popover trigger appears on fleet row, dismiss hides it, RepoBar restore brings it back", async () => {
+      mockFetchFleetView.mockResolvedValue(makeConflictView());
+      renderFleetApp();
+      await waitForContent();
+
+      // Conflict popover trigger should be present on httpd row
+      const httpdRow = screen.getByTestId("package-row-httpd.x86_64");
+      const trigger = within(httpdRow).getByRole("button", { name: /repo conflict/i });
+      expect(trigger).toBeInTheDocument();
+
+      // curl should not have a conflict trigger
+      const curlRow = screen.getByTestId("package-row-curl.x86_64");
+      expect(within(curlRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+
+      // Open popover and dismiss
+      await userEvent.click(trigger);
+      const dismissBtn = screen.getByText("Dismiss");
+      await userEvent.click(dismissBtn);
+
+      // Trigger should disappear after dismiss
+      expect(within(httpdRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+
+      // RepoBar should show "Show 1 dismissed"
+      const repoBar = screen.getByTestId("repo-bar");
+      const restoreBtn = within(repoBar).getByRole("button", { name: /show 1 dismissed/i });
+      expect(restoreBtn).toBeInTheDocument();
+
+      // Click restore — popover trigger should reappear
+      await userEvent.click(restoreBtn);
+      await waitFor(() => {
+        expect(within(httpdRow).getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+      });
+    });
+  });
 });
