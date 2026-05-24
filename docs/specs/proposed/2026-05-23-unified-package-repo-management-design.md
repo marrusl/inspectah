@@ -128,9 +128,16 @@ no dep tree.
 | Fleet | ☑ package-name  repo-name (colored text) | N/M hosts |
 
 **Repo text is always visible** on every row as colored text:
-- Distro repos: muted gray (low visual weight)
-- Official-optional (crb, rhel-extensions): green
-- Third-party (epel, COPRs): amber
+- Distro repos: muted gray (low visual weight), no additional indicator
+- Official-optional (crb, rhel-extensions): green text + subtle dotted
+  underline (non-color tier signal — visually distinguishes from distro
+  text for color-blind users without adding badge noise)
+- Third-party (epel, COPRs): amber text + solid underline (distinct
+  from official-optional's dotted underline)
+
+The underline styles provide a non-color differentiator between the
+three tiers in the package list, complementing the repo bar's
+structural differentiation (plain text vs green pill vs amber pill).
 
 **Position differs by mode:** In single-machine, repo is the right column
 (it's a primary data axis). In fleet, repo sits inline next to the package
@@ -154,24 +161,54 @@ larger layers) and create brittle repo-file manipulation. The user's
 real action lever is the repo toggle: disable the repo you don't want.
 
 **Warning behavior (fleet only):**
-- An inline warning icon (triangle-exclamation) appears in the repo
-  column for any package with mixed repo sources across hosts.
-- Hover or focus reveals a tooltip: "nginx found in epel (3 hosts)
-  and appstream (2 hosts)." Show repos and host counts — the split
-  ratio matters for judging severity.
+
+The repo-source warning is a **button-triggered popover disclosure**,
+not a tooltip. This distinction matters because the warning has
+interactive content (a dismiss action with session-scoped state).
+
+- **Trigger:** An inline warning button (triangle-exclamation icon)
+  appears in the repo column for any package with mixed repo sources.
+  The button is a native `<button>` element, not a passive icon.
+- **Popover:** Clicking or pressing Enter/Space on the trigger opens
+  a popover anchored to the button. Content: "nginx found in epel
+  (3 hosts) and appstream (2 hosts)." Show repos and host counts —
+  the split ratio matters for judging severity.
+- **Focus landing:** When the popover opens, focus moves to the first
+  interactive element inside (the dismiss button). When the popover
+  closes (via dismiss or Escape), focus returns to the trigger button.
+- **Dismiss:** A visible "Dismiss" button inside the popover. Dismissal
+  hides the warning icon on that row but does NOT hide the package row
+  or change the majority-repo text. The package stays in the list,
+  the repo text stays, only the warning affordance disappears.
+- **Restore:** A "Show N dismissed" chip or toggle (session-scoped)
+  restores dismissed warnings. Not permanently dismissable — fleet
+  composition changes between scans.
 - The majority repo is shown as the row's repo text.
-- Warnings are **session-scoped dismissable**: dismiss per-row via the
-  tooltip's close action. A "Show N dismissed" toggle or chip restores
-  visibility. Not permanently dismissable — fleet composition changes
-  between scans.
 - Packages with a single consistent repo across all hosts (the common
-  case) show no warning icon.
+  case) show no warning button.
+
+**Fleet surfacing:** Packages with repo conflicts sort to the top of
+their prevalence group when the default prevalence sort is active. This
+ensures consensus-installed-but-repo-split packages are not buried below
+divergent packages — the user sees them during first scan, not later.
+A conflict-count badge in the repo bar ("⚠ 3 conflicts") provides a
+fleet-wide summary so the user knows conflicts exist before scrolling.
 
 **Frequency in practice:** Uncommon for distro packages (baseos and
 appstream have disjoint package sets by design, EPEL policy avoids
 overriding RHEL). More common with COPRs, vendor repos (PGDG, MariaDB),
 and packages graduating from EPEL to RHEL during minor releases.
 Estimated 5-15% of packages in a heterogeneous fleet.
+
+**Mixed-repo row contract (canonical):** For packages with
+`repo_conflict`, the row's `source_repo` is the majority repo.
+Repo-bar package counts and repo toggles operate on this majority
+`source_repo`. If the majority repo is "epel" and the user disables
+EPEL, the package moves to the excluded zone — even though some hosts
+had it from appstream. The `repo_conflict` field is **UI-only
+provenance** — it surfaces awareness of repo divergence but does not
+affect Containerfile output, export truth, or refinement operations.
+The engine sees only the majority `source_repo`.
 
 **Prevalence display (fleet only):** Right-aligned N/M count, color-coded:
 - Green: consensus (all hosts)
@@ -196,9 +233,17 @@ Each mode has two independently sortable columns.
 - **Prevalence** — ascending (lowest prevalence first, divergent at top) /
   descending (highest prevalence first, consensus at top)
 
+**Sort header structure:** The two column headers are rendered as
+`<button>` elements inside a `<div role="row">` with
+`role="columnheader"` on each. This is a single-row header, not a full
+`<table>` — the package list below is a flat list, not table rows.
+The column headers own sort state; the list re-renders on sort change.
+
 **Sort interaction:**
 - Click a column header to make it the active sort. Click again to toggle
-  direction. Three-state cycle: ascending → descending → ascending.
+  direction. Two-state cycle per column: ascending → descending →
+  ascending. Clicking the inactive column activates it in ascending and
+  deactivates the other.
 - Only one column is active at a time. Clicking one deactivates the other.
 - Active column: header text in accent blue + chevron (▲ or ▼).
   Inactive column: header text in muted gray, no chevron.
@@ -227,18 +272,23 @@ non-distro repo is toggled off.
 - Reduced opacity (~40%)
 - Separated from the active list by a subtle border
 
-**Visibility:**
-- **Hidden** until at least one repo has been toggled off. No "No excluded
-  packages" noise in the default state.
-- **Visible** once any repo is disabled. Remains visible if the user
-  re-enables all repos (showing empty state) so the feature stays
-  discoverable after first use.
+**Visibility (three states):**
+- **Never shown:** Initial state. No repo has been toggled off this
+  session. The excluded zone does not render at all — no header, no
+  empty text, no space consumed.
+- **Visible with content:** At least one repo is disabled. The zone
+  renders with a header ("Excluded · N packages"), a subtle border
+  separator above it, and the full package list. The count in the
+  header always matches the number of rendered rows.
+- **Visible but empty:** The user disabled a repo and then re-enabled
+  it. The zone remains rendered with the header ("Excluded · 0
+  packages") and "No excluded packages" text. This preserves
+  discoverability — the user now knows the zone exists. The zone
+  stays visible for the rest of the session once it has appeared.
 
-**States (when visible):**
-- **Empty (all repos re-enabled):** "No excluded packages" text
-- **Non-empty:** Full list of excluded packages with their repo names
-- **Large (50+ packages):** Collapsed by default with "Show N excluded
-  packages" expander button
+**Large excluded zone (50+ packages):** Collapsed by default with
+"Show N excluded packages" expander button. The header count is always
+visible regardless of collapse state.
 
 **Re-enabling a repo** removes its packages from the excluded zone and
 returns them to the active list at their appropriate sorted position,
@@ -287,16 +337,25 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 - Screen reader announcement: "Packages, sorted ascending" /
   "Prevalence, sortable"
 
-### Repo-Source Warning (Fleet Only)
-- Warning icon is focusable (`tabindex="0"` or native button)
-- On focus, tooltip content announced via `aria-describedby`:
-  "nginx found in epel, 3 hosts, and appstream, 2 hosts"
-- Dismiss action: Escape closes tooltip, visible dismiss button (X)
-  inside tooltip is keyboard-reachable. Announced as "Dismiss repo
-  conflict warning for nginx"
-- `role="status"` on tooltip container for live-region announcement
-- Dismissed state: row `aria-label` updates to remove conflict mention
-- "Show N dismissed" toggle is a standard checkbox, announced naturally
+### Repo-Source Warning Popover (Fleet Only)
+- **Trigger button:** Native `<button>` with `aria-haspopup="dialog"`
+  and `aria-expanded="true|false"`. Accessible name: "Repo conflict
+  for nginx — 2 sources". Included in the row's tab order.
+- **Popover:** `role="dialog"`, `aria-label="Repo source conflict for
+  nginx"`. Focus moves to the dismiss button on open.
+- **Dismiss button:** Inside the popover. Accessible name: "Dismiss
+  repo conflict warning for nginx". On activation: popover closes,
+  focus returns to the trigger button, trigger button is removed from
+  the DOM (warning dismissed for session).
+- **Post-dismiss focus:** When the trigger button is removed, focus
+  moves to the next focusable element in the row (the package checkbox).
+- **Escape:** Closes the popover without dismissing. Focus returns to
+  the trigger button (which remains visible).
+- **Dismissed state:** Row `aria-label` updates to remove conflict
+  mention. The "Show N dismissed" restore control is a standard
+  toggle button, announced naturally.
+- **Conflict count badge** in repo bar: `aria-live="polite"` updates
+  when warnings are dismissed or restored.
 
 ### Excluded Zone
 - Count updated via `aria-live="polite"` when packages move in/out
@@ -312,8 +371,11 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 
 ### Color-Only Indicator Mitigation
 - Repo tier colors (gray/green/amber) must NOT be the sole differentiator.
-  The repo bar provides non-color context (locked label vs toggle), and
-  tier-first sort clusters repos by tier regardless of color perception.
+  In the package list, underline styles provide a non-color signal:
+  no underline = distro, dotted underline = official-optional, solid
+  underline = third-party. The repo bar provides structural non-color
+  context (plain text vs pill, locked label vs toggle), and tier-first
+  sort clusters repos by tier regardless of color perception.
 - Prevalence colors (green/amber/red) are reinforced by the numeric N/M
   count on every row — the number is the primary signal, color is secondary.
 - All colored text must meet 4.5:1 contrast ratio against the dark
@@ -372,23 +434,40 @@ repo column. The repo bar handles repo-level actions (enable/disable).
 
 ### Frontend Changes
 
-**Both modes share the same component structure:**
+**Current frontend structure (as-is):** The single-machine and fleet UIs
+are separate component trees: `App.tsx` / `MainContent.tsx` for
+single-machine refine, `FleetApp.tsx` / `FleetSection.tsx` for fleet.
+These share some primitives but are not unified. The backend mirrors
+this split: `handlers.rs` serves `ViewResponse` for single-machine,
+`fleet_handlers.rs` serves `FleetViewResponse` for fleet.
+
+**Target component structure:** Both modes will share a new unified
+package-list component tree. The mode-specific differences (which
+right column, which default sort, whether to show repo-conflict
+warnings) are props/config on shared components, not separate trees.
+
+**Shared components:**
 - Repo bar component (renders from `RepoGroupInfo[]`)
 - Package list component (renders rows with checkbox + name + context column)
 - Sort header component (two-column sortable, mode-aware)
 - Excluded zone component
-- Repo-conflict warning icon + tooltip (fleet only, renders from
-  `repo_conflict` field — display-only, dismissable, session-scoped)
 
-**Mode-specific rendering:**
-- Single-machine: right column = repo name text
-- Fleet: left column = name + repo text, right column = prevalence count
+**Fleet-only components:**
+- Repo-conflict warning popover (renders from `repo_conflict` field —
+  display-only, dismissable, session-scoped)
+- Conflict count badge in repo bar
+
+**Mode-specific rendering (prop-driven, not separate trees):**
+- Single-machine: right column = repo name text, default sort = alpha
+- Fleet: left column = name + repo text, right column = prevalence
+  count, default sort = prevalence ascending
 
 **HTML template:**
-- New unified template replaces both the packages section of `report.html`
-  and the drawer rendering in `architect.html`
-- Sorting, toggling, and excluded zone management are client-side JS
-  operating on the view data — no server round-trips for sort/filter
+- New unified template replaces both the packages section of
+  `report.html` and the drawer rendering in `architect.html`
+- Sorting, toggling, excluded zone management, and warning dismissal
+  are client-side JS operating on the view data — no server
+  round-trips for sort/filter/dismiss
 
 **Performance:**
 - No list virtualization in v1. Render all package rows in the DOM.
