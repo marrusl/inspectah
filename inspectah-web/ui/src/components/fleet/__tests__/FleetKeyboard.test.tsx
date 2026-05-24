@@ -19,6 +19,7 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
     include: true,
     attention: { level: "none", reason: "", prevalence: 1 },
     prevalence: { count: 3, total: 3 },
+    source_repo: "",
     variants: {
       count: 3,
       selected: "aaa111",

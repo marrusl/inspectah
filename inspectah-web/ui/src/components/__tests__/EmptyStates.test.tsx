@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { DecisionList } from "../DecisionList";
 import type { DecisionItemKind } from "../DecisionItem";
 import type {
@@ -64,7 +63,6 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
-  leaf_dep_tree: {},
   version_changes: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
@@ -293,9 +291,8 @@ describe("Completion state", () => {
   });
 });
 
-describe("Filter empty state in MainContent", () => {
-  it("shows 'No items match your search' with clear button", async () => {
-    // Import MainContent for this test
+describe("Packages section renders unified components", () => {
+  it("renders PackageList for packages section", async () => {
     const { MainContent } = await import("../MainContent");
 
     const viewData: ViewResponse = {
@@ -305,10 +302,9 @@ describe("Filter empty state in MainContent", () => {
       stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
       generation: 1,
       repo_groups: [],
-      leaf_dep_tree: {},
       version_changes: [],
-  users_groups_decisions: [],
-  session_is_sensitive: false,
+      users_groups_decisions: [],
+      session_is_sensitive: false,
     };
 
     render(
@@ -319,31 +315,14 @@ describe("Filter empty state in MainContent", () => {
         sections={[]}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
-        sectionSearchOpen={true}
+        sectionSearchOpen={false}
         onSectionSearchClose={vi.fn()}
       />,
     );
 
-    // Wait for search input to render
-    await waitFor(() => {
-      expect(screen.getByTestId("section-search-input")).toBeInTheDocument();
-    });
-
-    // Type a filter that matches nothing - use the PF SearchInput's inner input
-    const searchInput = screen.getByPlaceholderText("Filter items...");
-    const user = userEvent.setup();
-    await user.type(searchInput, "zzz-no-match");
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("No items match your search"),
-      ).toBeInTheDocument();
-    });
-
-    // Clear filter button should exist
-    expect(
-      screen.getByRole("button", { name: "Clear filter" }),
-    ).toBeInTheDocument();
+    // Packages now render via unified PackageList
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
+    expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
   });
 });
 
@@ -379,39 +358,5 @@ describe("Version Changes empty states", () => {
   });
 });
 
-describe("Leaf dependency tree integration", () => {
-  it("renders View Dependencies button when leaf_dep_tree is provided", async () => {
-    const { MainContent } = await import("../MainContent");
-    const pkg = makePkg({ name: "httpd" }, [ROUTINE_TAG]);
-    const viewData = {
-      ...MOCK_VIEW,
-      packages: [pkg],
-      stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
-      leaf_dep_tree: { "httpd.x86_64": ["apr.x86_64", "glibc.x86_64"] },
-    };
-    render(
-      <MainContent
-        activeSection="packages"
-        loading={false}
-        viewData={viewData}
-        sections={[]}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
-      />
-    );
-    // Wait for viewed fetch
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
-    // Expand the package card to show detail view
-    const packageCard = screen.getByTestId("decision-item-packages:httpd.x86_64");
-    packageCard.focus();
-    await userEvent.keyboard("{Enter}");
-    // The View Dependencies button should render in the expanded detail
-    await waitFor(() => {
-      expect(screen.getByText(/View Dependencies/)).toBeInTheDocument();
-    });
-  });
-});
+// Leaf dependency tree integration test removed — DependencyModal
+// was removed as part of the unified package/repo refactor.

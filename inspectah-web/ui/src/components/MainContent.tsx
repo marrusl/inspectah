@@ -8,14 +8,16 @@ import {
   Button,
   Alert,
 } from "@patternfly/react-core";
-import type { ViewResponse, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
+import type { ViewResponse, RefinedPackage, RefinedConfig, RefinementOp, ContextSection } from "../api/types";
+import { applyOp } from "../api/client";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import { SectionSearch } from "./SectionSearch";
-import { AttentionSummary } from "./AttentionSummary";
-import { highestAttention } from "./attentionUtils";
+import { RepoBar } from "./RepoBar";
+import { PackageList } from "./PackageList";
+import type { PackageListPackage } from "./PackageList";
 import { CubesIcon } from "@patternfly/react-icons";
 
 /** Section ID to human-readable label. */
@@ -51,12 +53,17 @@ export interface MainContentProps {
   revealItemId?: string;
 }
 
-function toPackageItems(packages: RefinedPackage[]): DecisionItemKind[] {
-  return packages.map((pkg) => ({ type: "package" as const, data: pkg }));
-}
-
 function toConfigItems(configs: RefinedConfig[]): DecisionItemKind[] {
   return configs.map((cfg) => ({ type: "config" as const, data: cfg }));
+}
+
+/** Convert RefinedPackage[] to the flat PackageListPackage[] expected by PackageList. */
+function toPackageListPackages(packages: RefinedPackage[]): PackageListPackage[] {
+  return packages.map((pkg) => ({
+    name: `${pkg.entry.name}.${pkg.entry.arch}`,
+    source_repo: pkg.entry.source_repo,
+    include: pkg.entry.include,
+  }));
 }
 
 export function MainContent({
@@ -86,26 +93,16 @@ export function MainContent({
     onSectionSearchClose();
   }, [onSectionSearchClose]);
 
-  const packageItems = useMemo(
-    () => (viewData ? toPackageItems(viewData.packages) : []),
+  // Convert packages to the flat format expected by PackageList
+  const packageListPackages = useMemo(
+    () => (viewData ? toPackageListPackages(viewData.packages) : []),
     [viewData],
   );
+
   const configItems = useMemo(
     () => (viewData ? toConfigItems(viewData.config_files) : []),
     [viewData],
   );
-
-  // Filter decision items by search text
-  const filteredPackageItems = useMemo(() => {
-    if (!filterText.trim()) return packageItems;
-    const q = filterText.toLowerCase();
-    return packageItems.filter((item) => {
-      if (item.type !== "package") return false;
-      const e = item.data.entry;
-      const text = `${e.name} ${e.arch} ${e.version} ${e.source_repo}`.toLowerCase();
-      return text.includes(q);
-    });
-  }, [packageItems, filterText]);
 
   const filteredConfigItems = useMemo(() => {
     if (!filterText.trim()) return configItems;
@@ -117,6 +114,40 @@ export function MainContent({
       return text.includes(q);
     });
   }, [configItems, filterText]);
+
+  // Package toggle: build ExcludePackage/IncludePackage op from "name.arch" string
+  const handlePackageToggle = useCallback(
+    (nameArch: string) => {
+      // Find the package to determine current include state
+      const pkg = viewData?.packages.find(
+        (p) => `${p.entry.name}.${p.entry.arch}` === nameArch,
+      );
+      if (!pkg) return;
+      const [name, arch] = [pkg.entry.name, pkg.entry.arch];
+      const op: RefinementOp = pkg.entry.include
+        ? { op: "ExcludePackage", target: { name, arch } }
+        : { op: "IncludePackage", target: { name, arch } };
+      applyOp(op)
+        .then((updatedView) => onViewUpdate(updatedView))
+        .catch((err) => onMutationError(err instanceof Error ? err : new Error(String(err))));
+    },
+    [viewData, onViewUpdate, onMutationError],
+  );
+
+  // Repo toggle: build ExcludeRepo/IncludeRepo op
+  const handleRepoToggle = useCallback(
+    (sectionId: string) => {
+      const repo = viewData?.repo_groups.find((r) => r.section_id === sectionId);
+      if (!repo) return;
+      const op: RefinementOp = repo.enabled
+        ? { op: "ExcludeRepo", target: { section_id: sectionId } }
+        : { op: "IncludeRepo", target: { section_id: sectionId } };
+      applyOp(op)
+        .then((updatedView) => onViewUpdate(updatedView))
+        .catch((err) => onMutationError(err instanceof Error ? err : new Error(String(err))));
+    },
+    [viewData, onViewUpdate, onMutationError],
+  );
 
   const handleArrowDown = useCallback(() => {
     // Focus the first decision item in the list
@@ -137,34 +168,11 @@ export function MainContent({
   }
 
   if (activeSection === "packages") {
-    const hasFilter = filterText.trim().length > 0;
-    const noResults = hasFilter && filteredPackageItems.length === 0;
     const baselineSummary = viewData?.baseline_summary;
-
-    // Compute attention counts for AttentionSummary
-    const needsReviewPkgs = packageItems.filter(
-      (item) => item.data.attention.length > 0 &&
-        highestAttention(item.data.attention) === "needs_review",
-    );
-    const infoPkgs = packageItems.filter(
-      (item) => item.data.attention.length > 0 &&
-        highestAttention(item.data.attention) === "informational",
-    );
-    const needsReviewRepos = new Set(
-      needsReviewPkgs
-        .filter((item) => item.type === "package")
-        .map((item) => (item.data as any).entry.source_repo),
-    );
-    const infoRepos = new Set(
-      infoPkgs
-        .filter((item) => item.type === "package")
-        .map((item) => (item.data as any).entry.source_repo),
-    );
 
     // Render verification banner
     let banner: JSX.Element | null = null;
     if (baselineSummary) {
-      // Verified mode: baseline comparison active
       const digestPrefix = baselineSummary.image_digest.substring(0, 12);
       banner = (
         <Alert
@@ -175,7 +183,6 @@ export function MainContent({
         />
       );
     } else {
-      // Degraded mode: baseline unavailable
       banner = (
         <Alert
           variant="warning"
@@ -192,43 +199,17 @@ export function MainContent({
           <h2>{label}</h2>
         </Content>
         {banner}
-        <AttentionSummary
-          needsReviewCount={needsReviewPkgs.length}
-          needsReviewRepoCount={needsReviewRepos.size}
-          infoCount={infoPkgs.length}
-          infoRepoCount={infoRepos.size}
+        <RepoBar
+          repos={viewData?.repo_groups ?? []}
+          onToggle={handleRepoToggle}
         />
-        {sectionSearchOpen && (
-          <SectionSearch
-            value={filterText}
-            onChange={setFilterText}
-            onClose={handleSearchClose}
-            onArrowDown={handleArrowDown}
-            resultCount={filteredPackageItems.length}
-          />
-        )}
-        {noResults ? (
-          <EmptyState titleText="No items match your search" headingLevel="h3">
-            <EmptyStateBody>
-              <Button variant="link" onClick={() => setFilterText("")}>
-                Clear filter
-              </Button>
-            </EmptyStateBody>
-          </EmptyState>
-        ) : (
-          <DecisionList
-            items={filteredPackageItems}
-            sectionLabel="Packages"
-            filterText={filterText}
-            repoGroups={viewData?.repo_groups ?? []}
-            revealItemId={revealItemId}
-            leafDepTree={viewData?.leaf_dep_tree}
-            versionChanges={viewData?.version_changes}
-            onViewUpdate={onViewUpdate}
-            onMutationError={onMutationError}
-            onViewedChange={onViewedChange}
-          />
-        )}
+        <PackageList
+          mode="single"
+          packages={packageListPackages}
+          repoGroups={viewData?.repo_groups ?? []}
+          onToggle={handlePackageToggle}
+          onRepoToggle={handleRepoToggle}
+        />
       </PageSection>
     );
   }

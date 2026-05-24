@@ -86,7 +86,7 @@ function PopoverDialog({
   packageName,
   entries,
   dismissRef,
-  onClose,
+  onClose: _onClose,
   onDismiss,
 }: {
   packageName: string;
@@ -116,7 +116,7 @@ function PopoverDialog({
       </ul>
       <div className="repo-conflict-popover__actions">
         <button
-          ref={dismissRef}
+          ref={dismissRef as React.RefObject<HTMLButtonElement>}
           type="button"
           className="repo-conflict-popover__dismiss"
           onClick={onDismiss}

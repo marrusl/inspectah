@@ -111,6 +111,7 @@ function makeViewWithContextSection(): FleetViewResponse {
             include: true,
             attention: { level: "none", reason: "", prevalence: 3 },
             prevalence: { count: 3, total: 3 },
+            source_repo: "",
             variants: {
               count: 2,
               selected: "aaa",
@@ -123,6 +124,8 @@ function makeViewWithContextSection(): FleetViewResponse {
         ],
       },
     ],
+    repo_groups: [],
+    repo_conflict_count: 0,
   };
 }
 

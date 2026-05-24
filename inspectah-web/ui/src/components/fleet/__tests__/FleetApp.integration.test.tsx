@@ -83,6 +83,7 @@ function mockFleetItem(overrides?: Partial<FleetItem>): FleetItem {
     include: true,
     attention: { level: "none", reason: "", prevalence: 3 },
     prevalence: { count: 3, total: 3 },
+    source_repo: "appstream",
     ...overrides,
   };
 }
@@ -199,6 +200,10 @@ function mockFleetViewResponse(
         items: [],
       }),
     ],
+    repo_groups: [
+      { section_id: "appstream", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
+    ],
+    repo_conflict_count: 0,
     ...overrides,
   };
 }
@@ -294,8 +299,9 @@ describe("FleetApp integration", () => {
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
       expect(within(sidebar).getByText("Services")).toBeInTheDocument();
 
-      // Content area renders real fleet section (default active = packages)
-      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+      // Packages render via unified RepoBar + PackageList
+      expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
+      expect(screen.getByTestId("package-list")).toBeInTheDocument();
       // Fleet banner is rendered (there are actionable variant items)
       expect(screen.getByTestId("fleet-banner")).toBeInTheDocument();
     });
@@ -434,8 +440,8 @@ describe("FleetApp integration", () => {
       renderFleetApp();
       await waitForContent();
 
-      // Content is visible with initial data — fleet section renders
-      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+      // Content is visible with initial data — packages render via unified components
+      expect(screen.getByTestId("package-list")).toBeInTheDocument();
 
       // Trigger undo via Ctrl+Z
       await act(async () => {
@@ -448,7 +454,7 @@ describe("FleetApp integration", () => {
       });
 
       // Content still visible (FleetApp holds last successful view in state)
-      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+      expect(screen.getByTestId("package-list")).toBeInTheDocument();
 
       // Retry button should be present
       expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
@@ -525,8 +531,8 @@ describe("FleetApp integration", () => {
       expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
 
-      // Content area renders fleet section with flat items
-      expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+      // Packages render via unified PackageList
+      expect(screen.getByTestId("package-list")).toBeInTheDocument();
     });
   });
 

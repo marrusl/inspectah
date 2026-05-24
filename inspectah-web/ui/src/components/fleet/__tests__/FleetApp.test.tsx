@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FleetApp } from "../../FleetApp";
 import type { FleetAppProps } from "../../FleetApp";
@@ -74,6 +74,7 @@ function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewRes
             include: true,
             attention: { level: "medium", reason: "variant", prevalence: 2 },
             prevalence: { count: 2, total: 3 },
+            source_repo: "appstream",
           },
         ],
       },
@@ -94,6 +95,10 @@ function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewRes
         items: [],
       },
     ],
+    repo_groups: [
+      { section_id: "appstream", provenance: "verified", is_distro: true, tier: "distro", package_count: 1, enabled: true },
+    ],
+    repo_conflict_count: 0,
     ...overrides,
   };
 }
@@ -132,8 +137,9 @@ describe("FleetApp", () => {
       expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
     });
 
-    // Content area renders fleet section with items from the active section (packages)
-    expect(screen.getByTestId("fleet-section")).toBeInTheDocument();
+    // Packages render via unified RepoBar + PackageList
+    expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
     expect(mockFetchFleetView).toHaveBeenCalledOnce();
   });
 
@@ -145,9 +151,10 @@ describe("FleetApp", () => {
       expect(screen.getByTestId("fleet-sidebar")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Packages")).toBeInTheDocument();
-    expect(screen.getByText("Config Files")).toBeInTheDocument();
-    expect(screen.getByText("Services")).toBeInTheDocument();
+    const sidebar = screen.getByTestId("fleet-sidebar");
+    expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Services")).toBeInTheDocument();
   });
 
   it("handles section navigation", async () => {
@@ -158,15 +165,15 @@ describe("FleetApp", () => {
       expect(screen.getByTestId("fleet-sidebar")).toBeInTheDocument();
     });
 
-    // Default active section is packages — verify the package item renders
+    // Default active section is packages — verify unified PackageList renders
+    expect(screen.getByTestId("package-list")).toBeInTheDocument();
     expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
 
     // Click on Config Files
     const configNav = screen.getByText("Config Files");
     await userEvent.click(configNav);
 
-    // Config section has no items in zones (all empty), so no fleet-item-row
-    // but the section content renders (FleetSectionContent handles empty zones)
+    // Config section renders via FleetSectionContent (non-package section)
     expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
   });
 
@@ -223,6 +230,7 @@ describe("FleetSidebar", () => {
           include: true,
           attention: { level: "medium", reason: "variant", prevalence: 2 },
           prevalence: { count: 2, total: 3 },
+          source_repo: "appstream",
         },
       ],
     },

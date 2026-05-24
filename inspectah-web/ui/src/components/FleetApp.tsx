@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button, Page, PageSection, EmptyState, EmptyStateBody, Spinner } from "@patternfly/react-core";
 import type {
   FleetHealthInfo,
@@ -22,6 +22,9 @@ import { FleetSidebar } from "./fleet/FleetSidebar";
 import { FleetBanner } from "./fleet/FleetBanner";
 import { FleetSectionContent } from "./fleet/FleetSection";
 import { itemDisplayName } from "./fleet/FleetItemRow";
+import { RepoBar } from "./RepoBar";
+import { PackageList } from "./PackageList";
+import type { PackageListPackage } from "./PackageList";
 
 export interface FleetAppProps {
   fleet: FleetHealthInfo;
@@ -187,6 +190,51 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     [],
   );
 
+  // --- Package / repo toggle handlers for unified PackageList ---
+
+  // Convert FleetItem[] from the packages section to PackageListPackage[]
+  const fleetPackages: PackageListPackage[] = useMemo(() => {
+    if (!view) return [];
+    const pkgSection = view.sections.find((s) => s.id === "packages");
+    if (!pkgSection) return [];
+    const items = sectionItems(pkgSection);
+    return items.map((item) => ({
+      name: itemDisplayName(item.item_id),
+      source_repo: item.source_repo,
+      include: item.include,
+      prevalence: { count: item.prevalence.count, total: item.prevalence.total },
+      repo_conflict: item.repo_conflict,
+    }));
+  }, [view]);
+
+  // Package toggle for unified PackageList: "name.arch" string → fleet ItemId toggle
+  const handleFleetPackageToggle = useCallback(
+    (nameArch: string) => {
+      if (!view) return;
+      const pkgSection = view.sections.find((s) => s.id === "packages");
+      if (!pkgSection) return;
+      const items = sectionItems(pkgSection);
+      const item = items.find((i) => itemDisplayName(i.item_id) === nameArch);
+      if (!item) return;
+      handleToggle(item.item_id, !item.include);
+    },
+    [view, handleToggle],
+  );
+
+  // Repo toggle for unified RepoBar
+  const handleFleetRepoToggle = useCallback(
+    (sectionId: string) => {
+      if (!view) return;
+      const repo = view.repo_groups.find((r) => r.section_id === sectionId);
+      if (!repo) return;
+      const op: RefinementOp = repo.enabled
+        ? { op: "ExcludeRepo", target: { section_id: sectionId } }
+        : { op: "IncludeRepo", target: { section_id: sectionId } };
+      mutate(op);
+    },
+    [view, mutate],
+  );
+
   // Loading state
   if (!view && !error) {
     return (
@@ -349,20 +397,37 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
                 <Button variant="link" onClick={retry}>Retry</Button>
               </div>
             )}
-            <FleetSectionContent
-              section={activeFleetSection}
-              filterText={filterText}
-              isDecisionSection={activeFleetSection?.is_decision_section ?? false}
-              onToggle={handleToggle}
-              ack={ack}
-              onExpandVariant={handleExpandVariant}
-              onForceExpandVariant={handleForceExpandVariant}
-              pendingNavTarget={pendingNavTarget}
-              onNavTargetConsumed={handleNavTargetConsumed}
-              expandedItemId={expandedItemId}
-              onSelectVariant={handleSelectVariant}
-              diffHook={diffHook}
-            />
+            {activeSection === "packages" ? (
+              <>
+                <RepoBar
+                  repos={fleetView.repo_groups}
+                  onToggle={handleFleetRepoToggle}
+                  conflictCount={fleetView.repo_conflict_count}
+                />
+                <PackageList
+                  mode="fleet"
+                  packages={fleetPackages}
+                  repoGroups={fleetView.repo_groups}
+                  onToggle={handleFleetPackageToggle}
+                  onRepoToggle={handleFleetRepoToggle}
+                />
+              </>
+            ) : (
+              <FleetSectionContent
+                section={activeFleetSection}
+                filterText={filterText}
+                isDecisionSection={activeFleetSection?.is_decision_section ?? false}
+                onToggle={handleToggle}
+                ack={ack}
+                onExpandVariant={handleExpandVariant}
+                onForceExpandVariant={handleForceExpandVariant}
+                pendingNavTarget={pendingNavTarget}
+                onNavTargetConsumed={handleNavTargetConsumed}
+                expandedItemId={expandedItemId}
+                onSelectVariant={handleSelectVariant}
+                diffHook={diffHook}
+              />
+            )}
           </div>
           </>
           );

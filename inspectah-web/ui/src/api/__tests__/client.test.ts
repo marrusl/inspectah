@@ -106,9 +106,8 @@ const mockView: ViewResponse = {
   },
   generation: 1,
   repo_groups: [
-    { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+    { section_id: "appstream", provenance: "verified", is_distro: true, tier: "distro", package_count: 1, enabled: true },
   ],
-  leaf_dep_tree: {},
   version_changes: [],
   users_groups_decisions: [],
   session_is_sensitive: false,

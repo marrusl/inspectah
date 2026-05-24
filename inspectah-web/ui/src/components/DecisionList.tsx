@@ -540,6 +540,7 @@ export function DecisionList({
               section_id: "__unknown__",
               provenance: "unknown",
               is_distro: false,
+              tier: "third_party",
               package_count: part.items.length,
               enabled: true,
             };
