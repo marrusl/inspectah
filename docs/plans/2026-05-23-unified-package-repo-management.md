@@ -351,12 +351,37 @@ fn test_package_merge_tracks_repo_conflict() {
     // Majority repo wins
     assert_eq!(nginx.source_repo, "epel");
 
-    // Repo-conflict data verified in Task 3 Step 4 (detect_repo_conflicts)
+    // After Step 3, merge_rpm_sections returns a tuple:
+    // (RpmSection, HashMap<String, Vec<RepoSourceEntry>>)
+    // Destructure and verify conflict data:
+    let (merged, repo_conflicts) = merge_rpm_sections(
+        vec![Some(host_a_rpm), Some(host_b_rpm), Some(host_c_rpm)],
+        3,
+        &hostnames,
+        None,
+    )
+    .unwrap();
+
+    let nginx = merged
+        .packages_added
+        .iter()
+        .find(|p| p.name == "nginx")
+        .unwrap();
+    assert_eq!(nginx.source_repo, "epel"); // majority wins
+
+    // Conflict data from the merge
+    assert!(repo_conflicts.contains_key("nginx.x86_64"));
+    let conflict = &repo_conflicts["nginx.x86_64"];
+    assert_eq!(conflict.len(), 2);
+    assert_eq!(conflict[0].repo, "epel");
+    assert_eq!(conflict[0].host_count, 2);
+    assert_eq!(conflict[1].repo, "appstream");
+    assert_eq!(conflict[1].host_count, 1);
 }
 ```
 
 Run: `cargo test -p inspectah-core -- test_package_merge_tracks_repo_conflict`
-Expected: PASS (baseline — the majority-repo assertion should already work since merge picks the first-seen/most-prevalent value).
+Expected: FAIL until Step 3 is implemented (return type changes).
 
 - [ ] **Step 3: Compute repo conflicts inside merge_rpm_sections()**
 
@@ -421,75 +446,90 @@ the `InspectionSnapshot` fleet metadata, or on `FleetContext` in
 `repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>` field so the
 web handler can access it without needing the original per-host sections.
 
-- [ ] **Step 4: Write test for detect_repo_conflicts**
+- [ ] **Step 4: Write test for non-conflicting and tie-breaking behavior**
 
 ```rust
 #[test]
-fn test_detect_repo_conflicts() {
+fn test_merge_no_conflict_single_repo() {
     use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
 
     let sections = vec![
         Some(RpmSection {
-            packages_added: vec![
-                PackageEntry {
-                    name: "nginx".into(),
-                    arch: "x86_64".into(),
-                    source_repo: "epel".into(),
-                    state: PackageState::Added,
-                    include: true,
-                    ..Default::default()
-                },
-                PackageEntry {
-                    name: "bash".into(),
-                    arch: "x86_64".into(),
-                    source_repo: "baseos".into(),
-                    state: PackageState::Added,
-                    include: true,
-                    ..Default::default()
-                },
-            ],
+            packages_added: vec![PackageEntry {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                source_repo: "baseos".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
             ..Default::default()
         }),
         Some(RpmSection {
-            packages_added: vec![
-                PackageEntry {
-                    name: "nginx".into(),
-                    arch: "x86_64".into(),
-                    source_repo: "appstream".into(),
-                    state: PackageState::Added,
-                    include: true,
-                    ..Default::default()
-                },
-                PackageEntry {
-                    name: "bash".into(),
-                    arch: "x86_64".into(),
-                    source_repo: "baseos".into(),
-                    state: PackageState::Added,
-                    include: true,
-                    ..Default::default()
-                },
-            ],
+            packages_added: vec![PackageEntry {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                source_repo: "baseos".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
             ..Default::default()
         }),
     ];
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let merged = merge_rpm_sections(sections.clone(), 2, &hostnames, None).unwrap();
-    let conflicts = detect_repo_conflicts(&merged.packages_added, &sections, &hostnames);
+    let (merged, conflicts) =
+        merge_rpm_sections(sections, 2, &hostnames, None).unwrap();
 
-    // nginx has a conflict (epel vs appstream)
-    assert!(conflicts.contains_key("nginx.x86_64"));
-    let nginx_conflict = &conflicts["nginx.x86_64"];
-    assert_eq!(nginx_conflict.len(), 2);
-    assert_eq!(nginx_conflict[0].host_count, 1);
-    assert_eq!(nginx_conflict[1].host_count, 1);
+    assert_eq!(merged.packages_added[0].source_repo, "baseos");
+    // No conflict — same repo on both hosts
+    assert!(conflicts.is_empty());
+}
 
-    // bash has no conflict (both baseos)
-    assert!(!conflicts.contains_key("bash.x86_64"));
+#[test]
+fn test_merge_repo_conflict_tie() {
+    use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+    // 50/50 split — tie-break: highest-count first, then alphabetical
+    let sections = vec![
+        Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                source_repo: "epel".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                source_repo: "appstream".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    ];
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (_, conflicts) =
+        merge_rpm_sections(sections, 2, &hostnames, None).unwrap();
+
+    let conflict = &conflicts["nginx.x86_64"];
+    assert_eq!(conflict.len(), 2);
+    // Both have count 1 — sorted by count desc, then stable
+    assert_eq!(conflict[0].host_count, 1);
+    assert_eq!(conflict[1].host_count, 1);
 }
 ```
 
-Run: `cargo test -p inspectah-core -- test_detect_repo_conflicts`
+Run: `cargo test -p inspectah-core -- test_merge_no_conflict test_merge_repo_conflict_tie`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -553,15 +593,25 @@ pub struct FleetViewResponse {
 
 - [ ] **Step 3: Populate the new fields in build_fleet_view_response()**
 
-Import `build_repo_groups` from handlers (make it `pub` if needed) and `detect_repo_conflicts` from `inspectah_core::fleet::merge`.
+**Canonical data flow (one path, no handler-side computation):**
+1. `merge_rpm_sections()` (inspectah-core) computes repo conflicts
+2. `merge_snapshots()` stores them on `FleetContext.repo_conflicts`
+3. `build_fleet_view_response()` (inspectah-web) reads from `FleetContext`
+4. Handler only MAPS data — no conflict detection at the web layer
+
+Import `build_repo_groups` from handlers (make it `pub` if needed).
 
 In `build_fleet_view_response()`:
 1. Call `build_repo_groups(session)` to get repo groups
-2. Call `detect_repo_conflicts()` with the merged RPM sections and the original per-host sections from `FleetContext`
-3. Pass the conflict map through to `build_fleet_sections()` so each `FleetItem` for an RPM package can look up its `repo_conflict`
-4. Count total conflicts for `repo_conflict_count`
+2. Read `ctx.repo_conflicts` from `FleetContext` — this was populated
+   during merge (Task 3). No `detect_repo_conflicts()` call here.
+3. Pass the conflict map through to `build_fleet_sections()` so each
+   `FleetItem` for an RPM package can look up its `repo_conflict` by
+   `name.arch` key
+4. Count `repo_conflicts.len()` for `repo_conflict_count`
 
-Populate `source_repo` on each `FleetItem` by reading the `PackageEntry.source_repo` from the projected snapshot's rpm packages.
+Populate `source_repo` on each `FleetItem` by reading
+`PackageEntry.source_repo` from the projected snapshot's rpm packages.
 
 - [ ] **Step 4: Write integration test for fleet repo_groups and conflicts**
 
@@ -597,32 +647,67 @@ async fn fleet_exclude_repo_round_trip() {
     let state = fleet_state_with_packages(); // includes epel packages
     let app = app(state);
 
-    // 1. Get initial view — epel packages should be included
-    let (_, initial) = get_json(&app, "/api/fleet/view").await;
-    // Find an epel package in the sections and verify include=true
-    // (exact path depends on section structure)
+    // Helper: extract fleet items with a given source_repo from response
+    fn fleet_items_by_repo(json: &serde_json::Value, repo: &str) -> Vec<&serde_json::Value> {
+        json["sections"].as_array().unwrap()
+            .iter()
+            .flat_map(|s| {
+                let items = s.get("items").and_then(|i| i.as_array());
+                let zone_items = s.get("zones").map(|z| {
+                    ["consensus", "near_consensus", "divergent"].iter()
+                        .flat_map(|k| z[k]["items"].as_array().unwrap_or(&vec![]).clone())
+                        .collect::<Vec<_>>()
+                }).unwrap_or_default();
+                items.cloned().unwrap_or_default().into_iter().chain(zone_items)
+            })
+            .filter(|item| item["source_repo"].as_str() == Some(repo))
+            .collect()
+    }
 
-    // 2. Apply ExcludeRepo for epel
+    // 1. Initial view — epel packages included, repo enabled
+    let (_, initial) = get_json(&app, "/api/fleet/view").await;
+    let epel_items = fleet_items_by_repo(&initial, "epel");
+    assert!(!epel_items.is_empty(), "should have epel packages");
+    for item in &epel_items {
+        assert_eq!(item["include"], true);
+    }
+    let epel_group = initial["repo_groups"].as_array().unwrap()
+        .iter().find(|g| g["section_id"] == "epel").unwrap();
+    assert_eq!(epel_group["enabled"], true);
+
+    // 2. ExcludeRepo
     let (status, _) = post_json(&app, "/api/op", json!({
         "op": "ExcludeRepo",
         "target": { "section_id": "epel" }
     })).await;
     assert_eq!(status, StatusCode::OK);
 
-    // 3. Get fleet view again — epel packages should have include=false
+    // 3. After exclude — FleetItem.include=false AND repo_groups.enabled=false
     let (_, after_exclude) = get_json(&app, "/api/fleet/view").await;
-    // Verify epel packages are exclude=false in the response
+    let epel_items = fleet_items_by_repo(&after_exclude, "epel");
+    for item in &epel_items {
+        assert_eq!(item["include"], false, "epel packages should be excluded");
+    }
+    let epel_group = after_exclude["repo_groups"].as_array().unwrap()
+        .iter().find(|g| g["section_id"] == "epel").unwrap();
+    assert_eq!(epel_group["enabled"], false, "epel repo should be disabled");
 
-    // 4. Apply IncludeRepo for epel
+    // 4. IncludeRepo
     let (status, _) = post_json(&app, "/api/op", json!({
         "op": "IncludeRepo",
         "target": { "section_id": "epel" }
     })).await;
     assert_eq!(status, StatusCode::OK);
 
-    // 5. Get fleet view — all epel packages should be include=true
+    // 5. After include — all back to include=true, repo enabled=true
     let (_, after_include) = get_json(&app, "/api/fleet/view").await;
-    // Verify all epel packages have include=true (engine default reset)
+    let epel_items = fleet_items_by_repo(&after_include, "epel");
+    for item in &epel_items {
+        assert_eq!(item["include"], true, "epel packages should be re-included");
+    }
+    let epel_group = after_include["repo_groups"].as_array().unwrap()
+        .iter().find(|g| g["section_id"] == "epel").unwrap();
+    assert_eq!(epel_group["enabled"], true, "epel repo should be re-enabled");
 }
 ```
 
@@ -777,8 +862,22 @@ describe("RepoBar", () => {
   });
 
   it("shows conflict count badge when provided", () => {
-    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} />);
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />);
     expect(screen.getByText(/3 conflicts/i)).toBeInTheDocument();
+  });
+
+  it("shows 'Show N dismissed' restore button when dismissedCount > 0", () => {
+    const onRestore = vi.fn();
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={2} onRestoreDismissed={onRestore} />);
+    const restoreBtn = screen.getByRole("button", { name: /show 2 dismissed/i });
+    expect(restoreBtn).toBeInTheDocument();
+    fireEvent.click(restoreBtn);
+    expect(onRestore).toHaveBeenCalled();
+  });
+
+  it("hides restore button when dismissedCount is 0", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /show.*dismissed/i })).not.toBeInTheDocument();
   });
 });
 ```
@@ -995,6 +1094,21 @@ Create `inspectah-web/ui/src/components/PackageList.tsx`. A mode-aware component
 - Computes excluded packages from disabled repos
 - Renders `ExcludedZone`
 
+**Dismissed-state ownership (canonical):** `PackageList` owns a
+`dismissedConflicts: Set<string>` state (identity keys of dismissed
+warnings). This is the single source of truth. Threading:
+- `PackageList` passes `dismissedConflicts` down to each
+  `RepoConflictPopover` instance (which checks if its key is in the set)
+- `PackageList` passes `onDismiss(key: string)` down to each popover
+- `PackageList` computes `dismissedCount = dismissedConflicts.size` and
+  passes it UP to the parent as a render prop or via callback so the
+  parent can pass `dismissedCount` and `onRestoreDismissed` to `RepoBar`
+- `onRestoreDismissed` clears the `dismissedConflicts` set
+- Fleet mode sort with conflicts: within each prevalence group, packages
+  with `repo_conflict` (that are NOT dismissed) sort before packages
+  without conflicts. This ensures conflict-first surfacing under the
+  default prevalence-ascending sort.
+
 - [ ] **Step 3: Run tests, commit**
 
 ```bash
@@ -1114,6 +1228,21 @@ This is the largest task. It replaces existing package rendering in both modes w
 - `fleet/FleetSidebar.tsx` — fleet selection sidebar
 - `fleet/DiffDrawer.tsx` — variant diff comparison
 
+**Fleet integration seam decision:** Package rendering moves OUT of
+`FleetSection.tsx` / `FleetSectionContent` and into the shared
+`PackageList` component. `FleetApp.tsx` renders `RepoBar` + `PackageList`
+directly for the RPM section, bypassing `FleetSection` for packages.
+Non-package fleet sections (config, services, etc.) continue to use
+`FleetSection` unchanged. This means:
+- `FleetSection.tsx` loses its RPM package rendering path but keeps
+  config/service/quadlet rendering
+- Nav/filter/reveal behaviors in `FleetApp` that currently route through
+  `FleetSection` for packages must be re-pointed to `PackageList`
+- Fleet tests that assert package rendering through `FleetSection` need
+  to be updated to test through `PackageList` instead
+- Focus management: the fleet section-level keyboard nav must include
+  the new `PackageList` in its focus group
+
 - [ ] **Step 2: Wire RepoBar + PackageList into single-machine view**
 
 Replace the existing package section (likely `DecisionSections` or similar) with:
@@ -1210,6 +1339,19 @@ end-to-end contracts:
 1. Fleet with 3 conflicts → `repo_conflict_count=3`
 2. Dismiss 1 warning → "Show 1 dismissed" restore control appears
 3. Restore → all 3 warnings visible again
+
+**Conflict-first ordering within equal prevalence:**
+1. Fleet with 3 packages at prevalence 4/5: two without conflict, one
+   with conflict → the conflicted package sorts first within that group
+2. Verify via rendered DOM order in a Vitest test
+
+**Popover focus landing:**
+1. Click repo-conflict trigger button → popover opens → verify
+   `document.activeElement` is the dismiss button inside the popover
+2. Press Escape → popover closes → verify `document.activeElement` is
+   the trigger button
+3. Click dismiss → popover closes, trigger removed → verify
+   `document.activeElement` is the package checkbox in the same row
 
 - [ ] **Step 5: Accessibility walkthrough**
 
