@@ -230,19 +230,40 @@ impl Inspector for RpmInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
+        use inspectah_core::types::progress::{MetricKind, ProgressEvent, StepId, StepOutcome};
+
         let exec = ctx.executor;
+        let inspector_id = InspectorId::Rpm;
 
         // 1. Query packages
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::QueryingPackages,
+        });
         let host_packages = self.query_packages(exec);
         if host_packages.is_empty() {
             return Err(InspectorError::Failed {
                 reason: "rpm -qa returned no packages".into(),
             });
         }
+        progress.emit(ProgressEvent::Metric {
+            inspector: inspector_id,
+            kind: MetricKind::PackagesFound,
+            value: host_packages.len(),
+        });
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
 
         // 2. Build baseline and classify
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::ClassifyingPackages,
+        });
         let baseline = self.build_baseline(ctx.baseline_data);
         let classification = classifier::classify_packages(&host_packages, &baseline);
         let version_changes = classification.version_changes;
@@ -274,11 +295,36 @@ impl Inspector for RpmInspector {
                 .collect(),
             None => Vec::new(),
         };
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::ClassifyingPackages,
+            outcome: StepOutcome::Complete,
+        });
 
         // 3b. Source repo attribution per added package (matches Go Step 2b).
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::ResolvingSourceRepos,
+        });
         if !packages_added.is_empty() {
             source_repos::populate_source_repos(exec, &mut packages_added);
         }
+        let repo_count = packages_added
+            .iter()
+            .map(|p| &p.source_repo)
+            .filter(|r| !r.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        progress.emit(ProgressEvent::Metric {
+            inspector: inspector_id,
+            kind: MetricKind::ReposMapped,
+            value: repo_count,
+        });
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
 
         // 4. Compute baseline_suppressed from ALL packages_added (leaf + auto).
         // This runs at the inspector level so it covers every package, not just
@@ -295,17 +341,51 @@ impl Inspector for RpmInspector {
 
         // 5. Classify leaf vs auto packages (subtract baseline so dep trees
         //    only count genuinely new packages, not base-image residents).
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::ResolvingDepTree,
+        });
         let baseline_name_set: HashSet<String> = ctx
             .baseline_data
             .map(|b| b.packages.keys().cloned().collect())
             .unwrap_or_default();
         let leaf_classification = classify_leaf_auto(exec, &packages_added, &baseline_name_set);
+        let dep_tree_outcome = if leaf_classification.leaf_packages.is_none() {
+            StepOutcome::Degraded {
+                reason: "dependency classification unavailable".into(),
+            }
+        } else {
+            StepOutcome::Complete
+        };
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::ResolvingDepTree,
+            outcome: dep_tree_outcome,
+        });
 
         // 6. Collect supplementary data
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::VerifyingIntegrity,
+        });
         let supp = self.collect_supplementary(exec, ctx.source_system);
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::VerifyingIntegrity,
+            outcome: StepOutcome::Complete,
+        });
 
         // 7. Query file ownership for Wave 2 inspectors (sentinel format)
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::MappingFileOwnership,
+        });
         let file_ownership = self.query_file_ownership(exec);
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::MappingFileOwnership,
+            outcome: StepOutcome::Complete,
+        });
 
         // 8. Build baseline_package_names for Go snapshot backward compat
         let baseline_package_names = ctx.baseline_data.map(|b| {
@@ -576,8 +656,9 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
-    use inspectah_core::traits::progress::NullProgress;
+    use inspectah_core::traits::progress::{NullProgress, VecProgress};
     use inspectah_core::types::os::OsRelease;
+    use inspectah_core::types::progress::{MetricKind, ProgressEvent, StepId, StepOutcome};
 
     fn test_os_release() -> OsRelease {
         OsRelease {
@@ -1818,6 +1899,130 @@ mod tests {
         assert!(
             entries.is_empty(),
             "failed command should produce no entries"
+        );
+    }
+
+    // --- progress event tests ---
+
+    #[test]
+    fn test_rpm_inspector_emits_progress_events() {
+        let exec = build_rpm_mock_executor();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+        let progress = VecProgress::new();
+        RpmInspector::new().inspect(&ctx, &progress).unwrap();
+
+        let events = progress.events();
+
+        // Verify all 6 steps started in order
+        let step_ids: Vec<&StepId> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::StepStarted { step, .. } => Some(step),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            step_ids,
+            &[
+                &StepId::QueryingPackages,
+                &StepId::ClassifyingPackages,
+                &StepId::ResolvingSourceRepos,
+                &StepId::ResolvingDepTree,
+                &StepId::VerifyingIntegrity,
+                &StepId::MappingFileOwnership,
+            ]
+        );
+
+        // Verify all 6 steps finished
+        let finished_ids: Vec<&StepId> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::StepFinished { step, .. } => Some(step),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished_ids.len(), 6);
+
+        // Verify PackagesFound metric emitted
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ProgressEvent::Metric {
+                kind: MetricKind::PackagesFound,
+                ..
+            }
+        )));
+
+        // Verify ReposMapped metric emitted
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ProgressEvent::Metric {
+                kind: MetricKind::ReposMapped,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn test_rpm_degraded_dep_tree_emits_degraded_step() {
+        // Build mock where dnf repoquery --userinstalled fails (exit code 1)
+        // AND dnf repoquery --requires also fails — this causes
+        // classify_leaf_auto to return leaf_packages: None.
+        let exec = build_leaf_classification_executor(
+            "\
+0:glibc-2.34-100.el9.x86_64
+0:vim-9.0.1592-1.el9.x86_64
+",
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let progress = VecProgress::new();
+        RpmInspector::new().inspect(&ctx, &progress).unwrap();
+
+        let events = progress.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ProgressEvent::StepFinished {
+                    step: StepId::ResolvingDepTree,
+                    outcome: StepOutcome::Degraded { .. },
+                    ..
+                }
+            )),
+            "dep tree step should emit Degraded outcome when leaf classification is unavailable"
         );
     }
 }
