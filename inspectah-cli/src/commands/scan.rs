@@ -214,12 +214,16 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Err(e) => return Err(e.into()),
     };
 
+    // Resolve rendering mode early — governs both pull viewport and scan progress.
+    // Priority: CLI flag > INSPECTAH_PROGRESS env > TTY auto-detect.
+    let mode = detect_mode(args.progress.as_ref());
+
     // Step 3: Extract baseline
     let baseline_data = match (&normalized_ref, args.no_baseline) {
         (Some(norm), false) => {
             eprintln!("Pulling {}...", norm.as_str());
 
-            let use_viewport = std::io::IsTerminal::is_terminal(&std::io::stderr());
+            let use_viewport = mode == crate::progress::Mode::Rich;
             let mut collected_lines: Vec<String> = Vec::new();
 
             let data = if use_viewport {
@@ -316,7 +320,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Box::new(NonRpmInspector::new()),
     ];
 
-    let mode = detect_mode(args.progress.as_ref());
     let color = use_color();
     let progress = TerminalProgress::new(mode, color);
     let scan_start = std::time::Instant::now();
