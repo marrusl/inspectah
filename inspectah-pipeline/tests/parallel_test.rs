@@ -3,7 +3,7 @@
 //! Validates the scoped-thread model: concurrency, panic containment,
 //! applicability filtering, and completeness tracking.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use inspectah_collect::executor::mock::MockExecutor;
@@ -212,7 +212,7 @@ fn independent_inspectors_run_concurrently() {
     ];
 
     let start = Instant::now();
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
     let elapsed = start.elapsed();
 
     // All three sections must be populated
@@ -290,7 +290,7 @@ fn rpm_failure_propagates() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Services should succeed
     assert!(
@@ -339,7 +339,7 @@ fn inspector_panic_contained() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Non-panicking inspectors must succeed
     assert!(
@@ -387,7 +387,7 @@ fn orchestrator_skips_inapplicable() {
     // Since Inspector requires ownership via Box, we use AtomicU32 inside the inspector.
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(PackageOnlyInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // No sections should be populated (PackageOnly inspector was skipped)
     assert!(
@@ -455,7 +455,7 @@ fn three_wave_model_rpm_runs_in_wave1() {
     let source = package_based_source();
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Wave 1 proof: RPM inspector ran and produced section data
     assert!(
@@ -513,7 +513,7 @@ fn three_wave_model_enriched_context_api_path() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress);
+    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Both inspectors ran in Wave 1
     assert!(
