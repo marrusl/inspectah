@@ -4,6 +4,7 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
+use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
@@ -85,7 +86,7 @@ impl Inspector for NonRpmInspector {
     fn inspect(
         &self,
         ctx: &InspectionContext<'_>,
-        _progress: &dyn ProgressSink,
+        progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
         // Wave 2 ordering contract: require rpm_state presence.
         // None means RPM inspector failed entirely.
@@ -129,25 +130,102 @@ impl Inspector for NonRpmInspector {
         }
 
         // Scan directories for ELF binaries.
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        let pre = section.items.len();
         scan_dirs(exec, &mut section, has_readelf, has_file);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Scan Python venvs.
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PythonVenvs,
+        });
+        let pre = section.items.len();
         scan_python_venvs(exec, &mut section, &mut warnings);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PythonVenvs,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Scan pip packages (system-level dist-info).
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        let pre = section.items.len();
         scan_pip_packages(exec, &mut section, is_ostree);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Scan npm packages (package-lock.json).
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+        });
+        let pre = section.items.len();
         scan_npm_packages(exec, &mut section, is_ostree);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Scan gem packages (Gemfile.lock).
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::GemPackages,
+        });
+        let pre = section.items.len();
         scan_gem_packages(exec, &mut section, is_ostree);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::GemPackages,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Collect .env files.
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::EnvFiles,
+        });
+        let pre = section.env_files.len();
         collect_env_files(exec, &mut section, &mut redaction_hints);
+        let found = section.env_files.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::EnvFiles,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Collect git repos.
+        progress.emit(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::GitRepos,
+        });
+        let pre = section.items.len();
         collect_git_repos(exec, &mut section, &mut redaction_hints);
+        let found = section.items.len() - pre;
+        progress.emit(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::GitRepos,
+            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+        });
 
         // Filter ostree-internal /var paths.
         if is_ostree {
@@ -1040,7 +1118,7 @@ mod tests {
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::inspector::{InspectionContext, Inspector, RpmState};
-    use inspectah_core::traits::progress::NullProgress;
+    use inspectah_core::traits::progress::{NullProgress, VecProgress};
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
 
@@ -1677,5 +1755,165 @@ mod tests {
             "should keep highest-confidence entry"
         );
         assert_eq!(myapp.method, "readelf (go)");
+    }
+
+    // ---- Test 21: test_nonrpm_emits_probe_events_all_empty ----
+
+    #[test]
+    fn test_nonrpm_emits_probe_events_all_empty() {
+        // Empty system — all probes should emit Empty.
+        let exec = MockExecutor::new()
+            .with_command(
+                "readelf --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "file --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = NonRpmInspector::new();
+        let progress = VecProgress::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let _result = inspector.inspect(&ctx, &progress);
+
+        let events = progress.events();
+        let probe_starts: Vec<&ProbeId> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::ProbeStarted { probe, .. } => Some(probe),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(probe_starts.len(), 7, "should emit 7 ProbeStarted events");
+        assert_eq!(probe_starts[0], &ProbeId::ElfBinaries);
+        assert_eq!(probe_starts[1], &ProbeId::PythonVenvs);
+        assert_eq!(probe_starts[2], &ProbeId::PipPackages);
+        assert_eq!(probe_starts[3], &ProbeId::NpmPackages);
+        assert_eq!(probe_starts[4], &ProbeId::GemPackages);
+        assert_eq!(probe_starts[5], &ProbeId::EnvFiles);
+        assert_eq!(probe_starts[6], &ProbeId::GitRepos);
+
+        let empties: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ProgressEvent::ProbeFinished {
+                        outcome: ProbeOutcome::Empty,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(empties.len(), 7, "all 7 probes should finish with Empty");
+    }
+
+    // ---- Test 22: test_nonrpm_probe_found_has_count ----
+
+    #[test]
+    fn test_nonrpm_probe_found_has_count() {
+        // System with a git repo — GitRepos probe should emit Found { count: 1 }.
+        let exec = MockExecutor::new()
+            .with_command(
+                "readelf --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "file --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec![".git", "src"])
+            .with_dir("/opt/myapp/.git", vec!["config"])
+            .with_file("/opt/myapp/.git/config", git_config_fixture())
+            .with_dir("/opt/myapp/src", vec![])
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = NonRpmInspector::new();
+        let progress = VecProgress::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let _result = inspector.inspect(&ctx, &progress);
+
+        let events = progress.events();
+
+        // GitRepos probe should report Found with count 1.
+        let git_finished: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ProgressEvent::ProbeFinished {
+                        probe: ProbeId::GitRepos,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(git_finished.len(), 1, "should have one GitRepos ProbeFinished");
+        match &git_finished[0] {
+            ProgressEvent::ProbeFinished { outcome, .. } => {
+                assert_eq!(
+                    *outcome,
+                    ProbeOutcome::Found { count: 1 },
+                    "GitRepos should report Found with count 1"
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        // ELF binaries probe should still be Empty (no ELF files mocked).
+        let elf_finished: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ProgressEvent::ProbeFinished {
+                        probe: ProbeId::ElfBinaries,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(elf_finished.len(), 1);
+        match &elf_finished[0] {
+            ProgressEvent::ProbeFinished { outcome, .. } => {
+                assert_eq!(
+                    *outcome,
+                    ProbeOutcome::Empty,
+                    "ElfBinaries should be Empty when no ELF files exist"
+                );
+            }
+            _ => unreachable!(),
+        }
     }
 }
