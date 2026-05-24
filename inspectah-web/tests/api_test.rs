@@ -22,6 +22,7 @@ use inspectah_core::types::storage::{FstabEntry, StorageSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::RepoTier;
 use inspectah_web::handlers::{AppState, normalize_for_context};
 use std::sync::{Arc, Mutex, OnceLock};
 use tower::ServiceExt;
@@ -749,6 +750,57 @@ async fn health_minimal_snapshot() {
     assert_eq!(host["os_version"], "");
     assert_eq!(host["os_id"], "");
     assert_eq!(host["schema_version"], inspectah_core::snapshot::SCHEMA_VERSION);
+}
+
+#[tokio::test]
+async fn view_response_repo_groups_include_tier() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "epel-release".into(),
+                arch: "noarch".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "epel".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let groups = json["repo_groups"].as_array().expect("repo_groups must be array");
+    let appstream = groups.iter().find(|g| g["section_id"] == "appstream").unwrap();
+    assert_eq!(appstream["tier"], "distro");
+
+    let epel = groups.iter().find(|g| g["section_id"] == "epel").unwrap();
+    assert_eq!(epel["tier"], "third_party");
+}
+
+#[tokio::test]
+async fn view_response_excludes_leaf_dep_tree() {
+    let app = app(test_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        json.get("leaf_dep_tree").is_none(),
+        "leaf_dep_tree should no longer appear in view response"
+    );
 }
 
 // --- normalize_for_context unit tests ---------------------------------------
