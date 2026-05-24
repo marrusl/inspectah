@@ -211,6 +211,14 @@ export interface ContextSection {
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type RepoProvenance = "verified" | "incomplete" | "unknown";
 
+/** Rust: #[serde(rename_all = "snake_case")] */
+export type RepoTier = "distro" | "official_optional" | "third_party";
+
+export interface RepoSourceEntry {
+  repo: string;
+  host_count: number;
+}
+
 export interface VersionChangeEntry {
   name: string;
   arch: string;
@@ -225,6 +233,7 @@ export interface RepoGroupInfo {
   section_id: string;
   provenance: RepoProvenance;
   is_distro: boolean;
+  tier: RepoTier;
   package_count: number;
   enabled: boolean;
 }
@@ -257,7 +266,6 @@ export interface HealthResponse {
 /** View endpoint response: RefinedView + repo_groups. */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
-  leaf_dep_tree: Record<string, string[]>;
   version_changes: VersionChangeEntry[];
   users_groups_decisions: UserDecision[];
   session_is_sensitive: boolean;
@@ -469,6 +477,8 @@ export interface FleetItem {
   attention: FleetAttention;
   prevalence: FleetItemPrevalence;
   variants?: FleetVariants;
+  source_repo: string;
+  repo_conflict?: RepoSourceEntry[];
 }
 
 export interface FleetZoneGroup {
@@ -498,6 +508,8 @@ export interface FleetViewResponse {
   session_is_sensitive: boolean;
   summary: FleetSummary;
   sections: FleetSection[];
+  repo_groups: RepoGroupInfo[];
+  repo_conflict_count: number;
 }
 
 export interface LineRange {
