@@ -1,6 +1,6 @@
 # CLI Scan Progress UX — Design Spec
 
-**Status:** Proposed (revision 4)
+**Status:** Approved (revision 4, approved 2026-05-24)
 **Date:** 2026-05-24
 **ROADMAP ref:** "CLI UX: Scan Progress Reporting (MEDIUM)", "CLI UX: Baseline Pull Viewport Height (LOW)"
 
