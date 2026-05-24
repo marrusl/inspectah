@@ -5,7 +5,7 @@
 //! results arrive from parallel execution.
 
 use inspectah_core::types::completeness::InspectorId;
-use inspectah_core::types::progress::{ProbeId, StepId};
+use inspectah_core::types::progress::{MetricKind, ProbeId, StepId};
 
 /// Fixed display order for the scan checklist.
 ///
@@ -77,6 +77,21 @@ pub fn probe_name(id: &ProbeId) -> &'static str {
     }
 }
 
+/// Format a metric value with the spec-defined label for its kind.
+///
+/// Each `MetricKind` maps to a specific phrasing rather than the
+/// generic "N found" used before this fix.
+pub fn metric_label(kind: &MetricKind, value: usize) -> String {
+    match kind {
+        MetricKind::PackagesFound => format!("{value} found"),
+        MetricKind::ReposMapped => format!("{value} repos mapped"),
+        MetricKind::ConfigsModified => format!("{value} modified"),
+        MetricKind::UnitsFound => format!("{value} units"),
+        MetricKind::ContainersFound => format!("{value} found"),
+        MetricKind::TimersFound => format!("{value} timers"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +155,15 @@ mod tests {
         for p in &probes {
             assert!(!probe_name(p).is_empty());
         }
+    }
+
+    #[test]
+    fn metric_label_specific_wording() {
+        assert_eq!(metric_label(&MetricKind::PackagesFound, 847), "847 found");
+        assert_eq!(metric_label(&MetricKind::ReposMapped, 8), "8 repos mapped");
+        assert_eq!(metric_label(&MetricKind::ConfigsModified, 12), "12 modified");
+        assert_eq!(metric_label(&MetricKind::UnitsFound, 4), "4 units");
+        assert_eq!(metric_label(&MetricKind::ContainersFound, 3), "3 found");
+        assert_eq!(metric_label(&MetricKind::TimersFound, 2), "2 timers");
     }
 }

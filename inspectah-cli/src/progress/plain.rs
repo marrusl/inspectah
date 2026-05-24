@@ -48,7 +48,10 @@ struct PlainState {
     writer: Box<dyn Write + Send>,
     use_color: bool,
     start_times: HashMap<InspectorId, Instant>,
+    /// Transient metric for the current step — consumed by StepFinished.
     last_metric: Option<(MetricKind, usize)>,
+    /// Last metric seen for the current inspector — used by the parent completion line.
+    inspector_metric: Option<(MetricKind, usize)>,
 }
 
 impl PlainRenderer {
@@ -63,6 +66,7 @@ impl PlainRenderer {
                 use_color,
                 start_times: HashMap::new(),
                 last_metric: None,
+                inspector_metric: None,
             }),
         }
     }
@@ -74,6 +78,7 @@ impl PlainRenderer {
             ProgressEvent::InspectorStarted(id) => {
                 state.start_times.insert(id, Instant::now());
                 state.last_metric = None;
+                state.inspector_metric = None;
                 let name = display::display_name(id);
                 let _ = writeln!(state.writer, "\u{25b8} {name}");
             }
@@ -85,9 +90,10 @@ impl PlainRenderer {
                     .map(|t| t.elapsed().as_secs_f64());
                 let use_color = state.use_color;
                 let (symbol, suffix) =
-                    format_inspector_outcome(&outcome, elapsed, use_color);
+                    format_inspector_outcome(&outcome, elapsed, &state.inspector_metric, use_color);
                 let _ = writeln!(state.writer, "{symbol} {name:<40} {suffix}");
                 state.last_metric = None;
+                state.inspector_metric = None;
             }
             ProgressEvent::StepStarted { step, .. } => {
                 let name = display::step_name(&step);
@@ -105,7 +111,8 @@ impl PlainRenderer {
                 state.last_metric = None;
             }
             ProgressEvent::Metric { kind, value, .. } => {
-                state.last_metric = Some((kind, value));
+                state.last_metric = Some((kind.clone(), value));
+                state.inspector_metric = Some((kind, value));
             }
             ProgressEvent::ProbeStarted { probe, .. } => {
                 let name = display::probe_name(&probe);
@@ -130,17 +137,25 @@ impl PlainRenderer {
 // ── Outcome formatting ──────────────────────────────────────────────
 
 /// Format the symbol and suffix for an inspector finish line.
+///
+/// When a metric is available, the completion line uses the specific
+/// metric label instead of generic "done".
 fn format_inspector_outcome(
     outcome: &InspectorOutcome,
     elapsed: Option<f64>,
+    last_metric: &Option<(MetricKind, usize)>,
     use_color: bool,
 ) -> (String, String) {
     match outcome {
         InspectorOutcome::Complete => {
             let sym = colored("\u{2713}", GREEN, use_color);
-            let suf = match elapsed {
-                Some(s) => format!("done ({s:.1}s)"),
+            let label = match last_metric {
+                Some((kind, value)) => display::metric_label(kind, *value),
                 None => "done".to_string(),
+            };
+            let suf = match elapsed {
+                Some(s) => format!("{label} ({s:.1}s)"),
+                None => label,
             };
             (sym, suf)
         }
@@ -180,7 +195,7 @@ fn format_step_outcome(
         StepOutcome::Complete => {
             let sym = colored("\u{2713}", GREEN, use_color);
             let suf = match last_metric {
-                Some((_, value)) => format!("{value} found"),
+                Some((kind, value)) => display::metric_label(kind, *value),
                 None => "done".to_string(),
             };
             (sym, suf)
@@ -425,6 +440,55 @@ mod tests {
         assert!(
             text.contains("ELF binaries") && text.contains("none"),
             "expected ELF none, got: {text}"
+        );
+    }
+
+    #[test]
+    fn plain_metric_labels_match_spec() {
+        let (renderer, buf) = test_renderer(false);
+
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        renderer.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        renderer.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 847,
+        });
+        renderer.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+        renderer.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        renderer.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 8,
+        });
+        renderer.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+        renderer.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        assert!(
+            text.contains("847 found"),
+            "PackagesFound should say '847 found', got: {text}"
+        );
+        assert!(
+            text.contains("8 repos mapped"),
+            "ReposMapped should say '8 repos mapped', got: {text}"
         );
     }
 

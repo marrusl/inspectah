@@ -98,7 +98,10 @@ struct InspectorRow {
     started_at: Option<Instant>,
     sub_steps: Vec<SubStepRow>,
     probes: Vec<ProbeRow>,
+    /// Transient metric for the current step — consumed by StepFinished.
     last_metric: Option<(MetricKind, usize)>,
+    /// Last metric seen across all steps — used by the parent completion line.
+    inspector_metric: Option<(MetricKind, usize)>,
 }
 
 /// In-memory checklist state — the entire model for rich-mode rendering.
@@ -128,6 +131,7 @@ impl ChecklistState {
                 sub_steps: Vec::new(),
                 probes: Vec::new(),
                 last_metric: None,
+                inspector_metric: None,
             })
             .collect();
 
@@ -154,6 +158,7 @@ impl ChecklistState {
                     self.rows[idx].state = RowState::Active;
                     self.rows[idx].started_at = Some(Instant::now());
                     self.rows[idx].last_metric = None;
+                    self.rows[idx].inspector_metric = None;
 
                     // Pre-populate sub-steps so the full checklist is
                     // visible upfront (not lazily on StepStarted).
@@ -220,7 +225,8 @@ impl ChecklistState {
                         InspectorOutcome::Failed { reason } => RowState::Failed { reason },
                         InspectorOutcome::Interrupted => RowState::Interrupted,
                     };
-                    self.rows[idx].last_metric = None;
+                    // Preserve last_metric for the completion line rendering.
+                    // InspectorStarted already resets it for the next inspector.
                 }
             }
             ProgressEvent::StepStarted { inspector, step } => {
@@ -278,7 +284,8 @@ impl ChecklistState {
                 value,
             } => {
                 if let Some(idx) = self.find_row(inspector) {
-                    self.rows[idx].last_metric = Some((kind, value));
+                    self.rows[idx].last_metric = Some((kind.clone(), value));
+                    self.rows[idx].inspector_metric = Some((kind, value));
                 }
             }
             ProgressEvent::ProbeStarted { inspector, probe } => {
@@ -353,8 +360,12 @@ impl ChecklistState {
                 }
                 RowState::Complete { elapsed } => {
                     let sym = colored("\u{2713}", GREEN, use_color);
+                    let label = match &row.inspector_metric {
+                        Some((kind, value)) => display::metric_label(kind, *value),
+                        None => "done".to_string(),
+                    };
                     let suf = format_elapsed_suf(*elapsed);
-                    format!("  {sym} [{position:>2}/{total}] {name:<40} done{suf}")
+                    format!("  {sym} [{position:>2}/{total}] {name:<40} {label}{suf}")
                 }
                 RowState::Skipped { reason } => {
                     let sym = colored("\u{2013}", DIM, use_color);
@@ -509,7 +520,7 @@ fn format_elapsed_suf(elapsed: Duration) -> String {
 /// Format the metric suffix for a completed sub-step.
 fn format_sub_step_suffix(metric: &Option<(MetricKind, usize)>) -> String {
     match metric {
-        Some((_, value)) => format!("{value} found"),
+        Some((kind, value)) => display::metric_label(kind, *value),
         None => "done".to_string(),
     }
 }
@@ -1083,6 +1094,68 @@ mod tests {
         assert!(
             joined.contains("\x1b["),
             "expected ANSI escape in color mode: {joined}"
+        );
+    }
+
+    #[test]
+    fn metric_labels_match_spec() {
+        let mut state = test_state();
+        state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+
+        // Step with PackagesFound
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        state.handle_event(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 847,
+        });
+        state.handle_event(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+
+        // Step with ReposMapped
+        state.handle_event(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        state.handle_event(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 8,
+        });
+        state.handle_event(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+
+        // Finish RPM inspector — last metric was ReposMapped
+        state.handle_event(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let lines = state.render_lines();
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("847 found"),
+            "PackagesFound should say '847 found', got: {joined}"
+        );
+        assert!(
+            joined.contains("8 repos mapped"),
+            "ReposMapped should say '8 repos mapped', got: {joined}"
+        );
+        // Parent completion line should show last metric
+        let rpm_line = lines.iter().find(|l| l.contains("RPM packages") && l.contains('\u{2713}')).expect("RPM done line");
+        assert!(
+            rpm_line.contains("8 repos mapped"),
+            "parent completion should show last metric, got: {rpm_line}"
         );
     }
 
