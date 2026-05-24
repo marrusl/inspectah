@@ -232,27 +232,41 @@ are overwritten.
 
 ### Plain mode (forced durable output on TTY)
 
-Sequential line output with no cursor manipulation, but with ANSI
-color. Each line is permanent — no redraws.
+Strictly append-only line output with ANSI color. No cursor
+manipulation, no `\r` overwrite, no spinner glyphs. Every line
+printed is permanent and final.
 
 **Detection:** `INSPECTAH_PROGRESS=plain` env var, or `--progress=plain`
 flag. This is for TTY users who want a durable transcript (e.g.,
 terminal multiplexer recording, screen reader users who prefer
 sequential output).
 
+Active items print a "started" line. When the item completes, a
+separate "done" line is appended — the started line is never
+modified. Under wave-2 concurrency, started and done lines from
+different inspectors may interleave. This is correct — the
+transcript is a truthful, chronological log of events.
+
 ```
-  ✓ RPM packages                            847 found (3.4s)
+  ▸ RPM packages
+      ▸ Querying installed packages
       ✓ Querying installed packages          847 found
+      ▸ Classifying packages
       ✓ Classifying packages                 done
       ...
+  ✓ RPM packages                            847 found (3.4s)
+  ▸ Services
+  ▸ Config files
+      ▸ Applying RPM verification results
   ✓ Services                                 4 units (0.1s)
-  ⣟ Config files
-      ⣟ Walking filesystem
+      ✓ Applying RPM verification results    done
+      ▸ Walking filesystem
+  ...
 ```
 
-Lines print as events arrive. No block redraw. Active items print
-with a spinner prefix that is replaced by the completion line when
-done (single `\r` overwrite of the current line only — no cursor-up).
+`▸` prefix for started lines (no animation). `✓` for complete. Same
+state symbols as rich mode for skipped/degraded/failed/interrupted
+completion lines. No braille spinners — the `▸` arrow is static.
 
 ### Flat mode (non-TTY / log-friendly)
 
@@ -387,6 +401,7 @@ Exit codes reflect report trustworthiness, not scan perfection.
 | 0 | Report is trustworthy | All inspectors complete, skipped, or degraded. Skipped = not applicable (expected). Degraded = partial data but usable. |
 | 1 | Hard error | Pipeline crash, tarball write failure, invalid arguments. No usable output. |
 | 2 | Report has blind spots | At least one inspector failed — capability existed on the host but data collection errored. Report is missing sections. |
+| 130 | Interrupted (SIGINT) | User sent Ctrl-C. Unix convention: 128 + signal number (SIGINT = 2). No report written. |
 
 **Skipped inspectors do not affect exit code.** A host with no
 container runtime exits 0 — absence is topology, not an error.
@@ -405,14 +420,16 @@ enum ScanOutcome {
     Clean,
     Degraded,
     Incomplete,
+    Interrupted,
 }
 ```
 
-Derived from `snapshot.completeness` after `collect()` returns.
-`main.rs` maps:
+Derived from `snapshot.completeness` (or SIGINT flag) after
+`collect()` returns. `main.rs` maps:
 - `ScanOutcome::Clean` → exit 0
 - `ScanOutcome::Degraded` → exit 0
 - `ScanOutcome::Incomplete` → exit 2
+- `ScanOutcome::Interrupted` → exit 130
 - `Err(_)` → exit 1
 
 ## 6. Architecture — Progress Events
@@ -444,11 +461,32 @@ pub enum ProgressEvent {
         kind: MetricKind,
         value: usize,
     },
-    Discovery {
+    ProbeStarted {
         inspector: InspectorId,
-        label: String,
-        count: usize,
+        probe: ProbeId,
     },
+    ProbeFinished {
+        inspector: InspectorId,
+        probe: ProbeId,
+        outcome: ProbeOutcome,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ProbeId {
+    ElfBinaries,
+    PythonVenvs,
+    PipPackages,
+    NpmPackages,
+    GemPackages,
+    EnvFiles,
+    GitRepos,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProbeOutcome {
+    Found { count: usize },
+    Empty,
 }
 
 #[derive(Debug, Clone)]
@@ -466,6 +504,7 @@ pub enum StepOutcome {
     Degraded,
     Failed,
     Skipped,
+    Interrupted,
 }
 
 #[derive(Debug, Clone)]
@@ -520,10 +559,13 @@ fn inspect(
 ) -> Result<InspectorOutput, InspectorError>;
 ```
 
-Each inspector emits `StepStarted`/`StepFinished` at its key phases:
-- RPM: 6 step pairs
-- Config: 3 step pairs
-- Non-RPM: up to 7 `Discovery` events (one per ecosystem found)
+Each inspector emits events at its key phases:
+- RPM: 6 `StepStarted`/`StepFinished` pairs
+- Config: 3 `StepStarted`/`StepFinished` pairs
+- Non-RPM: 7 `ProbeStarted`/`ProbeFinished` pairs (one per ecosystem
+  check). The renderer shows a spinner for `ProbeStarted`, removes it
+  on `ProbeFinished { outcome: Empty }`, or settles a checkmark with
+  count on `ProbeFinished { outcome: Found { count } }`.
 - Other 8 inspectors: no sub-step events needed
 
 ### collect() changes
@@ -538,6 +580,12 @@ Outcome mapping:
 - `Err(InspectorError::Skipped { .. })` → `InspectorOutcome::Skipped`
 - `Err(InspectorError::Degraded { .. })` → `InspectorOutcome::Degraded`
 - `Err(InspectorError::Failed { .. })` → `InspectorOutcome::Failed`
+- SIGINT received → `InspectorOutcome::Interrupted` for all active
+  and pending inspectors. `collect()` installs a SIGINT handler
+  (e.g., `Arc<AtomicBool>`) checked between inspector launches and
+  within wave-2 join loops. When set, remaining inspectors are not
+  started and active threads are joined (their results are discarded
+  or marked interrupted).
 
 Progress events are the ephemeral display channel. Outcomes are also
 recorded durably in `snapshot.completeness` — the exit code is
