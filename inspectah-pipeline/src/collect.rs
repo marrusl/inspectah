@@ -7,6 +7,7 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
+use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
@@ -47,6 +48,12 @@ pub fn collect(
                 message: format!("skipped: not applicable to {source_kind:?}"),
                 severity: Some(WarningSeverity::Info),
                 ..Default::default()
+            });
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Skipped {
+                    reason: format!("not applicable to {source_kind:?}"),
+                },
             });
         }
     }
@@ -92,7 +99,12 @@ pub fn collect(
     std::thread::scope(|s| {
         let handles: Vec<_> = wave1
             .iter()
-            .map(|inspector| s.spawn(|| inspector.inspect(&base_ctx, progress)))
+            .map(|inspector| {
+                s.spawn(|| {
+                    progress.emit(ProgressEvent::InspectorStarted(inspector.id()));
+                    inspector.inspect(&base_ctx, progress)
+                })
+            })
             .collect();
 
         for (inspector, handle) in wave1.iter().zip(handles) {
@@ -103,6 +115,7 @@ pub fn collect(
                 &mut failed,
                 &mut degraded,
                 &mut rpm_state,
+                progress,
             );
             if was_rpm {
                 rpm_populated = true;
@@ -133,7 +146,12 @@ pub fn collect(
         std::thread::scope(|s| {
             let handles: Vec<_> = wave2
                 .iter()
-                .map(|inspector| s.spawn(|| inspector.inspect(&enriched_ctx, progress)))
+                .map(|inspector| {
+                    s.spawn(|| {
+                        progress.emit(ProgressEvent::InspectorStarted(inspector.id()));
+                        inspector.inspect(&enriched_ctx, progress)
+                    })
+                })
                 .collect();
 
             // Wave 2 inspectors don't produce RpmState, so pass a
@@ -147,6 +165,7 @@ pub fn collect(
                     &mut failed,
                     &mut degraded,
                     &mut wave2_rpm,
+                    progress,
                 );
             }
         });
@@ -211,6 +230,7 @@ fn handle_result(
     failed: &mut Vec<InspectorId>,
     degraded: &mut Vec<InspectorId>,
     rpm_state: &mut RpmState,
+    progress: &dyn ProgressSink,
 ) -> bool {
     let mut rpm_extracted = false;
 
@@ -226,6 +246,10 @@ fn handle_result(
             route_section(snapshot, output.section);
             snapshot.warnings.extend(output.warnings);
             snapshot.redaction_hints.extend(output.redaction_hints);
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Complete,
+            });
         }
         Ok(Err(InspectorError::Skipped { reason })) => {
             snapshot.warnings.push(Warning {
@@ -233,6 +257,12 @@ fn handle_result(
                 message: format!("skipped: {reason}"),
                 severity: Some(WarningSeverity::Info),
                 ..Default::default()
+            });
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Skipped {
+                    reason: reason.clone(),
+                },
             });
         }
         Ok(Err(InspectorError::Degraded {
@@ -256,6 +286,12 @@ fn handle_result(
                 ..Default::default()
             });
             degraded.push(inspector.id());
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Degraded {
+                    reason: reason.clone(),
+                },
+            });
         }
         Ok(Err(InspectorError::Failed { reason })) => {
             snapshot.warnings.push(Warning {
@@ -265,6 +301,12 @@ fn handle_result(
                 ..Default::default()
             });
             failed.push(inspector.id());
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Failed {
+                    reason: reason.clone(),
+                },
+            });
         }
         Err(_panic) => {
             // Panic contained — record as Failed
@@ -274,6 +316,12 @@ fn handle_result(
                 message: "inspector panicked".into(),
                 severity: Some(WarningSeverity::Error),
                 ..Default::default()
+            });
+            progress.emit(ProgressEvent::InspectorFinished {
+                id: inspector.id(),
+                outcome: InspectorOutcome::Failed {
+                    reason: "inspector panicked".into(),
+                },
             });
         }
     }
@@ -374,10 +422,11 @@ mod tests {
     use inspectah_collect::inspectors::rpm::RpmInspector;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::inspector::InspectorOutput;
-    use inspectah_core::traits::progress::{NullProgress, ProgressSink};
+    use inspectah_core::traits::progress::{NullProgress, ProgressSink, VecProgress};
     use inspectah_core::types::completeness::SourceSystemKind;
     use inspectah_core::types::config::ConfigFileKind;
     use inspectah_core::types::os::OsRelease;
+    use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
     use inspectah_core::types::redaction::{Confidence, RedactionHint};
     use inspectah_core::types::system::SourceSystem;
 
@@ -1421,6 +1470,89 @@ mod tests {
             config.files.len(),
             2,
             "only the 2 genuinely unowned files should appear (not the 6 RPM-owned ones)"
+        );
+    }
+
+    // --- Inspector lifecycle event tests ---
+
+    #[test]
+    fn test_collect_emits_inspector_lifecycle_events() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let progress = VecProgress::new();
+        let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
+        let _pipeline = collect(&source, &exec, &inspectors, None, &progress);
+
+        let events = progress.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::InspectorStarted(InspectorId::Rpm))),
+            "must emit InspectorStarted for Rpm"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ProgressEvent::InspectorFinished {
+                    id: InspectorId::Rpm,
+                    outcome: InspectorOutcome::Complete
+                }
+            )),
+            "must emit InspectorFinished/Complete for Rpm"
+        );
+    }
+
+    #[test]
+    fn test_collect_emits_skipped_for_inapplicable() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let progress = VecProgress::new();
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(SkippedInspector),
+        ];
+        let _pipeline = collect(&source, &exec, &inspectors, None, &progress);
+
+        let events = progress.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ProgressEvent::InspectorFinished {
+                    id: InspectorId::Storage,
+                    outcome: InspectorOutcome::Skipped { .. }
+                }
+            )),
+            "must emit InspectorFinished/Skipped for SkippedInspector"
+        );
+    }
+
+    #[test]
+    fn test_collect_emits_failed_outcome() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let progress = VecProgress::new();
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(FailingInspector),
+        ];
+        let _pipeline = collect(&source, &exec, &inspectors, None, &progress);
+
+        let events = progress.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ProgressEvent::InspectorFinished {
+                    id: InspectorId::Config,
+                    outcome: InspectorOutcome::Failed { .. }
+                }
+            )),
+            "must emit InspectorFinished/Failed for FailingInspector"
         );
     }
 }
