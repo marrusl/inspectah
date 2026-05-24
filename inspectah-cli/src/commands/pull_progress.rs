@@ -13,8 +13,11 @@ pub const MIN_VIEWPORT_WIDTH: usize = 40;
 /// Maximum viewport content width.
 const MAX_VIEWPORT_WIDTH: usize = 72;
 
-/// Number of recent lines shown in the viewport.
-const VIEWPORT_LINES: usize = 3;
+/// Dynamic viewport height: 30% of terminal rows, floor 8, cap 16.
+pub fn viewport_height(terminal_rows: usize) -> usize {
+    let height = (terminal_rows as f64 * 0.3).round() as usize;
+    height.clamp(8, 16)
+}
 
 /// Strip ANSI escape sequences from a string.
 ///
@@ -135,13 +138,13 @@ pub fn non_tty_callback(collected: &mut Vec<String>) -> impl FnMut(&str) + '_ {
     }
 }
 
-/// Create the TTY viewport callback: renders a 3-line box-drawing viewport
+/// Create the TTY viewport callback: renders a dynamic-height box-drawing viewport
 /// with recent stderr lines.
 ///
 /// Also collects lines for post-completion blob counting.
 pub fn tty_viewport_callback<'a>(
     collected: &'a mut Vec<String>,
-    ring: &'a mut [String; VIEWPORT_LINES],
+    ring: &'a mut [String],
     ring_pos: &'a mut usize,
     content_width: usize,
 ) -> impl FnMut(&str) + 'a {
@@ -152,8 +155,10 @@ pub fn tty_viewport_callback<'a>(
         }
         collected.push(cleaned.clone());
 
+        let viewport_lines = ring.len();
+
         // Push into ring buffer
-        ring[*ring_pos % VIEWPORT_LINES] = truncate_line(&cleaned, content_width);
+        ring[*ring_pos % viewport_lines] = truncate_line(&cleaned, content_width);
         *ring_pos += 1;
 
         // Redraw viewport
@@ -162,7 +167,8 @@ pub fn tty_viewport_callback<'a>(
 
         // Move cursor up to clear previous viewport (if not first draw)
         if *ring_pos > 1 {
-            let _ = write!(w, "\x1b[5A"); // up 5 lines (top border + 3 content + bottom border)
+            // up (viewport_lines + 2) lines (top border + N content + bottom border)
+            let _ = write!(w, "\x1b[{}A", viewport_lines + 2);
         }
 
         // Draw top border
@@ -172,9 +178,9 @@ pub fn tty_viewport_callback<'a>(
             "\u{2500}".repeat(content_width + 2)
         );
         // Draw content lines
-        for i in 0..VIEWPORT_LINES {
-            let idx = if *ring_pos >= VIEWPORT_LINES {
-                (*ring_pos - VIEWPORT_LINES + i) % VIEWPORT_LINES
+        for i in 0..viewport_lines {
+            let idx = if *ring_pos >= viewport_lines {
+                (*ring_pos - viewport_lines + i) % viewport_lines
             } else if i < *ring_pos {
                 i
             } else {
@@ -207,15 +213,16 @@ pub fn tty_viewport_callback<'a>(
 /// Clear the TTY viewport after pull completes (or fails).
 ///
 /// Moves cursor up and clears each viewport line.
-pub fn viewport_cleanup() {
+pub fn viewport_cleanup(viewport_lines: usize) {
     let stderr = std::io::stderr();
     let mut w = stderr.lock();
-    // Clear 5 lines: top border + 3 content + bottom border
-    let _ = write!(w, "\x1b[5A"); // move up 5
-    for _ in 0..5 {
+    // Clear (viewport_lines + 2) lines: top border + N content + bottom border
+    let total_lines = viewport_lines + 2;
+    let _ = write!(w, "\x1b[{}A", total_lines); // move up
+    for _ in 0..total_lines {
         let _ = writeln!(w, "\x1b[2K"); // clear line, move down
     }
-    let _ = write!(w, "\x1b[5A"); // move back up
+    let _ = write!(w, "\x1b[{}A", total_lines); // move back up
     let _ = w.flush();
 }
 
@@ -348,5 +355,14 @@ mod tests {
         }
         assert_eq!(collected.len(), 2);
         assert!(collected[0].contains("aaa"));
+    }
+
+    #[test]
+    fn viewport_height_scales_with_terminal() {
+        assert_eq!(viewport_height(80), 16); // 80 * 0.3 = 24 -> capped at 16
+        assert_eq!(viewport_height(50), 15); // 50 * 0.3 = 15
+        assert_eq!(viewport_height(24), 8); // 24 * 0.3 = 7.2 -> floored at 8
+        assert_eq!(viewport_height(10), 8); // 10 * 0.3 = 3 -> floored at 8
+        assert_eq!(viewport_height(40), 12); // 40 * 0.3 = 12
     }
 }

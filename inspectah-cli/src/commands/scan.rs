@@ -222,13 +222,14 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
             let data = if use_viewport {
                 // TTY: viewport rendering
-                let term_width = terminal_size::terminal_size()
-                    .map(|(w, _)| w.0 as usize)
-                    .unwrap_or(80);
+                let (term_width, term_height) = terminal_size::terminal_size()
+                    .map(|(w, h)| (w.0 as usize, h.0 as usize))
+                    .unwrap_or((80, 24));
 
                 if term_width >= pull_progress::MIN_VIEWPORT_WIDTH {
                     let content_width = pull_progress::viewport_content_width(term_width);
-                    let mut ring = [String::new(), String::new(), String::new()];
+                    let viewport_lines = pull_progress::viewport_height(term_height);
+                    let mut ring: Vec<String> = (0..viewport_lines).map(|_| String::new()).collect();
                     let mut ring_pos: usize = 0;
 
                     let result = {
@@ -246,7 +247,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     };
                     // Only clear viewport if lines were actually rendered.
                     if ring_pos > 0 {
-                        pull_progress::viewport_cleanup();
+                        pull_progress::viewport_cleanup(viewport_lines);
                     }
                     result.context("baseline extraction failed")?
                 } else {
