@@ -28,6 +28,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
@@ -38,6 +39,37 @@ use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
 
 use super::pull_progress;
+
+/// Maps snapshot completeness to process exit semantics.
+/// Exit codes reflect report trustworthiness, not scan perfection.
+pub enum ScanOutcome {
+    /// Exit 0 — report is trustworthy.
+    Clean,
+    /// Exit 0 — report is trustworthy but has caveats.
+    Degraded,
+    /// Exit 2 — report has blind spots (inspector failed).
+    Incomplete,
+    /// Exit 130 — user interrupted with SIGINT.
+    Interrupted,
+}
+
+impl ScanOutcome {
+    fn from_completeness(completeness: &Completeness) -> Self {
+        match completeness {
+            Completeness::Complete => ScanOutcome::Clean,
+            Completeness::Partial { .. } => ScanOutcome::Degraded,
+            Completeness::Incomplete { .. } => ScanOutcome::Incomplete,
+        }
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            ScanOutcome::Clean | ScanOutcome::Degraded => 0,
+            ScanOutcome::Incomplete => 2,
+            ScanOutcome::Interrupted => 130,
+        }
+    }
+}
 
 #[derive(Args)]
 pub struct ScanArgs {
@@ -116,7 +148,7 @@ fn get_hostname(executor: &dyn inspectah_core::traits::executor::Executor) -> St
     }
 }
 
-pub fn run_scan(args: &ScanArgs) -> Result<()> {
+pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
     let euid = unsafe { libc::geteuid() };
@@ -284,6 +316,9 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     );
     eprintln!("Scanning host {hostname}... done");
 
+    // Derive exit outcome from collection completeness
+    let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
+
     // Step 5: Validate
     let validated = validate(collected).context("snapshot validation failed")?;
 
@@ -350,7 +385,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
                 println!("{json}");
             }
         }
-        return Ok(());
+        return Ok(outcome);
     }
 
     // Step 7: Render all artifacts to a temp directory
@@ -390,7 +425,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         "To view and edit results, run: inspectah refine {}",
         tarball_path.display()
     );
-    Ok(())
+    Ok(outcome)
 }
 
 /// Read Universal Blue metadata from the well-known path.
