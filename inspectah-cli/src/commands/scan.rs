@@ -100,6 +100,10 @@ pub struct ScanArgs {
     /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
     #[arg(long)]
     pub acknowledge_sensitive: bool,
+
+    /// Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)
+    #[arg(long, value_name = "MODE")]
+    pub progress: Option<crate::progress::ProgressMode>,
 }
 
 /// Detect the source system by reading /etc/os-release.
