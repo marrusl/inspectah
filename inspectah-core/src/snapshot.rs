@@ -1,6 +1,7 @@
 use crate::types::completeness::Completeness;
 use crate::types::config::ConfigSection;
 use crate::types::containers::ContainerSection;
+use crate::types::fleet::RepoSourceEntry;
 use crate::types::kernelboot::KernelBootSection;
 use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
@@ -80,6 +81,11 @@ pub struct InspectionSnapshot {
     /// Fleet snapshot metadata. None for single-host snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
+    /// Repo-source conflicts detected during fleet merge. Maps `name.arch`
+    /// identity keys to the distinct repos with host counts. Empty for
+    /// single-host snapshots.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub rpm_repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>,
 }
 
 impl InspectionSnapshot {

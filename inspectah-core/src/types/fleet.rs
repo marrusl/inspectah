@@ -48,6 +48,15 @@ pub enum PrevalenceZone {
     Consensus,
 }
 
+/// Tracks which repo a package was sourced from and how many hosts used it.
+/// Used to detect repo-source conflicts in fleet merge (e.g., nginx from epel
+/// on 2 hosts vs appstream on 1 host).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoSourceEntry {
+    pub repo: String,
+    pub host_count: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

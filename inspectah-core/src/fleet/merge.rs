@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use crate::types::fleet::{FleetPrevalence, VariantSelection};
+use crate::types::fleet::{FleetPrevalence, RepoSourceEntry, VariantSelection};
 
 /// Trait for types that participate in fleet prevalence tracking.
 ///
@@ -764,12 +764,16 @@ where
 /// `baseline_host_idx` identifies which sorted host's baseline-bearing fields
 /// to use (e.g. `baseline_package_names`, `base_image`, `no_baseline`).
 /// When `None`, falls back to first-host behavior for backward compat.
+///
+/// Returns `(merged_section, repo_conflicts)` where `repo_conflicts` maps
+/// `name.arch` identity keys to the distinct repos with host counts, only
+/// for packages installed from 2+ different repos across the fleet.
 pub fn merge_rpm_sections(
     sections: Vec<Option<RpmSection>>,
     total_hosts: usize,
     hostnames: &[String],
     baseline_host_idx: Option<usize>,
-) -> Option<RpmSection> {
+) -> Option<(RpmSection, HashMap<String, Vec<RepoSourceEntry>>)> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
     }
@@ -930,33 +934,71 @@ pub fn merge_rpm_sections(
         result
     };
 
-    Some(RpmSection {
-        packages_added,
-        base_image_only,
-        rpm_va,
-        repo_files,
-        gpg_keys,
-        dnf_history_removed,
-        version_changes,
-        leaf_packages,
-        auto_packages,
-        leaf_dep_tree,
-        module_streams,
-        version_locks,
-        module_stream_conflicts,
-        baseline_module_streams,
-        versionlock_command_output,
-        multiarch_packages,
-        duplicate_packages,
-        repo_providing_packages,
-        ostree_overrides,
-        ostree_removals,
-        base_image,
-        baseline_package_names,
-        no_baseline,
-        baseline_suppressed,
-        file_ownership,
-    })
+    // Detect repo-source conflicts: packages installed from different repos
+    // across the fleet. Only tracks conflicts (2+ distinct repos).
+    let repo_conflicts = {
+        let mut conflicts: HashMap<String, Vec<RepoSourceEntry>> = HashMap::new();
+        for pkg in &packages_added {
+            let key = format!("{}.{}", pkg.name, pkg.arch);
+            let mut repo_counts: HashMap<String, usize> = HashMap::new();
+            for section in sections.iter().flatten() {
+                for host_pkg in &section.packages_added {
+                    if host_pkg.name == pkg.name
+                        && host_pkg.arch == pkg.arch
+                        && !host_pkg.source_repo.is_empty()
+                    {
+                        *repo_counts
+                            .entry(host_pkg.source_repo.to_lowercase())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+            if repo_counts.len() >= 2 {
+                let mut entries: Vec<RepoSourceEntry> = repo_counts
+                    .into_iter()
+                    .map(|(repo, host_count)| RepoSourceEntry { repo, host_count })
+                    .collect();
+                entries.sort_by(|a, b| {
+                    b.host_count
+                        .cmp(&a.host_count)
+                        .then_with(|| a.repo.cmp(&b.repo))
+                });
+                conflicts.insert(key, entries);
+            }
+        }
+        conflicts
+    };
+
+    Some((
+        RpmSection {
+            packages_added,
+            base_image_only,
+            rpm_va,
+            repo_files,
+            gpg_keys,
+            dnf_history_removed,
+            version_changes,
+            leaf_packages,
+            auto_packages,
+            leaf_dep_tree,
+            module_streams,
+            version_locks,
+            module_stream_conflicts,
+            baseline_module_streams,
+            versionlock_command_output,
+            multiarch_packages,
+            duplicate_packages,
+            repo_providing_packages,
+            ostree_overrides,
+            ostree_removals,
+            base_image,
+            baseline_package_names,
+            no_baseline,
+            baseline_suppressed,
+            file_ownership,
+        },
+        repo_conflicts,
+    ))
 }
 
 /// Merge config sections from multiple hosts.
@@ -1581,4 +1623,158 @@ fn merge_json_by_name(
         .iter()
         .filter_map(|name| by_name.remove(name))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_package_merge_tracks_repo_conflict() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        let host_a_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "epel".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_c_rpm = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "epel".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+
+        let (merged, repo_conflicts) = merge_rpm_sections(
+            vec![Some(host_a_rpm), Some(host_b_rpm), Some(host_c_rpm)],
+            3,
+            &hostnames,
+            None,
+        )
+        .expect("merge should succeed");
+
+        let nginx = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "nginx")
+            .expect("nginx should be in merged output");
+        assert_eq!(nginx.source_repo, "epel"); // majority wins
+
+        assert!(repo_conflicts.contains_key("nginx.x86_64"));
+        let conflict = &repo_conflicts["nginx.x86_64"];
+        assert_eq!(conflict.len(), 2);
+        assert_eq!(conflict[0].repo, "epel");
+        assert_eq!(conflict[0].host_count, 2);
+        assert_eq!(conflict[1].repo, "appstream");
+        assert_eq!(conflict[1].host_count, 1);
+    }
+
+    #[test]
+    fn test_merge_no_conflict_single_repo() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        let sections = vec![
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "baseos".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "baseos".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ];
+
+        let hostnames = vec!["host-a".into(), "host-b".into()];
+        let (merged, conflicts) =
+            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+
+        assert_eq!(merged.packages_added[0].source_repo, "baseos");
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_merge_repo_conflict_tie() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        let sections = vec![
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "epel".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "appstream".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ];
+
+        let hostnames = vec!["host-a".into(), "host-b".into()];
+        let (merged, conflicts) =
+            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+
+        let nginx = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "nginx")
+            .expect("nginx should be in merged output");
+        assert_eq!(nginx.source_repo, "epel");
+
+        let conflict = &conflicts["nginx.x86_64"];
+        assert_eq!(conflict.len(), 2);
+        assert_eq!(conflict[0].repo, "appstream"); // alpha first at equal count
+        assert_eq!(conflict[0].host_count, 1);
+        assert_eq!(conflict[1].repo, "epel");
+        assert_eq!(conflict[1].host_count, 1);
+    }
 }

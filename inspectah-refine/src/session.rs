@@ -167,6 +167,7 @@ impl RefineSession {
                 zones,
                 total_hosts: fleet_meta.host_count,
                 zones_active,
+                repo_conflicts: snapshot.rpm_repo_conflicts.clone(),
             })
         } else {
             RefineMode::SingleHost
