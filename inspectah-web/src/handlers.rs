@@ -256,7 +256,7 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
 }
 
 /// Build `RepoGroupInfo` entries from the session's repo index and current view.
-fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
+pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let view = session.view();
     let repo_index = session.repo_index();
     let changes = session.pending_changes();

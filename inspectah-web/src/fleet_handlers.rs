@@ -28,6 +28,8 @@ pub struct FleetViewResponse {
     pub session_is_sensitive: bool,
     pub summary: FleetSummary,
     pub sections: Vec<FleetSection>,
+    pub repo_groups: Vec<crate::handlers::RepoGroupInfo>,
+    pub repo_conflict_count: usize,
 }
 
 #[derive(Serialize)]
@@ -70,6 +72,12 @@ pub struct FleetZoneGroup {
 }
 
 #[derive(Clone, Serialize)]
+pub struct RepoSourceEntryDto {
+    pub repo: String,
+    pub host_count: usize,
+}
+
+#[derive(Clone, Serialize)]
 pub struct FleetItem {
     pub item_id: ItemId,
     pub include: bool,
@@ -77,6 +85,9 @@ pub struct FleetItem {
     pub prevalence: FleetPrevalenceDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variants: Option<FleetVariants>,
+    pub source_repo: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_conflict: Option<Vec<RepoSourceEntryDto>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -342,6 +353,8 @@ fn build_fleet_view_response(
     let snap = session.snapshot_projected();
     let sections = build_fleet_sections(session, &snap, ctx);
     let summary = build_fleet_summary(&snap, ctx, &sections);
+    let repo_groups = crate::handlers::build_repo_groups(session);
+    let repo_conflict_count = ctx.repo_conflicts.len();
 
     FleetViewResponse {
         generation: session.generation(),
@@ -351,6 +364,8 @@ fn build_fleet_view_response(
         session_is_sensitive: session.is_sensitive(),
         summary,
         sections,
+        repo_groups,
+        repo_conflict_count,
     }
 }
 
@@ -443,12 +458,24 @@ fn build_fleet_sections(
                 };
                 let fa = pkg.fleet_attention;
                 let fp = pkg.entry.fleet.as_ref();
+                let name_arch_key = format!("{}.{}", pkg.entry.name, pkg.entry.arch);
+                let repo_conflict = ctx.repo_conflicts.get(&name_arch_key).map(|entries| {
+                    entries
+                        .iter()
+                        .map(|e| RepoSourceEntryDto {
+                            repo: e.repo.clone(),
+                            host_count: e.host_count,
+                        })
+                        .collect()
+                });
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: pkg.entry.include,
                     attention: build_attention_dto(&pkg.attention, fa),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
+                    source_repo: pkg.entry.source_repo.clone(),
+                    repo_conflict,
                 }
             })
             .collect();
@@ -520,6 +547,8 @@ fn build_fleet_sections(
                     attention: build_attention_dto(&cfg.attention, fa),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 }
             })
             .collect();
@@ -615,6 +644,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 }
             })
             .collect();
@@ -658,6 +689,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 });
             }
         }
@@ -708,6 +741,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 });
             }
         }
@@ -746,6 +781,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 });
             }
         }
@@ -775,6 +812,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         for zone in &net.firewall_zones {
@@ -788,6 +827,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         if !items.is_empty() {
@@ -811,6 +852,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 }
             })
             .collect();
@@ -833,6 +876,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         for timer in &sched.systemd_timers {
@@ -846,6 +891,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         if !items.is_empty() {
@@ -875,6 +922,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 }
             })
             .collect();
@@ -897,6 +946,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         for sysctl in &kb.sysctl_overrides {
@@ -910,6 +961,8 @@ fn build_context_sections(
                 attention: default_context_attention(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
             });
         }
         if !items.is_empty() {
@@ -939,6 +992,8 @@ fn build_context_sections(
                     attention: default_context_attention(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
                 }
             })
             .collect();

@@ -695,3 +695,309 @@ fn find_item_in_section<'a>(
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// Repo groups / repo conflict tests
+// ---------------------------------------------------------------------------
+
+fn fleet_state_with_packages() -> Arc<AppState> {
+    use inspectah_core::types::fleet::RepoSourceEntry;
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "web-tier".into(),
+        host_count: 3,
+        hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+        merged_at: "2026-05-21T12:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 3,
+                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+                }),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "epel-release".into(),
+                arch: "noarch".into(),
+                state: PackageState::Added,
+                source_repo: "epel".into(),
+                include: true,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 3,
+                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+                }),
+                ..Default::default()
+            },
+            // nginx has a repo conflict: epel on 2 hosts, appstream on 1
+            PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "epel".into(),
+                include: true,
+                fleet: Some(FleetPrevalence {
+                    count: 3,
+                    total: 3,
+                    hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+                }),
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![
+            RepoFile {
+                path: "/etc/yum.repos.d/centos.repo".into(),
+                content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
+                    .into(),
+                include: true,
+                ..Default::default()
+            },
+            RepoFile {
+                path: "/etc/yum.repos.d/epel.repo".into(),
+                content: "[epel]\nname=EPEL 9\n".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec![
+            "httpd.x86_64".into(),
+            "epel-release.noarch".into(),
+            "nginx.x86_64".into(),
+        ]),
+        ..Default::default()
+    });
+    // Populate repo conflict for nginx — same package from different repos
+    // across hosts. This simulates the carrier chain from Task 3.
+    snap.rpm_repo_conflicts.insert(
+        "nginx.x86_64".into(),
+        vec![
+            RepoSourceEntry {
+                repo: "epel".into(),
+                host_count: 2,
+            },
+            RepoSourceEntry {
+                repo: "appstream".into(),
+                host_count: 1,
+            },
+        ],
+    );
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+/// Collect all fleet items matching a given source_repo from all sections.
+fn fleet_items_by_repo<'a>(
+    json: &'a serde_json::Value,
+    repo: &str,
+) -> Vec<&'a serde_json::Value> {
+    json["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| {
+            let mut items = Vec::new();
+            if let Some(arr) = s.get("items").and_then(|i| i.as_array()) {
+                items.extend(arr.iter());
+            }
+            if let Some(zones) = s.get("zones").and_then(|z| z.as_object()) {
+                for zone_group in zones.values() {
+                    if let Some(arr) = zone_group.get("items").and_then(|i| i.as_array()) {
+                        items.extend(arr.iter());
+                    }
+                }
+            }
+            items
+        })
+        .filter(|item| item["source_repo"].as_str() == Some(repo))
+        .collect()
+}
+
+#[tokio::test]
+async fn fleet_view_includes_repo_groups() {
+    let state = fleet_state_with_packages();
+    let app = app(state);
+    let (status, json) = get_json(&app, "/api/fleet/view").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let repo_groups = json.get("repo_groups").unwrap().as_array().unwrap();
+    assert!(!repo_groups.is_empty(), "repo_groups should not be empty");
+
+    // Verify known repos are present
+    let section_ids: Vec<&str> = repo_groups
+        .iter()
+        .map(|g| g["section_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        section_ids.contains(&"appstream"),
+        "appstream should be in repo_groups"
+    );
+    assert!(
+        section_ids.contains(&"epel"),
+        "epel should be in repo_groups"
+    );
+
+    // Verify repo_conflict_count reflects the conflict map
+    let conflict_count = json["repo_conflict_count"].as_u64().unwrap();
+    assert_eq!(conflict_count, 1, "should have 1 repo conflict (nginx)");
+}
+
+#[tokio::test]
+async fn fleet_view_items_have_source_repo_and_conflict() {
+    let state = fleet_state_with_packages();
+    let app = app(state);
+    let (_, json) = get_json(&app, "/api/fleet/view").await;
+
+    // Find the packages section
+    let packages_section = json["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "packages")
+        .expect("packages section should exist");
+
+    // Get all package items (may be in zones or flat)
+    let mut all_items = Vec::new();
+    if let Some(items) = packages_section.get("items").and_then(|i| i.as_array()) {
+        all_items.extend(items.iter());
+    }
+    if let Some(zones) = packages_section.get("zones").and_then(|z| z.as_object()) {
+        for zone_group in zones.values() {
+            if let Some(items) = zone_group.get("items").and_then(|i| i.as_array()) {
+                all_items.extend(items.iter());
+            }
+        }
+    }
+
+    // httpd should have source_repo "appstream" and no repo_conflict
+    let httpd = all_items
+        .iter()
+        .find(|i| {
+            i["item_id"]["key"]["name_arch"]
+                .as_str()
+                .map(|s| s == "httpd.x86_64")
+                .unwrap_or(false)
+        })
+        .expect("httpd.x86_64 should exist");
+    assert_eq!(httpd["source_repo"], "appstream");
+    assert!(
+        httpd.get("repo_conflict").is_none() || httpd["repo_conflict"].is_null(),
+        "httpd should not have a repo conflict"
+    );
+
+    // nginx should have source_repo and a repo_conflict array
+    let nginx = all_items
+        .iter()
+        .find(|i| {
+            i["item_id"]["key"]["name_arch"]
+                .as_str()
+                .map(|s| s == "nginx.x86_64")
+                .unwrap_or(false)
+        })
+        .expect("nginx.x86_64 should exist");
+    assert_eq!(nginx["source_repo"], "epel");
+    let conflict = nginx["repo_conflict"].as_array().unwrap();
+    assert_eq!(conflict.len(), 2, "nginx should have 2 repo sources");
+    assert_eq!(conflict[0]["repo"], "epel");
+    assert_eq!(conflict[0]["host_count"], 2);
+    assert_eq!(conflict[1]["repo"], "appstream");
+    assert_eq!(conflict[1]["host_count"], 1);
+}
+
+#[tokio::test]
+async fn fleet_exclude_repo_round_trip() {
+    let state = fleet_state_with_packages();
+    let app = app(state);
+
+    // 1. Initial view — epel packages included, repo enabled
+    let (_, initial) = get_json(&app, "/api/fleet/view").await;
+    let epel_items = fleet_items_by_repo(&initial, "epel");
+    assert!(!epel_items.is_empty(), "should have epel packages");
+    for item in &epel_items {
+        assert_eq!(item["include"], true, "epel packages should be included initially");
+    }
+    let epel_group = initial["repo_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["section_id"] == "epel")
+        .unwrap();
+    assert_eq!(epel_group["enabled"], true);
+
+    // 2. ExcludeRepo
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "op": "ExcludeRepo",
+            "target": { "section_id": "epel" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 3. After exclude — FleetItem.include=false AND repo_groups.enabled=false
+    let (_, after_exclude) = get_json(&app, "/api/fleet/view").await;
+    let epel_items = fleet_items_by_repo(&after_exclude, "epel");
+    for item in &epel_items {
+        assert_eq!(
+            item["include"], false,
+            "epel packages should be excluded after ExcludeRepo"
+        );
+    }
+    let epel_group = after_exclude["repo_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["section_id"] == "epel")
+        .unwrap();
+    assert_eq!(
+        epel_group["enabled"], false,
+        "epel repo should be disabled after ExcludeRepo"
+    );
+
+    // 4. IncludeRepo
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "op": "IncludeRepo",
+            "target": { "section_id": "epel" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 5. After include — all back to include=true, repo enabled=true
+    let (_, after_include) = get_json(&app, "/api/fleet/view").await;
+    let epel_items = fleet_items_by_repo(&after_include, "epel");
+    for item in &epel_items {
+        assert_eq!(
+            item["include"], true,
+            "epel packages should be re-included after IncludeRepo"
+        );
+    }
+    let epel_group = after_include["repo_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["section_id"] == "epel")
+        .unwrap();
+    assert_eq!(
+        epel_group["enabled"], true,
+        "epel repo should be re-enabled after IncludeRepo"
+    );
+}
