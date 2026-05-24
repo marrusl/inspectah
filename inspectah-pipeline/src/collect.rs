@@ -149,32 +149,27 @@ pub fn collect(
 
         // Wave 2 does not mutate rpm_state — it only reads it.
         // A separate mutable tracker is used for completeness bookkeeping.
+        //
+        // Per-spawn cancellation: check `cancelled` before each spawn so
+        // SIGINT between spawns prevents launching further inspectors.
+        // Inspectors that were never started are simply omitted — the CLI
+        // layer is responsible for emitting Interrupted for them.
         std::thread::scope(|s| {
             let handles: Vec<_> = wave2
                 .iter()
-                .map(|inspector| {
-                    s.spawn(|| {
-                        progress.emit(ProgressEvent::InspectorStarted(inspector.id()));
-                        inspector.inspect(&enriched_ctx, progress)
-                    })
+                .filter_map(|inspector| {
+                    if cancelled.load(Ordering::SeqCst) {
+                        return None; // don't spawn
+                    }
+                    progress.emit(ProgressEvent::InspectorStarted(inspector.id()));
+                    Some((inspector, s.spawn(|| inspector.inspect(&enriched_ctx, progress))))
                 })
                 .collect();
 
             // Wave 2 inspectors don't produce RpmState, so pass a
             // throwaway — the real rpm_state is already finalized.
             let mut wave2_rpm = RpmState::default();
-            for (inspector, handle) in wave2.iter().zip(handles) {
-                // Join always completes (scoped threads); then check cancellation.
-                // If cancelled, discard the result regardless of completion.
-                if cancelled.load(Ordering::SeqCst) {
-                    // Still must join to satisfy scope lifetime, but discard result.
-                    let _ = handle.join();
-                    progress.emit(ProgressEvent::InspectorFinished {
-                        id: inspector.id(),
-                        outcome: InspectorOutcome::Interrupted,
-                    });
-                    continue;
-                }
+            for (inspector, handle) in handles {
                 handle_result(
                     inspector.as_ref(),
                     handle,
@@ -187,13 +182,8 @@ pub fn collect(
             }
         });
     } else if !wave2.is_empty() {
-        // Cancelled before wave 2 started — emit Interrupted for all.
-        for insp in &wave2 {
-            progress.emit(ProgressEvent::InspectorFinished {
-                id: insp.id(),
-                outcome: InspectorOutcome::Interrupted,
-            });
-        }
+        // Cancelled before wave 2 started — no action needed here.
+        // The CLI layer emits Interrupted for inspectors not in the snapshot.
     }
 
     // Set completeness based on inspector outcomes
@@ -1648,17 +1638,16 @@ mod tests {
             "Services is wave 2 — must be skipped when cancelled between waves"
         );
 
-        // Must emit Interrupted for the skipped wave-2 inspector
+        // collect() no longer emits Interrupted — the CLI layer handles
+        // that for inspectors whose sections are absent from the snapshot.
+        // Verify no InspectorStarted was emitted for Services (never spawned).
         let events = progress.events();
         assert!(
-            events.iter().any(|e| matches!(
+            !events.iter().any(|e| matches!(
                 e,
-                ProgressEvent::InspectorFinished {
-                    id: InspectorId::Services,
-                    outcome: InspectorOutcome::Interrupted,
-                }
+                ProgressEvent::InspectorStarted(InspectorId::Services)
             )),
-            "must emit InspectorFinished/Interrupted for skipped wave-2 inspector"
+            "Services should not have been started when cancelled between waves"
         );
     }
 
