@@ -661,25 +661,6 @@ fn config_section_lines(
 ) -> Vec<String> {
     let mut lines = Vec::new();
 
-    lines.push("# === Configuration Files ===".into());
-
-    // Config inventory comment
-    if let Some(config) = &snap.config {
-        let total = config.files.iter().filter(|f| f.include).count();
-        if total > 0 {
-            lines.push(format!("# {} config file(s) captured", total));
-        }
-
-        let has_diffs = config.files.iter().any(|f| f.diff_against_rpm.is_some());
-        if has_diffs {
-            lines.push(
-                "# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs."
-                    .into(),
-            );
-        }
-    }
-    lines.push(String::new());
-
     // COPY per top-level dir — use materialized roots when available
     // (single source of truth from write_config_tree), fall back to
     // snapshot-derived roots for standalone rendering.
@@ -687,14 +668,38 @@ fn config_section_lines(
         Some(roots) => roots.to_vec(),
         None => config_copy_roots_from_snapshot(snap),
     };
-    if config_roots.is_empty() {
-        lines.push("# (no config files captured)".into());
-    } else {
+
+    let has_config_content = !config_roots.is_empty()
+        || snap
+            .config
+            .as_ref()
+            .is_some_and(|c| c.files.iter().any(|f| f.include));
+
+    if has_config_content {
+        lines.push("# === Configuration Files ===".into());
+
+        // Config inventory comment
+        if let Some(config) = &snap.config {
+            let total = config.files.iter().filter(|f| f.include).count();
+            if total > 0 {
+                lines.push(format!("# {} config file(s) captured", total));
+            }
+
+            let has_diffs = config.files.iter().any(|f| f.diff_against_rpm.is_some());
+            if has_diffs {
+                lines.push(
+                    "# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs."
+                        .into(),
+                );
+            }
+        }
+        lines.push(String::new());
+
         for root in &config_roots {
             lines.push(format!("COPY config/{root}/ /{root}/"));
         }
+        lines.push(String::new());
     }
-    lines.push(String::new());
 
     // CA trust anchors
     if let Some(config) = &snap.config {
