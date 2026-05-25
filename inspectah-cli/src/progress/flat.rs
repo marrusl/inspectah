@@ -40,7 +40,9 @@ impl FlatRenderer {
     /// Create a new flat renderer writing to `writer`.
     ///
     /// `total` is the number of inspectors in the scan (used for `[N/total]`).
-    pub fn new(writer: Box<dyn Write + Send>, total: usize) -> Self {
+    /// When `verbose` is true, all sub-steps are shown regardless of
+    /// any future fast-inspector optimizations.
+    pub fn new(writer: Box<dyn Write + Send>, total: usize, _verbose: bool) -> Self {
         Self {
             inner: Mutex::new(FlatState {
                 writer,
@@ -190,7 +192,7 @@ mod tests {
     fn test_renderer(total: usize) -> (FlatRenderer, Arc<Mutex<Vec<u8>>>) {
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = SharedWriter(Arc::clone(&buf));
-        let renderer = FlatRenderer::new(Box::new(writer), total);
+        let renderer = FlatRenderer::new(Box::new(writer), total, false);
         (renderer, buf)
     }
 
