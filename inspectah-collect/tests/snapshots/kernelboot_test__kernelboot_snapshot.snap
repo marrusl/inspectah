@@ -1,6 +1,6 @@
 ---
 source: inspectah-collect/tests/kernelboot_test.rs
-assertion_line: 537
+assertion_line: 552
 expression: section
 ---
 {
@@ -12,14 +12,16 @@ expression: section
       "runtime": "16",
       "default": "1",
       "source": "/etc/sysctl.d/99-custom.conf",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "key": "vm.swappiness",
       "runtime": "30",
       "default": "10",
       "source": "/etc/sysctl.d/99-custom.conf",
-      "include": true
+      "include": true,
+      "fleet": null
     }
   ],
   "modules_load_d": [],
@@ -35,49 +37,57 @@ expression: section
       "name": "bridge",
       "size": "307200",
       "used_by": "0",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "stp",
       "size": "16384",
       "used_by": "1 bridge",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "llc",
       "size": "16384",
       "used_by": "2 stp,bridge",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "vfat",
       "size": "20480",
       "used_by": "1",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "fat",
       "size": "86016",
       "used_by": "1 vfat",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "nf_conntrack",
       "size": "172032",
       "used_by": "0",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "ip_tables",
       "size": "28672",
       "used_by": "0",
-      "include": true
+      "include": true,
+      "fleet": null
     },
     {
       "name": "xfs",
       "size": "196608",
       "used_by": "2",
-      "include": true
+      "include": true,
+      "fleet": null
     }
   ],
   "non_default_modules": [],
