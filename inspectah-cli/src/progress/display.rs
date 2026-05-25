@@ -84,13 +84,22 @@ pub fn probe_name(id: &ProbeId) -> &'static str {
 pub fn metric_label(kind: &MetricKind, value: usize) -> String {
     match kind {
         MetricKind::PackagesFound => format!("{value} found"),
-        MetricKind::ReposMapped => format!("{value} repos mapped"),
+        MetricKind::ReposMapped => {
+            if value == 1 { "1 repo mapped".to_string() } else { format!("{value} repos mapped") }
+        }
         MetricKind::ConfigsModified => format!("{value} modified"),
-        MetricKind::UnitsFound => format!("{value} units"),
+        MetricKind::UnitsFound => {
+            if value == 1 { "1 unit".to_string() } else { format!("{value} units") }
+        }
         MetricKind::ContainersFound => format!("{value} found"),
-        MetricKind::TimersFound => format!("{value} timers"),
+        MetricKind::TimersFound => {
+            if value == 1 { "1 timer".to_string() } else { format!("{value} timers") }
+        }
     }
 }
+
+/// Minimum elapsed seconds before showing a timer on completion lines.
+pub const TIMER_THRESHOLD_SECS: f64 = 3.0;
 
 #[cfg(test)]
 mod tests {
@@ -161,9 +170,12 @@ mod tests {
     fn metric_label_specific_wording() {
         assert_eq!(metric_label(&MetricKind::PackagesFound, 847), "847 found");
         assert_eq!(metric_label(&MetricKind::ReposMapped, 8), "8 repos mapped");
+        assert_eq!(metric_label(&MetricKind::ReposMapped, 1), "1 repo mapped");
         assert_eq!(metric_label(&MetricKind::ConfigsModified, 12), "12 modified");
         assert_eq!(metric_label(&MetricKind::UnitsFound, 4), "4 units");
+        assert_eq!(metric_label(&MetricKind::UnitsFound, 1), "1 unit");
         assert_eq!(metric_label(&MetricKind::ContainersFound, 3), "3 found");
         assert_eq!(metric_label(&MetricKind::TimersFound, 2), "2 timers");
+        assert_eq!(metric_label(&MetricKind::TimersFound, 1), "1 timer");
     }
 }

@@ -129,7 +129,7 @@ fn format_inspector_outcome(
                 if count == 0 {
                     "none found".to_string()
                 } else {
-                    format!("{count} ecosystems")
+                    if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
                 }
             } else {
                 match last_metric {
@@ -138,14 +138,14 @@ fn format_inspector_outcome(
                 }
             };
             match elapsed {
-                Some(s) => format!("{label} ({:.1}s)", s),
-                None => label,
+                Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("{label} ({s:.1}s)"),
+                _ => label,
             }
         }
         InspectorOutcome::Skipped { reason } => format!("skipped ({reason})"),
         InspectorOutcome::Degraded { reason } => match elapsed {
-            Some(s) => format!("degraded: {reason} ({:.1}s)", s),
-            None => format!("degraded: {reason}"),
+            Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("degraded: {reason} ({s:.1}s)"),
+            _ => format!("degraded: {reason}"),
         },
         InspectorOutcome::Failed { reason } => format!("failed: {reason}"),
         InspectorOutcome::Interrupted => "interrupted".to_string(),

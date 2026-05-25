@@ -163,7 +163,7 @@ fn format_inspector_outcome(
                 if count == 0 {
                     "none found".to_string()
                 } else {
-                    format!("{count} ecosystems")
+                    if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
                 }
             } else {
                 match last_metric {
@@ -172,8 +172,8 @@ fn format_inspector_outcome(
                 }
             };
             let suf = match elapsed {
-                Some(s) => format!("{label} ({s:.1}s)"),
-                None => label,
+                Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("{label} ({s:.1}s)"),
+                _ => label,
             };
             (sym, suf)
         }
@@ -184,8 +184,8 @@ fn format_inspector_outcome(
         InspectorOutcome::Degraded { reason } => {
             let sym = colored("~", YELLOW, use_color);
             let suf = match elapsed {
-                Some(s) => format!("degraded: {reason} ({s:.1}s)"),
-                None => format!("degraded: {reason}"),
+                Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("degraded: {reason} ({s:.1}s)"),
+                _ => format!("degraded: {reason}"),
             };
             (sym, suf)
         }

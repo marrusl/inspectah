@@ -375,7 +375,7 @@ impl ChecklistState {
                         if count == 0 {
                             "none found".to_string()
                         } else {
-                            format!("{count} ecosystems")
+                            if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
                         }
                     } else {
                         match &row.inspector_metric {
@@ -527,9 +527,10 @@ enum LineCategory {
 }
 
 /// Format the elapsed suffix `" (N.Ns)"` for finished rows.
+/// Only shows timing for phases that took longer than the threshold.
 fn format_elapsed_suf(elapsed: Duration) -> String {
     let secs = elapsed.as_secs_f64();
-    if secs >= 0.1 {
+    if secs >= super::display::TIMER_THRESHOLD_SECS {
         format!(" ({secs:.1}s)")
     } else {
         String::new()
