@@ -16,13 +16,10 @@ runs feel noisy for no reason.
 
 ## Architecture Constraints
 
-| Pull | Controller | Progress format | Controllable? |
-|------|-----------|----------------|---------------|
-| **Tool image** (ghcr.io/marrusl/inspectah:TAG) | Go wrapper `EnsureImage()` | `StreamPullProgress` on stderr | Yes — full control |
-| **Base image** (registry.redhat.io/rhel9/rhel-bootc:9.6) | Python `BaselineResolver.pull_image()` via nsenter | Raw `podman pull` stderr inherited | Partially — Python prints the intro line; podman renders its own layer progress |
-
-The Go wrapper cannot modify the Python-side output without changing the
-Python code. Both sides need coordinated changes.
+With the Rust rewrite, inspectah is a single native binary. There is no
+container image to pull for the tool itself. The only image pull is for
+the **base image** used in baseline generation, which the CLI controls
+directly.
 
 ## Design Principles
 
@@ -285,7 +282,16 @@ No changes made.
 
 ## Implementation Changes
 
-### Go wrapper changes (`cmd/inspectah/`)
+> **Note:** This spec was originally written for the Go+Python architecture.
+> With the Rust rewrite, the tool-image pull phase (`[setup]`) no longer
+> applies -- there is no container image for the tool itself. The UX
+> principles (phase labels, prefix system, color usage) remain valid and
+> should be implemented in the Rust CLI's progress output. The scenario
+> mockups above show the target UX; implementation details should follow
+> the Rust codebase structure (`inspectah-cli/`, `inspectah-pipeline/`,
+> etc.) rather than the Go/Python paths referenced below.
+
+### Legacy Go wrapper changes (`cmd/inspectah/`) -- FOR REFERENCE ONLY
 
 #### 1. Add first-run detection to `EnsureImage`
 

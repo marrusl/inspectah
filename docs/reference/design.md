@@ -47,7 +47,7 @@ During inspection, the tool emits styled progress output to stderr using ANSI co
 
 The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
 
-The tool ships as a container image (`ghcr.io/marrusl/inspectah:latest`) orchestrated by the Go CLI wrapper. The Go CLI constructs the `podman run` command with all required flags and volume mounts, so users run `inspectah scan` rather than composing the podman invocation manually.
+The tool is a native Rust binary distributed via COPR RPM and Homebrew. All inspection, rendering, and analysis logic runs directly on the host.
 
 ### Executor
 
@@ -115,30 +115,11 @@ This is called out prominently in the audit report's "Data Migration Plan" secti
 
 ## 3. CLI Reference
 
-### Go CLI Wrapper
+### Rust CLI
 
-Users interact with inspectah through a Go CLI binary (`cmd/inspectah/`) that manages the container lifecycle. The Go CLI:
+Users interact with inspectah through a native Rust binary built from the `inspectah-cli` crate. The CLI uses clap for argument parsing and dispatches to the workspace crates for inspection, rendering, and analysis.
 
-- Detects the container runtime (podman, with path discovery and version checking)
-- Pulls the `ghcr.io/marrusl/inspectah` container image automatically
-- Constructs the appropriate `podman run` or `podman build` command with all required volume mounts, privileges, port mappings, and environment variables
-- Translates podman error codes into actionable user-facing messages
-- Provides tab completion for bash, zsh, and fish
-- Supports two execution strategies: **exec replacement** (scan, fleet) for direct terminal control, and **child process** (refine, architect, build) for server management, signal forwarding, and browser launch
-
-The Go CLI is distributed via COPR RPM (`dnf install inspectah`) and Homebrew (`brew install marrusl/tap/inspectah`). It requires podman >= 4.4 at runtime.
-
-### Python CLI (Container-Internal)
-
-Inside the container, the Python CLI is the entry point registered in `pyproject.toml`:
-
-```
-inspectah = "inspectah.__main__:main"
-```
-
-Subcommands: `inspectah scan` (default), `inspectah fleet`, `inspectah refine`, `inspectah architect`. All inspection, rendering, and analysis logic lives in the Python codebase. The Go CLI is purely an orchestration layer that constructs and executes `podman run` commands.
-
-`inspectah build` is implemented directly in the Go CLI (not in Python) since it wraps `podman build` on the user's host rather than running inside the container.
+The Rust CLI is distributed via COPR RPM (`dnf install inspectah`) and Homebrew (`brew install marrusl/tap/inspectah`). It requires podman >= 4.4 at runtime for baseline generation and `inspectah build`.
 
 ### `inspectah` — Host Inspection
 
@@ -262,14 +243,14 @@ Merges multiple inspectah inspection snapshots into a single fleet-level snapsho
 
 ### Wrapper Scripts
 
-#### Go CLI (`cmd/inspectah/`)
+#### Rust CLI (`inspectah-cli/`)
 
-The primary CLI wrapper. A Cobra-based Go binary that constructs and executes `podman run` / `podman build` commands. Two execution strategies: exec replacement (scan, fleet) for direct terminal control, and child process mode (refine, architect, build) for server management, signal forwarding, and browser launch.
+The primary CLI binary. A clap-based Rust binary built from the `inspectah-cli` crate. All inspection, rendering, fleet aggregation, refinement, and build logic runs natively.
 
 Distributed via:
 - **COPR RPM**: `sudo dnf copr enable marrusl/inspectah && sudo dnf install inspectah`
 - **Homebrew**: `brew install marrusl/tap/inspectah`
-- **From source**: `cd cmd/inspectah && go build -o inspectah .`
+- **From source**: `cargo build --release -p inspectah-cli`
 
 Usage:
 
@@ -875,7 +856,7 @@ When building the Containerfile, `inspectah build` searches for certificates in 
 
 ### Wrapper Scripts
 
-The Go CLI (`cmd/inspectah/`) is the primary entry point, distributed as an RPM (via COPR) and a Homebrew formula. It replaces the shell script for all standard workflows. The `run-inspectah.sh` shell script remains available as a legacy zero-install option for one-off use.
+The Rust CLI (`inspectah-cli/`) is the primary entry point, distributed as an RPM (via COPR) and a Homebrew formula. It replaces the shell script for all standard workflows. The `run-inspectah.sh` shell script remains available as a legacy zero-install option for one-off use.
 
 The legacy shell script detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
 
