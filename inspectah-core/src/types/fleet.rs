@@ -17,6 +17,13 @@ pub struct FleetPrevalence {
     pub total: i32,
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Aggregate host count across all content variants of the same item.
+    /// Only set for items with content variants (configs, drop-ins, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate_count: Option<i32>,
+    /// Aggregate host list across all content variants of the same item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate_hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +75,7 @@ mod tests {
             count: 3,
             total: 5,
             hosts: vec!["host1".into(), "host2".into(), "host3".into()],
+            ..Default::default()
         };
         let json = serde_json::to_string(&fp).unwrap();
         let parsed: FleetPrevalence = serde_json::from_str(&json).unwrap();

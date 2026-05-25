@@ -124,6 +124,7 @@ impl RefineSession {
                         count: *count,
                         total: *total,
                         hosts: vec![],
+                        ..Default::default()
                     };
                     zones.insert(
                         ItemId::DropIn {
@@ -152,6 +153,7 @@ impl RefineSession {
                         count: *count,
                         total: *total,
                         hosts: vec![],
+                        ..Default::default()
                     };
                     zones.insert(
                         ItemId::Quadlet {

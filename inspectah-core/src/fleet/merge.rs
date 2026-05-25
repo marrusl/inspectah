@@ -485,6 +485,7 @@ pub fn merge_items<T: FleetMergeable + serde::Serialize>(
                 count,
                 total: total_hosts as i32,
                 hosts,
+                ..Default::default()
             });
             representative.set_include(true);
             result.push(representative);
@@ -536,13 +537,26 @@ fn merge_with_variants<T: FleetMergeable>(
             count: hosts.len() as i32,
             total: total_hosts as i32,
             hosts,
+            ..Default::default()
         });
         item.set_include(true);
         // variant_selection_mut defaults to Only, no change needed
         return vec![item];
     }
 
-    // Multiple variants — rank by prevalence, break ties by hash
+    // Multiple variants — compute aggregate prevalence (union of all hosts
+    // across all variants), then rank by per-variant prevalence.
+    let aggregate_hosts = {
+        let mut all: Vec<String> = subgroups
+            .values()
+            .flat_map(|sg| sg.iter().map(|(idx, _)| hostnames[*idx].clone()))
+            .collect();
+        all.sort();
+        all.dedup();
+        all
+    };
+    let aggregate_count = aggregate_hosts.len() as i32;
+
     let mut ranked: Vec<(String, Vec<(usize, &T)>)> = subgroups.into_iter().collect();
     ranked.sort_by(|(hash_a, hosts_a), (hash_b, hosts_b)| {
         let count_a = {
@@ -568,6 +582,8 @@ fn merge_with_variants<T: FleetMergeable>(
             count: hosts.len() as i32,
             total: total_hosts as i32,
             hosts,
+            aggregate_count: Some(aggregate_count),
+            aggregate_hosts: Some(aggregate_hosts.clone()),
         });
         item.set_include(true);
         if let Some(vs) = item.variant_selection_mut() {
@@ -1900,6 +1916,66 @@ mod tests {
             conflicts.contains_key("nginx.x86_64"),
             "cross-tier repos (baseos vs epel) should be counted as conflict"
         );
+    }
+
+    #[test]
+    fn test_config_variant_aggregate_prevalence() {
+        use crate::types::config::{ConfigFileEntry, ConfigSection};
+
+        // 3 hosts: web-01 has no /etc/chrony.conf, web-02 has content A,
+        // web-03 has content B. Per-variant prevalence is 1/3 each.
+        // Aggregate prevalence should be 2/3.
+        let host_a_cfg = ConfigSection {
+            files: vec![], // web-01 has no chrony.conf
+        };
+        let host_b_cfg = ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/chrony.conf".into(),
+                content: "server ntp1.example.com".into(),
+                include: true,
+                ..Default::default()
+            }],
+        };
+        let host_c_cfg = ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/chrony.conf".into(),
+                content: "server ntp2.example.com".into(),
+                include: true,
+                ..Default::default()
+            }],
+        };
+
+        let hostnames = vec!["web-01".into(), "web-02".into(), "web-03".into()];
+        let merged = merge_config_sections(
+            vec![Some(host_a_cfg), Some(host_b_cfg), Some(host_c_cfg)],
+            3,
+            &hostnames,
+        )
+        .expect("merge should succeed");
+
+        let chrony_entries: Vec<_> = merged
+            .files
+            .iter()
+            .filter(|f| f.path == "/etc/chrony.conf")
+            .collect();
+        assert_eq!(chrony_entries.len(), 2, "should have 2 content variants");
+
+        for entry in &chrony_entries {
+            let fleet = entry.fleet.as_ref().expect("should have fleet prevalence");
+            // Per-variant: each has 1 host
+            assert_eq!(fleet.count, 1, "per-variant count should be 1");
+            assert_eq!(fleet.total, 3, "total should be 3");
+            // Aggregate: union of both variants = 2 hosts
+            assert_eq!(
+                fleet.aggregate_count,
+                Some(2),
+                "aggregate count should be 2"
+            );
+            let agg_hosts = fleet.aggregate_hosts.as_ref().expect("should have aggregate hosts");
+            assert_eq!(agg_hosts.len(), 2);
+            assert!(agg_hosts.contains(&"web-02".to_string()));
+            assert!(agg_hosts.contains(&"web-03".to_string()));
+        }
     }
 
     /// Regression: when the majority repo is split across multiple payload
