@@ -14,8 +14,6 @@ BuildRequires:  rust
 
 Requires:       podman >= 4.4
 
-Conflicts:      python3-inspectah
-
 %description
 inspectah inspects package-based RHEL, CentOS, and Fedora hosts and
 produces bootc-compatible image artifacts including Containerfiles,

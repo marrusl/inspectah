@@ -183,17 +183,17 @@ pub struct RpmSection {
     /// this must serialize as an empty object.
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub version_locks: Vec<VersionLockEntry>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub module_stream_conflicts: Vec<String>,
     pub baseline_module_streams: Option<std::collections::HashMap<String, String>>,
     pub versionlock_command_output: Option<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub multiarch_packages: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub duplicate_packages: Vec<String>,
     #[serde(default)]
     pub repo_providing_packages: Vec<String>,

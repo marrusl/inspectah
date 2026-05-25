@@ -109,13 +109,13 @@ pub struct FlatpakApp {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub quadlet_units: Vec<QuadletUnit>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub compose_files: Vec<ComposeFile>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub running_containers: Vec<RunningContainer>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
+    #[serde(default)]
     pub flatpak_apps: Vec<FlatpakApp>,
 }
 

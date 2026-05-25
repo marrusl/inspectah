@@ -175,22 +175,10 @@ fn is_degraded(completeness: &Completeness, id: InspectorId) -> bool {
 
 /// Returns the base image reference from the snapshot, if determinable.
 ///
-/// Phase 6: prefers `target_image.image_ref` (normalized ref from resolution).
-/// Falls back to legacy `rpm.base_image` for Go-generated snapshots.
-/// Returns `None` when neither source is available — callers render a comment.
+/// Uses `target_image.image_ref` (normalized ref from resolution).
+/// Returns `None` when unavailable — callers render a comment.
 pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
-    // Phase 6: prefer top-level target_image (stores normalized ref)
-    if let Some(ref ti) = snap.target_image {
-        return Some(ti.image_ref.clone());
-    }
-    // Backward compat: Go-generated snapshots with rpm.base_image
-    if let Some(rpm) = &snap.rpm
-        && let Some(ref base) = rpm.base_image
-        && !base.is_empty()
-    {
-        return Some(base.clone());
-    }
-    None
+    snap.target_image.as_ref().map(|ti| ti.image_ref.clone())
 }
 
 // --- Packages section ---
@@ -2131,7 +2119,7 @@ mod tests {
         let result = base_image_from_snapshot(&snap);
         assert!(
             result.is_none(),
-            "no target_image or rpm.base_image must return None"
+            "no target_image must return None"
         );
         let output = render_containerfile(&snap, None);
         assert!(
@@ -2145,50 +2133,25 @@ mod tests {
     }
 
     #[test]
-    fn test_from_legacy_go_snapshot_uses_rpm_base_image() {
-        let mut snap = InspectionSnapshot::new();
-        snap.rpm = Some(RpmSection {
-            base_image: Some("quay.io/legacy/image:1.0".into()),
-            ..Default::default()
-        });
-        let output = render_containerfile(&snap, None);
-        assert!(
-            output.contains("FROM quay.io/legacy/image:1.0"),
-            "legacy Go snapshot must use rpm.base_image"
-        );
-    }
-
-    #[test]
-    fn test_from_no_fallback_without_any_source() {
-        let mut snap = InspectionSnapshot::new();
-        snap.rpm = Some(RpmSection {
-            base_image: None,
-            ..Default::default()
-        });
+    fn test_from_no_target_image_returns_none() {
+        let snap = InspectionSnapshot::new();
         let result = base_image_from_snapshot(&snap);
-        assert!(
-            result.is_none(),
-            "no hardcoded fallback when rpm.base_image is None"
-        );
+        assert!(result.is_none(), "no target_image must return None");
     }
 
     #[test]
-    fn test_from_target_image_takes_priority_over_rpm_base_image() {
+    fn test_from_target_image_returns_ref() {
         use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
         let mut snap = InspectionSnapshot::new();
         snap.target_image = Some(TargetImageIdentity {
             image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
             strategy: ResolutionStrategy::OsRelease,
         });
-        snap.rpm = Some(RpmSection {
-            base_image: Some("quay.io/old/image:1.0".into()),
-            ..Default::default()
-        });
         let result = base_image_from_snapshot(&snap);
         assert_eq!(
             result.unwrap(),
             "registry.redhat.io/rhel9/rhel-bootc:9.6",
-            "target_image must take priority over rpm.base_image"
+            "target_image.image_ref must be returned"
         );
     }
 
