@@ -140,7 +140,13 @@ impl RepoIndex {
     }
 
     /// Classify a repo section ID into its tier.
+    ///
+    /// Empty or missing section IDs return `Unknown` — "no repo identity"
+    /// is distinct from "known third-party repo."
     pub fn repo_tier(section_id: &str) -> RepoTier {
+        if section_id.is_empty() {
+            return RepoTier::Unknown;
+        }
         let lower = section_id.to_lowercase();
         let id = lower.as_str();
         if DISTRO_REPOS.contains(&id) {
@@ -275,6 +281,7 @@ mod tests {
         );
         assert_eq!(RepoIndex::repo_tier("epel"), RepoTier::ThirdParty);
         assert_eq!(RepoIndex::repo_tier("copr:mytools"), RepoTier::ThirdParty);
+        assert_eq!(RepoIndex::repo_tier(""), RepoTier::Unknown);
     }
 
     #[test]
