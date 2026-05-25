@@ -1,3 +1,0 @@
-0000000000000000000000000000000000000000 d216c915221f089e4acf1f68e765d575dfce2828 Mark Russell <mrussell@redhat.com> 1776642278 -0400	branch: Created from HEAD
-d216c915221f089e4acf1f68e765d575dfce2828 d023f5908d3efaf0849a0c1ccde36fedcbbe904f Mark Russell <mrussell@redhat.com> 1776642684 -0400	commit: refactor(cli): rename inspect subcommand to scan
-d023f5908d3efaf0849a0c1ccde36fedcbbe904f f81fc0ef7d97c4eae8274943515b9cd303e9a7e3 Mark Russell <mrussell@redhat.com> 1777149619 -0400	commit: fix(packaging): fix COPR and GHA RPM build failures

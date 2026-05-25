@@ -1,9 +1,0 @@
-fix(fleet-ui): expandable detail view for all decision section items
-
-Make all decision-section rows clickable for expansion, not just those
-with multiple variants. Add ItemDetailPane component to show metadata
-(path/package, kind, prevalence, attention, reason) for items without
-variant conflicts. Uses same visual treatment as VariantView (indented,
-bordered, brand-tinted left border).
-
-Assisted-by: Claude Code (Opus 4.6)

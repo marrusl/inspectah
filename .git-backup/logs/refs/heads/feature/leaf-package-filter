@@ -1,8 +1,0 @@
-0000000000000000000000000000000000000000 4bbb4f28cfd9c974d61d6c722ca3c5652b7f4d01 Mark Russell <mrussell@redhat.com> 1779043582 -0400	branch: Created from HEAD
-4bbb4f28cfd9c974d61d6c722ca3c5652b7f4d01 8bd24501959b036cdec3b2905defda12a34dc4d7 Mark Russell <mrussell@redhat.com> 1779043975 -0400	commit: feat(collect): add query_user_installed() to RPM inspector
-8bd24501959b036cdec3b2905defda12a34dc4d7 d00798d7a548bb12f28bfcffe681549070fb9cf0 Mark Russell <mrussell@redhat.com> 1779044190 -0400	commit: feat(collect): add dependency graph builder for leaf classification
-d00798d7a548bb12f28bfcffe681549070fb9cf0 0e0a51b60555f555790768154073d605f0fa2c31 Mark Russell <mrussell@redhat.com> 1779044195 -0400	commit: feat(refine): filter view to leaf packages when available
-0e0a51b60555f555790768154073d605f0fa2c31 be30fcb7d78f787a50a075eba7142303815ccc03 Mark Russell <mrussell@redhat.com> 1779044399 -0400	commit: feat(collect): classify leaf vs auto packages in RPM inspector
-be30fcb7d78f787a50a075eba7142303815ccc03 790d54fd62b586cae07b19523d16cd22759f44ee Mark Russell <mrussell@redhat.com> 1779044411 -0400	commit: feat(refine): filter containerfile dnf install to leaf packages
-790d54fd62b586cae07b19523d16cd22759f44ee 0edea3e00bcb48f97aa0f1d1f3b28fb23d4ba501 Mark Russell <mrussell@redhat.com> 1779044596 -0400	commit: feat(refine): view stats reflect leaf-filtered package counts
-0edea3e00bcb48f97aa0f1d1f3b28fb23d4ba501 44dfdf2baebbb26734ec39a5fd0a5a7cee9d7ae1 Mark Russell <mrussell@redhat.com> 1779054237 -0400	commit: fix(leaf-filter): address review findings for visibility, degraded state, and multiarch
