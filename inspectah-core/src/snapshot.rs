@@ -104,17 +104,6 @@ impl InspectionSnapshot {
     }
 }
 
-/// Migrate a snapshot to the current schema version.
-///
-/// Currently a no-op: MIN_SCHEMA == SCHEMA_VERSION, so all loaded
-/// snapshots are already at the current version.
-pub fn migrate(snap: &mut InspectionSnapshot) {
-    if snap.schema_version >= SCHEMA_VERSION {
-        return;
-    }
-    snap.schema_version = SCHEMA_VERSION;
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
     #[error("unsupported schema version: {0} (accepted: {max})", max = crate::snapshot::SCHEMA_VERSION)]
@@ -202,14 +191,6 @@ mod tests {
             result.is_err(),
             "future versions must be rejected, not silently partially-deserialized"
         );
-    }
-
-    #[test]
-    fn test_migrate_noop_on_current_version() {
-        let mut snap = InspectionSnapshot::new();
-        assert_eq!(snap.schema_version, SCHEMA_VERSION);
-        migrate(&mut snap);
-        assert_eq!(snap.schema_version, SCHEMA_VERSION);
     }
 
     #[test]

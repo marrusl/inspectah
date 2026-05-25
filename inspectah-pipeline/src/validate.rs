@@ -1,12 +1,11 @@
 use inspectah_core::pipeline::{Collected, Pipeline, Validated};
-use inspectah_core::snapshot::{SCHEMA_VERSION, migrate};
+use inspectah_core::snapshot::SCHEMA_VERSION;
 
 /// Errors from schema validation.
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
     #[error(
-        "unsupported schema version: {version} (accepted: {min}-{max})",
-        min = 12,
+        "unsupported schema version: {version} (accepted: {max})",
         max = SCHEMA_VERSION
     )]
     UnsupportedVersion { version: u32 },
@@ -15,29 +14,18 @@ pub enum ValidationError {
     MissingSection { section: String },
 }
 
-/// Validate and optionally migrate a collected snapshot.
+/// Validate a collected snapshot.
 ///
-/// - Checks schema version is in the accepted range (12..=SCHEMA_VERSION).
-/// - Migrates older snapshots to current version.
+/// - Checks schema version matches SCHEMA_VERSION exactly.
 /// - Returns `Pipeline<Validated>` on success.
 pub fn validate(pipeline: Pipeline<Collected>) -> Result<Pipeline<Validated>, ValidationError> {
-    let mut snapshot = pipeline.state.snapshot;
+    let snapshot = pipeline.state.snapshot;
 
-    // Schema version check
-    const MIN_SCHEMA: u32 = 12;
-    if snapshot.schema_version < MIN_SCHEMA || snapshot.schema_version > SCHEMA_VERSION {
+    if snapshot.schema_version != SCHEMA_VERSION {
         return Err(ValidationError::UnsupportedVersion {
             version: snapshot.schema_version,
         });
     }
-
-    // Migrate if needed
-    migrate(&mut snapshot);
-
-    // Required sections check: os_release should exist for meaningful snapshots,
-    // but we treat this as a warning rather than a hard failure to support
-    // partial/degraded snapshots from the collect phase.
-    // (rpm, config, etc. are all Optional by design)
 
     Ok(Pipeline {
         state: Validated { snapshot },
@@ -71,36 +59,13 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_v12_migrates() {
-        let p = collected(12);
-        let result = validate(p);
-        assert!(result.is_ok());
-        // After migration, version should be bumped to current
-        assert_eq!(
-            result.unwrap().state.snapshot.schema_version,
-            SCHEMA_VERSION
-        );
-    }
-
-    #[test]
-    fn test_validate_v13_migrates() {
-        let p = collected(13);
-        let result = validate(p);
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap().state.snapshot.schema_version,
-            SCHEMA_VERSION
-        );
-    }
-
-    #[test]
-    fn test_validate_rejects_v11() {
-        let p = collected(11);
+    fn test_validate_rejects_old_version() {
+        let p = collected(16);
         let result = validate(p);
         assert!(result.is_err());
         match result.unwrap_err() {
             ValidationError::UnsupportedVersion { version } => {
-                assert_eq!(version, 11);
+                assert_eq!(version, 16);
             }
             other => panic!("expected UnsupportedVersion, got {other:?}"),
         }

@@ -396,7 +396,7 @@ mod tests {
             }
         });
         InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
                 packages_added: packages,
                 version_changes,
@@ -584,7 +584,7 @@ mod tests {
             },
         );
         let snap = InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
                 packages_added: vec![pkg("glibc", PackageState::Added, "rhel-9-baseos")],
                 // baseline_package_names NOT set — only snap.baseline

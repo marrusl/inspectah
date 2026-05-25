@@ -55,7 +55,7 @@ fn read_tarball_file(tarball_path: &Path, filename: &str) -> String {
 /// and a valid redaction state so tarball import accepts it.
 fn snapshot_with_alice() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot {
-        schema_version: 15,
+        schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
         sensitive_snapshot: true,
         rpm: Some(Default::default()),
         users_groups: Some(UserGroupSection {

@@ -168,29 +168,3 @@ fn reject_missing_snapshot_json() {
     assert!(matches!(result, Err(RefineError::SnapshotLoad(_))));
 }
 
-#[test]
-fn load_v12_schema_tarball_migrates() {
-    // v12 snapshot — the minimum schema version load() accepts.
-    // If migrate() were removed, this snapshot would still load but
-    // would not have current-version fields populated correctly.
-    let dir = tempdir().unwrap();
-    let snap_json = r#"{
-        "schema_version": 12,
-        "redaction_state": {
-            "state": "fully_redacted",
-            "redacted_by": "inspectah 0.7.0",
-            "config_hash": "old123"
-        },
-        "rpm": {
-            "packages_added": [
-                {"name": "httpd", "arch": "x86_64", "state": "added", "include": true}
-            ]
-        }
-    }"#;
-    let tarball = write_flat_tarball(dir.path(), snap_json);
-
-    let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
-    // Session loads successfully after migration
-    assert_eq!(session.view().generation, 0);
-    assert_eq!(session.view().stats.total_packages, 1);
-}
