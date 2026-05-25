@@ -542,16 +542,6 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return lines,
     };
 
-    let has_content = !st.generated_timer_units.is_empty()
-        || !st.systemd_timers.is_empty()
-        || !st.cron_jobs.is_empty()
-        || !st.at_jobs.is_empty();
-    if !has_content {
-        return lines;
-    }
-
-    lines.push("# === Scheduled Tasks ===".into());
-
     let local_timers: Vec<_> = st
         .systemd_timers
         .iter()
@@ -563,6 +553,15 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         .iter()
         .filter(|u| u.include)
         .collect();
+
+    let has_content = !local_timers.is_empty()
+        || !included_timers.is_empty()
+        || !st.at_jobs.is_empty();
+    if !has_content {
+        return lines;
+    }
+
+    lines.push("# === Scheduled Tasks ===".into());
 
     if !local_timers.is_empty() || !included_timers.is_empty() {
         lines.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
