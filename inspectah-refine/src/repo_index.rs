@@ -288,7 +288,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                source_repo: "AppStream".into(), // Mixed case from Go scanner
+                source_repo: "AppStream".into(), // Mixed case from dnf repoquery
                 include: true,
                 ..Default::default()
             }],

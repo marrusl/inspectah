@@ -1,7 +1,7 @@
 /// Create a minimal test tarball with a FullyRedacted snapshot.
 fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let snap = serde_json::json!({
-        "schema_version": 16,
+        "schema_version": 17,
         "rpm": {
             "packages_added": [
                 {
