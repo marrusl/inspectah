@@ -1,3 +1,0 @@
-FROM rhel-bootc:9.4
-RUN dnf install -y httpd
-COPY ./config/ /etc/

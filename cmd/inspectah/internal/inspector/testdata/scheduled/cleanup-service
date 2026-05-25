@@ -1,6 +1,0 @@
-[Unit]
-Description=Cleanup temp files
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/cleanup-temp.sh
