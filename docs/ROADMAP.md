@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-21)
+## Current Status (2026-05-25)
 
 | Phase | Status |
 |-------|--------|
@@ -20,6 +20,9 @@
 | **v0.8.0-alpha.4** | **TAGGED (2026-05-19)** |
 | Fleet Spec 1: Aggregate | SHIPPED (2026-05-20) |
 | Fleet Phase 2a: Refine Engine | SHIPPED (2026-05-21) |
+| CLI Scan Progress | SHIPPED (2026-05-24) |
+| Go Retirement + Legacy Removal | DONE (2026-05-24/25) |
+| Nit List Sweep (5 items) | DONE (2026-05-25) |
 
 ## Roadmap to CLI Cutover
 
@@ -132,6 +135,14 @@ Shared `baseline_fmt` presentation helpers render baseline comparison sections a
 
 ## Upcoming Work
 
+### Fleet Default: Intersection Not Union (HIGH — next)
+
+Fleet merge currently includes ALL items from ALL hosts by default. A package appearing on only 1 of 3 hosts starts as "included" — the user has to manually exclude it. This produces wrong defaults: 54 packages at 1/3 prevalence all start checked on.
+
+**Required behavior:** Default to the intersection. Only items present on ALL hosts start included. Items below full prevalence start excluded. Users opt in from there. Applies to all section types: packages, configs, users/groups, containers, services, everything.
+
+**Where to fix:** The default `include` state is set during fleet snapshot merging in `inspectah-refine`. The merge logic needs to set `include = false` for any item where `prevalence.count < prevalence.total`.
+
 ### Package Group Detection (MEDIUM — future)
 
 Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
@@ -154,9 +165,9 @@ Shipped in `scan-progress` branch (2026-05-24). Full checklist with nested sub-c
 
 Shipped with scan progress (2026-05-24). Dynamic viewport height: 30% of terminal rows, floor 8, cap 16.
 
-### Test Hygiene: Rename phase6_integration_test (LOW)
+### ~~Test Hygiene: Rename phase6_integration_test~~ (DONE — 2026-05-25)
 
-Rename `inspectah-refine/tests/phase6_integration_test.rs` to `baseline_integration_test.rs`. "Phase 6" was an internal milestone name — the tests are cross-crate baseline data flow integration tests and deserve a descriptive name. Also fix the stale `assert_eq!(snap.schema_version, 16)` to use the `SCHEMA_VERSION` constant.
+Renamed to `cross_crate_integration_test.rs` — "Phase 6" was too narrow; the tests cover cross-crate data flow (core, pipeline, refine), not just baseline. Schema version assertions updated to use `SCHEMA_VERSION` constant.
 
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 

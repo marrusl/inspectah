@@ -1,4 +1,4 @@
-import { Button, Label } from "@patternfly/react-core";
+import { Button, Label, Switch } from "@patternfly/react-core";
 import type { RepoGroupInfo } from "../api/types";
 
 export interface RepoBarProps {
@@ -9,32 +9,10 @@ export interface RepoBarProps {
   onRestoreDismissed?: () => void;
 }
 
-const tierStyles: Record<string, React.CSSProperties> = {
-  official_optional: {
-    color: "var(--pf-t--global--color--status--success--default)",
-    textDecoration: "underline",
-    textDecorationStyle: "dotted" as const,
-    textUnderlineOffset: "3px",
-  },
-  third_party: {
-    color: "var(--pf-t--global--color--status--warning--default)",
-    textDecoration: "underline",
-    textDecorationStyle: "solid" as const,
-    textUnderlineOffset: "3px",
-  },
-};
-
-const pillBase: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: "2px var(--pf-t--global--spacer--sm)",
-  borderRadius: "var(--pf-t--global--border--radius--pill)",
-  border: "1px solid var(--pf-t--global--border--color--default)",
-  background: "transparent",
-  cursor: "pointer",
-  fontSize: "var(--pf-t--global--font--size--body--sm)",
-  lineHeight: 1.4,
-  gap: "var(--pf-t--global--spacer--xs)",
+const tierColors: Record<string, string> = {
+  distro: "var(--pf-t--global--text--color--subtle)",
+  official_optional: "var(--pf-t--global--color--status--success--default)",
+  third_party: "var(--pf-t--global--color--status--warning--default)",
 };
 
 export function RepoBar({
@@ -47,71 +25,47 @@ export function RepoBar({
   const distroRepos = repos.filter((r) => r.is_distro);
   const toggleableRepos = repos.filter((r) => !r.is_distro);
 
+  const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
+
   return (
-    <div
-      data-testid="repo-bar"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--pf-t--global--spacer--xs)",
-        padding: "var(--pf-t--global--spacer--sm) 0",
-      }}
-    >
-      {/* Row 1: Distro repos — static text */}
-      {distroRepos.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--pf-t--global--spacer--sm)",
-            fontSize: "var(--pf-t--global--font--size--body--sm)",
-            color: "var(--pf-t--global--text--color--subtle)",
-          }}
-        >
-          {distroRepos.map((repo, i) => (
-            <span key={repo.section_id}>
-              {i > 0 && " · "}
-              {repo.section_id} ({repo.package_count})
-            </span>
-          ))}
+    <div className="inspectah-repo-bar" data-testid="repo-bar">
+      <div className="inspectah-repo-bar__label">Repositories</div>
+
+      {distroRepos.map((repo) => (
+        <div key={repo.section_id} className="inspectah-repo-bar__row">
+          <div className="inspectah-repo-bar__name">
+            <span style={{ color: tierColors.distro }}>{repo.section_id}</span>
+            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+          </div>
+          <span className="inspectah-repo-bar__always">always included</span>
         </div>
-      )}
+      ))}
 
-      {/* Row 2: Toggleable repos + optional conflict/dismiss controls */}
-      {(toggleableRepos.length > 0 || conflictCount != null) && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--pf-t--global--spacer--sm)",
-            flexWrap: "wrap",
-          }}
-        >
-          {toggleableRepos.map((repo) => (
-            <button
-              key={repo.section_id}
-              role="switch"
-              aria-checked={repo.enabled}
-              aria-label={`${repo.section_id} (${repo.package_count})`}
-              onClick={() => onToggle(repo.section_id)}
-              style={{
-                ...pillBase,
-                ...(tierStyles[repo.tier] ?? {}),
-              }}
-            >
-              {repo.section_id} ({repo.package_count})
-            </button>
-          ))}
+      {toggleableRepos.map((repo) => (
+        <div key={repo.section_id} className="inspectah-repo-bar__row">
+          <div className="inspectah-repo-bar__name">
+            <span style={{ color: tierColors[repo.tier] ?? tierColors.distro }}>
+              {repo.section_id}
+            </span>
+            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+          </div>
+          <Switch
+            id={`repo-toggle-${repo.section_id}`}
+            aria-label={`${repo.section_id} (${repo.package_count})`}
+            isChecked={repo.enabled}
+            onChange={() => onToggle(repo.section_id)}
+            isReversed
+          />
+        </div>
+      ))}
 
-          {conflictCount != null && conflictCount > 0 && (() => {
-            const visibleConflicts = conflictCount - (dismissedCount ?? 0);
-            return visibleConflicts > 0 ? (
-              <Label color="orange" isCompact aria-live="polite">
-                {visibleConflicts} {visibleConflicts === 1 ? "conflict" : "conflicts"}
-              </Label>
-            ) : null;
-          })()}
-
+      {(visibleConflicts > 0 || (dismissedCount ?? 0) > 0) && (
+        <div className="inspectah-repo-bar__controls">
+          {visibleConflicts > 0 && (
+            <Label color="orange" isCompact aria-live="polite">
+              {visibleConflicts} {visibleConflicts === 1 ? "conflict" : "conflicts"}
+            </Label>
+          )}
           {dismissedCount != null && dismissedCount > 0 && onRestoreDismissed && (
             <Button
               variant="link"

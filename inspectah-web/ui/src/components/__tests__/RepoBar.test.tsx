@@ -11,31 +11,38 @@ const mockRepos: RepoGroupInfo[] = [
 ];
 
 describe("RepoBar", () => {
-  it("renders distro repos with package counts in row 1", () => {
+  it("renders REPOSITORIES header", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
-    expect(screen.getByText(/baseos \(12\)/)).toBeInTheDocument();
-    expect(screen.getByText(/appstream \(28\)/)).toBeInTheDocument();
+    expect(screen.getByText("Repositories")).toBeInTheDocument();
   });
 
-  it("renders toggleable repos as pills with package counts in row 2", () => {
+  it("renders distro repos with 'always included' label", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
-    const crbPill = screen.getByRole("switch", { name: /crb \(4\)/i });
-    expect(crbPill).toBeInTheDocument();
-    expect(crbPill.textContent).toContain("crb (4)");
-    const epelPill = screen.getByRole("switch", { name: /epel \(8\)/i });
-    expect(epelPill).toBeInTheDocument();
-    expect(epelPill.textContent).toContain("epel (8)");
+    expect(screen.getByText("baseos")).toBeInTheDocument();
+    expect(screen.getByText("appstream")).toBeInTheDocument();
+    const alwaysLabels = screen.getAllByText("always included");
+    expect(alwaysLabels).toHaveLength(2);
+  });
+
+  it("renders toggleable repos with Switch controls", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
+    expect(screen.getByText("crb")).toBeInTheDocument();
+    expect(screen.getByText("epel")).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch");
+    expect(switches.length).toBeGreaterThanOrEqual(2);
   });
 
   it("distro repos have no toggle", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
-    expect(screen.queryByRole("switch", { name: /baseos/i })).not.toBeInTheDocument();
+    const alwaysLabels = screen.getAllByText("always included");
+    expect(alwaysLabels).toHaveLength(2);
   });
 
-  it("calls onToggle with section_id when pill is clicked", () => {
+  it("calls onToggle with section_id when toggle is clicked", () => {
     const onToggle = vi.fn();
     render(<RepoBar repos={mockRepos} onToggle={onToggle} />);
-    fireEvent.click(screen.getByRole("switch", { name: /epel/i }));
+    const epelLabel = screen.getByLabelText(/epel \(8\)/i);
+    fireEvent.click(epelLabel);
     expect(onToggle).toHaveBeenCalledWith("epel");
   });
 

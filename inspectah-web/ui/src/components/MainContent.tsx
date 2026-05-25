@@ -1,7 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import {
-  PageSection,
-  Content,
   Skeleton,
   EmptyState,
   EmptyStateBody,
@@ -20,21 +18,6 @@ import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 import { CubesIcon } from "@patternfly/react-icons";
 
-/** Section ID to human-readable label. */
-const SECTION_LABELS: Record<string, string> = {
-  packages: "Packages",
-  configs: "Config Files",
-  services: "Services",
-  version_changes: "Version Changes",
-  containers: "Containers",
-  users_groups: "Users & Groups",
-  network: "Network",
-  storage: "Storage",
-  scheduled_tasks: "Scheduled Tasks",
-  non_rpm_software: "Non-RPM Software",
-  kernel_boot: "Kernel & Boot",
-  selinux: "Security & Access Control",
-};
 
 export interface MainContentProps {
   activeSection: string;
@@ -79,7 +62,6 @@ export function MainContent({
   filterClearCounter = 0,
   revealItemId,
 }: MainContentProps) {
-  const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
 
   // Clear stale filter when switching sections or when global search navigates within same section
@@ -157,13 +139,13 @@ export function MainContent({
 
   if (loading) {
     return (
-      <PageSection>
+      <>
         <Skeleton screenreaderText="Loading content" width="40%" />
         <br />
         <Skeleton width="100%" />
         <Skeleton width="100%" />
         <Skeleton width="80%" />
-      </PageSection>
+      </>
     );
   }
 
@@ -194,10 +176,7 @@ export function MainContent({
     }
 
     return (
-      <PageSection>
-        <Content>
-          <h2>{label}</h2>
-        </Content>
+      <>
         {banner}
         <RepoBar
           repos={viewData?.repo_groups ?? []}
@@ -210,7 +189,7 @@ export function MainContent({
           onToggle={handlePackageToggle}
           onRepoToggle={handleRepoToggle}
         />
-      </PageSection>
+      </>
     );
   }
 
@@ -218,10 +197,7 @@ export function MainContent({
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredConfigItems.length === 0;
     return (
-      <PageSection>
-        <Content>
-          <h2>{label}</h2>
-        </Content>
+      <>
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}
@@ -250,7 +226,7 @@ export function MainContent({
             onViewedChange={onViewedChange}
           />
         )}
-      </PageSection>
+      </>
     );
   }
 
@@ -287,12 +263,7 @@ export function MainContent({
   if (activeSection === "version_changes") {
     const section = sections?.find((s) => s.id === "version_changes");
     if (!section) {
-      return (
-        <PageSection>
-          <Content><h2>{label}</h2></Content>
-          <p>Section data not available.</p>
-        </PageSection>
-      );
+      return <p>Section data not available.</p>;
     }
 
     if (section.items.length === 0 && section.empty_reason) {
@@ -302,51 +273,20 @@ export function MainContent({
         data_unavailable: "Version change data is not available for this snapshot.",
       };
       const copy = copyMap[section.empty_reason] ?? copyMap.data_unavailable;
-      return (
-        <PageSection>
-          <Content><h2>{label}</h2></Content>
-          <EmptyState titleText={copy} icon={CubesIcon} headingLevel="h3" />
-        </PageSection>
-      );
+      return <EmptyState titleText={copy} icon={CubesIcon} headingLevel="h3" />;
     }
 
-    return (
-      <PageSection>
-        <Content><h2>{label}</h2></Content>
-        <ContextList section={section} />
-      </PageSection>
-    );
+    return <ContextList section={section} />;
   }
 
   if (contextSectionIds.includes(activeSection)) {
     const section = sections?.find((s) => s.id === activeSection);
     if (!section) {
-      return (
-        <PageSection>
-          <Content>
-            <h2>{label}</h2>
-            <p>Section data not available.</p>
-          </Content>
-        </PageSection>
-      );
+      return <p>Section data not available.</p>;
     }
 
-    return (
-      <PageSection>
-        <Content>
-          <h2>{label}</h2>
-        </Content>
-        <ContextList section={section} />
-      </PageSection>
-    );
+    return <ContextList section={section} />;
   }
 
-  return (
-    <PageSection>
-      <Content>
-        <h2>{label}</h2>
-        <p>Not yet implemented.</p>
-      </Content>
-    </PageSection>
-  );
+  return <p>Not yet implemented.</p>;
 }

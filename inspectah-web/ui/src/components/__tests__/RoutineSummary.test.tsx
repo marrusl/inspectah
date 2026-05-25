@@ -106,7 +106,7 @@ describe("RoutineSummary", () => {
     await userEvent.click(screen.getByText("+ 1 routine"));
 
     // Toggle switch should be present on the real DecisionItem
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     expect(toggle).toBeInTheDocument();
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalled();

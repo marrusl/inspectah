@@ -1,11 +1,4 @@
 import { useState, useCallback } from "react";
-import {
-  DataListItem,
-  DataListItemRow,
-  DataListItemCells,
-  DataListCell,
-  DataListContent,
-} from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { ContextItem as ContextItemType } from "../api/types";
 
@@ -22,66 +15,35 @@ export function ContextItem({ item }: ContextItemProps) {
   }, []);
 
   return (
-    <DataListItem
-      aria-labelledby={`context-item-${item.id}`}
+    <div
+      role="listitem"
       data-testid={`context-item-${item.id}`}
+      className="inspectah-context-row"
       tabIndex={-1}
     >
-      <DataListItemRow>
-        <DataListItemCells
-          dataListCells={[
-            <DataListCell key="primary" width={5}>
-              <div id={`context-item-${item.id}`}>
-                <strong>{item.title}</strong>
-                {item.subtitle && (
-                  <div style={{ color: "var(--pf-t--global--color--200)", fontSize: "var(--pf-t--global--font--size--sm)" }}>
-                    {item.subtitle}
-                  </div>
-                )}
-              </div>
-            </DataListCell>,
-            hasDetail && (
-              <DataListCell key="expand" width={1}>
-                <button
-                  onClick={handleToggle}
-                  aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
-                  aria-expanded={isExpanded}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: "4px",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                >
-                  {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-                </button>
-              </DataListCell>
-            ),
-          ].filter(Boolean)}
-        />
-      </DataListItemRow>
-      {hasDetail && isExpanded && (
-        <DataListContent
-          aria-label="Detail content"
-          isHidden={!isExpanded}
-        >
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              fontFamily: "var(--pf-t--global--font--family--mono)",
-              fontSize: "var(--pf-t--global--font--size--sm)",
-              color: "var(--pf-t--global--color--200)",
-              margin: 0,
-              padding: "var(--pf-t--global--spacer--md)",
-              backgroundColor: "var(--pf-t--global--color--nonstatus--gray--100)",
-            }}
+      <div className="inspectah-context-row__main">
+        <div id={`context-item-${item.id}`} className="inspectah-context-row__name">
+          <span>{item.title}</span>
+          {item.subtitle && (
+            <span className="inspectah-context-row__subtitle">{item.subtitle}</span>
+          )}
+        </div>
+        {hasDetail && (
+          <button
+            onClick={handleToggle}
+            aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
+            aria-expanded={isExpanded}
+            className="inspectah-decision-row__expand-btn"
           >
-            {item.detail}
-          </pre>
-        </DataListContent>
+            {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+          </button>
+        )}
+      </div>
+      {hasDetail && isExpanded && (
+        <pre className="inspectah-context-row__detail">
+          {item.detail}
+        </pre>
       )}
-    </DataListItem>
+    </div>
   );
 }

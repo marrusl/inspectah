@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { Switch, Label } from "@patternfly/react-core";
+import { Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type {
   RefinedPackage,
@@ -65,6 +65,12 @@ function buildToggleOp(item: DecisionItemKind): RefinementOp {
     : { op: "IncludeConfig", target: { path } };
 }
 
+const LEVEL_BORDER: Record<string, string> = {
+  needs_review: "3px solid var(--pf-t--global--color--status--danger--default)",
+  informational: "3px solid var(--pf-t--global--color--status--info--default)",
+  routine: "none",
+};
+
 export function DecisionItem({
   item,
   level,
@@ -103,7 +109,6 @@ export function DecisionItem({
   const handleExpand = useCallback(() => {
     const willExpand = !isExpanded;
     setIsExpanded(willExpand);
-    // Expanding a non-toggled item marks viewed
     if (willExpand && !hasBeenToggled.current) {
       onMarkViewed(id);
     }
@@ -130,177 +135,20 @@ export function DecisionItem({
     : level;
   const topReason = item.data.attention[0];
 
-  if (isNeedsReview) {
-    // Full card layout for NeedsReview items
-    return (
-      <div
-        role="row"
-        aria-rowindex={rowIndex}
-        aria-label={name}
-        tabIndex={tabIndex}
-        onKeyDown={handleKeyDown}
-        data-testid={`decision-item-${id}`}
-        data-expanded={isExpanded ? "true" : "false"}
-        style={{
-          borderLeft: `3px solid var(--pf-t--global--color--status--danger--default)`,
-          padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
-          marginBottom: "var(--pf-t--global--spacer--sm)",
-          background: "var(--pf-t--global--background--color--secondary--default)",
-          borderRadius: "var(--pf-t--global--border--radius--small)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          {onToggleInclude && (
-            <div role="gridcell" style={{ flexShrink: 0 }}>
-              <Switch
-                id={`switch-${id}`}
-                label={included ? "Include" : "Exclude"}
-                isChecked={included}
-                onChange={handleToggle}
-                isDisabled={isPending}
-                aria-label={`Toggle ${name}`}
-              />
-            </div>
-          )}
-          <div role="gridcell" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-            {showUnviewedDot && (
-              <span
-                role="img"
-                data-testid="unviewed-dot"
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "var(--pf-t--global--color--status--danger--default)",
-                  flexShrink: 0,
-                }}
-                aria-label="Not yet reviewed"
-              />
-            )}
-            <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
-          </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            {topReason && (
-              <Label color={attentionLabelColor(topAttention)}>
-                {formatReasonText(topReason.reason, topReason.detail)}
-              </Label>
-            )}
-          </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            <button
-              onClick={handleExpand}
-              aria-expanded={isExpanded}
-              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
-              tabIndex={-1}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: "4px",
-                display: "flex",
-                alignItems: "center",
-              }}
-            >
-              {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-            </button>
-          </div>
-        </div>
-        {isExpanded && (
-          <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
-            {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
-            ) : (
-              <ConfigDetail config={item.data as RefinedConfig} />
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
+  const borderLeft = LEVEL_BORDER[level] ?? LEVEL_BORDER.routine;
 
-  // Informational (Tier 2) — full card with info-level styling and provenance badge
-  if (level === "informational") {
-    const badgeText = topReason?.reason === "package_provenance_unavailable"
+  const badgeText = level === "informational"
+    ? (topReason?.reason === "package_provenance_unavailable"
       ? "Baseline Unavailable"
       : topReason?.reason === "package_user_added" && item.type === "package"
         ? (item.data as RefinedPackage).entry.source_repo || "Unknown"
         : topReason
           ? formatReasonText(topReason.reason, topReason.detail)
-          : null;
+          : null)
+    : level === "needs_review" && topReason
+      ? formatReasonText(topReason.reason, topReason.detail)
+      : null;
 
-    return (
-      <div
-        role="row"
-        aria-rowindex={rowIndex}
-        aria-label={name}
-        tabIndex={tabIndex}
-        onKeyDown={handleKeyDown}
-        data-testid={`decision-item-${id}`}
-        data-expanded={isExpanded ? "true" : "false"}
-        style={{
-          borderLeft: "3px solid var(--pf-t--global--color--status--info--default)",
-          padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
-          marginBottom: "var(--pf-t--global--spacer--sm)",
-          background: "var(--pf-t--global--background--color--secondary--default)",
-          borderRadius: "var(--pf-t--global--border--radius--small)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          {onToggleInclude && (
-            <div role="gridcell" style={{ flexShrink: 0 }}>
-              <Switch
-                id={`switch-${id}`}
-                label={included ? "Include" : "Exclude"}
-                isChecked={included}
-                onChange={handleToggle}
-                isDisabled={isPending}
-                aria-label={`Toggle ${name}`}
-              />
-            </div>
-          )}
-          <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
-            <span>{name}</span>
-          </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            {badgeText && (
-              <Label color="blue">
-                {badgeText}
-              </Label>
-            )}
-          </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            <button
-              onClick={handleExpand}
-              aria-expanded={isExpanded}
-              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
-              tabIndex={-1}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: "4px",
-                display: "flex",
-                alignItems: "center",
-              }}
-            >
-              {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-            </button>
-          </div>
-        </div>
-        {isExpanded && (
-          <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
-            {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
-            ) : (
-              <ConfigDetail config={item.data as RefinedConfig} />
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Compact row for Routine items
   return (
     <div
       role="row"
@@ -310,50 +158,55 @@ export function DecisionItem({
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
       data-expanded={isExpanded ? "true" : "false"}
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: "var(--pf-t--global--spacer--sm)",
-        padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
-        borderBottom: "1px solid var(--pf-t--global--border--color--default)",
-      }}
+      className="inspectah-decision-row"
+      style={{ borderLeft }}
     >
-      {onToggleInclude && (
-        <div role="gridcell" style={{ flexShrink: 0 }}>
-          <Switch
-            id={`switch-${id}`}
-            label={included ? "Include" : "Exclude"}
-            isChecked={included}
-            onChange={handleToggle}
-            isDisabled={isPending}
-            aria-label={`Toggle ${name}`}
-          />
+      <div className="inspectah-decision-row__main">
+        {onToggleInclude && (
+          <div role="gridcell" className="inspectah-decision-row__toggle">
+            <input
+              type="checkbox"
+              role="checkbox"
+              id={`switch-${id}`}
+              checked={included}
+              onChange={handleToggle}
+              disabled={isPending}
+              aria-label={`Toggle ${name}`}
+            />
+          </div>
+        )}
+        <div role="gridcell" className="inspectah-decision-row__name">
+          {showUnviewedDot && (
+            <span
+              role="img"
+              data-testid="unviewed-dot"
+              className="inspectah-decision-row__dot"
+              aria-label="Not yet reviewed"
+            />
+          )}
+          <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
         </div>
-      )}
-      <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
-        <span>{name}</span>
-      </div>
-      <div role="gridcell" style={{ flexShrink: 0 }}>
-        <button
-          onClick={handleExpand}
-          aria-expanded={isExpanded}
-          aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
-          tabIndex={-1}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "4px",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-        </button>
+        {badgeText && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            <Label color={attentionLabelColor(topAttention)}>
+              {badgeText}
+            </Label>
+          </div>
+        )}
+        <div role="gridcell" className="inspectah-decision-row__expand">
+          <button
+            onClick={handleExpand}
+            aria-expanded={isExpanded}
+            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
+            tabIndex={-1}
+            className="inspectah-decision-row__expand-btn"
+          >
+            {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+          </button>
+        </div>
       </div>
       {isExpanded && (
-        <div role="gridcell" style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
+        <div role="gridcell" className="inspectah-decision-row__detail">
           {item.type === "package" ? (
             <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
           ) : (

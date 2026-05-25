@@ -139,12 +139,16 @@ export function PackageList({
           return direction === "asc" ? cmp : -cmp;
         });
       } else {
-        // Tier-first sort: distro < official_optional < third_party, then alpha within tier
+        // Tier → repo → name: group by tier, then by repo within tier, then alpha
         sorted.sort((a, b) => {
           const tierA = TIER_ORDER[repoTierMap.get(a.source_repo) ?? "distro"];
           const tierB = TIER_ORDER[repoTierMap.get(b.source_repo) ?? "distro"];
           if (tierA !== tierB) {
             return direction === "asc" ? tierA - tierB : tierB - tierA;
+          }
+          const repoCmp = a.source_repo.localeCompare(b.source_repo);
+          if (repoCmp !== 0) {
+            return direction === "asc" ? repoCmp : -repoCmp;
           }
           return a.name.localeCompare(b.name);
         });
@@ -249,6 +253,14 @@ interface PackageRowProps {
   onDismiss: (key: string) => void;
 }
 
+function prevalenceClass(count: number, total: number): string {
+  if (total === 0) return "";
+  const ratio = count / total;
+  if (ratio >= 1) return "inspectah-package-row__prevalence--full";
+  if (ratio >= 0.6) return "inspectah-package-row__prevalence--partial";
+  return "inspectah-package-row__prevalence--low";
+}
+
 function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
   const checkboxRef = useRef<HTMLInputElement>(null);
@@ -257,22 +269,9 @@ function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: Package
     <div
       role="listitem"
       data-testid={`package-row-${pkg.name}`}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        padding: "var(--pf-t--global--spacer--xs) 0",
-        gap: "var(--pf-t--global--spacer--sm)",
-      }}
+      className="inspectah-package-row"
     >
-      <div
-        data-testid="left-column"
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--pf-t--global--spacer--sm)",
-        }}
-      >
+      <div data-testid="left-column" className="inspectah-package-row__left">
         <input
           ref={checkboxRef}
           type="checkbox"
@@ -281,10 +280,14 @@ function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: Package
           aria-label={pkg.name}
           onChange={() => onToggle(pkg.name)}
         />
-        <span>{pkg.name}</span>
+        <span className="inspectah-package-row__name">{pkg.name}</span>
         {mode === "fleet" && (
           <>
-            <span data-testid="repo-text" style={style}>
+            <span
+              data-testid="repo-text"
+              className="inspectah-package-row__repo"
+              style={style}
+            >
               {pkg.source_repo}
             </span>
             {pkg.repo_conflict && pkg.repo_conflict.length > 0 && (
@@ -301,19 +304,19 @@ function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: Package
         )}
       </div>
 
-      <div
-        data-testid="right-column"
-        style={{
-          minWidth: 80,
-          textAlign: "right",
-        }}
-      >
+      <div data-testid="right-column" className="inspectah-package-row__right">
         {mode === "single" ? (
           <span data-testid="repo-text" style={style}>
             {pkg.source_repo}
           </span>
         ) : (
-          <span>
+          <span
+            className={
+              pkg.prevalence
+                ? prevalenceClass(pkg.prevalence.count, pkg.prevalence.total)
+                : ""
+            }
+          >
             {pkg.prevalence
               ? `${pkg.prevalence.count}/${pkg.prevalence.total}`
               : "—"}
