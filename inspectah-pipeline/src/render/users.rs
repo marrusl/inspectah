@@ -271,7 +271,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         return lines;
     }
 
-    lines.push("# === Users and Groups ===".into());
+    let mut body: Vec<String> = Vec::new();
 
     // Collect GIDs and supplementary group names needed by useradd users
     let mut needed_gids: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -302,9 +302,9 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
             continue;
         }
         if gid > 0 {
-            lines.push(format!("RUN groupadd -g {gid} {name}"));
+            body.push(format!("RUN groupadd -g {gid} {name}"));
         } else {
-            lines.push(format!("RUN groupadd {name}"));
+            body.push(format!("RUN groupadd {name}"));
         }
     }
 
@@ -337,7 +337,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
             cmd.push_str(&format!(" -d {home}"));
         }
         cmd.push_str(&format!(" {name}"));
-        lines.push(cmd);
+        body.push(cmd);
     }
 
     // chpasswd for users with password hashes
@@ -346,11 +346,12 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         .filter(|u| !str_field(u, "password_hash").is_empty())
         .collect();
     if !pw_users.is_empty() {
-        lines.push(
+        body.push(
             "# WARNING: Embedding password hashes in a Containerfile is a security risk.".into(),
         );
-        lines
-            .push("# Consider using a secrets manager or deploy-time provisioning instead.".into());
+        body.push(
+            "# Consider using a secrets manager or deploy-time provisioning instead.".into(),
+        );
         let mut chpasswd_entries: Vec<String> = Vec::new();
         for u in &pw_users {
             let name = str_field(u, "name");
@@ -360,7 +361,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
             }
         }
         if !chpasswd_entries.is_empty() {
-            lines.push(format!(
+            body.push(format!(
                 "RUN echo '{}' | chpasswd -e",
                 chpasswd_entries.join("\\n")
             ));
@@ -389,18 +390,18 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
             format!("{name}:{uid}")
         };
 
-        lines.push(format!(
+        body.push(format!(
             "RUN install -d -m 700 -o {name} -g {gid} {home}/.ssh"
         ));
-        lines.push(format!(
+        body.push(format!(
             "COPY users/home/{name}/.ssh/authorized_keys {home}/.ssh/authorized_keys"
         ));
-        lines.push(format!(
+        body.push(format!(
             "RUN chown {ownership} {home}/.ssh/authorized_keys && chmod 600 {home}/.ssh/authorized_keys"
         ));
     }
 
-    lines.push(String::new());
+    lines.extend(super::containerfile::section("Users and Groups", body));
     lines
 }
 
