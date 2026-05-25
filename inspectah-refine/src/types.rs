@@ -187,6 +187,7 @@ pub enum RepoTier {
     Distro,
     OfficialOptional,
     ThirdParty,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
