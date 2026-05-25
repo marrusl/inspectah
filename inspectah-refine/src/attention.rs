@@ -79,6 +79,20 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
+    // Build config path set for @commandline auto-exclude check.
+    let config_paths: std::collections::HashSet<&str> = snap
+        .config
+        .as_ref()
+        .map(|c| c.files.iter().map(|f| f.path.as_str()).collect())
+        .unwrap_or_default();
+
+    // Build package -> owned paths map from file_ownership.
+    let ownership_map: std::collections::HashMap<&str, &[String]> = rpm
+        .file_ownership
+        .iter()
+        .map(|e| (e.package_name.as_str(), e.paths.as_slice()))
+        .collect();
+
     rpm.packages_added
         .iter()
         .map(|entry| {
@@ -115,11 +129,29 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                 }
             }
 
-            RefinedPackage {
+            let mut refined = RefinedPackage {
                 entry: entry.clone(),
                 attention: tags,
                 fleet_attention: None,
+            };
+
+            // Auto-exclude @commandline packages whose files are all config-captured.
+            if entry.source_repo.eq_ignore_ascii_case("@commandline")
+                && let Some(owned_paths) = ownership_map.get(entry.name.as_str())
+                && !owned_paths.is_empty()
+                && owned_paths
+                    .iter()
+                    .all(|p| p.starts_with("/etc/") && config_paths.contains(p.as_str()))
+            {
+                refined.entry.include = false;
+                refined.attention.push(AttentionTag {
+                    level: AttentionLevel::Informational,
+                    reason: AttentionReason::PackageConfigCaptured,
+                    detail: Some("contents captured via config files".to_string()),
+                });
             }
+
+            refined
         })
         .collect()
 }
@@ -148,8 +180,10 @@ fn classify_package(
         _ => {}
     }
 
-    // Empty source_repo means unknown provenance — always Tier 3.
-    if entry.source_repo.is_empty() {
+    // Empty source_repo or @commandline means unknown provenance — always Tier 3.
+    if entry.source_repo.is_empty()
+        || entry.source_repo.eq_ignore_ascii_case("@commandline")
+    {
         return AttentionTag {
             level: AttentionLevel::NeedsReview,
             reason: AttentionReason::PackageNoRepoSource,
@@ -645,6 +679,131 @@ mod tests {
     #[test]
     fn degraded_no_repo_state_still_needs_review() {
         let snap = snap_with_baseline(None, vec![pkg("orphan", PackageState::NoRepo, "some-repo")]);
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
+    }
+
+    #[test]
+    fn commandline_source_repo_is_needs_review() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("rpmfusion-free-release", PackageState::Added, "@commandline")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
+    }
+
+    #[test]
+    fn commandline_config_captured_auto_excludes() {
+        use inspectah_core::types::config::{ConfigFileEntry as CfgEntry, ConfigSection};
+        use inspectah_core::types::rpm::{FileOwnershipEntry, RpmSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![pkg(
+                    "rpmfusion-free-release",
+                    PackageState::Added,
+                    "@commandline",
+                )],
+                file_ownership: vec![FileOwnershipEntry {
+                    package_name: "rpmfusion-free-release".into(),
+                    paths: vec![
+                        "/etc/yum.repos.d/rpmfusion-free.repo".into(),
+                        "/etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-9".into(),
+                    ],
+                }],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![
+                    CfgEntry {
+                        path: "/etc/yum.repos.d/rpmfusion-free.repo".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                    CfgEntry {
+                        path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-9".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].entry.include, "should be auto-excluded");
+        assert!(
+            result[0]
+                .attention
+                .iter()
+                .any(|a| a.reason == AttentionReason::PackageConfigCaptured),
+            "should have PackageConfigCaptured reason"
+        );
+    }
+
+    #[test]
+    fn commandline_with_non_etc_file_not_auto_excluded() {
+        use inspectah_core::types::config::{ConfigFileEntry as CfgEntry, ConfigSection};
+        use inspectah_core::types::rpm::{FileOwnershipEntry, RpmSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![pkg(
+                    "epel-release",
+                    PackageState::Added,
+                    "@commandline",
+                )],
+                file_ownership: vec![FileOwnershipEntry {
+                    package_name: "epel-release".into(),
+                    paths: vec![
+                        "/etc/yum.repos.d/epel.repo".into(),
+                        "/usr/bin/crb".into(),
+                    ],
+                }],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![CfgEntry {
+                    path: "/etc/yum.repos.d/epel.repo".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        // epel-release has /usr/bin/crb outside /etc/ -- should NOT be auto-excluded
+        assert!(
+            !result[0]
+                .attention
+                .iter()
+                .any(|a| a.reason == AttentionReason::PackageConfigCaptured),
+            "should not be config-captured"
+        );
+    }
+
+    #[test]
+    fn commandline_source_repo_degraded_is_needs_review() {
+        let snap = snap_with_baseline(
+            None,
+            vec![pkg("custom-tool", PackageState::Added, "@commandline")],
+        );
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);

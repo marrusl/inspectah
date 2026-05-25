@@ -125,7 +125,7 @@ impl RepoIndex {
 
     /// Look up the provenance of a repo section ID.
     pub fn provenance(&self, section_id: &str) -> RepoProvenance {
-        if section_id.is_empty() {
+        if section_id.is_empty() || section_id.eq_ignore_ascii_case("@commandline") {
             return RepoProvenance::Unknown;
         }
         self.provenance_map
@@ -149,6 +149,9 @@ impl RepoIndex {
         }
         let lower = section_id.to_lowercase();
         let id = lower.as_str();
+        if id == "@commandline" {
+            return RepoTier::Unknown;
+        }
         if DISTRO_REPOS.contains(&id) {
             RepoTier::Distro
         } else if OFFICIAL_OPTIONAL_REPOS.contains(&id) {
@@ -282,6 +285,39 @@ mod tests {
         assert_eq!(RepoIndex::repo_tier("epel"), RepoTier::ThirdParty);
         assert_eq!(RepoIndex::repo_tier("copr:mytools"), RepoTier::ThirdParty);
         assert_eq!(RepoIndex::repo_tier(""), RepoTier::Unknown);
+        assert_eq!(RepoIndex::repo_tier("@commandline"), RepoTier::Unknown);
+        assert_eq!(RepoIndex::repo_tier("@CommandLine"), RepoTier::Unknown);
+    }
+
+    #[test]
+    fn test_commandline_provenance_is_unknown() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "custom-tool".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "@commandline".into(),
+                include: true,
+                ..Default::default()
+            }],
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/centos.repo".into(),
+                content: "[baseos]\nname=CentOS BaseOS\n".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let index = RepoIndex::build(&snap);
+        assert_eq!(
+            index.provenance("@commandline"),
+            RepoProvenance::Unknown,
+            "@commandline should be Unknown provenance"
+        );
     }
 
     #[test]
