@@ -569,8 +569,8 @@ mod tests {
 
     #[test]
     fn snap_baseline_field_drives_verified_mode() {
-        // Verify that compute_package_attention reads snap.baseline (Phase 6),
-        // not rpm.baseline_package_names (Go compat).
+        // Verify that compute_package_attention reads snap.baseline,
+        // not the legacy rpm.baseline_package_names field.
         use std::collections::HashMap;
         let mut pkgs = HashMap::new();
         pkgs.insert(

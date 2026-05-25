@@ -1,6 +1,6 @@
 //! Source repository attribution for RPM packages.
 //!
-//! Ports Go's `populateSourceRepos` to Rust. Primary strategy uses
+//! Attributes each installed RPM to its source repository. Primary strategy uses
 //! `dnf repoquery --installed` in batches of 100. Fallback parses
 //! `rpm -qi` output for `From repo` / `Repository` lines.
 //!

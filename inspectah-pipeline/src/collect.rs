@@ -357,7 +357,7 @@ fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut R
     state.module_streams = rpm.module_streams.clone();
 
     // Build owned_paths and path_to_package from file ownership data.
-    // owned_paths: only /etc paths (matches Go's BuildRpmOwnedPaths filter).
+    // owned_paths: only /etc paths (config tree scope).
     // path_to_package: maps each /etc path to its owning package's index
     // in state.packages.
     //

@@ -16,7 +16,7 @@ const SENSITIVE_PATTERNS: &[&str] = &["password", "secret", "token", "key", "cre
 
 /// System-generated PAM configs to exclude from custom PAM detection.
 /// These are base system files that appear in unowned scans but are not
-/// user customizations. Matches Go's `unownedExcludeExact` PAM entries.
+/// user customizations.
 const EXCLUDED_PAM_CONFIGS: &[&str] = &[
     "/etc/pam.d/chfn",
     "/etc/pam.d/chsh",

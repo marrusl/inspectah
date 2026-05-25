@@ -85,7 +85,7 @@ impl RepoIndex {
         }
 
         // 2. Map packages by source_repo (normalized to lowercase).
-        // The Go scanner emits mixed-case repo IDs (e.g. "AppStream")
+        // dnf repoquery may emit mixed-case repo IDs (e.g. "AppStream")
         // while INI section headers from .repo files are already lowercase.
         // Normalizing here ensures packages match their repo definitions.
         let mut packages_by_repo: BTreeMap<String, Vec<String>> = BTreeMap::new();
