@@ -25,6 +25,10 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] Remove Go source tree (`cmd/`, `go.mod`, `go.sum`, etc.) once the Go CLI wrapper is fully retired and the Rust binary is the sole distribution path. Straightforward delete — wait until Go is no longer packaged or referenced.
 
+## Git History Cleanup
+
+- [ ] Scrub `.git-backup/` from git history using `git filter-repo`. The directory was accidentally committed and contains a 68MB packfile. It's removed from the working tree and `.gitignore`'d, but still inflates clone size. Do this before the repo goes more public — requires a force push.
+
 ## RepoBar Accessibility
 
 - [ ] RepoBar `aria-live` badge should announce dismiss/restore changes via a dedicated live-region message tied to the event, not just the static badge text. Currently the badge updates its visible count correctly, but the announcement is passive (relies on text mutation). A dedicated `aria-live` message ("1 conflict dismissed", "All conflicts restored") would be more reliable for screen readers. Flagged by Fern in round-2 review as important but non-blocking.
