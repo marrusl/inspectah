@@ -1,3 +1,0 @@
-org.mozilla.firefox	flathub	stable
-org.gnome.Calculator	fedora	stable
-com.visualstudio.code	flathub	stable
