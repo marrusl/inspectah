@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn test_redaction_finding_go_compat() {
+    fn test_redaction_finding_deserialize() {
         let json = r#"{
             "path": "/etc/shadow",
             "source": "file",
