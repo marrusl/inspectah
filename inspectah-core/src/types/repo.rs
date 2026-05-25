@@ -19,21 +19,21 @@ pub enum RepoTier {
     Distro,
     OfficialOptional,
     ThirdParty,
-    Unknown,
+    None,
 }
 
 /// Classify a repo section ID into its tier.
 ///
-/// Empty, missing, or `@commandline` section IDs return `Unknown` --
+/// Empty, missing, or `@commandline` section IDs return `None` --
 /// "no repo identity" is distinct from "known third-party repo."
 pub fn repo_tier(section_id: &str) -> RepoTier {
     if section_id.is_empty() {
-        return RepoTier::Unknown;
+        return RepoTier::None;
     }
     let lower = section_id.to_lowercase();
     let id = lower.as_str();
     if id == "@commandline" {
-        return RepoTier::Unknown;
+        return RepoTier::None;
     }
     if DISTRO_REPOS.contains(&id) {
         RepoTier::Distro
@@ -72,9 +72,9 @@ mod tests {
     }
 
     #[test]
-    fn test_repo_tier_unknown() {
-        assert_eq!(repo_tier(""), RepoTier::Unknown);
-        assert_eq!(repo_tier("@commandline"), RepoTier::Unknown);
-        assert_eq!(repo_tier("@CommandLine"), RepoTier::Unknown);
+    fn test_repo_tier_none() {
+        assert_eq!(repo_tier(""), RepoTier::None);
+        assert_eq!(repo_tier("@commandline"), RepoTier::None);
+        assert_eq!(repo_tier("@CommandLine"), RepoTier::None);
     }
 }
