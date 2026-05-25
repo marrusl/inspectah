@@ -1049,7 +1049,7 @@ fn default_context_attention(
     fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
     ctx: &FleetContext,
 ) -> FleetAttentionDto {
-    let zone = fp.map(|f| inspectah_core::fleet::classify_zone(f));
+    let zone = fp.map(inspectah_core::fleet::classify_zone);
     let zone = if ctx.zones_active { zone } else { None };
     FleetAttentionDto {
         level: AttentionLevel::Informational,

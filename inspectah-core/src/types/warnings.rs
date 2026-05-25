@@ -11,8 +11,8 @@ pub enum WarningSeverity {
     Error,
 }
 
-/// Typed warning with extra field support for Go compatibility.
-/// Go uses []map[string]interface{} — the flatten catches unknown keys.
+/// Typed warning with extra field support.
+/// The flatten catches unknown keys for forward compatibility.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Warning {
     #[serde(default)]

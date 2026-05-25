@@ -385,8 +385,7 @@ impl Executor for RealExecutor {
 
     /// Returns successfully-read entries. Individual entry errors (e.g.,
     /// permission denied on one file in a readable directory) are silently
-    /// skipped — the caller gets a partial list. This matches the Go
-    /// behavior where os.ReadDir errors are filtered, not fatal.
+    /// skipped — the caller gets a partial list.
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
         let entries = std::fs::read_dir(path)?;
         entries

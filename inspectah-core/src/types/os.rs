@@ -19,7 +19,7 @@ pub struct OsRelease {
 }
 
 /// System type as stored in the snapshot JSON.
-/// Uses explicit renames because Go values contain hyphens.
+/// Uses explicit renames because JSON values contain hyphens.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SystemType {
     #[default]
