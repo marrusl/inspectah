@@ -88,7 +88,6 @@ pub fn use_color() -> bool {
 /// `finalize()` through a shared reference (rich mode needs `&mut self`
 /// internally to join the tick thread).
 pub struct TerminalProgress {
-    mode: Mode,
     inner: Mutex<TerminalProgressInner>,
 }
 
@@ -125,14 +124,8 @@ impl TerminalProgress {
             )),
         };
         Self {
-            mode,
             inner: Mutex::new(inner),
         }
-    }
-
-    /// The resolved rendering mode.
-    pub fn mode(&self) -> Mode {
-        self.mode
     }
 
     /// Finalize rendering (rich mode: stop tick thread, print scrollback).
@@ -228,12 +221,6 @@ mod tests {
     fn test_terminal_progress_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TerminalProgress>();
-    }
-
-    #[test]
-    fn test_terminal_progress_mode_accessor() {
-        let tp = TerminalProgress::new(Mode::Flat, false);
-        assert_eq!(tp.mode(), Mode::Flat);
     }
 
     #[test]

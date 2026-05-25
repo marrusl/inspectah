@@ -114,7 +114,6 @@ struct InspectorRow {
 #[derive(Debug)]
 struct ChecklistState {
     rows: Vec<InspectorRow>,
-    scan_start: Instant,
     tick_count: u32,
     terminal_height: usize,
     use_color: bool,
@@ -140,7 +139,6 @@ impl ChecklistState {
 
         Self {
             rows,
-            scan_start: Instant::now(),
             tick_count: 0,
             terminal_height,
             use_color,
