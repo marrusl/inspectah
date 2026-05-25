@@ -553,6 +553,41 @@ mod tests {
     }
 
     #[test]
+    fn flat_nonrpm_zero_result_shows_none_found() {
+        let (renderer, buf) = test_renderer(11);
+
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: ProbeOutcome::Empty,
+        });
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Empty,
+        });
+        renderer.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        assert!(
+            text.contains("none found"),
+            "expected 'none found', got: {text}"
+        );
+    }
+
+    #[test]
     fn flat_per_inspector_metric_isolation() {
         // Two inspectors active simultaneously — metrics must not leak.
         let (renderer, buf) = test_renderer(11);

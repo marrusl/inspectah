@@ -688,6 +688,45 @@ mod tests {
     }
 
     #[test]
+    fn plain_nonrpm_zero_result_shows_none_found() {
+        let (renderer, buf) = test_renderer(false);
+
+        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::ElfBinaries,
+            outcome: ProbeOutcome::Empty,
+        });
+        renderer.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        renderer.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Empty,
+        });
+        renderer.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        let done_line = text
+            .lines()
+            .find(|l| l.contains("Non-RPM") && l.contains('\u{2713}'))
+            .expect("should find NonRpmSoftware done line");
+        assert!(
+            done_line.contains("none found"),
+            "expected 'none found', got: {done_line}"
+        );
+    }
+
+    #[test]
     fn plain_per_inspector_metric_isolation() {
         // Two inspectors active at once — RPM metric must not leak to Services.
         let (renderer, buf) = test_renderer(false);

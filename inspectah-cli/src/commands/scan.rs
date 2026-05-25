@@ -421,7 +421,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                         let elapsed = scan_start.elapsed();
                         print_completion(&outcome, elapsed, &snapshot, None, true);
                         eprintln!("Error: failed to write output: {e}");
-                        return Err(anyhow::anyhow!("failed to write {}", path.display()).context(e));
+                        std::process::exit(1);
                     }
                 }
             }
@@ -473,9 +473,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
             let elapsed = scan_start.elapsed();
             print_completion(&outcome, elapsed, &snapshot, None, false);
             eprintln!("Error: failed to write report: {e}");
-            Err(e).with_context(|| {
-                format!("failed to create tarball at {}", tarball_path.display())
-            })
+            std::process::exit(1);
         }
     }
 }
