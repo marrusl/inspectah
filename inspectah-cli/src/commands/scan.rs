@@ -392,14 +392,14 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
     // Export gating: if snapshot contains sensitive data, require acknowledgment
     if snapshot.sensitive_snapshot && !args.acknowledge_sensitive {
-        eprintln!("Error: Snapshot contains sensitive data (password hashes or SSH keys).");
-        eprintln!("       To export, re-run with --acknowledge-sensitive");
-        eprintln!(
-            "       Preserved credentials: {}",
-            snapshot.preserved_credentials
+        anyhow::bail!(
+            "Snapshot contains sensitive data (password hashes or SSH keys).\n\
+             To export, re-run with --acknowledge-sensitive\n\
+             Preserved credentials: {}\n\
+             Preserved SSH keys: {}",
+            snapshot.preserved_credentials,
+            snapshot.preserved_ssh_keys
         );
-        eprintln!("       Preserved SSH keys: {}", snapshot.preserved_ssh_keys);
-        anyhow::bail!("Cannot export sensitive snapshot without --acknowledge-sensitive flag");
     }
 
     // If --inspect-only, write JSON and exit
@@ -420,8 +420,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     Err(e) => {
                         let elapsed = scan_start.elapsed();
                         print_completion(&outcome, elapsed, &snapshot, None, true);
-                        eprintln!("Error: failed to write output: {e}");
-                        std::process::exit(1);
+                        anyhow::bail!("failed to write output: {e}");
                     }
                 }
             }
@@ -472,8 +471,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Err(e) => {
             let elapsed = scan_start.elapsed();
             print_completion(&outcome, elapsed, &snapshot, None, false);
-            eprintln!("Error: failed to write report: {e}");
-            std::process::exit(1);
+            anyhow::bail!("failed to write report: {e}");
         }
     }
 }
