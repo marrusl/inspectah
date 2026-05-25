@@ -170,6 +170,7 @@ pub enum AttentionReason {
     ConfigOrphaned,
     SensitivePath,
     ServiceImageModeIncompatible,
+    PackageConfigCaptured,
     Custom(String),
 }
 
