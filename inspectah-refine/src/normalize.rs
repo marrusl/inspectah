@@ -1,6 +1,6 @@
 use crate::types::{AttentionLevel, RefineError, RefinedConfig, RefinedPackage};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
-use inspectah_core::snapshot::{InspectionSnapshot, migrate};
+use inspectah_core::snapshot::InspectionSnapshot;
 use serde_json::Value;
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
@@ -25,13 +25,12 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
     patch_missing_includes(&mut value);
 
     // Serialize patched Value back to string and use InspectionSnapshot::load()
-    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (currently 12..=17).
+    // which enforces schema_version == SCHEMA_VERSION.
     let patched_json =
         serde_json::to_string(&value).map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
     let mut snap = InspectionSnapshot::load(&patched_json)
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
-    migrate(&mut snap);
     normalize_incompatible_services(&mut snap);
 
     Ok(snap)
@@ -220,7 +219,7 @@ mod tests {
         enabled_units: Vec<String>,
     ) -> InspectionSnapshot {
         InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             services: Some(ServiceSection {
                 state_changes,
                 enabled_units,
@@ -315,7 +314,7 @@ mod tests {
     #[test]
     fn no_services_section_is_noop() {
         let mut snap = InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             ..Default::default()
         };
         // Should not panic.
@@ -376,7 +375,7 @@ mod tests {
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
         let mut snap = InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
                 packages_added: vec![
                     PackageEntry {
@@ -464,7 +463,7 @@ mod tests {
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
         let mut snap = InspectionSnapshot {
-            schema_version: 14,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
                 packages_added: vec![
                     PackageEntry {

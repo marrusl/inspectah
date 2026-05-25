@@ -1751,7 +1751,7 @@ mod tests {
     /// Build a minimal snapshot suitable for RefineSession tests.
     fn test_snapshot() -> InspectionSnapshot {
         InspectionSnapshot {
-            schema_version: 15,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
             ..Default::default()
         }
@@ -2043,7 +2043,7 @@ mod tests {
     /// Build a snapshot with a users_groups section containing one user.
     fn test_snapshot_with_user() -> InspectionSnapshot {
         InspectionSnapshot {
-            schema_version: 15,
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
             users_groups: Some(UserGroupSection {
                 users: vec![serde_json::json!({
