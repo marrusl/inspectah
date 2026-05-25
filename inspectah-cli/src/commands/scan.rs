@@ -380,7 +380,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
             }
             _ => 0,
         };
-        let summary = baseline_fmt::version_comparison_summary(vc_display, shared_count);
+        let not_in_base = snapshot
+            .rpm
+            .as_ref()
+            .map(|rpm| rpm.packages_added.len().saturating_sub(shared_count))
+            .unwrap_or(0);
+        let summary =
+            baseline_fmt::version_comparison_summary(vc_display, shared_count, not_in_base);
         if vc_display.is_none() {
             eprintln!("  Version comparison: {summary}");
         } else {

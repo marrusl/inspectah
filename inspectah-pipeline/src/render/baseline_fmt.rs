@@ -29,10 +29,16 @@ pub fn strategy_label(strategy: &ResolutionStrategy) -> &'static str {
 pub fn version_comparison_summary(
     version_changes: Option<&[VersionChange]>,
     shared_count: usize,
+    not_in_base: usize,
 ) -> String {
+    let suffix = if not_in_base > 0 {
+        format!(", {not_in_base} not in base image")
+    } else {
+        String::new()
+    };
     match version_changes {
         None => "comparison data unavailable".to_string(),
-        Some([]) => format!("all {shared_count} shared packages at same version"),
+        Some([]) => format!("all {shared_count} shared packages at same version{suffix}"),
         Some(vcs) => {
             let upgrades = vcs
                 .iter()
@@ -45,7 +51,7 @@ pub fn version_comparison_summary(
                 (u, d) => format!("{u} target-newer, {d} host-newer"),
             };
             format!(
-                "{} shared packages with version changes ({})",
+                "{} shared packages with version changes ({}){suffix}",
                 vcs.len(),
                 detail
             )
@@ -138,9 +144,14 @@ pub fn baseline_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 }
                 _ => 0,
             };
+            let not_in_base = snap
+                .rpm
+                .as_ref()
+                .map(|rpm| rpm.packages_added.len().saturating_sub(shared_count))
+                .unwrap_or(0);
             lines.push(format!(
                 "| Version changes | {} |",
-                version_comparison_summary(vc_display, shared_count)
+                version_comparison_summary(vc_display, shared_count, not_in_base)
             ));
         }
         None => {
@@ -198,7 +209,15 @@ mod tests {
     #[test]
     fn version_comparison_unavailable() {
         assert_eq!(
-            version_comparison_summary(None, 447),
+            version_comparison_summary(None, 447, 0),
+            "comparison data unavailable"
+        );
+    }
+
+    #[test]
+    fn version_comparison_unavailable_ignores_not_in_base() {
+        assert_eq!(
+            version_comparison_summary(None, 447, 134),
             "comparison data unavailable"
         );
     }
@@ -206,8 +225,16 @@ mod tests {
     #[test]
     fn version_comparison_zero_changes() {
         assert_eq!(
-            version_comparison_summary(Some(&[]), 447),
+            version_comparison_summary(Some(&[]), 447, 0),
             "all 447 shared packages at same version"
+        );
+    }
+
+    #[test]
+    fn version_comparison_zero_changes_with_not_in_base() {
+        assert_eq!(
+            version_comparison_summary(Some(&[]), 347, 134),
+            "all 347 shared packages at same version, 134 not in base image"
         );
     }
 
@@ -217,15 +244,16 @@ mod tests {
             make_vc(VersionChangeDirection::Upgrade),
             make_vc(VersionChangeDirection::Upgrade),
         ];
-        let s = version_comparison_summary(Some(&vcs), 447);
+        let s = version_comparison_summary(Some(&vcs), 447, 0);
         assert!(s.contains("2 shared packages with version changes"));
         assert!(s.contains("all target-newer"));
+        assert!(!s.contains("not in base image"));
     }
 
     #[test]
     fn version_comparison_all_downgrades() {
         let vcs = vec![make_vc(VersionChangeDirection::Downgrade)];
-        let s = version_comparison_summary(Some(&vcs), 447);
+        let s = version_comparison_summary(Some(&vcs), 447, 0);
         assert!(s.contains("1 shared packages with version changes"));
         assert!(s.contains("all host-newer"));
     }
@@ -236,9 +264,21 @@ mod tests {
             make_vc(VersionChangeDirection::Upgrade),
             make_vc(VersionChangeDirection::Downgrade),
         ];
-        let s = version_comparison_summary(Some(&vcs), 447);
+        let s = version_comparison_summary(Some(&vcs), 447, 0);
         assert!(s.contains("2 shared packages with version changes"));
         assert!(s.contains("1 target-newer, 1 host-newer"));
+    }
+
+    #[test]
+    fn version_comparison_mixed_with_not_in_base() {
+        let vcs = vec![
+            make_vc(VersionChangeDirection::Upgrade),
+            make_vc(VersionChangeDirection::Downgrade),
+        ];
+        let s = version_comparison_summary(Some(&vcs), 447, 134);
+        assert!(s.contains("2 shared packages with version changes"));
+        assert!(s.contains("1 target-newer, 1 host-newer"));
+        assert!(s.contains(", 134 not in base image"));
     }
 
     fn test_target_image() -> TargetImageIdentity {
