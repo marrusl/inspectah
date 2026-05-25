@@ -29,7 +29,7 @@ pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
     let snap_json = std::fs::read_to_string(&snap_path)?;
 
     // load_for_refine handles the full pipeline:
-    // raw-JSON include patching → deserialize → schema migration
+    // raw-JSON include patching → deserialize → schema version check
     let snapshot = load_for_refine(&snap_json)?;
 
     // Check provenance — FullyRedacted only

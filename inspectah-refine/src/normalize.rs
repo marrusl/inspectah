@@ -16,7 +16,7 @@ fn canonical_package_id(name: &str, arch: &str) -> String {
 /// explicit-false collapse to the same `false`.
 ///
 /// Enforces the same schema version gate as `InspectionSnapshot::load()`
-/// (MIN_SCHEMA..=SCHEMA_VERSION) by round-tripping through the patched
+/// (current SCHEMA_VERSION only) by round-tripping through the patched
 /// JSON string and calling `load()`.
 pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError> {
     let mut value: Value =

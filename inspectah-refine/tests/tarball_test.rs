@@ -144,6 +144,29 @@ fn reject_path_traversal() {
 }
 
 #[test]
+fn reject_old_schema_version() {
+    let dir = tempdir().unwrap();
+    // Construct a minimal snapshot with an old schema version (v12).
+    // Only schema_version is required for deserialization — all other
+    // fields default. The schema floor is now SCHEMA_VERSION (current-only),
+    // so anything below it must be rejected at the tarball import boundary.
+    let snap_json = r#"{"schema_version": 12}"#.to_string();
+    let tarball = write_flat_tarball(dir.path(), &snap_json);
+
+    let result = inspectah_refine::tarball::from_tarball(&tarball);
+    match result {
+        Err(RefineError::SnapshotLoad(msg)) => {
+            assert!(
+                msg.contains("unsupported schema version"),
+                "expected 'unsupported schema version' in error, got: {msg}"
+            );
+        }
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("expected error for old schema version, got Ok"),
+    }
+}
+
+#[test]
 fn reject_missing_snapshot_json() {
     let dir = tempdir().unwrap();
     let tarball_path = dir.path().join("empty.tar.gz");
