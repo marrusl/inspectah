@@ -144,6 +144,17 @@ impl TerminalProgress {
             r.finalize();
         }
     }
+
+    /// Cancel rendering (SIGINT path). Stops the tick thread without
+    /// reprinting the checklist — leaves the terminal as-is.
+    ///
+    /// No-op for plain and flat modes (they don't have a tick thread).
+    pub fn cancel(&self) {
+        let mut inner = self.inner.lock().expect("TerminalProgress lock poisoned");
+        if let TerminalProgressInner::Rich(ref mut r) = *inner {
+            r.cancel();
+        }
+    }
 }
 
 impl ProgressSink for TerminalProgress {
