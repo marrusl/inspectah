@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use inspectah_core::baseline::{
     BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
 };
-use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION, migrate};
+use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
@@ -175,14 +175,13 @@ fn degraded_target_image_null_cross_crate() {
 }
 
 // ---------------------------------------------------------------------------
-// Step 4: Pre-Phase-6 migration
+// Step 4: Old schema versions rejected
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pre_phase6_migration_cross_crate() {
-    // Simulate a pre-Phase-6 snapshot (v14, no baseline fields)
+fn old_schema_version_rejected() {
     let json = r#"{
-        "schema_version": 14,
+        "schema_version": 16,
         "meta": {},
         "system_type": "package-mode",
         "preflight": {"status": "ok"},
@@ -190,26 +189,8 @@ fn pre_phase6_migration_cross_crate() {
         "redactions": []
     }"#;
 
-    let mut snap = InspectionSnapshot::load(json).unwrap();
-    assert_eq!(snap.schema_version, 14);
-    assert!(snap.target_image.is_none());
-    assert!(snap.baseline.is_none());
-    assert!(!snap.no_baseline);
-
-    // Migrate
-    migrate(&mut snap);
-
-    assert_eq!(
-        snap.schema_version, 16,
-        "schema_version must be 16 after migration"
-    );
-    assert!(snap.target_image.is_none(), "target_image must remain None");
-    assert!(snap.baseline.is_none(), "baseline must remain None");
-    assert!(snap.no_baseline, "no_baseline must be set by migration");
-
-    // Cross-crate: pipeline renders a comment, not a FROM line
-    let base = base_image_from_snapshot(&snap);
-    assert!(base.is_none(), "migrated legacy snapshot has no base image");
+    let result = InspectionSnapshot::load(json);
+    assert!(result.is_err(), "old schema versions must be rejected");
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +201,6 @@ fn pre_phase6_migration_cross_crate() {
 fn service_surface_agreement() {
     // Build a snapshot JSON with dnf-makecache.service in services
     let mut snap = InspectionSnapshot::new();
-    snap.schema_version = 16;
     snap.services = Some(ServiceSection {
         state_changes: vec![
             ServiceStateChange {
