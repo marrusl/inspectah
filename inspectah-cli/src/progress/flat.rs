@@ -94,7 +94,8 @@ impl FlatRenderer {
                 state.step_metrics.insert(inspector, (kind.clone(), value));
                 state.inspector_metrics.insert(inspector, (kind, value));
             }
-            ProgressEvent::ProbeStarted { probe, .. } => {
+            ProgressEvent::ProbeStarted { inspector, probe } => {
+                state.probes_found.entry(inspector).or_insert(0);
                 let name = display::probe_name(&probe);
                 let _ = writeln!(state.writer, "  {name}...");
             }
