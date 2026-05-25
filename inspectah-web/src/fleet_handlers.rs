@@ -1096,6 +1096,7 @@ fn attention_reason_to_string(reason: &AttentionReason) -> String {
         AttentionReason::ServiceImageModeIncompatible => {
             "service_image_mode_incompatible".to_string()
         }
+        AttentionReason::PackageConfigCaptured => "package_config_captured".to_string(),
         AttentionReason::Custom(s) => s.clone(),
     }
 }
