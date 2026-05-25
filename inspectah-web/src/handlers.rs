@@ -42,20 +42,21 @@ fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
         }
     }
     // Major part appears but version_id has a minor (e.g., name has "10", version is "10.2")
-    if let Some(major) = version_id.split('.').next() {
-        if major != version_id {
-            for (i, _) in pretty_name.match_indices(major) {
-                let before_ok =
-                    i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
-                let after = i + major.len();
-                let after_ok = after >= pretty_name.len()
-                    || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
-                if before_ok && after_ok {
-                    return format!("({version_id})");
-                }
+    if let Some(major) = version_id.split('.').next()
+        && major != version_id
+    {
+        for (i, _) in pretty_name.match_indices(major) {
+            let before_ok =
+                i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+            let after = i + major.len();
+            let after_ok = after >= pretty_name.len()
+                || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return format!("({version_id})");
             }
         }
     }
+
     // No overlap at all
     version_id.to_string()
 }
