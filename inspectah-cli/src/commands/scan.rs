@@ -107,6 +107,14 @@ pub struct ScanArgs {
     /// Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)
     #[arg(long, value_name = "MODE")]
     pub progress: Option<crate::progress::ProgressMode>,
+
+    /// Show sub-step detail for all inspectors, including fast ones
+    #[arg(long, short, conflicts_with = "quiet")]
+    pub verbose: bool,
+
+    /// Suppress the scan progress checklist (completion summary still prints)
+    #[arg(long, short, conflicts_with = "verbose")]
+    pub quiet: bool,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -320,8 +328,16 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Box::new(NonRpmInspector::new()),
     ];
 
+    let verbosity = if args.quiet {
+        crate::progress::Verbosity::Quiet
+    } else if args.verbose {
+        crate::progress::Verbosity::Verbose
+    } else {
+        crate::progress::Verbosity::Normal
+    };
+
     let color = use_color();
-    let progress = TerminalProgress::new(mode, color);
+    let progress = TerminalProgress::new(mode, color, verbosity);
     let scan_start = std::time::Instant::now();
 
     // Install SIGINT handler so Ctrl-C exits cleanly with code 130.

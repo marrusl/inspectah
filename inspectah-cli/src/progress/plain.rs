@@ -61,7 +61,9 @@ impl PlainRenderer {
     ///
     /// When `use_color` is true, outcome symbols are wrapped in ANSI
     /// color codes.  When false, the same symbols are emitted plain.
-    pub fn new(writer: Box<dyn Write + Send>, use_color: bool) -> Self {
+    /// When `verbose` is true, all sub-steps are shown regardless of
+    /// any future fast-inspector optimizations.
+    pub fn new(writer: Box<dyn Write + Send>, use_color: bool, _verbose: bool) -> Self {
         Self {
             inner: Mutex::new(PlainState {
                 writer,
@@ -277,7 +279,7 @@ mod tests {
     fn test_renderer(use_color: bool) -> (PlainRenderer, Arc<Mutex<Vec<u8>>>) {
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = SharedWriter(Arc::clone(&buf));
-        let renderer = PlainRenderer::new(Box::new(writer), use_color);
+        let renderer = PlainRenderer::new(Box::new(writer), use_color, false);
         (renderer, buf)
     }
 

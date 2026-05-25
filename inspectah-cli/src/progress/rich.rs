@@ -560,10 +560,13 @@ pub struct RichRenderer {
 impl RichRenderer {
     /// Create a new rich renderer writing to `writer`.
     ///
+    /// When `verbose` is true, all sub-steps are shown regardless of
+    /// any future fast-inspector optimizations.
+    ///
     /// Spawns a background tick thread that redraws every ~100ms.
     /// Call [`finalize`] to stop the tick thread and print the final
     /// durable output.
-    pub fn new(writer: Box<dyn Write + Send>, use_color: bool, terminal_height: usize) -> Self {
+    pub fn new(writer: Box<dyn Write + Send>, use_color: bool, terminal_height: usize, _verbose: bool) -> Self {
         let state = Arc::new(Mutex::new(ChecklistState::new(use_color, terminal_height)));
         let writer = Arc::new(Mutex::new(writer));
         let stop_tick = Arc::new(AtomicBool::new(false));
