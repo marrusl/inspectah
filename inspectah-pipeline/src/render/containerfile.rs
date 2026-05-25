@@ -24,6 +24,24 @@ use inspectah_core::types::rpm::PackageEntry;
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 
+/// Emit a section header + body only when the body is non-empty.
+///
+/// This is the **sole** place that produces `# === ... ===` banners.
+/// Individual section functions compute their body lines and pass them
+/// through here — they never format the banner themselves.  This makes
+/// it structurally impossible to emit an empty section header.
+///
+/// A trailing blank line is appended automatically after the body.
+pub(crate) fn section(header: &str, body: Vec<String>) -> Vec<String> {
+    if body.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!("# === {} ===", header)];
+    lines.extend(body);
+    lines.push(String::new());
+    lines
+}
+
 /// Render the Containerfile content from a snapshot.
 ///
 /// When `materialized_roots` is provided, COPY lines are derived from the
@@ -225,15 +243,14 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         .filter(|r| r.include && !r.is_default_repo)
         .count();
     if included_repos > 0 {
-        lines.push(format!("# === Custom Repositories ({included_repos}) ==="));
-        lines.push("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into());
-        lines.push(String::new());
+        let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
+        lines.extend(section(&format!("Custom Repositories ({included_repos})"), body));
     }
 
     // GPG keys — batch standard-dir keys, per-key import for non-standard
     let included_gpg: Vec<_> = rpm.gpg_keys.iter().filter(|k| k.include).collect();
     if !included_gpg.is_empty() {
-        lines.push(format!("# === GPG Keys ({}) ===", included_gpg.len()));
+        let mut gpg_body: Vec<String> = Vec::new();
 
         const STANDARD_GPG_DIR: &str = "etc/pki/rpm-gpg";
 
@@ -247,14 +264,14 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         for key in &included_gpg {
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
-                lines.push(format!(
+                gpg_body.push(format!(
                     "# FIXME: GPG key path contains unsafe characters: {}",
                     super::safety::html_escape(&key.path)
                 ));
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
-                lines.push(format!(
+                gpg_body.push(format!(
                     "# FIXME: GPG key path unsafe for shell: {}",
                     super::safety::html_escape(&key.path)
                 ));
@@ -281,7 +298,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         // Standard-dir keys: single directory COPY, no rpm --import needed
         // (RPM automatically picks up keys in /etc/pki/rpm-gpg/)
         if !standard_keys.is_empty() {
-            lines.push(format!(
+            gpg_body.push(format!(
                 "COPY config/{STANDARD_GPG_DIR}/ /{STANDARD_GPG_DIR}/"
             ));
         }
@@ -289,8 +306,8 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         // Non-standard directory keys: COPY parent dir + per-key rpm --import
         for dir in &nonstandard_dirs {
             match super::safety::sanitize_shell_value(dir) {
-                Some(safe) => lines.push(format!("COPY config/{safe}/ /{safe}/")),
-                None => lines.push(format!(
+                Some(safe) => gpg_body.push(format!("COPY config/{safe}/ /{safe}/")),
+                None => gpg_body.push(format!(
                     "# FIXME: GPG directory path contains unsafe characters: {}",
                     super::safety::html_escape(dir)
                 )),
@@ -300,14 +317,14 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         // COPY root-level keys directly (no parent directory)
         for key in &root_keys {
             let rel = key.path.trim_start_matches('/');
-            lines.push(format!("COPY config/{rel} {}", key.path));
+            gpg_body.push(format!("COPY config/{rel} {}", key.path));
         }
 
         // rpm --import only for non-standard keys (standard-dir keys are auto-imported)
         for key in &nonstandard_keys {
-            lines.push(format!("RUN rpm --import {}", key.path));
+            gpg_body.push(format!("RUN rpm --import {}", key.path));
         }
-        lines.push(String::new());
+        lines.extend(section(&format!("GPG Keys ({})", included_gpg.len()), gpg_body));
     }
 
     // Module streams
@@ -317,13 +334,13 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         .filter(|ms| ms.include && !ms.baseline_match)
         .collect();
     if !enabled_modules.is_empty() {
-        lines.push("# === Module Streams ===".into());
+        let mut mod_body: Vec<String> = Vec::new();
         for ms in &enabled_modules {
             // Sanitize all host-derived values before shell interpolation
             if sanitize_shell_value(&ms.module_name).is_none()
                 || sanitize_shell_value(&ms.stream).is_none()
             {
-                lines.push(format!(
+                mod_body.push(format!(
                     "# FIXME: module stream contains unsafe characters, skipped: {:?}:{:?}",
                     ms.module_name, ms.stream
                 ));
@@ -339,7 +356,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
                     .filter_map(|p| sanitize_shell_value(p))
                     .collect();
                 if safe_profiles.len() != ms.profiles.len() {
-                    lines.push(format!(
+                    mod_body.push(format!(
                         "# FIXME: module profile contains unsafe characters, skipped: {:?}",
                         ms.profiles
                     ));
@@ -347,12 +364,12 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
                 }
                 format!("/{}", safe_profiles.join(","))
             };
-            lines.push(format!(
+            mod_body.push(format!(
                 "RUN dnf module enable -y {}:{}{}",
                 ms.module_name, ms.stream, profiles
             ));
         }
-        lines.push(String::new());
+        lines.extend(section("Module Streams", mod_body));
     }
 
     // Packages
@@ -408,26 +425,24 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
 
     if !install_names.is_empty() {
         install_names.sort();
-        lines.push(format!("# === Packages ({}) ===", install_names.len()));
-        lines.push("RUN dnf install -y \\".into());
+        let mut pkg_body: Vec<String> = Vec::new();
+        pkg_body.push("RUN dnf install -y \\".into());
         for name in &install_names {
-            lines.push(format!("    {} \\", name));
+            pkg_body.push(format!("    {} \\", name));
         }
-        lines.push("    && dnf clean all \\".into());
-        lines.push("    && rm -rf \\".into());
-        lines.push("        /var/cache/dnf \\".into());
-        lines.push("        /var/lib/dnf/history* \\".into());
-        lines.push("        /var/log/dnf* \\".into());
-        lines.push("        /var/log/hawkey.log \\".into());
-        lines.push("        /var/log/rhsm".into());
-        lines.push(String::new());
+        pkg_body.push("    && dnf clean all \\".into());
+        pkg_body.push("    && rm -rf \\".into());
+        pkg_body.push("        /var/cache/dnf \\".into());
+        pkg_body.push("        /var/lib/dnf/history* \\".into());
+        pkg_body.push("        /var/log/dnf* \\".into());
+        pkg_body.push("        /var/log/hawkey.log \\".into());
+        pkg_body.push("        /var/log/rhsm".into());
+        lines.extend(section(&format!("Packages ({})", install_names.len()), pkg_body));
     }
 
     if !todo_lines.is_empty() {
         lines.push(String::new());
-        lines.push("# === Manual Follow-up Required ===".into());
-        lines.extend(todo_lines);
-        lines.push(String::new());
+        lines.extend(section("Manual Follow-up Required", todo_lines));
     }
 
     // Version locks
@@ -443,13 +458,13 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
             }
         }
         if !safe_locks.is_empty() {
-            lines.push("# === Version Locks ===".into());
-            lines.push("RUN dnf install -y python3-dnf-plugin-versionlock && \\".into());
+            let mut vl_body: Vec<String> = Vec::new();
+            vl_body.push("RUN dnf install -y python3-dnf-plugin-versionlock && \\".into());
             for vl in &safe_locks {
-                lines.push(format!("    dnf versionlock add {} && \\", vl.raw_pattern));
+                vl_body.push(format!("    dnf versionlock add {} && \\", vl.raw_pattern));
             }
-            lines.push("    dnf clean all".into());
-            lines.push(String::new());
+            vl_body.push("    dnf clean all".into());
+            lines.extend(section("Version Locks", vl_body));
         }
         for vl in &unsafe_locks {
             lines.push(format!(
@@ -469,14 +484,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
 
 fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let plan = render_service_intent(snap);
-    if plan.lines.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = vec!["# === Service Enablement ===".into()];
-    lines.extend(plan.lines);
-    lines.push(String::new());
-    lines
+    section("Service Enablement", plan.lines)
 }
 
 // --- Network section ---
@@ -491,42 +499,46 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
     if firewall_only {
         let included_zones: usize = network.firewall_zones.iter().filter(|z| z.include).count();
         if included_zones > 0 || !network.firewall_direct_rules.is_empty() {
-            lines.push("# === Firewall Configuration ===".into());
+            let mut fw_body: Vec<String> = Vec::new();
             if included_zones > 0 {
-                lines.push(format!(
+                fw_body.push(format!(
                     "# {} custom firewall zone(s) — included in COPY config/etc/ below",
                     included_zones
                 ));
             }
-            lines.push(String::new());
+            lines.extend(section("Firewall Configuration", fw_body));
         }
         return lines;
     }
 
     // Non-firewall network config
-    if !network.static_routes.is_empty() {
-        lines.push("# === Static Routes ===".into());
-        for r in &network.static_routes {
-            lines.push(format!("# Static route file: {}", r.path));
-        }
-        lines.push(String::new());
+    {
+        let body: Vec<String> = network
+            .static_routes
+            .iter()
+            .map(|r| format!("# Static route file: {}", r.path))
+            .collect();
+        lines.extend(section("Static Routes", body));
     }
 
-    if !network.hosts_additions.is_empty() {
-        lines.push("# === /etc/hosts Additions ===".into());
-        lines.push("# FIXME: These /etc/hosts entries need to be added to the image:".into());
-        for h in &network.hosts_additions {
-            lines.push(format!("#   {}", h));
+    {
+        let mut body: Vec<String> = Vec::new();
+        if !network.hosts_additions.is_empty() {
+            body.push("# FIXME: These /etc/hosts entries need to be added to the image:".into());
+            for h in &network.hosts_additions {
+                body.push(format!("#   {}", h));
+            }
         }
-        lines.push(String::new());
+        lines.extend(section("/etc/hosts Additions", body));
     }
 
-    if !network.proxy.is_empty() {
-        lines.push("# === Proxy Configuration ===".into());
-        for p in &network.proxy {
-            lines.push(format!("# {}: {}", p.source, p.line));
-        }
-        lines.push(String::new());
+    {
+        let body: Vec<String> = network
+            .proxy
+            .iter()
+            .map(|p| format!("# {}: {}", p.source, p.line))
+            .collect();
+        lines.extend(section("Proxy Configuration", body));
     }
 
     lines
@@ -535,11 +547,9 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
 // --- Scheduled Tasks section ---
 
 fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-
     let st = match &snap.scheduled_tasks {
         Some(s) => s,
-        None => return lines,
+        None => return Vec::new(),
     };
 
     let local_timers: Vec<_> = st
@@ -558,13 +568,13 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         || !included_timers.is_empty()
         || !st.at_jobs.is_empty();
     if !has_content {
-        return lines;
+        return Vec::new();
     }
 
-    lines.push("# === Scheduled Tasks ===".into());
+    let mut body = Vec::new();
 
     if !local_timers.is_empty() || !included_timers.is_empty() {
-        lines.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
+        body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
     if !local_timers.is_empty() {
@@ -572,7 +582,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             .iter()
             .map(|t| format!("{}.timer", t.name))
             .collect();
-        lines.push(format!(
+        body.push(format!(
             "# Existing local timers ({}): {}",
             local_timers.len(),
             names.join(", ")
@@ -585,7 +595,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             .filter(|u| !u.name.is_empty())
             .map(|u| u.name.clone())
             .collect();
-        lines.push(format!(
+        body.push(format!(
             "# Converted from cron: {} timer(s): {}",
             included_timers.len(),
             names.join(", ")
@@ -599,7 +609,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         if sanitize_shell_value(&unit).is_some() {
             timer_names.push(unit);
         } else {
-            lines.push(format!(
+            body.push(format!(
                 "# FIXME: Timer unit name contains unsafe characters: {}",
                 t.name
             ));
@@ -619,7 +629,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 if sanitize_shell_value(&unit).is_some() {
                     timer_names.push(unit);
                 } else {
-                    lines.push(format!(
+                    body.push(format!(
                         "# FIXME: Timer unit name contains unsafe characters: {}",
                         u.name
                     ));
@@ -628,28 +638,27 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
     if !timer_names.is_empty() {
-        lines.push(format!("RUN systemctl enable {}", timer_names.join(" ")));
+        body.push(format!("RUN systemctl enable {}", timer_names.join(" ")));
     }
     if !reboot_service_names.is_empty() {
-        lines.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
-        lines.push(format!(
+        body.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
+        body.push(format!(
             "RUN systemctl enable {}",
             reboot_service_names.join(" ")
         ));
     }
 
     if !st.at_jobs.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# FIXME: {} at job(s) found — convert to systemd timers or cron",
             st.at_jobs.len()
         ));
         for a in &st.at_jobs {
-            lines.push(format!("#   at job: {}", a.command));
+            body.push(format!("#   at job: {}", a.command));
         }
     }
 
-    lines.push(String::new());
-    lines
+    section("Scheduled Tasks", body)
 }
 
 // --- Config section ---
@@ -675,29 +684,31 @@ fn config_section_lines(
             .is_some_and(|c| c.files.iter().any(|f| f.include));
 
     if has_config_content {
-        lines.push("# === Configuration Files ===".into());
+        let mut cfg_body: Vec<String> = Vec::new();
 
         // Config inventory comment
         if let Some(config) = &snap.config {
             let total = config.files.iter().filter(|f| f.include).count();
             if total > 0 {
-                lines.push(format!("# {} config file(s) captured", total));
+                cfg_body.push(format!("# {} config file(s) captured", total));
             }
 
             let has_diffs = config.files.iter().any(|f| f.diff_against_rpm.is_some());
             if has_diffs {
-                lines.push(
+                cfg_body.push(
                     "# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs."
                         .into(),
                 );
             }
         }
-        lines.push(String::new());
+        if !cfg_body.is_empty() {
+            cfg_body.push(String::new());
+        }
 
         for root in &config_roots {
-            lines.push(format!("COPY config/{root}/ /{root}/"));
+            cfg_body.push(format!("COPY config/{root}/ /{root}/"));
         }
-        lines.push(String::new());
+        lines.extend(section("Configuration Files", cfg_body));
     }
 
     // CA trust anchors
@@ -709,12 +720,11 @@ fn config_section_lines(
                     .starts_with("etc/pki/ca-trust/source/anchors/")
         });
         if has_ca {
-            lines.push("# === CA Trust Store ===".into());
-            lines.push(
+            let ca_body = vec![
                 "# Custom CA certificates detected in /etc/pki/ca-trust/source/anchors/".into(),
-            );
-            lines.push("RUN update-ca-trust".into());
-            lines.push(String::new());
+                "RUN update-ca-trust".into(),
+            ];
+            lines.extend(section("CA Trust Store", ca_body));
         }
     }
 
@@ -807,21 +817,21 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         return lines;
     }
 
-    lines.push("# === Container Workloads ===".into());
+    let mut body: Vec<String> = Vec::new();
     if included_quadlets > 0 {
-        lines.push("COPY quadlet/ /etc/containers/systemd/".into());
+        body.push("COPY quadlet/ /etc/containers/systemd/".into());
     }
     if included_flatpaks > 0 {
-        lines.push("# Flatpak applications — installed on first boot via oneshot service".into());
-        lines.push("# Manifest: flatpak/flatpak-install.json".into());
-        lines.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
-        lines.push(
+        body.push("# Flatpak applications — installed on first boot via oneshot service".into());
+        body.push("# Manifest: flatpak/flatpak-install.json".into());
+        body.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
+        body.push(
             "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
                 .into(),
         );
-        lines.push("RUN systemctl enable flatpak-provision.service".into());
+        body.push("RUN systemctl enable flatpak-provision.service".into());
     }
-    lines.push(String::new());
+    lines.extend(section("Container Workloads", body));
     lines
 }
 
@@ -844,12 +854,12 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         return lines;
     }
 
-    lines.push("# === Non-RPM Software (migration planned) ===".into());
-    lines.push(
+    let mut body: Vec<String> = Vec::new();
+    body.push(
         "# WARNING: These stubs are advisory — source files are NOT in the build context.".into(),
     );
-    lines.push("# You must manually stage each referenced file/package before building.".into());
-    lines.push("#".into());
+    body.push("# You must manually stage each referenced file/package before building.".into());
+    body.push("#".into());
 
     for item in &migration_items {
         let note = if item.notes.is_empty() {
@@ -859,22 +869,22 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         };
 
         if item.method == "pip dist-info" && item.has_c_extensions {
-            lines.push(format!(
+            body.push(format!(
                 "# {}=={} — pip package with native extensions, rebuild required{}",
                 item.name, item.version, note
             ));
         } else if item.method == "pip dist-info" {
-            lines.push(format!(
+            body.push(format!(
                 "# {}=={} — pip package{}",
                 item.name, item.version, note
             ));
-            lines.push(format!("# RUN pip install {}=={}", item.name, item.version));
+            body.push(format!("# RUN pip install {}=={}", item.name, item.version));
         } else if (item.lang == "go" || item.method == "go binary") && item.r#static {
             let dest = std::path::Path::new(&item.path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            lines.push(format!(
+            body.push(format!(
                 "# COPY {} /usr/local/bin/{}{}",
                 item.path, dest, note
             ));
@@ -883,35 +893,35 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            lines.push(format!(
+            body.push(format!(
                 "# COPY {} /usr/local/bin/{}{}",
                 item.path, dest, note
             ));
         } else if !item.shared_libs.is_empty() {
-            lines.push(format!(
+            body.push(format!(
                 "# {} — dynamic binary, shared libs: {}{}",
                 item.path,
                 item.shared_libs.join(", "),
                 note
             ));
-            lines.push("# Dependency analysis required before COPY".into());
+            body.push("# Dependency analysis required before COPY".into());
         } else if item.r#static {
             let dest = std::path::Path::new(&item.path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            lines.push(format!(
+            body.push(format!(
                 "# COPY {} /usr/local/bin/{}{}",
                 item.path, dest, note
             ));
         } else {
-            lines.push(format!(
+            body.push(format!(
                 "# {} ({}) — review required for migration{}",
                 item.path, item.method, note
             ));
         }
     }
-    lines.push(String::new());
+    lines.extend(section("Non-RPM Software (migration planned)", body));
     lines
 }
 
@@ -932,7 +942,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // Kernel arguments
     let safe_kargs = operator_kargs(&kb.cmdline);
     if !safe_kargs.is_empty() {
-        body.push("# === Kernel Arguments (bootc-native kargs.d) ===".into());
+        body.push("# Kernel Arguments (bootc-native kargs.d)".into());
         body.push(
             "# These are applied at install and honored across image upgrades. See bootc documentation:"
                 .into(),
@@ -981,14 +991,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
 
-    if body.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = vec!["# === Kernel and Boot Configuration ===".into()];
-    lines.extend(body);
-    lines.push(String::new());
-    lines
+    section("Kernel and Boot Configuration", body)
 }
 
 // --- Security & Access Control section ---
@@ -1115,14 +1118,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         );
     }
 
-    if body.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = vec!["# === Security & Access Control ===".into()];
-    lines.extend(body);
-    lines.push(String::new());
-    lines
+    section("Security & Access Control", body)
 }
 
 // --- Secrets comment lines ---
@@ -1148,28 +1144,26 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut lines = Vec::new();
     if !excluded.is_empty() {
-        lines.push("# === Secrets: Excluded Files ===".into());
-        lines.push(format!(
+        let mut body = vec![format!(
             "# {} file(s) excluded from the image for security:",
             excluded.len()
-        ));
+        )];
         for f in &excluded {
-            lines.push(format!("#   {} ({})", f.path, f.remediation));
+            body.push(format!("#   {} ({})", f.path, f.remediation));
         }
-        lines.push("# See secrets-review.md for details and remediation steps.".into());
-        lines.push(String::new());
+        body.push("# See secrets-review.md for details and remediation steps.".into());
+        lines.extend(section("Secrets: Excluded Files", body));
     }
     if !flagged.is_empty() {
-        lines.push("# === Secrets: Flagged for Review ===".into());
-        lines.push(format!(
+        let mut body = vec![format!(
             "# {} file(s) flagged for manual review:",
             flagged.len()
-        ));
+        )];
         for f in &flagged {
-            lines.push(format!("#   {}", f.path));
+            body.push(format!("#   {}", f.path));
         }
-        lines.push("# See secrets-review.md for details.".into());
-        lines.push(String::new());
+        body.push("# See secrets-review.md for details.".into());
+        lines.extend(section("Secrets: Flagged for Review", body));
     }
     lines
 }
@@ -1184,10 +1178,10 @@ fn tmpfiles_lines() -> Vec<String> {
 }
 
 fn validate_lines() -> Vec<String> {
-    vec![
-        "# === Validate bootc compatibility ===".into(),
-        "RUN bootc container lint".into(),
-    ]
+    section(
+        "Validate bootc compatibility",
+        vec!["RUN bootc container lint".into()],
+    )
 }
 
 #[cfg(test)]
