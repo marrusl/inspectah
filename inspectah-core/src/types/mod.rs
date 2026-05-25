@@ -9,6 +9,7 @@ pub mod os;
 pub mod preflight;
 pub mod progress;
 pub mod redaction;
+pub mod repo;
 pub mod rpm;
 pub mod scheduled;
 pub mod selinux;

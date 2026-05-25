@@ -935,8 +935,12 @@ pub fn merge_rpm_sections(
     };
 
     // Detect repo-source conflicts: packages installed from different repos
-    // across the fleet. Only tracks conflicts (2+ distinct repos).
+    // across the fleet. Only tracks conflicts when repos span different tiers
+    // (e.g., epel vs baseos). Same-tier differences (e.g., anaconda vs baseos)
+    // are not meaningful conflicts.
     let repo_conflicts = {
+        use crate::types::repo::repo_tier;
+
         let mut conflicts: HashMap<String, Vec<RepoSourceEntry>> = HashMap::new();
         for pkg in &packages_added {
             let key = format!("{}.{}", pkg.name, pkg.arch);
@@ -954,6 +958,14 @@ pub fn merge_rpm_sections(
                 }
             }
             if repo_counts.len() >= 2 {
+                // Check if all repos map to the same tier -- if so, skip.
+                let tiers: HashSet<_> = repo_counts
+                    .keys()
+                    .map(|r| std::mem::discriminant(&repo_tier(r)))
+                    .collect();
+                if tiers.len() < 2 {
+                    continue;
+                }
                 let mut entries: Vec<RepoSourceEntry> = repo_counts
                     .into_iter()
                     .map(|(repo, host_count)| RepoSourceEntry { repo, host_count })
@@ -1797,6 +1809,97 @@ mod tests {
         assert_eq!(conflict[0].host_count, 1);
         assert_eq!(conflict[1].repo, "epel");
         assert_eq!(conflict[1].host_count, 1);
+    }
+
+    #[test]
+    fn test_same_tier_repos_not_counted_as_conflict() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        // anaconda and baseos are both Distro tier -- no real conflict.
+        let sections = vec![
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "anaconda".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "baseos".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "baseos".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ];
+
+        let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+        let (_, conflicts) =
+            merge_rpm_sections(sections, 3, &hostnames, None).expect("merge should succeed");
+
+        assert!(
+            !conflicts.contains_key("bash.x86_64"),
+            "same-tier repos (anaconda vs baseos) should not be counted as conflict"
+        );
+    }
+
+    #[test]
+    fn test_cross_tier_repos_counted_as_conflict() {
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        // baseos (Distro) vs epel (ThirdParty) is a real conflict.
+        let sections = vec![
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "baseos".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    source_repo: "epel".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ];
+
+        let hostnames = vec!["host-a".into(), "host-b".into()];
+        let (_, conflicts) =
+            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+
+        assert!(
+            conflicts.contains_key("nginx.x86_64"),
+            "cross-tier repos (baseos vs epel) should be counted as conflict"
+        );
     }
 
     /// Regression: when the majority repo is split across multiple payload

@@ -1,22 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::repo;
 
 use crate::types::{RepoProvenance, RepoTier};
 
-/// Repo section IDs considered part of the base distribution.
-pub const DISTRO_REPOS: &[&str] = &[
-    "baseos",
-    "appstream",
-    "fedora",
-    "updates",
-    "updates-testing",
-    "extras",
-    "anaconda",
-];
-
-/// Red Hat repos that are official but user-toggleable (not part of the base image).
-pub const OFFICIAL_OPTIONAL_REPOS: &[&str] = &["crb", "codeready-builder", "rhel-extensions"];
+/// Re-export from core for backward compatibility.
+pub use repo::DISTRO_REPOS;
+/// Re-export from core for backward compatibility.
+pub use repo::OFFICIAL_OPTIONAL_REPOS;
 
 /// A parsed INI section from a repo file.
 struct RepoSection {
@@ -141,23 +133,13 @@ impl RepoIndex {
 
     /// Classify a repo section ID into its tier.
     ///
-    /// Empty or missing section IDs return `Unknown` — "no repo identity"
-    /// is distinct from "known third-party repo."
+    /// Delegates to the canonical implementation in `inspectah_core::types::repo`.
     pub fn repo_tier(section_id: &str) -> RepoTier {
-        if section_id.is_empty() {
-            return RepoTier::Unknown;
-        }
-        let lower = section_id.to_lowercase();
-        let id = lower.as_str();
-        if id == "@commandline" {
-            return RepoTier::Unknown;
-        }
-        if DISTRO_REPOS.contains(&id) {
-            RepoTier::Distro
-        } else if OFFICIAL_OPTIONAL_REPOS.contains(&id) {
-            RepoTier::OfficialOptional
-        } else {
-            RepoTier::ThirdParty
+        match repo::repo_tier(section_id) {
+            repo::RepoTier::Distro => RepoTier::Distro,
+            repo::RepoTier::OfficialOptional => RepoTier::OfficialOptional,
+            repo::RepoTier::ThirdParty => RepoTier::ThirdParty,
+            repo::RepoTier::Unknown => RepoTier::Unknown,
         }
     }
 }
