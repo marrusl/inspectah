@@ -409,23 +409,17 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
     if !install_names.is_empty() {
         install_names.sort();
         lines.push(format!("# === Packages ({}) ===", install_names.len()));
-        let dnf_suffix = " && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm";
-        if install_names.len() <= 10 {
-            lines.push(format!(
-                "RUN dnf install -y {}{}",
-                install_names.join(" "),
-                dnf_suffix
-            ));
-        } else {
-            lines.push("RUN dnf install -y \\".into());
-            for name in &install_names {
-                lines.push(format!("    {} \\", name));
-            }
-            lines.push(format!(
-                "    {}",
-                dnf_suffix.trim_start_matches(" && ").replace("&& ", "")
-            ));
+        lines.push("RUN dnf install -y \\".into());
+        for name in &install_names {
+            lines.push(format!("    {} \\", name));
         }
+        lines.push("    && dnf clean all \\".into());
+        lines.push("    && rm -rf \\".into());
+        lines.push("    /var/cache/dnf \\".into());
+        lines.push("    /var/lib/dnf/history* \\".into());
+        lines.push("    /var/log/dnf* \\".into());
+        lines.push("    /var/log/hawkey.log \\".into());
+        lines.push("    /var/log/rhsm".into());
         lines.push(String::new());
     }
 
@@ -1238,11 +1232,15 @@ mod tests {
             "must omit FROM when no base image source"
         );
         assert!(
-            output.contains("RUN dnf install -y"),
-            "must contain dnf install"
+            output.contains("RUN dnf install -y \\"),
+            "must contain dnf install with continuation"
         );
         assert!(output.contains("httpd"), "must contain httpd");
         assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
+        assert!(
+            output.contains("&& dnf clean all"),
+            "must contain cleanup commands"
+        );
     }
 
     #[test]
@@ -1273,24 +1271,19 @@ mod tests {
         });
 
         let output = render_containerfile(&snap, None);
-        let install_line = output
-            .lines()
-            .find(|line| line.starts_with("RUN dnf install -y"))
-            .expect("install line must be present");
 
+        // Packages are now one-per-line; check the indented package lines
         assert!(
-            install_line
-                .split_whitespace()
-                .any(|token| token == "httpd"),
-            "install line must render package names, got: {install_line}"
+            output.lines().any(|line| line.trim().starts_with("httpd")),
+            "must render httpd as a package line"
         );
         assert!(
-            !install_line.contains("httpd.x86_64"),
-            "install line must not leak canonical leaf identity, got: {install_line}"
+            !output.contains("httpd.x86_64"),
+            "must not leak canonical leaf identity"
         );
         assert!(
-            !install_line.contains("httpd.i686"),
-            "install line must not install the non-leaf arch, got: {install_line}"
+            !output.contains("httpd.i686"),
+            "must not install the non-leaf arch"
         );
     }
 
@@ -1342,20 +1335,23 @@ mod tests {
         });
 
         let output = render_containerfile(&snap, None);
-        let install_line = output
+
+        // Packages are now one-per-line; collect indented package lines
+        let pkg_lines: Vec<&str> = output
             .lines()
-            .find(|line| line.starts_with("RUN dnf install -y"))
-            .expect("install line must be present");
+            .filter(|l| l.starts_with("    ") && !l.contains("&&") && !l.starts_with("    /"))
+            .collect();
+        let pkg_text = pkg_lines.join(" ");
 
         assert!(
-            install_line.contains("httpd"),
-            "leaf package must stay on the install line, got: {install_line}"
+            pkg_text.contains("httpd"),
+            "leaf package must appear in install block"
         );
         assert!(
-            !install_line.contains("local-tool")
-                && !install_line.contains("orphan-pkg")
-                && !install_line.contains("mystery"),
-            "non-leaf unresolved packages must stay off the install line, got: {install_line}"
+            !pkg_text.contains("local-tool")
+                && !pkg_text.contains("orphan-pkg")
+                && !pkg_text.contains("mystery"),
+            "non-leaf unresolved packages must stay off the install block"
         );
         assert!(
             output.contains("# === Manual Follow-up Required ==="),
@@ -1396,7 +1392,7 @@ mod tests {
         let output = render_containerfile(&snap, None);
 
         // Verify section order: packages before services before selinux before epilogue
-        let packages_pos = output.find("dnf install").unwrap();
+        let packages_pos = output.find("dnf install -y").unwrap();
         let services_pos = output.find("Service Enablement").unwrap();
         let selinux_pos = output.find("Security & Access Control").unwrap();
         let epilogue_pos = output.find("bootc container lint").unwrap();
@@ -1435,10 +1431,11 @@ mod tests {
 
     #[test]
     fn test_containerfile_custom_base_image() {
+        use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
         let mut snap = InspectionSnapshot::new();
-        snap.rpm = Some(RpmSection {
-            base_image: Some("quay.io/custom/image:latest".into()),
-            ..Default::default()
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "quay.io/custom/image:latest".into(),
+            strategy: ResolutionStrategy::CliOverride,
         });
         let output = render_containerfile(&snap, None);
         assert!(output.contains("FROM quay.io/custom/image:latest"));
@@ -1514,8 +1511,8 @@ mod tests {
         let snap = snapshot_with_packages(&["safe-pkg", "bad;pkg"]);
         let output = render_containerfile(&snap, None);
         assert!(output.contains("safe-pkg"));
-        // The unsafe package should not appear in a RUN command
-        assert!(!output.contains("RUN dnf install -y bad;pkg"));
+        // The unsafe package should not appear anywhere in the install block
+        assert!(!output.contains("bad;pkg"));
     }
 
     #[test]
