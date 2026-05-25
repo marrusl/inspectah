@@ -6,6 +6,7 @@
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::scheduled::ScheduledTaskSection;
@@ -92,7 +93,7 @@ fn test_scheduled_inspector_happy_path() {
     };
 
     let output = ScheduledTasksInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("scheduled inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -182,7 +183,7 @@ fn test_scheduled_inspector_cron_not_found() {
     };
 
     let output = ScheduledTasksInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed even with no cron dirs");
 
     let section = match &output.section {
@@ -214,7 +215,7 @@ fn test_scheduled_inspector_degraded_permissions() {
         baseline_data: None,
     };
 
-    let result = ScheduledTasksInspector::new().inspect(&ctx);
+    let result = ScheduledTasksInspector::new().inspect(&ctx, &NullProgress);
 
     // The inspector should return Ok with warnings, or the warnings
     // should mention degraded/permission issues. The exact behavior
@@ -265,7 +266,7 @@ fn test_reboot_entry_no_fake_timer() {
     };
 
     let output = ScheduledTasksInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed");
 
     let section = match &output.section {
@@ -334,7 +335,7 @@ fn test_scheduled_inspector_json_roundtrip() {
     };
 
     let output = ScheduledTasksInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed");
 
     let section = match &output.section {

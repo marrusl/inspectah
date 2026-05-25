@@ -1,4 +1,5 @@
 use crate::baseline::BaselineData;
+use crate::traits::progress::ProgressSink;
 use crate::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use crate::types::redaction::RedactionHint;
 use crate::types::rpm::{EnabledModuleStream, PackageEntry, RpmVaEntry};
@@ -11,7 +12,11 @@ use std::path::{Path, PathBuf};
 pub trait Inspector: Send + Sync {
     fn id(&self) -> InspectorId;
     fn applicable_to(&self) -> &[SourceSystemKind];
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError>;
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError>;
 }
 
 /// Borrowed references into executor + source system state.

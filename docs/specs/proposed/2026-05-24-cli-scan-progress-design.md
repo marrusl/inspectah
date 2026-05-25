@@ -1,6 +1,6 @@
 # CLI Scan Progress UX — Design Spec
 
-**Status:** Approved (revision 5, approved 2026-05-24)
+**Status:** Approved (revision 6, approved 2026-05-24)
 **Date:** 2026-05-24
 **ROADMAP ref:** "CLI UX: Scan Progress Reporting (MEDIUM)", "CLI UX: Baseline Pull Viewport Height (LOW)"
 
@@ -111,8 +111,9 @@ Multiple spinners active at once. Items complete out of display order.
 - **Failed:** `✗` prefix. Inspector was expected to work but errored.
   The capability exists on the host but the inspector could not collect
   data. Example: `✗ Containers  failed: podman returned error`
-- **Interrupted:** `■` prefix. User sent SIGINT during the scan. All
-  active and pending items show interrupted state.
+SIGINT does not produce an interrupted visual state. The checklist is
+left as-is and the cancellation message prints below it. See the
+SIGINT handling section for details.
 
 Sub-steps within expanded inspectors use the same state symbols.
 
@@ -419,13 +420,20 @@ No report path. No refine hint. Exit code 1 (hard error).
 
 ### Interrupted scan (SIGINT)
 
-All active and pending items transition to interrupted state. The
-completion block reflects what was collected before interruption:
+Ctrl-C means the user cancelled the run. This is an exit, not a
+state to render.
+
+- No tarball or report is written
+- No partial counts or interrupted-state checklist rendering
+- Rich mode: leave the in-progress checklist as-is on screen
+- Print one line below whatever is displayed:
 
 ```
-Scan interrupted after 6.3s — 847 packages (partial)
-No report written.
+Scan cancelled. No report written.
 ```
+
+- Same behavior across all three rendering modes — one code path
+- Exit code 130
 
 ## 5. Exit Codes
 
@@ -632,31 +640,20 @@ handler. `collect()` does not install signal handlers.
 
 **Mechanism:** The CLI installs a SIGINT handler before calling
 `collect()` that sets an `Arc<AtomicBool>` flag. The flag is passed
-to `collect()` as a cancellation token. `collect()` checks the flag:
-- Between wave-1 and wave-2: if set, skip wave-2 entirely.
-- Before each inspector launch within a wave: if set, skip launch.
-- After joining each thread in a wave: results from threads that
-  completed before the flag was set are kept. Results from threads
-  still running when the flag was set are joined and discarded.
+to `collect()` as a cancellation token. `collect()` checks the flag
+between wave-1 and wave-2 (skip wave-2 if set) and before each
+inspector launch within a wave.
 
-**Cutoff policy:** Deterministic join-time check. `collect()` joins
-wave-2 handles sequentially. After each `join()` returns, it checks
-the cancellation flag. If the flag is set, the result is discarded
-regardless of whether the thread finished before or after the signal.
-Results from handles already joined before the flag was set are kept.
+**Behavior on SIGINT:** Ctrl-C is a cancellation, not a partial
+completion. When `collect()` returns and the flag is set:
+1. No tarball or report is written
+2. No progress events are synthesized for skipped inspectors
+3. `eprintln!("Scan cancelled. No report written.")`
+4. Exit 130
 
-This means 1-2 already-complete fast inspectors may be discarded if
-their `join()` happens to be reached after the signal. This is
-acceptable for a user-interrupt path — the user hit Ctrl-C and
-expects incomplete output.
-
-If the flag is set between wave-1 and wave-2, wave-2 is skipped
-entirely.
-
-**Event emission on SIGINT:** After `collect()` returns, the CLI
-emits `InspectorFinished { outcome: Interrupted }` for all
-inspectors that were not started or whose results were discarded.
-This is a CLI-layer concern, not a collector concern.
+No partial counts, no interrupted-state rendering, no child-row
+reconciliation. The in-progress checklist is left as-is on screen.
+Same behavior across all rendering modes.
 
 Progress events are the ephemeral display channel. Outcomes are also
 recorded durably in `snapshot.completeness` — the exit code is

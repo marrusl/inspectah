@@ -4,6 +4,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -63,7 +64,9 @@ fn happy_path() {
         baseline_data: None,
     };
 
-    let output = StorageInspector::new().inspect(&ctx).unwrap();
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Storage(s) => s,
         other => panic!("expected SectionData::Storage, got {:?}", other),
@@ -119,7 +122,9 @@ fn credential_detection() {
         baseline_data: None,
     };
 
-    let output = StorageInspector::new().inspect(&ctx).unwrap();
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Storage(s) => s,
         other => panic!("expected SectionData::Storage, got {:?}", other),
@@ -166,7 +171,7 @@ fn findmnt_failure_returns_degraded() {
         baseline_data: None,
     };
 
-    let result = StorageInspector::new().inspect(&ctx);
+    let result = StorageInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -211,7 +216,7 @@ fn malformed_findmnt_json() {
         baseline_data: None,
     };
 
-    let result = StorageInspector::new().inspect(&ctx);
+    let result = StorageInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -245,7 +250,7 @@ fn fstab_unreadable_returns_failed() {
         baseline_data: None,
     };
 
-    let result = StorageInspector::new().inspect(&ctx);
+    let result = StorageInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Failed { reason }) => {
             assert!(
@@ -281,7 +286,9 @@ fn lvm_not_available() {
         baseline_data: None,
     };
 
-    let output = StorageInspector::new().inspect(&ctx).unwrap();
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Storage(s) => s,
         other => panic!("expected SectionData::Storage, got {:?}", other),
@@ -317,7 +324,9 @@ fn empty_fstab() {
         baseline_data: None,
     };
 
-    let output = StorageInspector::new().inspect(&ctx).unwrap();
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Storage(s) => s,
         other => panic!("expected SectionData::Storage, got {:?}", other),
@@ -350,7 +359,9 @@ fn storage_snapshot() {
         baseline_data: None,
     };
 
-    let output = StorageInspector::new().inspect(&ctx).unwrap();
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
     let section = match &output.section {
         SectionData::Storage(s) => s,
         other => panic!("expected SectionData::Storage, got {:?}", other),

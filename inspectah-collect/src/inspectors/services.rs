@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::services::{
@@ -210,7 +211,11 @@ impl Inspector for ServicesInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
 
         // 1. Run systemctl list-unit-files
@@ -376,6 +381,13 @@ impl Inspector for ServicesInspector {
 
         // 4b. Resolve owning packages for state_changes entries.
         populate_owning_packages(exec, &mut state_changes);
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::Services,
+            kind: inspectah_core::types::progress::MetricKind::UnitsFound,
+            value: state_changes.len(),
+        });
 
         // 5. Scan drop-in directories
         let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
@@ -739,6 +751,7 @@ mod tests {
 
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
 
@@ -792,7 +805,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, partial }) => {
                 assert!(
@@ -842,7 +855,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, partial }) => {
                 assert!(
@@ -878,7 +891,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -928,7 +941,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -977,7 +990,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         assert!(
             result.is_ok(),
             "/etc/systemd/system-preset NotFound must NOT degrade, got: {result:?}"
@@ -1002,7 +1015,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, .. }) => {
                 assert!(
@@ -1089,7 +1102,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             // httpd should be captured (operator enabled a preset-disabled service)
             assert!(
@@ -1145,7 +1158,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             // sshd matches preset — should not be in state_changes
             assert!(
@@ -1208,7 +1221,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             let fw = svc
                 .state_changes
@@ -1265,7 +1278,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             assert!(
                 !svc.state_changes
@@ -1318,7 +1331,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             assert!(
                 !svc.state_changes
@@ -1370,7 +1383,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             // The wildcard "disable *" matches some-obscure.service with
             // default_state="disabled", and current state is also "disabled"
@@ -1413,7 +1426,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx).unwrap();
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Services(ref svc) = result.section {
             assert!(
                 !svc.drop_ins.is_empty(),
@@ -1450,7 +1463,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         assert!(
             result.is_ok(),
             "all drop-ins readable → must succeed, got: {result:?}"

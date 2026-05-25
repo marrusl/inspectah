@@ -49,15 +49,31 @@ fn within_zone_and_attention_lower_prevalence_first() {
 #[test]
 fn sort_vec_of_fleet_attention_produces_correct_order() {
     let items = vec![
-        FleetAttention { zone: Some(PrevalenceZone::Consensus), attention: AttentionLevel::Informational, prevalence: 20 },
-        FleetAttention { zone: Some(PrevalenceZone::Divergent), attention: AttentionLevel::NeedsReview, prevalence: 1 },
-        FleetAttention { zone: Some(PrevalenceZone::NearConsensus), attention: AttentionLevel::NeedsReview, prevalence: 15 },
-        FleetAttention { zone: Some(PrevalenceZone::Divergent), attention: AttentionLevel::Informational, prevalence: 3 },
+        FleetAttention {
+            zone: Some(PrevalenceZone::Consensus),
+            attention: AttentionLevel::Informational,
+            prevalence: 20,
+        },
+        FleetAttention {
+            zone: Some(PrevalenceZone::Divergent),
+            attention: AttentionLevel::NeedsReview,
+            prevalence: 1,
+        },
+        FleetAttention {
+            zone: Some(PrevalenceZone::NearConsensus),
+            attention: AttentionLevel::NeedsReview,
+            prevalence: 15,
+        },
+        FleetAttention {
+            zone: Some(PrevalenceZone::Divergent),
+            attention: AttentionLevel::Informational,
+            prevalence: 3,
+        },
     ];
     let mut sorted = items.clone();
     sorted.sort();
-    assert_eq!(sorted[0].prevalence, 1);  // Divergent, NeedsReview, lowest prevalence
-    assert_eq!(sorted[1].prevalence, 3);  // Divergent, Informational
+    assert_eq!(sorted[0].prevalence, 1); // Divergent, NeedsReview, lowest prevalence
+    assert_eq!(sorted[1].prevalence, 3); // Divergent, Informational
     assert_eq!(sorted[2].prevalence, 15); // NearConsensus
     assert_eq!(sorted[3].prevalence, 20); // Consensus
 }
@@ -74,5 +90,8 @@ fn unclassified_sorts_after_consensus() {
         attention: AttentionLevel::NeedsReview,
         prevalence: 1,
     };
-    assert!(classified < unclassified, "unclassified (None) must sort after Consensus");
+    assert!(
+        classified < unclassified,
+        "unclassified (None) must sort after Consensus"
+    );
 }

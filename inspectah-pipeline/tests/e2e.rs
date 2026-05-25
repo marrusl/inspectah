@@ -3,11 +3,14 @@
 //! Uses MockExecutor exclusively — these tests run offline on any platform.
 //! Phase 1 proves RPM-section parity, not full-snapshot parity.
 
+use std::sync::atomic::AtomicBool;
+
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
@@ -90,7 +93,7 @@ fn run_full_pipeline_from_mock(
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
     // Collect
-    let collected = collect(&source, &mock, &inspectors, None);
+    let collected = collect(&source, &mock, &inspectors, None, &NullProgress, &AtomicBool::new(false));
 
     // Validate
     let validated = validate(collected).expect("validation should pass");
@@ -266,7 +269,7 @@ fn test_rpm_section_self_roundtrip() {
     let exec = build_full_rpm_mock_executor();
     let source = build_source();
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-    let collected = collect(&source, &exec, &inspectors, None);
+    let collected = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
     let validated = validate(collected).expect("validation");
 
     let rpm = validated

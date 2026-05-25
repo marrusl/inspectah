@@ -1,7 +1,11 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::containers::{ComposeFile, ComposeService, ContainerSection, QuadletUnit};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection};
+use inspectah_core::types::containers::{
+    ComposeFile, ComposeService, ContainerSection, QuadletUnit,
+};
+use inspectah_core::types::fleet::{
+    FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection,
+};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
@@ -288,7 +292,10 @@ fn variants_changed_net_zero_is_clean() {
         changes.variants_changed > 0,
         "after selecting a different variant, variants_changed must be > 0"
     );
-    assert!(changes.is_dirty, "session must be dirty after variant change");
+    assert!(
+        changes.is_dirty,
+        "session must be dirty after variant change"
+    );
 
     // Select back to original (A)
     session
@@ -384,12 +391,8 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
         image: "nginx:1.24".into(),
         ..Default::default()
     }];
-    let hash_a = ContentHash::from_content(
-        serde_json::to_string(&images_a).unwrap().as_bytes(),
-    );
-    let hash_b = ContentHash::from_content(
-        serde_json::to_string(&images_b).unwrap().as_bytes(),
-    );
+    let hash_a = ContentHash::from_content(serde_json::to_string(&images_a).unwrap().as_bytes());
+    let hash_b = ContentHash::from_content(serde_json::to_string(&images_b).unwrap().as_bytes());
 
     snap.containers = Some(ContainerSection {
         compose_files: vec![
@@ -436,7 +439,10 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
         changes.variants_changed > 0,
         "compose SelectVariant must report dirty",
     );
-    assert!(changes.is_dirty, "compose session must be dirty after variant change");
+    assert!(
+        changes.is_dirty,
+        "compose session must be dirty after variant change"
+    );
 
     // Revert to original selection A
     session

@@ -57,7 +57,12 @@ pub fn variant_summary(
 
         let mut host_split: Vec<usize> = entries
             .iter()
-            .map(|e| e.fleet.as_ref().map(|f| f.count.max(0) as usize).unwrap_or(0))
+            .map(|e| {
+                e.fleet
+                    .as_ref()
+                    .map(|f| f.count.max(0) as usize)
+                    .unwrap_or(0)
+            })
             .collect();
         host_split.sort_unstable_by(|a, b| b.cmp(a)); // descending
 

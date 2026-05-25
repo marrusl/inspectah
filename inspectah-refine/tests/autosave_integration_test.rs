@@ -104,11 +104,17 @@ fn session_file_created_after_first_apply() {
     let tarball = dir.path().join("test.tar.gz");
     let session_path = session_file_path(&tarball);
 
-    assert!(!session_path.exists(), "session file should not exist before any apply");
+    assert!(
+        !session_path.exists(),
+        "session file should not exist before any apply"
+    );
 
     session.apply(exclude_httpd()).unwrap();
 
-    assert!(session_path.exists(), "session file should exist after apply");
+    assert!(
+        session_path.exists(),
+        "session file should exist after apply"
+    );
 }
 
 #[test]
@@ -171,7 +177,10 @@ fn noop_apply_does_not_trigger_save() {
     session.apply(exclude_httpd()).unwrap();
     assert!(session_path.exists());
 
-    let mtime_before = std::fs::metadata(&session_path).unwrap().modified().unwrap();
+    let mtime_before = std::fs::metadata(&session_path)
+        .unwrap()
+        .modified()
+        .unwrap();
 
     // Small sleep to ensure mtime would differ
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -179,8 +188,14 @@ fn noop_apply_does_not_trigger_save() {
     // Re-excluding httpd is a noop — should not re-save
     session.apply(exclude_httpd()).unwrap();
 
-    let mtime_after = std::fs::metadata(&session_path).unwrap().modified().unwrap();
-    assert_eq!(mtime_before, mtime_after, "noop apply should not update session file");
+    let mtime_after = std::fs::metadata(&session_path)
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(
+        mtime_before, mtime_after,
+        "noop apply should not update session file"
+    );
 }
 
 #[test]
@@ -202,17 +217,22 @@ fn session_without_tarball_does_not_autosave() {
     let snap = test_snapshot();
     let mut session = RefineSession::new(snap);
 
-    session
-        .apply(exclude_httpd())
-        .unwrap();
+    session.apply(exclude_httpd()).unwrap();
 
     // No session file should exist anywhere in the temp dir
     let entries: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().contains("inspectah-session"))
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .contains("inspectah-session")
+        })
         .collect();
-    assert!(entries.is_empty(), "no session file should be created for tarball-less sessions");
+    assert!(
+        entries.is_empty(),
+        "no session file should be created for tarball-less sessions"
+    );
 }
 
 #[test]
@@ -236,7 +256,10 @@ fn stale_tarball_detected_on_resume() {
             saved_hash,
             current_hash,
         }) => {
-            assert_ne!(saved_hash, current_hash, "hashes must differ for stale detection");
+            assert_ne!(
+                saved_hash, current_hash,
+                "hashes must differ for stale detection"
+            );
         }
         Err(other) => panic!("expected StaleTarball error, got: {other}"),
         Ok(_) => panic!("resume_from must fail on stale tarball"),

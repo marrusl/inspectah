@@ -11,7 +11,9 @@ use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance, RepoTier, UserPasswordOp};
+use inspectah_refine::types::{
+    RefinedView, RefinementOp, RepoProvenance, RepoTier, UserPasswordOp,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -165,12 +167,9 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     };
 
     let fleet = snap.fleet_meta.as_ref().map(|meta| {
-        let variant_count = inspectah_refine::fleet::variant_summary(
-            snap,
-            session.fleet_context(),
-        )
-        .map(|s| s.paths_with_variants)
-        .unwrap_or(0);
+        let variant_count = inspectah_refine::fleet::variant_summary(snap, session.fleet_context())
+            .map(|s| s.paths_with_variants)
+            .unwrap_or(0);
         json!({
             "host_count": meta.host_count,
             "hostnames": meta.hostnames,

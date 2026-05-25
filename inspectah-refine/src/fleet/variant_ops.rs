@@ -49,11 +49,7 @@ pub fn item_path(item_id: &ItemId) -> Option<&str> {
 /// Apply a SelectVariant op to the projection state.
 ///
 /// Records which variant hash should be Selected for the given path.
-pub fn apply_select(
-    state: &mut VariantProjectionState,
-    item_id: &ItemId,
-    target: &ContentHash,
-) {
+pub fn apply_select(state: &mut VariantProjectionState, item_id: &ItemId, target: &ContentHash) {
     if let Some(path) = item_path(item_id) {
         state.selected.insert(path.to_string(), target.clone());
     }
@@ -83,27 +79,27 @@ pub fn apply_edit(
             .config
             .as_ref()
             .map(|c| {
-                c.files
-                    .iter()
-                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+                c.files.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash
+                })
             })
             .unwrap_or(false),
         ItemId::DropIn { .. } => snap
             .services
             .as_ref()
             .map(|s| {
-                s.drop_ins
-                    .iter()
-                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+                s.drop_ins.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash
+                })
             })
             .unwrap_or(false),
         ItemId::Quadlet { .. } => snap
             .containers
             .as_ref()
             .map(|c| {
-                c.quadlet_units
-                    .iter()
-                    .any(|e| e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash)
+                c.quadlet_units.iter().any(|e| {
+                    e.path == path && ContentHash::from_content(e.content.as_bytes()) == new_hash
+                })
             })
             .unwrap_or(false),
         // Compose: EditVariant is blocked at validation, so this branch
@@ -140,11 +136,7 @@ pub fn apply_edit(
 ///
 /// Only user-created variants can be discarded. Host-sourced variants
 /// cannot be discarded (the caller should validate this before calling).
-pub fn apply_discard(
-    state: &mut VariantProjectionState,
-    item_id: &ItemId,
-    variant: &ContentHash,
-) {
+pub fn apply_discard(state: &mut VariantProjectionState, item_id: &ItemId, variant: &ContentHash) {
     let Some(path) = item_path(item_id) else {
         return;
     };
@@ -470,8 +462,7 @@ fn materialize_config_variants(
 
         if let Some(selected_hash) = state.selected.get(path) {
             for &idx in &variants {
-                let entry_hash =
-                    ContentHash::from_content(config.files[idx].content.as_bytes());
+                let entry_hash = ContentHash::from_content(config.files[idx].content.as_bytes());
                 if entry_hash == *selected_hash {
                     config.files[idx].variant_selection = VariantSelection::Selected;
                 } else {
@@ -653,8 +644,7 @@ fn materialize_quadlet_variants(
                 if entry_hash == *selected_hash {
                     containers.quadlet_units[idx].variant_selection = VariantSelection::Selected;
                 } else {
-                    containers.quadlet_units[idx].variant_selection =
-                        VariantSelection::Alternative;
+                    containers.quadlet_units[idx].variant_selection = VariantSelection::Alternative;
                 }
             }
         }
@@ -702,8 +692,7 @@ fn materialize_compose_variants(
                 if entry_hash == *selected_hash {
                     containers.compose_files[idx].variant_selection = VariantSelection::Selected;
                 } else {
-                    containers.compose_files[idx].variant_selection =
-                        VariantSelection::Alternative;
+                    containers.compose_files[idx].variant_selection = VariantSelection::Alternative;
                 }
             }
         }

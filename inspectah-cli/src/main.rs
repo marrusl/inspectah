@@ -1,4 +1,5 @@
 mod commands;
+mod progress;
 
 use clap::{Parser, Subcommand};
 
@@ -25,18 +26,33 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    let result = match cli.command {
-        Commands::Scan(args) => commands::scan::run_scan(&args),
-        Commands::Refine(args) => commands::refine::run_refine(&args),
-        Commands::Fleet(args) => commands::fleet::run_fleet(&args),
+    match cli.command {
+        Commands::Scan(args) => match commands::scan::run_scan(&args) {
+            Ok(outcome) => {
+                let code = outcome.exit_code();
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        },
+        Commands::Refine(args) => {
+            if let Err(e) = commands::refine::run_refine(&args) {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Fleet(args) => {
+            if let Err(e) = commands::fleet::run_fleet(&args) {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
         Commands::Version => {
             commands::version::print_version();
-            Ok(())
         }
-    };
-
-    if let Err(err) = result {
-        eprintln!("error: {err:#}");
-        std::process::exit(1);
     }
 }

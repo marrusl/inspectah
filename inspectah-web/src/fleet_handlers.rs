@@ -274,25 +274,27 @@ pub async fn fleet_diff(
         .unwrap_or_default();
 
     // Compute the diff.
-    let diff_result =
-        match inspectah_refine::fleet::diff::compute_diff(&base_entry.content, &target_entry.content, 3)
-        {
-            Ok(r) => r,
-            Err(inspectah_refine::fleet::diff::DiffError::BinaryContent) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({"error": "binary content cannot be diffed"})),
-                )
-                    .into_response();
-            }
-            Err(inspectah_refine::fleet::diff::DiffError::InputTooLarge) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({"error": "content exceeds size limit for diffing"})),
-                )
-                    .into_response();
-            }
-        };
+    let diff_result = match inspectah_refine::fleet::diff::compute_diff(
+        &base_entry.content,
+        &target_entry.content,
+        3,
+    ) {
+        Ok(r) => r,
+        Err(inspectah_refine::fleet::diff::DiffError::BinaryContent) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": "binary content cannot be diffed"})),
+            )
+                .into_response();
+        }
+        Err(inspectah_refine::fleet::diff::DiffError::InputTooLarge) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": "content exceeds size limit for diffing"})),
+            )
+                .into_response();
+        }
+    };
 
     // Map DiffResult to response DTOs.
     let hunks: Vec<FleetDiffHunk> = diff_result
@@ -345,10 +347,7 @@ pub async fn fleet_diff(
 // Response builder
 // ---------------------------------------------------------------------------
 
-fn build_fleet_view_response(
-    session: &RefineSession,
-    ctx: &FleetContext,
-) -> FleetViewResponse {
+fn build_fleet_view_response(session: &RefineSession, ctx: &FleetContext) -> FleetViewResponse {
     let view = session.view();
     let snap = session.snapshot_projected();
     let sections = build_fleet_sections(session, &snap, ctx);
@@ -378,8 +377,7 @@ fn build_fleet_summary(
     ctx: &FleetContext,
     sections: &[FleetSection],
 ) -> FleetSummary {
-    let variant_summary =
-        inspectah_refine::fleet::variant_summary(snap, Some(ctx));
+    let variant_summary = inspectah_refine::fleet::variant_summary(snap, Some(ctx));
 
     let mut actionable_variant_items = Vec::new();
 
@@ -388,9 +386,7 @@ fn build_fleet_summary(
             // Config variants are actionable (decision section)
             let max_host_spread = info.host_split.iter().copied().max().unwrap_or(0);
             actionable_variant_items.push(ActionableVariantItem {
-                item_id: ItemId::Config {
-                    path: path.clone(),
-                },
+                item_id: ItemId::Config { path: path.clone() },
                 section_id: "configs".to_string(),
                 variant_count: info.variant_count,
                 max_host_spread,
@@ -417,20 +413,14 @@ fn build_fleet_summary(
 
 /// Iterate over all items in a section regardless of zone/flat layout.
 fn section_items(section: &FleetSection) -> impl Iterator<Item = &FleetItem> {
-    let zone_items = section
-        .zones
-        .iter()
-        .flat_map(|z| {
-            z.consensus
-                .items
-                .iter()
-                .chain(z.near_consensus.items.iter())
-                .chain(z.divergent.items.iter())
-        });
-    let flat_items = section
-        .items
-        .iter()
-        .flat_map(|items| items.iter());
+    let zone_items = section.zones.iter().flat_map(|z| {
+        z.consensus
+            .items
+            .iter()
+            .chain(z.near_consensus.items.iter())
+            .chain(z.divergent.items.iter())
+    });
+    let flat_items = section.items.iter().flat_map(|items| items.iter());
     zone_items.chain(flat_items)
 }
 
@@ -553,7 +543,13 @@ fn build_fleet_sections(
             })
             .collect();
 
-        sections.push(build_section("configs", "Configuration Files", true, &items, ctx));
+        sections.push(build_section(
+            "configs",
+            "Configuration Files",
+            true,
+            &items,
+            ctx,
+        ));
     }
 
     // --- Context sections (read-only, no toggles) ---
@@ -666,7 +662,12 @@ fn build_context_sections(
             // Emit only the Selected/Only entry as the representative item.
             let representative = group
                 .iter()
-                .find(|d| matches!(d.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .find(|d| {
+                    matches!(
+                        d.variant_selection,
+                        VariantSelection::Selected | VariantSelection::Only
+                    )
+                })
                 .or_else(|| group.first());
             if let Some(d) = representative {
                 let item_id = ItemId::DropIn {
@@ -710,15 +711,17 @@ fn build_context_sections(
             Vec<&inspectah_core::types::containers::QuadletUnit>,
         > = std::collections::BTreeMap::new();
         for q in &containers.quadlet_units {
-            quadlet_groups
-                .entry(q.path.as_str())
-                .or_default()
-                .push(q);
+            quadlet_groups.entry(q.path.as_str()).or_default().push(q);
         }
         for (path, group) in &quadlet_groups {
             let representative = group
                 .iter()
-                .find(|q| matches!(q.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .find(|q| {
+                    matches!(
+                        q.variant_selection,
+                        VariantSelection::Selected | VariantSelection::Only
+                    )
+                })
                 .or_else(|| group.first());
             if let Some(q) = representative {
                 let item_id = ItemId::Quadlet {
@@ -753,15 +756,17 @@ fn build_context_sections(
             Vec<&inspectah_core::types::containers::ComposeFile>,
         > = std::collections::BTreeMap::new();
         for c in &containers.compose_files {
-            compose_groups
-                .entry(c.path.as_str())
-                .or_default()
-                .push(c);
+            compose_groups.entry(c.path.as_str()).or_default().push(c);
         }
         for (path, group) in &compose_groups {
             let representative = group
                 .iter()
-                .find(|c| matches!(c.variant_selection, VariantSelection::Selected | VariantSelection::Only))
+                .find(|c| {
+                    matches!(
+                        c.variant_selection,
+                        VariantSelection::Selected | VariantSelection::Only
+                    )
+                })
                 .or_else(|| group.first());
             if let Some(c) = representative {
                 let item_id = ItemId::Compose {
@@ -998,7 +1003,13 @@ fn build_context_sections(
             })
             .collect();
         if !items.is_empty() {
-            sections.push(build_section("nonrpm", "Non-RPM Software", false, &items, ctx));
+            sections.push(build_section(
+                "nonrpm",
+                "Non-RPM Software",
+                false,
+                &items,
+                ctx,
+            ));
         }
     }
 
@@ -1038,9 +1049,7 @@ fn default_context_attention(
     fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
     ctx: &FleetContext,
 ) -> FleetAttentionDto {
-    let zone = fp.map(|f| {
-        inspectah_core::fleet::classify_zone(f)
-    });
+    let zone = fp.map(|f| inspectah_core::fleet::classify_zone(f));
     let zone = if ctx.zones_active { zone } else { None };
     FleetAttentionDto {
         level: AttentionLevel::Informational,
@@ -1105,11 +1114,14 @@ fn build_variants(
         .map(|e| {
             let hash = ContentHash::from_content(e.content.as_bytes());
             let is_selected = matches!(e.variant_selection, VariantSelection::Selected)
-                || (matches!(e.variant_selection, VariantSelection::Only)
-                    && hash == selected_hash);
+                || (matches!(e.variant_selection, VariantSelection::Only) && hash == selected_hash);
             FleetVariantOption {
                 hash: hash.as_str().to_string(),
-                hosts: e.fleet.as_ref().map(|f| f.hosts.clone()).unwrap_or_default(),
+                hosts: e
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.hosts.clone())
+                    .unwrap_or_default(),
                 host_count: e
                     .fleet
                     .as_ref()
@@ -1178,9 +1190,12 @@ fn build_compose_variants(
         ContentHash::from_content(key.as_bytes())
     }
 
-    let selected_entry = entries
-        .iter()
-        .find(|c| matches!(c.variant_selection, VariantSelection::Selected | VariantSelection::Only));
+    let selected_entry = entries.iter().find(|c| {
+        matches!(
+            c.variant_selection,
+            VariantSelection::Selected | VariantSelection::Only
+        )
+    });
     let selected_hash = selected_entry
         .map(|c| compose_hash(c))
         .unwrap_or_else(|| compose_hash(entries[0]));
@@ -1193,8 +1208,16 @@ fn build_compose_variants(
                 || (matches!(c.variant_selection, VariantSelection::Only) && hash == selected_hash);
             FleetVariantOption {
                 hash: hash.as_str().to_string(),
-                hosts: c.fleet.as_ref().map(|f| f.hosts.clone()).unwrap_or_default(),
-                host_count: c.fleet.as_ref().map(|f| f.count.max(0) as usize).unwrap_or(0),
+                hosts: c
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.hosts.clone())
+                    .unwrap_or_default(),
+                host_count: c
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count.max(0) as usize)
+                    .unwrap_or(0),
                 selected: is_selected,
             }
         })

@@ -87,19 +87,30 @@ async fn fleet_health_returns_fleet_context() {
     let fleet = json
         .get("fleet")
         .expect("fleet field should be present for fleet snapshots");
-    assert!(!fleet.is_null(), "fleet should not be null for fleet snapshots");
+    assert!(
+        !fleet.is_null(),
+        "fleet should not be null for fleet snapshots"
+    );
 
     assert_eq!(fleet["host_count"], 5);
     assert_eq!(fleet["label"], "web-tier");
     assert_eq!(fleet["merged_at"], "2026-05-21T12:00:00Z");
 
-    let hostnames = fleet["hostnames"].as_array().expect("hostnames should be an array");
+    let hostnames = fleet["hostnames"]
+        .as_array()
+        .expect("hostnames should be an array");
     assert_eq!(hostnames.len(), 3);
     assert_eq!(hostnames[0], "web-01");
 
     // zones_active and variant_count should be present
-    assert!(fleet.get("zones_active").is_some(), "zones_active should be present");
-    assert!(fleet.get("variant_count").is_some(), "variant_count should be present");
+    assert!(
+        fleet.get("zones_active").is_some(),
+        "zones_active should be present"
+    );
+    assert!(
+        fleet.get("variant_count").is_some(),
+        "variant_count should be present"
+    );
 }
 
 #[tokio::test]
@@ -111,7 +122,10 @@ async fn single_host_health_returns_null_fleet() {
     assert_eq!(status, StatusCode::OK);
 
     let fleet = json.get("fleet").expect("fleet field should be present");
-    assert!(fleet.is_null(), "fleet should be null for single-host snapshots");
+    assert!(
+        fleet.is_null(),
+        "fleet should be null for single-host snapshots"
+    );
 }
 
 #[tokio::test]
@@ -154,14 +168,23 @@ async fn fleet_view_returns_zone_grouped_sections() {
     let containerfile = json
         .get("containerfile_preview")
         .expect("containerfile_preview should be present");
-    assert!(containerfile.is_string(), "containerfile_preview should be a string");
-    assert!(!containerfile.as_str().unwrap().is_empty(), "containerfile_preview should not be empty");
+    assert!(
+        containerfile.is_string(),
+        "containerfile_preview should be a string"
+    );
+    assert!(
+        !containerfile.as_str().unwrap().is_empty(),
+        "containerfile_preview should not be empty"
+    );
 
     // Assert: session_is_sensitive is a boolean
     let sensitive = json
         .get("session_is_sensitive")
         .expect("session_is_sensitive should be present");
-    assert!(sensitive.is_boolean(), "session_is_sensitive should be a boolean");
+    assert!(
+        sensitive.is_boolean(),
+        "session_is_sensitive should be a boolean"
+    );
 
     // Assert: sections array is present
     let sections = json
@@ -190,16 +213,17 @@ async fn fleet_view_returns_zone_grouped_sections() {
                 let has_zone_groups = zones_obj.contains_key("consensus")
                     || zones_obj.contains_key("near_consensus")
                     || zones_obj.contains_key("divergent");
-                assert!(has_zone_groups, "zones should have at least one of consensus/near_consensus/divergent");
+                assert!(
+                    has_zone_groups,
+                    "zones should have at least one of consensus/near_consensus/divergent"
+                );
             }
         }
 
         // Assert: items have item_id with {kind, key} shape
         if let Some(items) = section.get("items").and_then(|i| i.as_array()) {
             for item in items {
-                let item_id = item
-                    .get("item_id")
-                    .expect("item should have item_id");
+                let item_id = item.get("item_id").expect("item should have item_id");
                 assert!(item_id.get("kind").is_some(), "item_id should have kind");
                 assert!(item_id.get("key").is_some(), "item_id should have key");
             }
@@ -207,9 +231,7 @@ async fn fleet_view_returns_zone_grouped_sections() {
     }
 
     // Assert: summary.actionable_variant_items lists config variants only
-    let summary = json
-        .get("summary")
-        .expect("summary should be present");
+    let summary = json.get("summary").expect("summary should be present");
     let actionable = summary
         .get("actionable_variant_items")
         .expect("actionable_variant_items should be present")
@@ -223,14 +245,20 @@ async fn fleet_view_returns_zone_grouped_sections() {
             .expect("actionable item should have kind")
             .as_str()
             .expect("kind should be a string");
-        assert_eq!(kind, "config", "actionable_variant_items should only contain config items");
+        assert_eq!(
+            kind, "config",
+            "actionable_variant_items should only contain config items"
+        );
     }
 
     // Assert: summary.informational_variant_count is a number
     let informational = summary
         .get("informational_variant_count")
         .expect("informational_variant_count should be present");
-    assert!(informational.is_number(), "informational_variant_count should be a number");
+    assert!(
+        informational.is_number(),
+        "informational_variant_count should be a number"
+    );
 }
 
 #[tokio::test]
@@ -268,7 +296,10 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
 
         if !has_zones {
             // Assert: items should be present for flat listing
-            assert!(section.get("items").is_some(), "items should be present in flat mode");
+            assert!(
+                section.get("items").is_some(),
+                "items should be present in flat mode"
+            );
         }
     }
 }
@@ -285,7 +316,10 @@ async fn fleet_view_returns_error_for_single_host() {
     let error = json
         .get("error")
         .expect("error field should be present for single-host session");
-    assert_eq!(error, "not a fleet session", "error message should indicate not a fleet session");
+    assert_eq!(
+        error, "not a fleet session",
+        "error message should indicate not a fleet session"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -377,9 +411,13 @@ async fn fleet_diff_returns_unified_diff() {
     assert_eq!(json["target_hash"], hash_b.as_str());
 
     // Verify host lists
-    let base_hosts = json["base_hosts"].as_array().expect("base_hosts should be array");
+    let base_hosts = json["base_hosts"]
+        .as_array()
+        .expect("base_hosts should be array");
     assert_eq!(base_hosts.len(), 3);
-    let target_hosts = json["target_hosts"].as_array().expect("target_hosts should be array");
+    let target_hosts = json["target_hosts"]
+        .as_array()
+        .expect("target_hosts should be array");
     assert_eq!(target_hosts.len(), 2);
 
     // Verify hunks exist with changes
@@ -388,8 +426,14 @@ async fn fleet_diff_returns_unified_diff() {
 
     // Verify hunk structure
     let hunk = &hunks[0];
-    assert!(hunk.get("base_range").is_some(), "hunk should have base_range");
-    assert!(hunk.get("target_range").is_some(), "hunk should have target_range");
+    assert!(
+        hunk.get("base_range").is_some(),
+        "hunk should have base_range"
+    );
+    assert!(
+        hunk.get("target_range").is_some(),
+        "hunk should have target_range"
+    );
     let changes = hunk["changes"].as_array().expect("changes should be array");
     assert!(!changes.is_empty(), "hunk should have changes");
 
@@ -404,7 +448,10 @@ async fn fleet_diff_returns_unified_diff() {
 
     // Verify stats
     let stats = json.get("stats").expect("stats should be present");
-    assert!(stats["total_changes"].as_u64().unwrap() > 0, "should have changes");
+    assert!(
+        stats["total_changes"].as_u64().unwrap() > 0,
+        "should have changes"
+    );
     assert_eq!(
         stats["total_changes"].as_u64().unwrap(),
         stats["insertions"].as_u64().unwrap() + stats["deletions"].as_u64().unwrap()
@@ -429,7 +476,10 @@ async fn fleet_diff_422_unknown_item() {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
-        json["error"].as_str().unwrap().contains("unknown config path"),
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown config path"),
         "error should mention unknown config path"
     );
 }
@@ -454,7 +504,10 @@ async fn fleet_diff_422_unknown_hash() {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
-        json["error"].as_str().unwrap().contains("unknown target hash"),
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown target hash"),
         "error should mention unknown target hash"
     );
 }
@@ -668,8 +721,14 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
     let dropin_variants = dropin
         .get("variants")
         .expect("drop-in item should have variants");
-    assert!(!dropin_variants.is_null(), "drop-in variants should not be null");
-    assert_eq!(dropin_variants["count"], 2, "drop-in should have 2 variants");
+    assert!(
+        !dropin_variants.is_null(),
+        "drop-in variants should not be null"
+    );
+    assert_eq!(
+        dropin_variants["count"], 2,
+        "drop-in should have 2 variants"
+    );
 }
 
 /// Find an item with the given `kind` in a section (checking both zones and flat items).
@@ -708,10 +767,7 @@ fn fleet_state_with_packages() -> Arc<AppState> {
     // Build individual per-host snapshots and pass through merge_snapshots()
     // to exercise the full vertical: merge computes → snapshot stores →
     // session copies → handler maps.
-    let make_host = |hostname: &str,
-                     nginx_repo: &str,
-                     nginx_version: &str|
-     -> InspectionSnapshot {
+    let make_host = |hostname: &str, nginx_repo: &str, nginx_version: &str| -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.meta
             .insert("hostname".into(), serde_json::json!(hostname));
@@ -750,9 +806,8 @@ fn fleet_state_with_packages() -> Arc<AppState> {
             repo_files: vec![
                 RepoFile {
                     path: "/etc/yum.repos.d/centos.repo".into(),
-                    content:
-                        "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
-                            .into(),
+                    content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
+                        .into(),
                     include: true,
                     ..Default::default()
                 },
@@ -783,10 +838,7 @@ fn fleet_state_with_packages() -> Arc<AppState> {
 }
 
 /// Collect all fleet items matching a given source_repo from all sections.
-fn fleet_items_by_repo<'a>(
-    json: &'a serde_json::Value,
-    repo: &str,
-) -> Vec<&'a serde_json::Value> {
+fn fleet_items_by_repo<'a>(json: &'a serde_json::Value, repo: &str) -> Vec<&'a serde_json::Value> {
     json["sections"]
         .as_array()
         .unwrap()
@@ -910,7 +962,10 @@ async fn fleet_exclude_repo_round_trip() {
     let epel_items = fleet_items_by_repo(&initial, "epel");
     assert!(!epel_items.is_empty(), "should have epel packages");
     for item in &epel_items {
-        assert_eq!(item["include"], true, "epel packages should be included initially");
+        assert_eq!(
+            item["include"], true,
+            "epel packages should be included initially"
+        );
     }
     let epel_group = initial["repo_groups"]
         .as_array()
