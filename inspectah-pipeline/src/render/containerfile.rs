@@ -920,39 +920,26 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 // --- Kernel/Boot section ---
 
 fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-
     let kb = match &snap.kernel_boot {
         Some(k) => k,
-        None => return lines,
+        None => return Vec::new(),
     };
 
-    let has_content = !kb.cmdline.is_empty()
-        || !kb.modules_load_d.is_empty()
-        || !kb.modprobe_d.is_empty()
-        || !kb.dracut_conf.is_empty()
-        || !kb.sysctl_overrides.is_empty()
-        || !kb.non_default_modules.is_empty()
-        || !kb.tuned_active.is_empty()
-        || !kb.tuned_custom_profiles.is_empty();
-
-    if !has_content {
-        return lines;
-    }
-
-    lines.push("# === Kernel and Boot Configuration ===".into());
+    // Compute all sub-section content first, then only emit the
+    // outer header if there's actual content to show.
+    let mut body = Vec::new();
 
     // Kernel arguments
     let safe_kargs = operator_kargs(&kb.cmdline);
     if !safe_kargs.is_empty() {
-        lines.push("# === Kernel Arguments (bootc-native kargs.d) ===".into());
-        lines.push(
+        body.push("# === Kernel Arguments (bootc-native kargs.d) ===".into());
+        body.push(
             "# These are applied at install and honored across image upgrades. See bootc documentation:"
                 .into(),
         );
-        lines.push("# https://containers.github.io/bootc/building/kernel-arguments.html".into());
-        lines.push("RUN mkdir -p /usr/lib/bootc/kargs.d".into());
-        lines.push(
+        body.push("# https://containers.github.io/bootc/building/kernel-arguments.html".into());
+        body.push("RUN mkdir -p /usr/lib/bootc/kargs.d".into());
+        body.push(
             "COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/"
                 .into(),
         );
@@ -961,7 +948,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // Non-default modules
     let included_mods: usize = kb.non_default_modules.iter().filter(|m| m.include).count();
     if included_mods > 0 {
-        lines.push(format!(
+        body.push(format!(
             "# {} non-default kernel module(s) — config files in COPY config/etc/ above",
             included_mods
         ));
@@ -970,7 +957,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // Sysctl overrides
     let included_sysctl: usize = kb.sysctl_overrides.iter().filter(|s| s.include).count();
     if included_sysctl > 0 {
-        lines.push(format!(
+        body.push(format!(
             "# {} sysctl override(s) — config files in COPY config/etc/ above",
             included_sysctl
         ));
@@ -979,21 +966,27 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // Tuned
     if !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
-            lines.push(format!("# Tuned profile: {}", kb.tuned_active));
-            lines.push(format!(
+            body.push(format!("# Tuned profile: {}", kb.tuned_active));
+            body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
                 kb.tuned_active
             ));
-            lines.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
-            lines.push("RUN systemctl enable tuned.service".into());
+            body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
+            body.push("RUN systemctl enable tuned.service".into());
         } else {
-            lines.push(format!(
+            body.push(format!(
                 "# FIXME: tuned profile name contains unsafe characters: {:?}",
                 kb.tuned_active
             ));
         }
     }
 
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec!["# === Kernel and Boot Configuration ===".into()];
+    lines.extend(body);
     lines.push(String::new());
     lines
 }
@@ -1001,33 +994,23 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 // --- Security & Access Control section ---
 
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
     let sel = match &snap.selinux {
         Some(s) => s,
-        None => return lines,
+        None => return Vec::new(),
     };
 
-    let has_content = !sel.custom_modules.is_empty()
-        || !sel.boolean_overrides.is_empty()
-        || !sel.fcontext_rules.is_empty()
-        || !sel.audit_rules.is_empty()
-        || sel.fips_mode
-        || !sel.port_labels.is_empty();
-
-    if !has_content {
-        return lines;
-    }
-
-    lines.push("# === Security & Access Control ===".into());
+    // Compute all sub-section content first, then only emit the
+    // outer header if there's actual content to show.
+    let mut body = Vec::new();
 
     if !sel.custom_modules.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# FIXME: {} custom policy module(s) detected — \
              export .pp files to config/selinux/ and uncomment the COPY + semodule lines below",
             sel.custom_modules.len()
         ));
-        lines.push("# COPY config/selinux/ /tmp/selinux/".into());
-        lines.push("# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/".into());
+        body.push("# COPY config/selinux/ /tmp/selinux/".into());
+        body.push("# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/".into());
     }
 
     // Non-default booleans
@@ -1045,7 +1028,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         .collect();
 
     if !non_default.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# FIXME: {} non-default boolean(s) detected — verify each is still needed",
             non_default.len()
         ));
@@ -1059,9 +1042,9 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 continue;
             }
             if sanitize_shell_value(bname).is_some() && sanitize_shell_value(bval).is_some() {
-                lines.push(format!("RUN setsebool -P {} {}", bname, bval));
+                body.push(format!("RUN setsebool -P {} {}", bname, bval));
             } else {
-                lines.push(format!(
+                body.push(format!(
                     "# FIXME: boolean name/value contains unsafe characters, skipped: {:?}={:?}",
                     bname, bval
                 ));
@@ -1070,40 +1053,40 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     if !sel.fcontext_rules.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# FIXME: {} custom fcontext rule(s) detected — apply in image",
             sel.fcontext_rules.len()
         ));
         let limit = sel.fcontext_rules.len().min(10);
         for fc in &sel.fcontext_rules[..limit] {
             if sanitize_shell_value(fc).is_some() {
-                lines.push(format!("# RUN semanage fcontext -a {}", fc));
+                body.push(format!("# RUN semanage fcontext -a {}", fc));
             } else {
-                lines.push(format!(
+                body.push(format!(
                     "# FIXME: fcontext rule contains unsafe characters: {:?}",
                     fc
                 ));
             }
         }
-        lines.push("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs".into());
+        body.push("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs".into());
     }
 
     if !sel.audit_rules.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# {} custom audit rule file(s) materialized under config/etc/audit/rules.d/",
             sel.audit_rules.len()
         ));
     }
 
     if !sel.pam_configs.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# {} custom PAM config file(s) materialized under config/etc/pam.d/",
             sel.pam_configs.len()
         ));
     }
 
     if !sel.port_labels.is_empty() {
-        lines.push(format!(
+        body.push(format!(
             "# {} custom SELinux port label(s) detected",
             sel.port_labels.len()
         ));
@@ -1112,12 +1095,12 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 && sanitize_shell_value(&pl.port).is_some()
                 && sanitize_shell_value(&pl.label_type).is_some()
             {
-                lines.push(format!(
+                body.push(format!(
                     "RUN semanage port -a -t {} -p {} {}",
                     pl.label_type, pl.protocol, pl.port
                 ));
             } else {
-                lines.push(format!(
+                body.push(format!(
                     "# FIXME: port label contains unsafe characters, skipped: {:?} {:?} {:?}",
                     pl.label_type, pl.protocol, pl.port
                 ));
@@ -1126,12 +1109,18 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     if sel.fips_mode {
-        lines.push(
+        body.push(
             "# FIXME: host has FIPS mode enabled — enable FIPS in the bootc image via fips-mode-setup"
                 .into(),
         );
     }
 
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec!["# === Security & Access Control ===".into()];
+    lines.extend(body);
     lines.push(String::new());
     lines
 }
@@ -1188,10 +1177,10 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 // --- Epilogue ---
 
 fn tmpfiles_lines() -> Vec<String> {
-    vec![
-        "# === Finalize: systemd-tmpfiles for /tmp, /run, /var, /etc/ above".into(),
-        String::new(),
-    ]
+    // Placeholder — no content to emit yet. When systemd-tmpfiles
+    // directives are captured by the inspector, content will be
+    // rendered here conditionally. Until then, emit nothing.
+    Vec::new()
 }
 
 fn validate_lines() -> Vec<String> {
