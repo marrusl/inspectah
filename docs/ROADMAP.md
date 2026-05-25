@@ -146,13 +146,13 @@ Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_sta
 
 Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
 
-### CLI UX: Scan Progress Reporting (MEDIUM)
+### ~~CLI UX: Scan Progress Reporting~~ (DONE)
 
-`inspectah scan` gives no feedback while inspectors run. Add per-inspector progress lines to stderr (e.g., "Scanning RPM packages... done", "Scanning config files..."). Inspector count is known upfront so a simple counter works.
+Shipped in `scan-progress` branch (2026-05-24). Full checklist with nested sub-checklists for RPM/Config/Non-RPM, three rendering modes (rich/plain/flat), typed ProgressSink trait, exit codes, SIGINT cancellation. Spec: `docs/specs/proposed/2026-05-24-cli-scan-progress-design.md`.
 
-### CLI UX: Baseline Pull Viewport Height (LOW)
+### ~~CLI UX: Baseline Pull Viewport Height~~ (DONE)
 
-The live viewport during target image pull is 1-2 rows too short. Increase the viewport height so pull progress is readable without excessive scrolling.
+Shipped with scan progress (2026-05-24). Dynamic viewport height: 30% of terminal rows, floor 8, cap 16.
 
 ### Test Hygiene: Rename phase6_integration_test (LOW)
 
