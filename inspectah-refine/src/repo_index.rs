@@ -139,7 +139,7 @@ impl RepoIndex {
             repo::RepoTier::Distro => RepoTier::Distro,
             repo::RepoTier::OfficialOptional => RepoTier::OfficialOptional,
             repo::RepoTier::ThirdParty => RepoTier::ThirdParty,
-            repo::RepoTier::Unknown => RepoTier::Unknown,
+            repo::RepoTier::None => RepoTier::None,
         }
     }
 }
@@ -266,9 +266,9 @@ mod tests {
         );
         assert_eq!(RepoIndex::repo_tier("epel"), RepoTier::ThirdParty);
         assert_eq!(RepoIndex::repo_tier("copr:mytools"), RepoTier::ThirdParty);
-        assert_eq!(RepoIndex::repo_tier(""), RepoTier::Unknown);
-        assert_eq!(RepoIndex::repo_tier("@commandline"), RepoTier::Unknown);
-        assert_eq!(RepoIndex::repo_tier("@CommandLine"), RepoTier::Unknown);
+        assert_eq!(RepoIndex::repo_tier(""), RepoTier::None);
+        assert_eq!(RepoIndex::repo_tier("@commandline"), RepoTier::None);
+        assert_eq!(RepoIndex::repo_tier("@CommandLine"), RepoTier::None);
     }
 
     #[test]
