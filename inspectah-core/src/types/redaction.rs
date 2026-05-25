@@ -118,7 +118,6 @@ pub struct RedactionHint {
 }
 
 /// Redaction finding with typed classification fields.
-/// Go-compatible via serde rename_all — strings at the export edge only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RedactionFinding {
     #[serde(default)]

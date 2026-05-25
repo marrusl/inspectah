@@ -1,6 +1,6 @@
 //! Renderer module — produces all output artifacts from an InspectionSnapshot.
 //!
-//! Go writes 8 artifacts unconditionally. Phase 1 must produce all 8:
+//! Produces 8 artifacts:
 //!
 //! 1. Containerfile — image build definition
 //! 2. report.html — minimal PatternFly HTML report

@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the inspectah pipeline.
 //!
 //! Uses MockExecutor exclusively — these tests run offline on any platform.
-//! Phase 1 proves RPM-section parity, not full-snapshot parity.
+//! Proves RPM-section correctness via round-trip validation.
 
 use std::sync::atomic::AtomicBool;
 
@@ -262,8 +262,7 @@ fn test_no_secrets_in_any_artifact() {
 
 #[test]
 fn test_rpm_section_self_roundtrip() {
-    // Phase 1 parity proof: Rust RPM section round-trips faithfully.
-    // Go tarball ingestion is not a goal — if you need the data, re-scan.
+    // RPM section round-trips faithfully through serialize/deserialize.
     use inspectah_core::types::rpm::RpmSection;
 
     let exec = build_full_rpm_mock_executor();

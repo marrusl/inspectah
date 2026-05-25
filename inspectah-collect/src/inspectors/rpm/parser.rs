@@ -1,7 +1,7 @@
 use inspectah_core::types::rpm::PackageEntry;
 
 /// Parse "epoch:name-version-release.arch" format from `rpm -qa --queryformat`.
-/// Go's format string: `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`
+/// Format: `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`
 pub fn parse_nevra(line: &str) -> Option<PackageEntry> {
     let line = line.trim();
     if line.is_empty() {
@@ -43,7 +43,7 @@ pub fn parse_nevra(line: &str) -> Option<PackageEntry> {
 }
 
 /// RPM version comparison algorithm (rpmvercmp).
-/// Implements the same algorithm as Go's rpmvercmp and librpm's C implementation.
+/// Implements the same algorithm as librpm's C rpmvercmp.
 pub fn rpmvercmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 

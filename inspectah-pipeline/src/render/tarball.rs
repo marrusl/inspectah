@@ -1,6 +1,6 @@
 //! Tarball construction — creates deterministic .tar.gz archives from output.
 //!
-//! Mirrors Go `CreateTarball` with added path safety validation.
+//! Creates deterministic .tar.gz archives with path safety validation.
 
 use flate2::Compression;
 use flate2::write::GzEncoder;

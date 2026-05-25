@@ -1,6 +1,6 @@
 //! Containerfile renderer — produces a Containerfile from an InspectionSnapshot.
 //!
-//! Section order matches Go exactly:
+//! Section order:
 //! 1. FROM + repos + GPG + modules + packages (dnf install -y)
 //! 2. Services (enable/disable)
 //! 3. Firewall zones

@@ -1,21 +1,8 @@
 //! Inspector correctness tests.
 //!
-//! These tests run the actual Rust inspectors on fixture data via
-//! MockExecutor and verify the output is structurally correct and
-//! self-consistent. They prove inspector code paths work correctly.
-//!
-//! NOTE: These tests compare inspector output against fixture-derived
-//! goldens (Rust inspector output from fixture data), NOT against the
-//! real Go-captured goldens. The Go-captured goldens contain data from
-//! a real CentOS Stream 9 host, which differs from fixture data. Go
-//! parity on real host data is proven by:
-//!   1. Serde roundtrip tests in `inspectah-core/tests/parity_gate.rs`
-//!      (Go golden -> Rust type -> JSON, no loss)
-//!   2. Host validation evidence from running both binaries on the same
-//!      host and comparing output.
-//!
-//! For serde roundtrip tests (golden JSON -> Rust type -> JSON), see
-//! `inspectah-core/tests/parity_gate.rs`.
+//! These tests run the inspectors on fixture data via MockExecutor and
+//! verify the output is structurally correct and self-consistent.
+//! They prove inspector code paths work correctly with fixture data.
 
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
@@ -160,11 +147,7 @@ fn kernelboot_mock() -> MockExecutor {
 // ── Services inspector correctness ──────────────────────────────────
 
 /// Runs ServicesInspector on fixture data and verifies the output is
-/// structurally valid and self-consistent. Proves the inspector code
-/// path works correctly with fixture data.
-///
-/// Go parity on real data is proven separately by serde roundtrip tests
-/// (parity_gate.rs) and host validation evidence.
+/// structurally valid and self-consistent.
 #[test]
 fn test_services_inspector_correctness() {
     let exec = services_mock();
@@ -212,13 +195,7 @@ fn test_services_inspector_correctness() {
 // ── Storage inspector correctness ───────────────────────────────────
 
 /// Runs StorageInspector on fixture data and verifies the output is
-/// structurally valid and self-consistent. Proves the inspector code
-/// path works correctly with fixture data.
-///
-/// Go parity on real data is proven separately by serde roundtrip tests
-/// (parity_gate.rs) and host validation evidence. The Go golden contains
-/// real host data (LVM volumes, real device paths, etc.) that differs
-/// from fixture data by design.
+/// structurally valid and self-consistent.
 #[test]
 fn test_storage_inspector_vs_golden() {
     let exec = storage_mock();
@@ -273,13 +250,7 @@ fn test_storage_inspector_vs_golden() {
 // ── Kernelboot inspector correctness ────────────────────────────────
 
 /// Runs KernelbootInspector on fixture data and verifies the output is
-/// structurally valid and self-consistent. Proves the inspector code
-/// path works correctly with fixture data.
-///
-/// Go parity on real data is proven separately by serde roundtrip tests
-/// (parity_gate.rs) and host validation evidence. The Go golden contains
-/// real host data (73 modules, 28 alternatives, etc.) that differs from
-/// fixture data by design.
+/// structurally valid and self-consistent.
 #[test]
 fn test_kernelboot_inspector_correctness() {
     let exec = kernelboot_mock();

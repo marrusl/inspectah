@@ -1,6 +1,6 @@
 //! Config tree materialization — writes config files from snapshot to output.
 //!
-//! Implements the full `writeConfigTree()` contract from Go:
+//! Materializes the following config artifacts:
 //! - Config files (snap.config.files where include=true)
 //! - Repo files (snap.rpm.repo_files)
 //! - GPG keys (snap.rpm.gpg_keys)
@@ -129,7 +129,7 @@ fn safe_write_file(dest: &Path, content: &str) {
 }
 
 /// Write all config files from snapshot to output_dir/config/ preserving
-/// paths. This implements the full Go `writeConfigTree()` contract.
+/// paths. Writes all artifact categories listed in the module doc.
 ///
 /// Returns the sorted list of top-level directory names materialized under
 /// `config/` so the Containerfile renderer can emit matching COPY lines.

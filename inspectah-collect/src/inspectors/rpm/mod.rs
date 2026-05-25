@@ -15,7 +15,7 @@ use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use std::collections::{HashMap, HashSet};
 
-/// RPM query format string — matches Go's `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`.
+/// RPM query format string for NEVRA parsing.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
 
 /// RPM query format for file ownership — sentinel format.
@@ -301,7 +301,7 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
-        // 3b. Source repo attribution per added package (matches Go Step 2b).
+        // 3b. Source repo attribution per added package.
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::ResolvingSourceRepos,
@@ -387,7 +387,7 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
-        // 8. Build baseline_package_names for Go snapshot backward compat
+        // 8. Build baseline_package_names for downstream consumers
         let baseline_package_names = ctx.baseline_data.map(|b| {
             let mut names: Vec<String> = b
                 .packages

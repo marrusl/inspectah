@@ -2,7 +2,7 @@ use super::rpm::{RepoStatus, UnverifiablePackage};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Go-compatible preflight result (stored in snapshot JSON).
+/// Preflight result (stored in snapshot JSON).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PreflightResult {
     #[serde(default)]
