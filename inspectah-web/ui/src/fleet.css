@@ -2,10 +2,7 @@
 
 /* ─── Fleet content area ─────────────────────────────────────────────── */
 
-/* Fleet-specific padding (layout handled by .inspectah-layout__main) */
-.fleet-content {
-  padding: var(--pf-t--global--spacer--md);
-}
+/* Padding now inherited from .inspectah-layout__main in App.css */
 
 /* ─── Fleet section search ───────────────────────────────────────────── */
 

@@ -1,4 +1,4 @@
-import { DataList, EmptyState, EmptyStateBody, Title } from "@patternfly/react-core";
+import { EmptyState, EmptyStateBody } from "@patternfly/react-core";
 import { CubesIcon } from "@patternfly/react-icons";
 import type { ContextSection } from "../api/types";
 import { ContextItem } from "./ContextItem";
@@ -28,35 +28,27 @@ export function ContextList({ section }: ContextListProps) {
   return (
     <>
       {section.items.length > 0 && (
-        <DataList
+        <div
+          role="list"
           aria-label={`${section.display_name} context items`}
-          style={{
-            borderLeft: "3px solid var(--pf-t--global--border--color--default)",
-            marginTop: "var(--pf-t--global--spacer--md)",
-          }}
         >
           {section.items.map((item) => (
             <ContextItem key={item.id} item={item} />
           ))}
-        </DataList>
+        </div>
       )}
 
       {subsections.map((sub) => (
-        <div key={sub.id} style={{ marginTop: "var(--pf-t--global--spacer--lg)" }}>
-          <Title headingLevel="h3" size="lg">
-            {sub.display_name}
-          </Title>
-          <DataList
+        <div key={sub.id} className="inspectah-context-subsection">
+          <div className="inspectah-context-subsection__label">{sub.display_name}</div>
+          <div
+            role="list"
             aria-label={`${sub.display_name} context items`}
-            style={{
-              borderLeft: "3px solid var(--pf-t--global--border--color--default)",
-              marginTop: "var(--pf-t--global--spacer--md)",
-            }}
           >
             {sub.items.map((item) => (
               <ContextItem key={item.id} item={item} />
             ))}
-          </DataList>
+          </div>
         </div>
       ))}
     </>

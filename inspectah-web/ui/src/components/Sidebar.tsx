@@ -154,7 +154,7 @@ export function Sidebar({
       </div>
       {searchSlot}
       <Nav aria-label="Sections">
-        <NavGroup title="Decisions">
+        <NavGroup title="Review">
           {DECISION_SECTIONS.map((sec) => (
             <NavItem
               key={sec.id}
@@ -168,7 +168,7 @@ export function Sidebar({
             </NavItem>
           ))}
         </NavGroup>
-        <NavGroup title="Context">
+        <NavGroup title="Reference">
           {CONTEXT_SECTIONS.map((sec) => (
             <NavItem
               key={sec.id}

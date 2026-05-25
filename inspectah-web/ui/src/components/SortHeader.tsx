@@ -58,13 +58,14 @@ export function SortHeader({
             ref={leftRef}
             className="inspectah-sort-header__column"
             aria-label={sortLabel(leftLabel, leftSortDir)}
+            aria-sort={leftSortDir}
             onClick={() => onSort("left")}
             onKeyDown={(e) => handleKeyDown(e, "left")}
           >
             {leftLabel}
             {activeColumn === "left" && (
               <span className="inspectah-sort-header__chevron" aria-hidden="true">
-                {" "}{chevron(direction)}
+                {chevron(direction)}
               </span>
             )}
           </button>
@@ -74,13 +75,14 @@ export function SortHeader({
             ref={rightRef}
             className="inspectah-sort-header__column"
             aria-label={sortLabel(rightLabel, rightSortDir)}
+            aria-sort={rightSortDir}
             onClick={() => onSort("right")}
             onKeyDown={(e) => handleKeyDown(e, "right")}
           >
             {rightLabel}
             {activeColumn === "right" && (
               <span className="inspectah-sort-header__chevron" aria-hidden="true">
-                {" "}{chevron(direction)}
+                {chevron(direction)}
               </span>
             )}
           </button>

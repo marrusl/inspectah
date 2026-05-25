@@ -18,6 +18,47 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
+
+/// Produce a display version that avoids duplicating what's already in pretty_name.
+///
+/// Cases:
+/// - "CentOS Stream 9" + "9"       → "" (exact match, pretty_name is sufficient)
+/// - "Fedora Linux 41 (Server)" + "41" → "" (version appears inside pretty_name)
+/// - "RHEL 9.4 (Plow)" + "9.4"    → "" (exact match inside pretty_name)
+/// - "RHEL 10" + "10.2"           → "(10.2)" (major in name, minor is new info)
+/// - "RHEL" + "10.2"              → "10.2" (no version in name at all)
+fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
+    if version_id.is_empty() {
+        return String::new();
+    }
+    // Exact version already appears as a word boundary in pretty_name
+    for (i, _) in pretty_name.match_indices(version_id) {
+        let before_ok = i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let after = i + version_id.len();
+        let after_ok =
+            after >= pretty_name.len() || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return String::new();
+        }
+    }
+    // Major part appears but version_id has a minor (e.g., name has "10", version is "10.2")
+    if let Some(major) = version_id.split('.').next() {
+        if major != version_id {
+            for (i, _) in pretty_name.match_indices(major) {
+                let before_ok =
+                    i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+                let after = i + major.len();
+                let after_ok = after >= pretty_name.len()
+                    || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
+                if before_ok && after_ok {
+                    return format!("({version_id})");
+                }
+            }
+        }
+    }
+    // No overlap at all
+    version_id.to_string()
+}
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::AppError;
@@ -149,13 +190,13 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .os_release
         .as_ref()
         .map(|os| {
-            // pretty_name with name fallback
             let name = if !os.pretty_name.is_empty() {
                 os.pretty_name.clone()
             } else {
                 os.name.clone()
             };
-            (name, os.version_id.clone(), os.id.clone())
+            let version = deduplicate_version(&name, &os.version_id);
+            (name, version, os.id.clone())
         })
         .unwrap_or_default();
 
@@ -2861,6 +2902,125 @@ mod tests {
                 .items
                 .iter()
                 .any(|item| item.id == "custom-app.service")
+        );
+    }
+
+    // -- deduplicate_version tests -------------------------------------------
+
+    #[test]
+    fn dedup_version_exact_suffix() {
+        // CentOS Stream 9 + 9 → empty (already in name)
+        assert_eq!(deduplicate_version("CentOS Stream 9", "9"), "");
+    }
+
+    #[test]
+    fn dedup_version_inside_with_parens() {
+        // Fedora Linux 41 (Server Edition) + 41 → empty
+        assert_eq!(
+            deduplicate_version("Fedora Linux 41 (Server Edition)", "41"),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_rhel_9_exact() {
+        // RHEL 9.4 (Plow) + 9.4 → empty
+        assert_eq!(
+            deduplicate_version("Red Hat Enterprise Linux 9.4 (Plow)", "9.4"),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_rhel_10_minor() {
+        // RHEL 10 + 10.2 → "(10.2)" — major in name, minor is new info
+        assert_eq!(
+            deduplicate_version("Red Hat Enterprise Linux 10", "10.2"),
+            "(10.2)"
+        );
+    }
+
+    #[test]
+    fn dedup_version_rhel_10_codename_minor() {
+        // RHEL 10 (Coughlan) + 10.2 → "(10.2)"
+        assert_eq!(
+            deduplicate_version("Red Hat Enterprise Linux 10 (Coughlan)", "10.2"),
+            "(10.2)"
+        );
+    }
+
+    #[test]
+    fn dedup_version_no_overlap() {
+        // Name has no version at all → pass through
+        assert_eq!(
+            deduplicate_version("Red Hat Enterprise Linux", "10.2"),
+            "10.2"
+        );
+    }
+
+    #[test]
+    fn dedup_version_empty() {
+        assert_eq!(deduplicate_version("CentOS Stream 9", ""), "");
+    }
+
+    #[test]
+    fn dedup_version_no_false_positive_on_partial_digit() {
+        // "19" should not match version "9" — word boundary check
+        assert_eq!(deduplicate_version("Build19 Linux", "9"), "9");
+    }
+
+    #[test]
+    fn dedup_version_rhel_9_with_minor() {
+        // RHEL 9 + 9.4 → "(9.4)" — major in name, minor adds info
+        assert_eq!(
+            deduplicate_version("Red Hat Enterprise Linux 9", "9.4"),
+            "(9.4)"
+        );
+    }
+
+    #[test]
+    fn dedup_version_bazzite_current() {
+        // Bazzite 44 (FROM Fedora Kinoite) + 44 → empty
+        assert_eq!(
+            deduplicate_version("Bazzite 44 (FROM Fedora Kinoite)", "44"),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_bazzite_old_format() {
+        // Old UBlue format: version embedded in date-stamped string
+        assert_eq!(
+            deduplicate_version("Fedora Linux 40.20240621.0 (Bazzite)", "40"),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_aurora() {
+        assert_eq!(
+            deduplicate_version("Aurora 44 (FROM Fedora Kinoite)", "44"),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_bluefin() {
+        assert_eq!(
+            deduplicate_version(
+                "Bluefin (Version: 41.20250209.1 / FROM Fedora Silverblue 41)",
+                "41"
+            ),
+            ""
+        );
+    }
+
+    #[test]
+    fn dedup_version_bluefin_lts() {
+        // Bluefin LTS is built on CentOS Stream 10
+        assert_eq!(
+            deduplicate_version("Bluefin LTS 10 (FROM CentOS Stream 10)", "10"),
+            ""
         );
     }
 

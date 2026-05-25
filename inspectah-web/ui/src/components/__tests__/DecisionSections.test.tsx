@@ -266,7 +266,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg({ include: true }) };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
 
-    const toggle = screen.getByRole("switch", { name: /toggle httpd/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle httpd/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
       op: "ExcludePackage",
@@ -279,7 +279,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg({ include: false }) };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
 
-    const toggle = screen.getByRole("switch", { name: /toggle httpd/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle httpd/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
       op: "IncludePackage",
@@ -292,7 +292,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "config", data: makeConfig({ include: true }) };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
 
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
       op: "ExcludeConfig",
@@ -393,7 +393,7 @@ describe("Viewed tracking", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg() };
     render(<DecisionItem item={item} {...baseProps} onMarkViewed={onMarkViewed} />);
 
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await userEvent.click(toggle);
     expect(onMarkViewed).toHaveBeenCalledWith("packages:httpd.x86_64");
   });
@@ -422,7 +422,7 @@ describe("Viewed tracking", () => {
     render(<DecisionItem item={item} {...baseProps} onMarkViewed={onMarkViewed} />);
 
     // First toggle (marks viewed)
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await userEvent.click(toggle);
     expect(onMarkViewed).toHaveBeenCalledTimes(1);
 
@@ -651,7 +651,7 @@ describe("Error handling", () => {
     });
 
     // Toggle the switch to trigger mutation
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await user.click(toggle);
 
     // Wait for error toast and optimistic revert re-fetch to complete
@@ -718,7 +718,7 @@ describe("Error handling", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await userEvent.click(toggle);
 
     // Should auto re-fetch and update view
@@ -1394,10 +1394,10 @@ describe("RepoBar in MainContent", () => {
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
 
-    // RepoBar renders pill buttons for toggleable (non-distro) repos with counts
+    // RepoBar renders toggleable (non-distro) repos with name and count
     const repoBar = screen.getByTestId("repo-bar");
     expect(repoBar).toBeInTheDocument();
-    expect(within(repoBar).getByText(/epel \(1\)/)).toBeInTheDocument();
+    expect(within(repoBar).getByText("epel")).toBeInTheDocument();
   });
 
   it("renders PackageList with all packages from view data", () => {
