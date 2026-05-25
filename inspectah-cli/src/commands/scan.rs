@@ -10,6 +10,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -26,7 +28,10 @@ use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspecto
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
+use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
@@ -37,6 +42,37 @@ use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
 
 use super::pull_progress;
+
+/// Maps snapshot completeness to process exit semantics.
+/// Exit codes reflect report trustworthiness, not scan perfection.
+pub enum ScanOutcome {
+    /// Exit 0 — report is trustworthy.
+    Clean,
+    /// Exit 0 — report is trustworthy but has caveats.
+    Degraded,
+    /// Exit 2 — report has blind spots (inspector failed).
+    Incomplete,
+    /// Exit 130 — user interrupted with SIGINT.
+    Interrupted,
+}
+
+impl ScanOutcome {
+    fn from_completeness(completeness: &Completeness) -> Self {
+        match completeness {
+            Completeness::Complete => ScanOutcome::Clean,
+            Completeness::Partial { .. } => ScanOutcome::Degraded,
+            Completeness::Incomplete { .. } => ScanOutcome::Incomplete,
+        }
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            ScanOutcome::Clean | ScanOutcome::Degraded => 0,
+            ScanOutcome::Incomplete => 2,
+            ScanOutcome::Interrupted => 130,
+        }
+    }
+}
 
 #[derive(Args)]
 pub struct ScanArgs {
@@ -67,6 +103,10 @@ pub struct ScanArgs {
     /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
     #[arg(long)]
     pub acknowledge_sensitive: bool,
+
+    /// Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)
+    #[arg(long, value_name = "MODE")]
+    pub progress: Option<crate::progress::ProgressMode>,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -115,7 +155,7 @@ fn get_hostname(executor: &dyn inspectah_core::traits::executor::Executor) -> St
     }
 }
 
-pub fn run_scan(args: &ScanArgs) -> Result<()> {
+pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
     let euid = unsafe { libc::geteuid() };
@@ -174,23 +214,28 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Err(e) => return Err(e.into()),
     };
 
+    // Resolve rendering mode early — governs both pull viewport and scan progress.
+    // Priority: CLI flag > INSPECTAH_PROGRESS env > TTY auto-detect.
+    let mode = detect_mode(args.progress.as_ref());
+
     // Step 3: Extract baseline
     let baseline_data = match (&normalized_ref, args.no_baseline) {
         (Some(norm), false) => {
             eprintln!("Pulling {}...", norm.as_str());
 
-            let use_viewport = std::io::IsTerminal::is_terminal(&std::io::stderr());
+            let use_viewport = mode == crate::progress::Mode::Rich;
             let mut collected_lines: Vec<String> = Vec::new();
 
             let data = if use_viewport {
                 // TTY: viewport rendering
-                let term_width = terminal_size::terminal_size()
-                    .map(|(w, _)| w.0 as usize)
-                    .unwrap_or(80);
+                let (term_width, term_height) = terminal_size::terminal_size()
+                    .map(|(w, h)| (w.0 as usize, h.0 as usize))
+                    .unwrap_or((80, 24));
 
                 if term_width >= pull_progress::MIN_VIEWPORT_WIDTH {
                     let content_width = pull_progress::viewport_content_width(term_width);
-                    let mut ring = [String::new(), String::new(), String::new()];
+                    let viewport_lines = pull_progress::viewport_height(term_height);
+                    let mut ring: Vec<String> = (0..viewport_lines).map(|_| String::new()).collect();
                     let mut ring_pos: usize = 0;
 
                     let result = {
@@ -208,7 +253,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
                     };
                     // Only clear viewport if lines were actually rendered.
                     if ring_pos > 0 {
-                        pull_progress::viewport_cleanup();
+                        pull_progress::viewport_cleanup(viewport_lines);
                     }
                     result.context("baseline extraction failed")?
                 } else {
@@ -252,7 +297,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 
     // Step 4: Collect — run all inspectors
     let hostname = get_hostname(&executor);
-    eprintln!("Scanning host {hostname}...");
+    eprintln!("Inspecting host {hostname}...");
 
     // Build UserGroupOptions from CLI flags
     let user_group_options = UserGroupOptions {
@@ -274,8 +319,40 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
-    let collected = collect(&source, &executor, &inspectors, baseline_data.as_ref());
-    eprintln!("Scanning host {hostname}... done");
+
+    let color = use_color();
+    let progress = TerminalProgress::new(mode, color);
+    let scan_start = std::time::Instant::now();
+
+    // Install SIGINT handler so Ctrl-C exits cleanly with code 130.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_hook = cancelled.clone();
+    ctrlc::set_handler(move || {
+        cancelled_hook.store(true, Ordering::SeqCst);
+    })
+    .expect("failed to install SIGINT handler");
+
+    let collected = collect(
+        &source,
+        &executor,
+        &inspectors,
+        baseline_data.as_ref(),
+        &progress,
+        &cancelled,
+    );
+
+    // SIGINT is a cancellation — no output, no partial counts.
+    // Check BEFORE finalize so rich mode doesn't reprint the checklist.
+    if cancelled.load(Ordering::SeqCst) {
+        progress.cancel();
+        eprintln!("Scan cancelled. No report written.");
+        return Ok(ScanOutcome::Interrupted);
+    }
+
+    progress.finalize();
+
+    // Derive exit outcome from collection completeness
+    let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
 
     // Step 5: Validate
     let validated = validate(collected).context("snapshot validation failed")?;
@@ -335,15 +412,26 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).context("failed to create output directory")?;
                 }
-                std::fs::write(path, &json)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                eprintln!("Snapshot written to {}", path.display());
+                match std::fs::write(path, &json) {
+                    Ok(()) => {
+                        let elapsed = scan_start.elapsed();
+                        print_completion(&outcome, elapsed, &snapshot, Some(path.as_path()), true);
+                    }
+                    Err(e) => {
+                        let elapsed = scan_start.elapsed();
+                        print_completion(&outcome, elapsed, &snapshot, None, true);
+                        eprintln!("Error: failed to write output: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
             None => {
                 println!("{json}");
+                let elapsed = scan_start.elapsed();
+                print_completion(&outcome, elapsed, &snapshot, None, true);
             }
         }
-        return Ok(());
+        return Ok(outcome);
     }
 
     // Step 7: Render all artifacts to a temp directory
@@ -375,15 +463,19 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         std::fs::create_dir_all(parent).context("failed to create output directory")?;
     }
 
-    create_tarball(render_dir.path(), &tarball_path, &stamp)
-        .with_context(|| format!("failed to create tarball at {}", tarball_path.display()))?;
-
-    eprintln!("Output written to {}", tarball_path.display());
-    eprintln!(
-        "To view and edit results, run: inspectah refine {}",
-        tarball_path.display()
-    );
-    Ok(())
+    match create_tarball(render_dir.path(), &tarball_path, &stamp) {
+        Ok(()) => {
+            let elapsed = scan_start.elapsed();
+            print_completion(&outcome, elapsed, &snapshot, Some(&tarball_path), false);
+            Ok(outcome)
+        }
+        Err(e) => {
+            let elapsed = scan_start.elapsed();
+            print_completion(&outcome, elapsed, &snapshot, None, false);
+            eprintln!("Error: failed to write report: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Read Universal Blue metadata from the well-known path.
@@ -414,6 +506,111 @@ fn read_bootc_status_ref(executor: &dyn Executor) -> Option<String> {
         .get("image")?
         .as_str()
         .map(String::from)
+}
+
+/// Build a human-readable summary of section item counts.
+///
+/// Returns a comma-separated string like "847 packages, 12 configs, 4 services, 2 containers".
+/// Sections with zero items are omitted. Returns an empty string when all sections are absent
+/// or empty (used by the interrupted path to detect whether any inspectors completed).
+fn build_summary_counts(snapshot: &InspectionSnapshot) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(rpm) = &snapshot.rpm {
+        let count = rpm.packages_added.len();
+        if count > 0 {
+            parts.push(format!("{count} packages"));
+        }
+    }
+    if let Some(config) = &snapshot.config {
+        let count = config.files.len();
+        if count > 0 {
+            parts.push(format!("{count} configs"));
+        }
+    }
+    if let Some(services) = &snapshot.services {
+        let count = services.state_changes.len();
+        if count > 0 {
+            parts.push(format!("{count} services"));
+        }
+    }
+    if let Some(containers) = &snapshot.containers {
+        let count = containers.running_containers.len();
+        if count > 0 {
+            parts.push(format!("{count} containers"));
+        }
+    }
+
+    parts.join(", ")
+}
+
+/// Render the scan completion block to stderr.
+///
+/// Output varies by `ScanOutcome`:
+/// - **Clean / Degraded / Incomplete**: summary counts, optional degraded/failed detail,
+///   report path and next-step hint.
+/// - **Interrupted**: partial counts (if any inspectors completed), no report written.
+fn print_completion(
+    outcome: &ScanOutcome,
+    elapsed: std::time::Duration,
+    snapshot: &InspectionSnapshot,
+    output_path: Option<&std::path::Path>,
+    inspect_only: bool,
+) {
+    let secs = elapsed.as_secs_f64();
+    let counts = build_summary_counts(snapshot);
+
+    match outcome {
+        ScanOutcome::Clean => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+        }
+        ScanOutcome::Degraded => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+            if let Completeness::Partial {
+                degraded_sections, ..
+            } = &snapshot.completeness
+            {
+                eprintln!(
+                    "  {} degraded (see report for details)",
+                    degraded_sections.len()
+                );
+            }
+        }
+        ScanOutcome::Incomplete => {
+            eprintln!("Scan complete ({secs:.1}s) — {counts}");
+            if let Completeness::Incomplete {
+                failed_sections,
+                degraded_sections,
+                ..
+            } = &snapshot.completeness
+            {
+                let mut detail = Vec::new();
+                if !failed_sections.is_empty() {
+                    detail.push(format!("{} failed", failed_sections.len()));
+                }
+                if !degraded_sections.is_empty() {
+                    detail.push(format!("{} degraded", degraded_sections.len()));
+                }
+                eprintln!("  {} (see report for details)", detail.join(", "));
+            }
+        }
+        ScanOutcome::Interrupted => {
+            // SIGINT path never reaches print_completion — the early
+            // return in run_scan() handles it directly. This arm exists
+            // only for exhaustive matching.
+            return;
+        }
+    }
+
+    // Report path and next-step hint
+    if let Some(path) = output_path {
+        if inspect_only {
+            eprintln!("Output: {}", path.display());
+        } else {
+            eprintln!("Report: {}", path.display());
+            eprintln!("To review: inspectah refine {}", path.display());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -465,6 +662,88 @@ VARIANT_ID="workstation"
             Box::new(NonRpmInspector::new()),
         ];
         assert_eq!(inspectors.len(), 11);
+    }
+
+    #[test]
+    fn test_build_summary_counts_full() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::containers::{ContainerSection, RunningContainer};
+        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let mut snapshot = InspectionSnapshot::default();
+
+        // 3 packages
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = vec![
+            PackageEntry::default(),
+            PackageEntry::default(),
+            PackageEntry::default(),
+        ];
+        snapshot.rpm = Some(rpm);
+
+        // 2 configs
+        let mut config = ConfigSection::default();
+        config.files = vec![ConfigFileEntry::default(), ConfigFileEntry::default()];
+        snapshot.config = Some(config);
+
+        // 4 services
+        let svc = || ServiceStateChange {
+            unit: "test.service".into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Enable),
+            include: true,
+            owning_package: None,
+            fleet: None,
+            attention_reason: None,
+        };
+        let mut services = ServiceSection::default();
+        services.state_changes = vec![svc(), svc(), svc(), svc()];
+        snapshot.services = Some(services);
+
+        // 1 container
+        let mut containers = ContainerSection::default();
+        containers.running_containers = vec![RunningContainer::default()];
+        snapshot.containers = Some(containers);
+
+        assert_eq!(
+            build_summary_counts(&snapshot),
+            "3 packages, 2 configs, 4 services, 1 containers"
+        );
+    }
+
+    #[test]
+    fn test_build_summary_counts_empty() {
+        let snapshot = InspectionSnapshot::default();
+        assert_eq!(build_summary_counts(&snapshot), "");
+    }
+
+    #[test]
+    fn test_build_summary_counts_partial() {
+        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+        let mut snapshot = InspectionSnapshot::default();
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = (0..847).map(|_| PackageEntry::default()).collect();
+        snapshot.rpm = Some(rpm);
+
+        assert_eq!(build_summary_counts(&snapshot), "847 packages");
+    }
+
+    #[test]
+    fn test_build_summary_counts_skips_empty_sections() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::RpmSection;
+
+        let mut snapshot = InspectionSnapshot::default();
+        // RPM section present but no packages_added
+        snapshot.rpm = Some(RpmSection::default());
+        // Config section present but no files
+        snapshot.config = Some(ConfigSection::default());
+
+        assert_eq!(build_summary_counts(&snapshot), "");
     }
 
     #[test]

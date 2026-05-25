@@ -67,9 +67,7 @@ pub fn save_session(state: &SessionState, tarball: &Path) -> Result<(), std::io:
 ///
 /// Returns `Ok(None)` if no session file exists. Returns an error if the
 /// file exists but has an unknown schema version or is malformed.
-pub fn load_session(
-    tarball: &Path,
-) -> Result<Option<SessionState>, Box<dyn std::error::Error>> {
+pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std::error::Error>> {
     let path = session_file_path(tarball);
     if !path.exists() {
         return Ok(None);

@@ -7,6 +7,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
+use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
 use inspectah_core::types::os::OsRelease;
@@ -157,7 +158,7 @@ fn test_nonrpm_inspector_happy_path() {
     };
 
     let output = NonRpmInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("nonrpm inspector should succeed on full fixture set");
 
     let section = match &output.section {
@@ -221,7 +222,7 @@ fn test_nonrpm_inspector_empty_system() {
     };
 
     let output = NonRpmInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed on empty system");
 
     let section = match &output.section {
@@ -263,7 +264,7 @@ fn test_nonrpm_inspector_degraded_no_readelf() {
         baseline_data: None,
     };
 
-    let result = NonRpmInspector::new().inspect(&ctx);
+    let result = NonRpmInspector::new().inspect(&ctx, &NullProgress);
 
     match result {
         Err(InspectorError::Degraded { partial, reason }) => {
@@ -316,7 +317,7 @@ fn test_nonrpm_inspector_json_roundtrip() {
     };
 
     let output = NonRpmInspector::new()
-        .inspect(&ctx)
+        .inspect(&ctx, &NullProgress)
         .expect("inspector should succeed");
 
     let section = match &output.section {
@@ -354,7 +355,7 @@ fn test_nonrpm_ignores_rpm_state() {
     };
 
     let output_a = NonRpmInspector::new()
-        .inspect(&ctx_a)
+        .inspect(&ctx_a, &NullProgress)
         .expect("run A should succeed");
 
     // Run 2: rpm_state with many owned paths
@@ -378,7 +379,7 @@ fn test_nonrpm_ignores_rpm_state() {
     };
 
     let output_b = NonRpmInspector::new()
-        .inspect(&ctx_b)
+        .inspect(&ctx_b, &NullProgress)
         .expect("run B should succeed");
 
     let json_a = serde_json::to_string(&output_a.section).expect("A must serialize");

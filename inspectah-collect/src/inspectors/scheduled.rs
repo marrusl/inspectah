@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::scheduled::{
@@ -39,7 +40,11 @@ impl Inspector for ScheduledTasksInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let rpm_state = match ctx.rpm_state {
             None => {
                 return Err(InspectorError::Failed {
@@ -124,6 +129,13 @@ impl Inspector for ScheduledTasksInspector {
         for timer in &section.systemd_timers {
             check_command_redaction(&timer.exec_start, &timer.path, &mut hints);
         }
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::ScheduledTasks,
+            kind: inspectah_core::types::progress::MetricKind::TimersFound,
+            value: section.systemd_timers.len(),
+        });
 
         if !warnings.is_empty() || !degraded_reasons.is_empty() {
             // Add degraded file count warning if applicable
@@ -971,6 +983,7 @@ fn check_command_redaction(command: &str, path: &str, hints: &mut Vec<RedactionH
 mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
     use std::collections::HashSet;
@@ -1031,7 +1044,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             // Two cron jobs from /etc/cron.d
@@ -1078,7 +1091,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             // One cron job entry for /etc/crontab
@@ -1123,7 +1136,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             // User crontab entry
@@ -1188,7 +1201,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             let daily_jobs: Vec<_> = section
@@ -1374,7 +1387,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             assert_eq!(section.systemd_timers.len(), 1);
@@ -1438,7 +1451,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             assert!(section.at_jobs.is_empty());
@@ -1472,7 +1485,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             let rpm_job = section
@@ -1523,7 +1536,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed on empty system");
         if let SectionData::ScheduledTasks(ref section) = output.section {
             assert!(section.cron_jobs.is_empty());
@@ -1552,7 +1565,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Degraded { reason, partial }) => {
                 assert!(
@@ -1584,7 +1597,7 @@ mod tests {
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         match result {
             Err(InspectorError::Failed { reason }) => {
                 assert!(

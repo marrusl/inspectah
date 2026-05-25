@@ -44,7 +44,9 @@ fn content_hash_ord_for_btreemap() {
 
 #[test]
 fn item_id_config_serde_roundtrip() {
-    let id = ItemId::Config { path: "/etc/nginx/nginx.conf".into() };
+    let id = ItemId::Config {
+        path: "/etc/nginx/nginx.conf".into(),
+    };
     let json = serde_json::to_string(&id).unwrap();
     assert!(json.contains("Config"));
     let parsed: ItemId = serde_json::from_str(&json).unwrap();
@@ -53,7 +55,9 @@ fn item_id_config_serde_roundtrip() {
 
 #[test]
 fn item_id_package_serde_roundtrip() {
-    let id = ItemId::Package { name_arch: "httpd.x86_64".into() };
+    let id = ItemId::Package {
+        name_arch: "httpd.x86_64".into(),
+    };
     let json = serde_json::to_string(&id).unwrap();
     let parsed: ItemId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, parsed);
@@ -63,7 +67,9 @@ fn item_id_package_serde_roundtrip() {
 fn select_variant_op_serde() {
     let hash = ContentHash::from_content(b"variant content");
     let op = RefinementOp::SelectVariant {
-        item_id: ItemId::Config { path: "/etc/test.conf".into() },
+        item_id: ItemId::Config {
+            path: "/etc/test.conf".into(),
+        },
         target: hash,
     };
     let json = serde_json::to_string(&op).unwrap();
@@ -74,7 +80,9 @@ fn select_variant_op_serde() {
 #[test]
 fn edit_variant_op_serde() {
     let op = RefinementOp::EditVariant {
-        item_id: ItemId::DropIn { path: "/etc/systemd/system/httpd.service.d/override.conf".into() },
+        item_id: ItemId::DropIn {
+            path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+        },
         content: "new content".into(),
         based_on: None,
     };
@@ -87,7 +95,9 @@ fn edit_variant_op_serde() {
 fn discard_variant_op_serde() {
     let hash = ContentHash::from_content(b"discard me");
     let op = RefinementOp::DiscardVariant {
-        item_id: ItemId::Config { path: "/etc/test.conf".into() },
+        item_id: ItemId::Config {
+            path: "/etc/test.conf".into(),
+        },
         variant: hash,
     };
     let json = serde_json::to_string(&op).unwrap();

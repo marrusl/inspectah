@@ -731,7 +731,10 @@ async fn health_extended_fields() {
     assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
     assert_eq!(host["os_id"], "rhel");
     assert!(host.get("system_type").is_some());
-    assert_eq!(host["schema_version"], inspectah_core::snapshot::SCHEMA_VERSION);
+    assert_eq!(
+        host["schema_version"],
+        inspectah_core::snapshot::SCHEMA_VERSION
+    );
     assert!(json.get("completeness").is_some());
 }
 
@@ -748,7 +751,10 @@ async fn health_minimal_snapshot() {
     assert_eq!(host["os_name"], "");
     assert_eq!(host["os_version"], "");
     assert_eq!(host["os_id"], "");
-    assert_eq!(host["schema_version"], inspectah_core::snapshot::SCHEMA_VERSION);
+    assert_eq!(
+        host["schema_version"],
+        inspectah_core::snapshot::SCHEMA_VERSION
+    );
 }
 
 #[tokio::test]
@@ -783,8 +789,13 @@ async fn view_response_repo_groups_include_tier() {
     let (status, json) = get_json(&app, "/api/view").await;
     assert_eq!(status, StatusCode::OK);
 
-    let groups = json["repo_groups"].as_array().expect("repo_groups must be array");
-    let appstream = groups.iter().find(|g| g["section_id"] == "appstream").unwrap();
+    let groups = json["repo_groups"]
+        .as_array()
+        .expect("repo_groups must be array");
+    let appstream = groups
+        .iter()
+        .find(|g| g["section_id"] == "appstream")
+        .unwrap();
     assert_eq!(appstream["tier"], "distro");
 
     let epel = groups.iter().find(|g| g["section_id"] == "epel").unwrap();

@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerMount, ContainerSection, FlatpakApp, QuadletUnit,
@@ -88,7 +89,11 @@ impl Inspector for ContainersInspector {
         &[SourceSystemKind::PackageBased]
     }
 
-    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+    fn inspect(
+        &self,
+        ctx: &InspectionContext<'_>,
+        progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
         let mut warnings: Vec<Warning> = Vec::new();
         let mut hints: Vec<RedactionHint> = Vec::new();
@@ -129,6 +134,13 @@ impl Inspector for ContainersInspector {
 
         // --- Flatpak apps ---
         section.flatpak_apps = detect_flatpak_apps(exec);
+
+        // Emit metric for progress rendering
+        progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
+            inspector: InspectorId::Containers,
+            kind: inspectah_core::types::progress::MetricKind::ContainersFound,
+            value: section.running_containers.len(),
+        });
 
         let output = InspectorOutput {
             section: SectionData::Containers(section),
@@ -884,6 +896,7 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
 
@@ -1640,7 +1653,7 @@ com.visualstudio.code\tflathub\tstable
             baseline_data: None,
         };
 
-        let result = inspector.inspect(&ctx);
+        let result = inspector.inspect(&ctx, &NullProgress);
         assert!(
             result.is_ok(),
             "empty system should be Complete, not Degraded"
