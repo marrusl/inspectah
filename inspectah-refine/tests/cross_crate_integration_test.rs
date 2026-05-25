@@ -1,8 +1,8 @@
-//! Phase 6 integration tests — cross-crate round-trip proofs.
+//! Cross-crate integration tests — round-trip contract proofs.
 //!
 //! These tests exercise the contracts between inspectah-core, inspectah-pipeline,
-//! and inspectah-refine to prove that Phase 6 baseline data flows correctly
-//! across crate boundaries.
+//! and inspectah-refine to prove that baseline data flows correctly across crate
+//! boundaries.
 
 use std::collections::HashMap;
 
