@@ -30,17 +30,16 @@ This directory contains comprehensive documentation for developers working on th
 
 ## Key Takeaways (60 seconds)
 
-1. **Two layers**: Go CLI wrapper (Cobra, `cmd/inspectah/`) + Python engine (argparse, `src/inspectah/`)
-2. **Go CLI**: orchestrates podman, distributed via COPR RPM and Homebrew
-3. **Python engine**: runs inside the container, does all inspection and rendering
-4. **Data**: Pydantic v2 schema (strongly typed)
-5. **Pattern**: 11 Inspectors → 1 Schema → 8 Renderers
-6. **Entry**: Go → `cmd/inspectah/main.go`, Python → `src/inspectah/__main__.py::main()`
-7. **Schema**: `src/inspectah/schema.py::InspectionSnapshot` (single source of truth)
-8. **Inspectors**: `src/inspectah/inspectors/*.py` (each returns Pydantic model)
-9. **Renderers**: `src/inspectah/renderers/*.py` (each consumes snapshot)
-10. **Tests**: pytest for Python (`tests/`), Go tests (`cmd/inspectah/internal/*/`)
-11. **Build**: Go binary via `go build`, Python container via `Containerfile`
+1. **Native Rust binary**: single `inspectah` binary from a Cargo workspace with six crates
+2. **CLI crate**: `inspectah-cli/` — clap-based, user-facing binary
+3. **Core crate**: `inspectah-core/` — schema types and shared domain logic
+4. **Collect crate**: `inspectah-collect/` — inspectors (host data collection)
+5. **Pipeline crate**: `inspectah-pipeline/` — orchestrates inspectors, baseline, and renderers
+6. **Web crate**: `inspectah-web/` — HTML report renderer and interactive web UIs
+7. **Refine crate**: `inspectah-refine/` — refine engine for interactive editing
+8. **Entry**: `inspectah-cli/src/main.rs`
+9. **Tests**: `cargo test` runs all workspace tests
+10. **Build**: `cargo build --release -p inspectah-cli`, distributed via COPR RPM and Homebrew
 
 ## File Organization
 
@@ -50,15 +49,12 @@ inspectah/
 ├── IMPLEMENTATION_PLAN.md             ← Full reference (900 lines)
 ├── ARCHITECTURE_DIAGRAM.md            ← Visual flows
 ├── README_DEVELOPER.md                ← You are here
-├── cmd/inspectah/                    ← Go CLI wrapper (Cobra)
-│   ├── main.go                       ← Entry point
-│   ├── go.mod / go.sum / vendor/     ← Go module deps
-│   └── internal/
-│       ├── cli/                      ← Subcommands (scan, fleet, etc.)
-│       ├── container/                ← Podman invocation builder
-│       ├── errors/                   ← Error translation
-│       ├── paths/                    ← Path resolution
-│       └── platform/                 ← Platform detection
+├── inspectah-cli/                    ← CLI binary crate (clap)
+├── inspectah-core/                   ← Schema types and shared domain logic
+├── inspectah-collect/                ← Inspectors (host data collection)
+├── inspectah-pipeline/               ← Pipeline orchestrator
+├── inspectah-web/                    ← HTML report renderer and web UIs
+├── inspectah-refine/                 ← Refine engine
 ├── packaging/
 │   └── inspectah.spec                ← RPM spec for COPR builds
 ├── src/inspectah/                    ← Python analysis engine
@@ -254,7 +250,7 @@ Questions? Start here:
 
 ---
 
-**Last Updated**: April 2026  
-**inspectah Version**: 0.6.0  
-**Go CLI**: 1.21+, Cobra  
-**Python Engine**: 3.11+, Pydantic v2
+**Last Updated**: May 2026  
+**inspectah Version**: 0.8.1-alpha.3  
+**Language**: Rust (2024 edition)  
+**Build**: `cargo build --release -p inspectah-cli`

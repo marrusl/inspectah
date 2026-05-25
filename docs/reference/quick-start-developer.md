@@ -2,13 +2,15 @@
 
 ## TL;DR - Key Facts
 
-- **Two layers**: Go CLI wrapper (`cmd/inspectah/`) orchestrates the container; Python analysis engine (`src/inspectah/`) does the actual work inside the container
-- **Go CLI**: Cobra framework, manages podman lifecycle, distributed via COPR RPM and Homebrew
-- **Python engine**: Python 3.11+, argparse, Pydantic v2 schemas (`src/inspectah/schema.py`)
-- **Plugin Pattern**: Inspectors collect → Renderers output (both in registry)
-- **Orchestration**: Pipeline in `pipeline.py` runs inspectors sequentially, then renderers
-- **Testing**: pytest for Python (`tests/`), Go tests for CLI (`cmd/inspectah/internal/`)
-- **Build**: Go binary via `go build`, Python container via `Containerfile`, published to `ghcr.io/marrusl/inspectah:latest`
+- **Native Rust CLI**: single binary built from a Cargo workspace with six crates
+- **CLI crate**: `inspectah-cli/` — clap-based, user-facing binary
+- **Core crate**: `inspectah-core/` — schema types and shared domain logic
+- **Collect crate**: `inspectah-collect/` — inspectors that run against a host root
+- **Pipeline crate**: `inspectah-pipeline/` — orchestrates inspectors, baseline, and renderers
+- **Web crate**: `inspectah-web/` — HTML report renderer and interactive web UIs
+- **Refine crate**: `inspectah-refine/` — refine engine for interactive editing
+- **Testing**: `cargo test` runs all workspace tests
+- **Build**: `cargo build --release -p inspectah-cli`, distributed via COPR RPM and Homebrew
 
 ## Critical Files (Read in Order)
 
@@ -41,13 +43,13 @@
 ## Commands Structure
 
 ```bash
-# Go CLI (user-facing, manages container lifecycle)
+# Rust CLI (native binary)
 inspectah scan                     # Scan host, produce tarball/dir
 inspectah refine *.tar.gz          # Interactive browser editor
 inspectah fleet dir/               # Merge N host snapshots
 inspectah architect ./fleets/      # Plan layer decomposition
-inspectah build *.tar.gz -t tag    # Build bootc image (runs on host, not in container)
-inspectah version                  # Print wrapper version
+inspectah build *.tar.gz -t tag    # Build bootc image
+inspectah version                  # Print version
 inspectah completion bash          # Generate shell completions
 
 # Python CLI (inside the container — developers work here)
@@ -222,47 +224,32 @@ result.returncode  # int
 ## Project Layout
 
 ```
-cmd/inspectah/                    # Go CLI wrapper
-├── main.go                       # Entry point (version injection via ldflags)
-├── go.mod / go.sum / vendor/     # Go module with vendored deps
-└── internal/
-    ├── cli/                      # Cobra subcommands (scan, fleet, refine, etc.)
-    ├── container/                # Podman invocation builder
-    ├── errors/                   # Error classification and user-facing messages
-    ├── paths/                    # Path resolution and mount construction
-    └── platform/                 # Platform detection (podman discovery)
+inspectah-cli/                    # CLI binary crate
+├── src/main.rs                   # Entry point
+└── Cargo.toml
 
-src/inspectah/                    # Python analysis engine (runs inside container)
-├── __main__.py                   # CLI entry point
-├── cli.py                        # argparse setup
-├── pipeline.py                   # Orchestrator (run_pipeline function)
-├── schema.py                     # Pydantic models
-├── inspectors/
-│   ├── __init__.py               # run_XXXXX functions
-│   ├── rpm.py
-│   ├── config.py
-│   ├── service.py
-│   └── ... (9 more)
-├── renderers/
-│   ├── __init__.py               # run_all() main entry
-│   ├── audit_report.py
-│   ├── html_report.py
-│   └── ... (6 more)
-├── templates/                    # Jinja2 templates
-├── preflight.py                  # Startup checks
-├── baseline.py                   # Resolve base image
-├── heuristic.py                  # Smart classification
-├── redact.py                     # Secrets masking
-└── packaging.py                  # Tarball handling
+inspectah-core/                   # Schema types and shared domain logic
+├── src/
+└── Cargo.toml
+
+inspectah-collect/                # Inspectors (host data collection)
+├── src/
+└── Cargo.toml
+
+inspectah-pipeline/               # Pipeline orchestrator
+├── src/
+└── Cargo.toml
+
+inspectah-web/                    # HTML report renderer and web UIs
+├── src/
+└── Cargo.toml
+
+inspectah-refine/                 # Refine engine for interactive editing
+├── src/
+└── Cargo.toml
 
 packaging/
 ├── inspectah.spec                # RPM spec for COPR builds
-
-tests/
-├── conftest.py                   # pytest fixtures
-├── fixtures/                     # Mock /etc trees
-├── test_*.py                     # ~20 test modules
-└── e2e/                          # Browser tests
 
 docs/
 ├── reference/                    # CLI flag documentation
@@ -271,15 +258,12 @@ docs/
 
 ## Important Notes
 
-1. **Two-layer architecture** — Go CLI wrapper (Cobra) orchestrates podman; Python engine (argparse) does inspection/rendering inside the container
-2. **Go CLI** — `cmd/inspectah/` contains the Cobra CLI, distributed as RPM/Homebrew binary
-3. **Python engine** — `src/inspectah/` is the analysis core, runs inside the container image
-4. **Pydantic v2** — use Field(), BaseModel, not v1 syntax
-5. **Container-First** — Inspection runs inside podman with host root mounted at /host
-6. **Read-Only** — Never modifies the inspected host
-7. **Type Safety** — Everything flows through schema types
-8. **Baseline Required** — Without baseline, all packages included (risky)
-9. **Warnings Tracked** — Appear in snapshot.warnings and HTML report
+1. **Native Rust binary** — single `inspectah` binary, no container image needed for the tool itself
+2. **Cargo workspace** — six crates with clear separation of concerns
+3. **Read-Only** — Never modifies the inspected host
+4. **Type Safety** — Everything flows through strongly-typed schema types
+5. **Baseline Required** — Without baseline, all packages included (risky)
+6. **Warnings Tracked** — Appear in snapshot.warnings and HTML report
 
 ## Common Tasks
 

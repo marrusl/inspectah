@@ -4,9 +4,9 @@ Complete flag reference for all inspectah subcommands. For usage examples, see t
 
 ## Architecture
 
-The `inspectah` binary is a Go CLI wrapper that manages the container lifecycle. All inspection, rendering, and analysis logic runs inside the `ghcr.io/marrusl/inspectah` container image. The Go CLI handles image pulling, volume mounting, port forwarding, and error translation so you don't need to construct `podman run` commands by hand.
+The `inspectah` binary is a native Rust CLI (built from the `inspectah-cli` crate). It handles host inspection, rendering, fleet aggregation, interactive refinement, and image building directly -- no container image required for the tool itself. Requires podman >= 4.4 at runtime for baseline generation and `inspectah build`.
 
-Install via [COPR RPM](../../README.md#installation) (`dnf install inspectah`) or [Homebrew](../../README.md#installation) (`brew install marrusl/tap/inspectah`). Requires podman >= 4.4 at runtime.
+Install via [COPR RPM](../../README.md#installation) (`dnf install inspectah`) or [Homebrew](../../README.md#installation) (`brew install marrusl/tap/inspectah`).
 
 ### Global flags
 

@@ -1,15 +1,19 @@
 # Architecture
 
-This document covers inspectah internals: the Go CLI wrapper, inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../reference/design.md).
+This document covers inspectah internals: inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../reference/design.md).
 
 ## Overview
 
-inspectah has a two-layer architecture:
+inspectah is a native Rust CLI built as a Cargo workspace with six crates:
 
-- **Go CLI wrapper** (`cmd/inspectah/`) — a Cobra-based binary that manages the container lifecycle. Users interact with this layer. It handles podman discovery, image pulling, volume mounting, port forwarding, error translation, and tab completion. Distributed via COPR RPM and Homebrew.
-- **Python analysis engine** (the container image) — all inspection, rendering, and analysis logic. Runs inside the `ghcr.io/marrusl/inspectah` container image. The Go CLI constructs the `podman run` command; the Python code does the actual work.
+- **inspectah-cli** — the user-facing binary (`inspectah`). Handles argument parsing (clap), host inspection orchestration, and subcommand dispatch. Distributed via COPR RPM and Homebrew.
+- **inspectah-core** — schema types, snapshot model, and shared domain logic.
+- **inspectah-collect** — inspectors that run against a host root and produce structured data.
+- **inspectah-pipeline** — orchestrates inspectors, baseline resolution, and renderers.
+- **inspectah-web** — HTML report renderer and interactive refine/architect/fleet web UIs.
+- **inspectah-refine** — refine engine for interactive editing and re-rendering.
 
-Within the Python layer:
+Key abstractions:
 
 - **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
 - **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
@@ -184,42 +188,10 @@ When running inside a container, the tool uses `nsenter` to execute `podman` in 
 
 The resolved baseline (including the base image package list) is cached in the inspection snapshot, so `--from-snapshot` re-renders work without network access or podman.
 
-## Running the Container Directly
-
-The Go CLI handles all container orchestration automatically. The examples below are for advanced users who want to run the container image directly without the Go CLI.
-
-The pre-built image is published to GHCR on every push to `main`:
-
-```
-ghcr.io/marrusl/inspectah:latest
-```
-
-Multi-arch (amd64 + arm64). To run it directly without the CLI:
+## Building from Source
 
 ```bash
-sudo podman run --rm \
-  --pid=host \
-  --privileged \
-  --security-opt label=disable \
-  -w /output \
-  -v /:/host:ro \
-  -v "$(pwd):/output" \
-  ghcr.io/marrusl/inspectah:latest
+cargo build --release -p inspectah-cli
 ```
 
-To build locally:
-
-```bash
-podman build -t inspectah .
-```
-
-**Required flags:**
-
-| Flag | Why |
-|------|-----|
-| `sudo` (rootful) | nsenter into host namespaces requires real `CAP_SYS_ADMIN` — rootless podman runs in a user namespace where this is impossible |
-| `--pid=host` | Exposes the host PID namespace so the tool can reach PID 1 and run `podman` on the host via `nsenter` |
-| `--privileged` | Grants the full capability set including `CAP_SYS_ADMIN` for `nsenter` and broad filesystem access |
-| `--security-opt label=disable` | Disables SELinux label enforcement so the container can read all host paths |
-
-The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
+The binary is at `target/release/inspectah`. Install it to your PATH or use the COPR RPM / Homebrew formula.
