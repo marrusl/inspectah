@@ -415,11 +415,11 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         }
         lines.push("    && dnf clean all \\".into());
         lines.push("    && rm -rf \\".into());
-        lines.push("    /var/cache/dnf \\".into());
-        lines.push("    /var/lib/dnf/history* \\".into());
-        lines.push("    /var/log/dnf* \\".into());
-        lines.push("    /var/log/hawkey.log \\".into());
-        lines.push("    /var/log/rhsm".into());
+        lines.push("        /var/cache/dnf \\".into());
+        lines.push("        /var/lib/dnf/history* \\".into());
+        lines.push("        /var/log/dnf* \\".into());
+        lines.push("        /var/log/hawkey.log \\".into());
+        lines.push("        /var/log/rhsm".into());
         lines.push(String::new());
     }
 
