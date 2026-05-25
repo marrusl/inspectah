@@ -159,7 +159,11 @@ fn format_inspector_outcome(
         InspectorOutcome::Complete => {
             let sym = colored("\u{2713}", GREEN, use_color);
             let label = if let Some(count) = probes_found {
-                format!("{count} ecosystems")
+                if count == 0 {
+                    "none found".to_string()
+                } else {
+                    format!("{count} ecosystems")
+                }
             } else {
                 match last_metric {
                     Some((kind, value)) => display::metric_label(kind, *value),

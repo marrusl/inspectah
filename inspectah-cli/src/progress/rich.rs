@@ -372,7 +372,11 @@ impl ChecklistState {
                 RowState::Complete { elapsed } => {
                     let sym = colored("\u{2713}", GREEN, use_color); // ✓
                     let label = if let Some(count) = row.probes_found_count {
-                        format!("{count} ecosystems")
+                        if count == 0 {
+                            "none found".to_string()
+                        } else {
+                            format!("{count} ecosystems")
+                        }
                     } else {
                         match &row.inspector_metric {
                             Some((kind, value)) => display::metric_label(kind, *value),
@@ -439,7 +443,7 @@ impl ChecklistState {
                         format!("       {sym} {step_name:<36} interrupted")
                     }
                     RowState::Pending => {
-                        format!("       \u{00b7} {step_name}")
+                        format!("       \u{25cc} {step_name}")
                     }
                 };
                 let sub_cat = match &sub.state {
@@ -640,6 +644,15 @@ impl RichRenderer {
             let _ = writeln!(w, "{line}");
         }
         let _ = w.flush();
+    }
+
+    /// Cancel rendering (SIGINT path). Stops the tick thread without
+    /// reprinting the checklist — leaves the terminal as-is.
+    pub fn cancel(&mut self) {
+        self.stop_tick.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.tick_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -1488,7 +1501,7 @@ mod tests {
 
     #[test]
     fn nonrpm_zero_ecosystems() {
-        // When all probes are empty, show "0 ecosystems" (not "done").
+        // When all probes are empty, show "none found" (not "0 ecosystems").
         let mut state = test_state();
         state.handle_event(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
 
@@ -1513,8 +1526,8 @@ mod tests {
             .find(|l| l.contains("Non-RPM") && l.contains('\u{2713}'))
             .expect("should have NonRpmSoftware done line");
         assert!(
-            nonrpm_line.contains("0 ecosystems"),
-            "expected '0 ecosystems', got: {nonrpm_line}"
+            nonrpm_line.contains("none found"),
+            "expected 'none found', got: {nonrpm_line}"
         );
     }
 }

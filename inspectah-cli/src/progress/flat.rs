@@ -125,7 +125,11 @@ fn format_inspector_outcome(
     match outcome {
         InspectorOutcome::Complete => {
             let label = if let Some(count) = probes_found {
-                format!("{count} ecosystems")
+                if count == 0 {
+                    "none found".to_string()
+                } else {
+                    format!("{count} ecosystems")
+                }
             } else {
                 match last_metric {
                     Some((kind, value)) => display::metric_label(kind, *value),

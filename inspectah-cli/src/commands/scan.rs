@@ -341,13 +341,15 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         &cancelled,
     );
 
-    progress.finalize();
-
     // SIGINT is a cancellation — no output, no partial counts.
+    // Check BEFORE finalize so rich mode doesn't reprint the checklist.
     if cancelled.load(Ordering::SeqCst) {
+        progress.cancel();
         eprintln!("Scan cancelled. No report written.");
         return Ok(ScanOutcome::Interrupted);
     }
+
+    progress.finalize();
 
     // Derive exit outcome from collection completeness
     let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
