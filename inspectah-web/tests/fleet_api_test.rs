@@ -823,10 +823,13 @@ fn fleet_state_with_packages() -> Arc<AppState> {
         snap
     };
 
-    // nginx: epel on web-01 and web-02 (different versions), appstream on web-03
-    let s1 = make_host("web-01", "epel", "1.24.0");
-    let s2 = make_host("web-02", "epel", "1.25.0");
-    let s3 = make_host("web-03", "appstream", "1.22.0");
+    // nginx: appstream on web-01 (minority-first), epel on web-02/web-03 (majority).
+    // The first-seen source_repo is appstream; the majority rewrite in
+    // merge_rpm_sections() must overwrite it to epel. If the rewrite were
+    // removed, this test would fail because source_repo would stay appstream.
+    let s1 = make_host("web-01", "appstream", "1.22.0");
+    let s2 = make_host("web-02", "epel", "1.24.0");
+    let s3 = make_host("web-03", "epel", "1.25.0");
 
     let (merged, _warnings) =
         merge_snapshots(vec![s1, s2, s3], None).expect("merge should succeed");
