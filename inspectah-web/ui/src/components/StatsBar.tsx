@@ -77,15 +77,15 @@ export function StatsBar({
               <ToolbarItem>
                 <Content component="small">
                   <strong>Packages:</strong>{" "}
-                  {stat(stats?.included_packages)} included /{" "}
-                  {stat(stats?.excluded_packages)} excluded
+                  {stat(stats?.sections?.find(s => s.kind === "package")?.included)} included /{" "}
+                  {stat(stats?.sections?.find(s => s.kind === "package")?.excluded)} excluded
                 </Content>
               </ToolbarItem>
               <ToolbarItem>
                 <Content component="small">
                   <strong>Configs:</strong>{" "}
-                  {stat(stats?.included_configs)} included /{" "}
-                  {stat(stats?.excluded_configs)} excluded
+                  {stat(stats?.sections?.find(s => s.kind === "config")?.included)} included /{" "}
+                  {stat(stats?.sections?.find(s => s.kind === "config")?.excluded)} excluded
                 </Content>
               </ToolbarItem>
               <ToolbarItem>

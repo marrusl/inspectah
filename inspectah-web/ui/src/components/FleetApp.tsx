@@ -351,13 +351,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   );
 
   const fleetStats: RefineStats = {
-    total_packages: fleetSectionCounts.totalPkg,
-    included_packages: fleetSectionCounts.inclPkg,
-    excluded_packages: fleetSectionCounts.exclPkg,
-    total_configs: fleetSectionCounts.totalCfg,
-    included_configs: fleetSectionCounts.inclCfg,
-    excluded_configs: fleetSectionCounts.exclCfg,
-    package_managed_configs: 0,
+    sections: [
+      { kind: "package", total: fleetSectionCounts.totalPkg, included: fleetSectionCounts.inclPkg, excluded: fleetSectionCounts.exclPkg },
+      { kind: "config", total: fleetSectionCounts.totalCfg, included: fleetSectionCounts.inclCfg, excluded: fleetSectionCounts.exclCfg },
+    ],
     needs_review_count: ack.unackedCount,
     ops_applied: 0,
     baseline_available: false,

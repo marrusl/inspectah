@@ -16,6 +16,11 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 /// Defense-in-depth beyond CORS preflight: even if a browser somehow
 /// skips preflight, mutating requests from foreign origins are blocked.
 /// Requests with no Origin header (non-browser clients like curl) are allowed.
+/// Normalize 127.0.0.1 ↔ localhost so both resolve to the same origin.
+fn normalize_loopback(origin: &str) -> String {
+    origin.replace("://localhost", "://127.0.0.1")
+}
+
 async fn origin_guard(
     served_origin: String,
     req: axum::extract::Request,
@@ -23,7 +28,10 @@ async fn origin_guard(
 ) -> axum::response::Response {
     if req.method() == Method::POST {
         match req.headers().get("origin") {
-            Some(origin) if origin.to_str().unwrap_or("") == served_origin => {
+            Some(origin)
+                if normalize_loopback(origin.to_str().unwrap_or(""))
+                    == normalize_loopback(&served_origin) =>
+            {
                 // Origin matches — allow
             }
             None => {
@@ -42,10 +50,12 @@ async fn origin_guard(
 }
 
 pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
+    let localhost_origin = served_origin.replace("://127.0.0.1", "://localhost");
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::exact(
+        .allow_origin(AllowOrigin::list([
             HeaderValue::from_str(served_origin).unwrap(),
-        ))
+            HeaderValue::from_str(&localhost_origin).unwrap(),
+        ]))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,

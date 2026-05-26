@@ -85,8 +85,12 @@ function decisionCount(
     return String((viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0));
   }
   if (!stats) return "...";
-  if (id === "packages") return String(stats.total_packages);
-  if (id === "configs") return String(stats.total_configs);
+  const section = stats.sections?.find((s: { kind: string }) => {
+    if (id === "packages") return s.kind === "package";
+    if (id === "configs") return s.kind === "config";
+    return false;
+  });
+  if (section) return String(section.total);
   return "0";
 }
 
