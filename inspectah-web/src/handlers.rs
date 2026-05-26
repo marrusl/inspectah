@@ -513,7 +513,7 @@ fn build_sysctl_decisions(session: &RefineSession) -> Vec<SysctlDecisionDto> {
 /// Classify tuned profile selection from the projected snapshot into decision-item DTOs.
 fn build_tuned_decisions(session: &RefineSession) -> Vec<TunedDecisionDto> {
     let snap = session.snapshot_projected();
-    let tuned_include = snap.kernel_boot.as_ref().map_or(true, |kb| kb.tuned_include);
+    let tuned_include = snap.kernel_boot.as_ref().is_none_or(|kb| kb.tuned_include);
     classify_tuned(&snap)
         .into_iter()
         .map(|t| TunedDecisionDto {
