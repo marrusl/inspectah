@@ -199,6 +199,10 @@ Absorbed by Section Promotion & Triage Redesign. Triage bucket system (Site/Dive
 
 Single-host and fleet modes have divergent rendering paths: `MainContent` + `DecisionList` + section components (ServiceSection, ContainerSection, etc.) for single-host, `FleetApp` + `FleetItemRow` for fleet. Only packages achieved visual alignment. Every promoted section (services, containers, sysctls, tuned) added new single-host components that fleet doesn't share. Bugs fixed in one mode don't fix the other. The goal: shared components that render both modes, with fleet adding prevalence/variant overlays. Fix once, both modes benefit. Touches component architecture, not just styling.
 
+### Fleet Divergence Review UX (MEDIUM — needs spec)
+
+The "0/11 confirmed" counter on every fleet Review section is opaque — confirmed *what*? The underlying feature (variant acknowledgment via `useVariantAck`) tracks whether the user has reviewed each divergent item across hosts, but nothing in the UI explains the workflow, why it matters, or what "confirmed" means. Needs a spec covering: what triggers the need for confirmation, how the user signals they've reviewed an item, what visual state changes on confirmation, whether non-divergent items should show a counter at all, and how this integrates with the include/exclude toggles. Fern specs the interaction model, Kit builds.
+
 ### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
 
 Rust redaction pipeline needs parity with Go's heuristic redaction capabilities. Go has pattern-based redaction for passwords, API keys, tokens, and connection strings embedded in config files. Rust currently handles explicit redaction but lacks the heuristic detection layer. Needs spec.
