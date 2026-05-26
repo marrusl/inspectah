@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
@@ -323,6 +324,20 @@ pub struct RefinedServiceState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedDropIn {
     pub entry: SystemdDropIn,
+    pub triage: TriageTag,
+}
+
+/// A classified quadlet unit with triage assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedQuadlet {
+    pub entry: QuadletUnit,
+    pub triage: TriageTag,
+}
+
+/// A classified flatpak app with triage assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedFlatpak {
+    pub entry: FlatpakApp,
     pub triage: TriageTag,
 }
 
