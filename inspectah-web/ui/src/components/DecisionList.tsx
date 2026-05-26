@@ -19,7 +19,7 @@ import { fetchView } from "../api/client";
 import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
-import { AttentionGroup } from "./AttentionGroup";
+import { TriageBucketGroup } from "./TriageBucketGroup";
 import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
@@ -754,7 +754,7 @@ export function DecisionList({
             );
 
             return (
-              <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
+              <TriageBucketGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
                 {baselineItems.length > 0 && (
                   <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} filterActive={forceExpanded} />
                 )}
@@ -783,12 +783,12 @@ export function DecisionList({
                     />
                   );
                 })}
-              </AttentionGroup>
+              </TriageBucketGroup>
             );
           }
 
           return (
-            <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
+            <TriageBucketGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
               {groupItems.map((item) => {
                 runningRowIndex++;
                 const id = getItemId(item);
@@ -811,7 +811,7 @@ export function DecisionList({
                   />
                 );
               })}
-            </AttentionGroup>
+            </TriageBucketGroup>
           );
         });
       })()}
