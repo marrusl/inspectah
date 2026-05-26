@@ -175,6 +175,21 @@ impl RefineSession {
             RefineMode::SingleHost
         };
 
+        // Fleet prevalence gate: in fleet mode, items below full prevalence
+        // default to excluded (strict intersection). This overrides the
+        // single-host triage defaults set by normalize_package_defaults.
+        if matches!(refine_mode, RefineMode::Fleet(_)) {
+            if let Some(ref mut rpm) = snapshot.rpm {
+                for pkg in &mut rpm.packages_added {
+                    if let Some(ref fp) = pkg.fleet {
+                        if fp.count < fp.total {
+                            pkg.include = false;
+                        }
+                    }
+                }
+            }
+        }
+
         let mut session = Self {
             original: snapshot,
             repo_index,
