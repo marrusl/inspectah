@@ -383,10 +383,14 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         }
     }
 
-    let leaf_filter: Option<std::collections::HashSet<String>> = rpm
-        .leaf_packages
-        .as_ref()
-        .map(|leaf_packages| leaf_packages.iter().cloned().collect());
+    let is_fleet = snap.fleet_meta.is_some();
+    let leaf_filter: Option<std::collections::HashSet<String>> = if is_fleet {
+        None
+    } else {
+        rpm.leaf_packages
+            .as_ref()
+            .map(|leaf_packages| leaf_packages.iter().cloned().collect())
+    };
 
     let baseline_suppressed_set: std::collections::HashSet<String> = rpm
         .baseline_suppressed
