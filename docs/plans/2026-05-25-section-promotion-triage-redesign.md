@@ -897,7 +897,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Owner:** Tang (backend) + Kit (frontend)
 **Depends on:** Phase 0 complete
 
-### Task 8: Service classification (Rust)
+### Task 8: Service classification (Rust) ✅ DONE (6aae213)
 
 **Files:**
 - Modify: `inspectah-refine/src/classify.rs`
@@ -1065,7 +1065,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 9: Service refinement in session
+### Task 9: Service refinement in session ✅ DONE (6aae213)
 
 **Files:**
 - Modify: `inspectah-refine/src/session.rs` (SetInclude handler for services)
@@ -1126,7 +1126,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 9a: Pipeline pruning for services
+### Task 9a: Pipeline pruning for services ✅ DONE (dc4b607)
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/configtree.rs` — `write_config_tree()` (line 138) must skip materializing paths under `/etc/systemd/system/*.service.d/` — these are owned by the services renderer
@@ -1196,7 +1196,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 9b: Web + fleet handlers for services
+### Task 9b: Web + fleet handlers for services ✅ DONE (edffbe0)
 
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs` — replace `normalize_services()` (line 858) ContextSection projection with decision-item projection returning `Vec<RefinedService>` with `TriageTag`. Update `get_view()` (line 247) to include services in the view response.
@@ -1230,7 +1230,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 10: Services frontend
+### Task 10: Services frontend ✅ DONE (127cae5)
 
 **Owner:** Kit (frontend)
 **Files:**
