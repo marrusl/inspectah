@@ -301,7 +301,8 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let view = session.view();
     let repo_index = session.repo_index();
     let changes = session.pending_changes();
-    let excluded: BTreeSet<&str> = changes.repos_excluded.iter().map(|s| s.as_str()).collect();
+    let repos_excluded = changes.repos_excluded();
+    let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
     // Count visible packages per source_repo (lowercased for consistency
     // with RepoIndex, which normalizes section IDs to lowercase).
