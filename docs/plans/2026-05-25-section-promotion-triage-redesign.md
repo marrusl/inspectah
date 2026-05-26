@@ -21,7 +21,7 @@
 **Owner:** Tang (Rust)
 **Blocks:** All subsequent phases
 
-### Task 1: Define new triage types
+### Task 1: Define new triage types ✅ DONE (b8b565f)
 
 **Files:**
 - Modify: `inspectah-refine/src/types.rs`
@@ -242,7 +242,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 2: Collapse RefinementOp and restructure ItemId
+### Task 2: Collapse RefinementOp and restructure ItemId ✅ DONE (93107ab)
 
 **Files:**
 - Modify: `inspectah-refine/src/types.rs`
@@ -398,7 +398,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 3: Generic ChangesSummary and RefineStats
+### Task 3: Generic ChangesSummary and RefineStats ✅ DONE (b2757db)
 
 **Files:**
 - Modify: `inspectah-refine/src/types.rs`
@@ -484,7 +484,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 4: Autosave migration (v1 → v2)
+### Task 4: Autosave migration (v1 → v2) ✅ DONE (900060c)
 
 **Files:**
 - Modify: `inspectah-refine/src/autosave.rs` — loader (`load_session`) and writer (`save_session` at line 51)
@@ -629,7 +629,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 5: Replace attention classification with triage classification
+### Task 5: Replace attention classification with triage classification ✅ DONE (74c81cc)
 
 **Files:**
 - Modify: `inspectah-refine/src/attention.rs` → rename to `inspectah-refine/src/classify.rs`
