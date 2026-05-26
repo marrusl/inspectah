@@ -712,7 +712,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 6: Update web handler and fleet handler for new types
+### Task 6: Update web handler and fleet handler for new types ✅ DONE (91fbc09)
 
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs` (view endpoint, sections endpoint)
@@ -746,7 +746,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 7: Frontend type alignment
+### Task 7: Frontend type alignment ✅ DONE (f01a1bf, 3a2b43d, a83c693)
 
 **Owner:** Kit (frontend)
 **Files:**
