@@ -99,7 +99,8 @@ impl RefineSession {
                     if let Some(ref prevalence) = entry.fleet {
                         let zone = classify_zone(prevalence);
                         let item_id = ItemId::Package {
-                            name_arch: format!("{}.{}", entry.name, entry.arch),
+                            name: entry.name.clone(),
+                            arch: entry.arch.clone(),
                         };
                         zones.insert(item_id, zone);
                     }
@@ -855,6 +856,9 @@ impl RefineSession {
                 let state = self.build_variant_state();
                 variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
             }
+            // SetInclude validation deferred to Task 4 (autosave migration);
+            // for now, accept all SetInclude ops without target validation.
+            RefinementOp::SetInclude { .. } => {}
         }
         Ok(())
     }
@@ -994,6 +998,8 @@ impl RefineSession {
             RefinementOp::SelectVariant { .. }
             | RefinementOp::EditVariant { .. }
             | RefinementOp::DiscardVariant { .. } => false,
+            // SetInclude noop detection deferred to Task 4
+            RefinementOp::SetInclude { .. } => false,
         }
     }
 
@@ -1092,6 +1098,8 @@ impl RefineSession {
                         }
                     }
                 }
+                // SetInclude projection deferred to Task 4 (autosave migration)
+                RefinementOp::SetInclude { .. } => {}
                 RefinementOp::IncludeRepo { section_id } => {
                     if let Some(ref mut rpm) = snap.rpm {
                         // 1. Include all packages from this repo (case-insensitive)
@@ -1309,7 +1317,8 @@ impl RefineSession {
         if let RefineMode::Fleet(ref ctx) = self.refine_mode {
             for pkg in &mut all_packages {
                 let item_id = ItemId::Package {
-                    name_arch: format!("{}.{}", pkg.entry.name, pkg.entry.arch),
+                    name: pkg.entry.name.clone(),
+                    arch: pkg.entry.arch.clone(),
                 };
                 let attention_level = pkg
                     .attention
