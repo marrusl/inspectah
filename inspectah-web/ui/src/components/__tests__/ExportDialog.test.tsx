@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExportDialog } from "../ExportDialog";
-import type { RefineStats, ViewResponse } from "../../api/types";
+import type { ViewResponse } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
 // --- Mock fetch globally ---
 const mockFetch = vi.fn();
@@ -14,20 +15,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 10,
-  included_packages: 8,
-  excluded_packages: 2,
-  total_configs: 5,
-  included_configs: 3,
-  package_managed_configs: 2,
-  excluded_configs: 2,
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 10, included: 8, excluded: 2 },
+    { kind: "config", total: 5, included: 3, excluded: 2 },
+  ],
   needs_review_count: 3,
   ops_applied: 1,
   can_undo: true,
   can_redo: false,
   baseline_available: true,
-};
+});
 
 const MOCK_VIEW: ViewResponse = {
   packages: [],
@@ -311,11 +309,17 @@ describe("ExportDialog", () => {
   });
 
   it("shows zero exclusions when stats have no exclusions", () => {
-    const zeroStats: RefineStats = {
-      ...MOCK_STATS,
-      excluded_packages: 0,
-      excluded_configs: 0,
-    };
+    const zeroStats = mockStats({
+      sections: [
+        { kind: "package", total: 10, included: 10, excluded: 0 },
+        { kind: "config", total: 5, included: 5, excluded: 0 },
+      ],
+      needs_review_count: 3,
+      ops_applied: 1,
+      can_undo: true,
+      can_redo: false,
+      baseline_available: true,
+    });
 
     render(
       <ExportDialog
