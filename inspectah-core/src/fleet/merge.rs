@@ -1125,18 +1125,29 @@ pub fn merge_container_sections(
     // Skip running_containers — runtime state, not config
     let running_containers = Vec::new();
 
-    // Dedup flatpak_apps by app_id
+    // Dedup flatpak_apps by (app_id, remote, branch) identity.
+    // remote_url is render metadata and not part of the identity key.
     let flatpak_apps = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
         for s in sections.iter().flatten() {
             for app in &s.flatpak_apps {
-                if seen.insert(app.app_id.clone()) {
+                let key = (
+                    app.app_id.clone(),
+                    app.remote.clone(),
+                    app.branch.clone(),
+                );
+                if seen.insert(key) {
                     result.push(app.clone());
                 }
             }
         }
-        result.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+        result.sort_by(|a, b| {
+            a.app_id
+                .cmp(&b.app_id)
+                .then_with(|| a.remote.cmp(&b.remote))
+                .then_with(|| a.branch.cmp(&b.branch))
+        });
         result
     };
 
@@ -2059,5 +2070,126 @@ mod tests {
         assert_eq!(conflict[0].host_count, 2);
         assert_eq!(conflict[1].repo, "appstream");
         assert_eq!(conflict[1].host_count, 1);
+    }
+
+    #[test]
+    fn flatpak_different_remotes_not_collapsed() {
+        use crate::types::containers::{ContainerSection, FlatpakApp};
+
+        // Same app_id but different remotes — must produce two distinct items.
+        // Previously collapsed by app_id-only dedup.
+        let host_a = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "fedora".into(),
+                branch: "stable".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = merge_container_sections(
+            vec![Some(host_a), Some(host_b)],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .expect("merge should succeed");
+
+        assert_eq!(
+            merged.flatpak_apps.len(),
+            2,
+            "same app_id with different remotes must not be collapsed"
+        );
+        let remotes: Vec<&str> = merged.flatpak_apps.iter().map(|a| a.remote.as_str()).collect();
+        assert!(remotes.contains(&"fedora"));
+        assert!(remotes.contains(&"flathub"));
+    }
+
+    #[test]
+    fn flatpak_same_identity_deduped() {
+        use crate::types::containers::{ContainerSection, FlatpakApp};
+
+        // Same (app_id, remote, branch) across hosts with different remote_url.
+        // remote_url is render metadata — these should collapse to one entry.
+        let host_a = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+                remote_url: "https://dl.flathub.org/repo/".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+                remote_url: "https://mirror.example.com/flathub/".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = merge_container_sections(
+            vec![Some(host_a), Some(host_b)],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .expect("merge should succeed");
+
+        assert_eq!(
+            merged.flatpak_apps.len(),
+            1,
+            "same (app_id, remote, branch) must collapse despite different remote_url"
+        );
+    }
+
+    #[test]
+    fn flatpak_different_branches_not_collapsed() {
+        use crate::types::containers::{ContainerSection, FlatpakApp};
+
+        // Same app_id and remote but different branch — two distinct items.
+        let host_a = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b = ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                remote: "flathub".into(),
+                branch: "beta".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = merge_container_sections(
+            vec![Some(host_a), Some(host_b)],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .expect("merge should succeed");
+
+        assert_eq!(
+            merged.flatpak_apps.len(),
+            2,
+            "same app_id with different branches must not be collapsed"
+        );
     }
 }
