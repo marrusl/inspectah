@@ -92,8 +92,8 @@ export function RoutineSummary({
       {effectiveExpanded &&
         items.map((item, idx) => {
           const id = getItemId(item);
-          const level = item.data.attention.length > 0
-            ? highestAttention(item.data.attention)
+          const level = (item.data.attention ?? []).length > 0
+            ? highestAttention(item.data.attention!)
             : "routine";
           const flatIdx = flatItemIds.indexOf(id);
           return (

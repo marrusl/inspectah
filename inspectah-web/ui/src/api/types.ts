@@ -104,14 +104,96 @@ export interface AttentionTag {
   detail: string | null;
 }
 
+// --- Triage types (inspectah-refine/src/types.rs) ---
+
+/** Rust: #[serde(rename_all = "snake_case")] */
+export type TriageBucket = "baseline" | "site" | "investigate";
+
+/** Rust: #[serde(rename_all = "snake_case")] */
+export type FleetBucket = "investigate" | "divergent" | "partial" | "universal";
+
+export interface Prevalence {
+  count: number;
+  total: number;
+}
+
+export interface FleetTriage {
+  bucket: FleetBucket;
+  prevalence: Prevalence;
+}
+
+/**
+ * Rust: #[serde(tag = "mode")] with internally-tagged enum.
+ * SingleHost(TriageBucket) serializes as {"mode":"single_host","<bucket>":null}
+ * Fleet(FleetTriage) serializes as {"mode":"fleet","bucket":"...","prevalence":{...}}
+ */
+export type Triage =
+  | { mode: "single_host"; baseline?: null; site?: null; investigate?: null }
+  | ({ mode: "fleet" } & FleetTriage);
+
+/**
+ * Rust: #[serde(rename_all = "snake_case")]
+ * Unit variants serialize as strings; RequiresProjectedPackage has content.
+ */
+export type TriageAnnotation =
+  | "sensitive_path"
+  | "first_boot_provisioned"
+  | { requires_projected_package: { name: string } }
+  | "runtime_only_observation";
+
+/**
+ * Rust: #[serde(rename_all = "snake_case")]
+ * Typed classification reason.
+ */
+export type TriageReason =
+  | "package_baseline_match"
+  | "package_user_added"
+  | "package_version_changed"
+  | "package_provenance_unavailable"
+  | "package_local_install"
+  | "package_no_repo_source"
+  | "package_config_captured"
+  | "config_default"
+  | "config_baseline_match"
+  | "config_modified"
+  | "config_unowned"
+  | "config_orphaned"
+  | "service_baseline_match"
+  | "service_non_default_state"
+  | "service_unknown_origin"
+  | "service_drop_in_present"
+  | "quadlet_user_deployed"
+  | "quadlet_present_in_base_image"
+  | "flatpak_provisioned_on_first_boot"
+  | "flatpak_incomplete_provenance"
+  | "sysctl_baseline_match"
+  | "sysctl_file_backed_override"
+  | "sysctl_no_baseline"
+  | "tuned_baseline_match"
+  | "tuned_non_default_profile"
+  | "tuned_custom_profile"
+  | "tuned_unusual_state"
+  | "sensitive_path"
+  | { custom: string };
+
+export interface TriageTag {
+  triage: Triage;
+  primary_reason: TriageReason;
+  annotations: TriageAnnotation[];
+}
+
 export interface RefinedPackage {
   entry: PackageEntry;
-  attention: AttentionTag[];
+  /** @deprecated Legacy attention tags; use triage instead. */
+  attention?: AttentionTag[];
+  triage: TriageTag;
 }
 
 export interface RefinedConfig {
   entry: ConfigFileEntry;
-  attention: AttentionTag[];
+  /** @deprecated Legacy attention tags; use triage instead. */
+  attention?: AttentionTag[];
+  triage: TriageTag;
 }
 
 export interface BaselineSummary {
@@ -150,18 +232,28 @@ export interface RefinedView {
 
 /**
  * Rust: #[serde(tag = "op", content = "target")]
- * JSON: {"op": "ExcludePackage", "target": {"name": "httpd", "arch": "x86_64"}}
+ * JSON: {"op": "SetInclude", "target": {"item_id": {...}, "include": true}}
  */
 export type RefinementOp =
+  | { op: "SetInclude"; target: { item_id: ItemId; include: boolean } }
+  | { op: "UserStrategy"; target: { username: string; strategy: string } }
+  | { op: "UserPassword"; target: UserPasswordOp }
+  | { op: "SelectVariant"; target: { item_id: ItemId; target: string } }
+  | { op: "EditVariant"; target: { item_id: ItemId; content: string; based_on: string | null } }
+  | { op: "DiscardVariant"; target: { item_id: ItemId; variant: string } }
+  // Legacy ops kept for backward compat during migration
   | { op: "ExcludePackage"; target: PackageTarget }
   | { op: "IncludePackage"; target: PackageTarget }
   | { op: "ExcludeConfig"; target: { path: string } }
   | { op: "IncludeConfig"; target: { path: string } }
   | { op: "ExcludeRepo"; target: { section_id: string } }
-  | { op: "IncludeRepo"; target: { section_id: string } }
-  | { op: "SelectVariant"; target: { item_id: ItemId; target: string } }
-  | { op: "EditVariant"; target: { item_id: ItemId; content: string; based_on: string | null } }
-  | { op: "DiscardVariant"; target: { item_id: ItemId; variant: string } };
+  | { op: "IncludeRepo"; target: { section_id: string } };
+
+/** Rust: #[serde(tag = "choice")] */
+export type UserPasswordOp =
+  | { choice: "New"; username: string; hash?: string | null }
+  | { choice: "None"; username: string }
+  | { choice: "Preserve"; username: string };
 
 export interface ChangesSummary {
   packages_included: PackageTarget[];
@@ -311,14 +403,14 @@ export interface UserPreviewResponse {
 // --- Fleet types (inspectah-web/src/handlers/fleet.rs) ---
 
 /** ItemId uses tag/content serde (Rust: #[serde(tag = "kind", content = "key")]) */
+export interface ItemIdPackage {
+  kind: "Package";
+  key: { name: string; arch: string };
+}
+
 export interface ItemIdConfig {
   kind: "Config";
   key: { path: string };
-}
-
-export interface ItemIdPackage {
-  kind: "Package";
-  key: { name_arch: string };
 }
 
 export interface ItemIdRepo {
@@ -356,6 +448,11 @@ export interface ItemIdCompose {
   key: { path: string };
 }
 
+export interface ItemIdFlatpak {
+  kind: "Flatpak";
+  key: { app_id: string; remote: string; branch: string };
+}
+
 export interface ItemIdNMConnection {
   kind: "NMConnection";
   key: { path: string };
@@ -374,6 +471,11 @@ export interface ItemIdKernelModule {
 export interface ItemIdSysctl {
   kind: "Sysctl";
   key: { key: string };
+}
+
+export interface ItemIdTunedSelection {
+  kind: "TunedSelection";
+  key: { profile: string };
 }
 
 export interface ItemIdCronJob {
@@ -412,8 +514,8 @@ export interface ItemIdNonRpm {
 }
 
 export type ItemId =
-  | ItemIdConfig
   | ItemIdPackage
+  | ItemIdConfig
   | ItemIdRepo
   | ItemIdModuleStream
   | ItemIdVersionLock
@@ -421,10 +523,12 @@ export type ItemId =
   | ItemIdDropIn
   | ItemIdQuadlet
   | ItemIdCompose
+  | ItemIdFlatpak
   | ItemIdNMConnection
   | ItemIdFirewallZone
   | ItemIdKernelModule
   | ItemIdSysctl
+  | ItemIdTunedSelection
   | ItemIdCronJob
   | ItemIdSystemdTimer
   | ItemIdAtJob
@@ -446,11 +550,18 @@ export interface FleetSummary {
   informational_variant_count: number;
 }
 
+/** @deprecated Use FleetTriageDto instead. */
 export interface FleetAttention {
-  level: string; // "high" | "medium" | "low" | "none"
+  level: string;
   reason: string;
-  zone?: string; // "Consensus" | "NearConsensus" | "Divergent"
+  zone?: string;
   prevalence: number;
+}
+
+/** Fleet triage classification from the backend. */
+export interface FleetTriageDto {
+  bucket: FleetBucket;
+  prevalence: Prevalence;
 }
 
 export interface FleetVariantOption {
@@ -474,7 +585,8 @@ export interface FleetItemPrevalence {
 export interface FleetItem {
   item_id: ItemId;
   include: boolean;
-  attention: FleetAttention;
+  triage: FleetTriageDto;
+  /** @deprecated Use triage.prevalence instead. */
   prevalence: FleetItemPrevalence;
   variants?: FleetVariants;
   source_repo: string;

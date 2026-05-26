@@ -97,18 +97,20 @@ export function MainContent({
     });
   }, [configItems, filterText]);
 
-  // Package toggle: build ExcludePackage/IncludePackage op from "name.arch" string
+  // Package toggle: build SetInclude op from "name.arch" string
   const handlePackageToggle = useCallback(
     (nameArch: string) => {
-      // Find the package to determine current include state
       const pkg = viewData?.packages.find(
         (p) => `${p.entry.name}.${p.entry.arch}` === nameArch,
       );
       if (!pkg) return;
-      const [name, arch] = [pkg.entry.name, pkg.entry.arch];
-      const op: RefinementOp = pkg.entry.include
-        ? { op: "ExcludePackage", target: { name, arch } }
-        : { op: "IncludePackage", target: { name, arch } };
+      const op: RefinementOp = {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Package", key: { name: pkg.entry.name, arch: pkg.entry.arch } },
+          include: !pkg.entry.include,
+        },
+      };
       applyOp(op)
         .then((updatedView) => onViewUpdate(updatedView))
         .catch((err) => onMutationError(err instanceof Error ? err : new Error(String(err))));
@@ -116,14 +118,18 @@ export function MainContent({
     [viewData, onViewUpdate, onMutationError],
   );
 
-  // Repo toggle: build ExcludeRepo/IncludeRepo op
+  // Repo toggle: build SetInclude op for repos
   const handleRepoToggle = useCallback(
     (sectionId: string) => {
       const repo = viewData?.repo_groups.find((r) => r.section_id === sectionId);
       if (!repo) return;
-      const op: RefinementOp = repo.enabled
-        ? { op: "ExcludeRepo", target: { section_id: sectionId } }
-        : { op: "IncludeRepo", target: { section_id: sectionId } };
+      const op: RefinementOp = {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Repo", key: { path: sectionId } },
+          include: !repo.enabled,
+        },
+      };
       applyOp(op)
         .then((updatedView) => onViewUpdate(updatedView))
         .catch((err) => onMutationError(err instanceof Error ? err : new Error(String(err))));

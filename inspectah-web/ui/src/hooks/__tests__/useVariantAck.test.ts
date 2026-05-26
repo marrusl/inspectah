@@ -39,7 +39,7 @@ const ITEM_A: ItemId = { kind: "Config", key: { path: "/etc/foo.conf" } };
 const ITEM_B: ItemId = { kind: "Config", key: { path: "/etc/bar.conf" } };
 const ITEM_C: ItemId = {
   kind: "Package",
-  key: { name_arch: "vim.x86_64" },
+  key: { name: "vim", arch: "x86_64" },
 };
 
 beforeEach(() => {

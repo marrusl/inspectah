@@ -18,7 +18,7 @@ const defaultAck: UseVariantAckResult = {
 function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetItem {
   return {
     include: true,
-    attention: { level: "none", reason: "", prevalence: 1 },
+    triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     ...overrides,
@@ -28,7 +28,7 @@ function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetIte
 describe("FleetItemRow", () => {
   it("renders item name from Package item_id", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     });
 
     render(
@@ -62,7 +62,7 @@ describe("FleetItemRow", () => {
 
   it("renders prevalence chip", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
       prevalence: { count: 8, total: 12 },
     });
 
@@ -80,7 +80,7 @@ describe("FleetItemRow", () => {
 
   it("renders variant count when variants exist", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
       variants: {
         count: 3,
         selected: "abc123",
@@ -106,7 +106,7 @@ describe("FleetItemRow", () => {
 
   it("does not render variant indicator when no variants", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     });
 
     render(
@@ -123,7 +123,7 @@ describe("FleetItemRow", () => {
 
   it("renders toggle for decision sections", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     });
 
     render(
@@ -140,7 +140,7 @@ describe("FleetItemRow", () => {
 
   it("does not render toggle for context sections", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     });
 
     render(
@@ -156,7 +156,7 @@ describe("FleetItemRow", () => {
   });
 
   it("sets data-item-id attribute", () => {
-    const itemId: ItemId = { kind: "Package", key: { name_arch: "httpd.x86_64" } };
+    const itemId: ItemId = { kind: "Package", key: { name: "httpd", arch: "x86_64" } };
     const item = makeItem({ item_id: itemId });
 
     render(
@@ -176,7 +176,7 @@ describe("FleetItemRow", () => {
     const user = userEvent.setup();
     const onToggle = vi.fn();
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
       include: true,
     });
 
@@ -193,7 +193,7 @@ describe("FleetItemRow", () => {
     await user.click(toggle);
 
     expect(onToggle).toHaveBeenCalledWith(
-      { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
       false,
     );
   });
@@ -202,7 +202,7 @@ describe("FleetItemRow", () => {
     const user = userEvent.setup();
     const onExpand = vi.fn();
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
       variants: {
         count: 3,
         selected: "abc123",
@@ -229,7 +229,7 @@ describe("FleetItemRow", () => {
 
     expect(onExpand).toHaveBeenCalledWith({
       kind: "Package",
-      key: { name_arch: "httpd.x86_64" },
+      key: { name: "httpd", arch: "x86_64" },
     });
   });
 
@@ -237,8 +237,8 @@ describe("FleetItemRow", () => {
     const levels = ["needs_review", "informational", "routine"];
     for (const level of levels) {
       const item = makeItem({
-        item_id: { kind: "Package", key: { name_arch: `test-${level}.x86_64` } },
-        attention: { level, reason: "test", prevalence: 1 },
+        item_id: { kind: "Package", key: { name: `test-${level}`, arch: "x86_64" } },
+        triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
       });
 
       const { unmount } = render(
@@ -257,8 +257,8 @@ describe("FleetItemRow", () => {
 
   it("does not render attention badge for none level", () => {
     const item = makeItem({
-      item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
-      attention: { level: "none", reason: "", prevalence: 1 },
+      item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
+      triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
     });
 
     render(

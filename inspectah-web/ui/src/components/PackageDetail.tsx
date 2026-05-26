@@ -70,11 +70,11 @@ export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetail
             {pkg.entry.source_repo || "Unknown"}
           </DescriptionListDescription>
         </DescriptionListGroup>
-        {pkg.attention.length > 0 && (
+        {(pkg.attention ?? []).length > 0 && (
           <DescriptionListGroup>
             <DescriptionListTerm>Attention</DescriptionListTerm>
             <DescriptionListDescription>
-              {pkg.attention.map((tag: AttentionTag, i: number) => (
+              {(pkg.attention ?? []).map((tag: AttentionTag, i: number) => (
                 <span key={i} style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}>
                   <Label color={attentionLabelColor(tag.level)}>
                     {formatReasonText(tag.reason, tag.detail)}

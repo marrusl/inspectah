@@ -43,11 +43,11 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {config.attention.length > 0 && (
+        {(config.attention ?? []).length > 0 && (
           <DescriptionListGroup>
             <DescriptionListTerm>Attention</DescriptionListTerm>
             <DescriptionListDescription>
-              {config.attention.map((tag: AttentionTag, i: number) => (
+              {(config.attention ?? []).map((tag: AttentionTag, i: number) => (
                 <span key={i} style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}>
                   <Label color={attentionLabelColor(tag.level)}>
                     {formatReasonText(tag.reason, tag.detail)}

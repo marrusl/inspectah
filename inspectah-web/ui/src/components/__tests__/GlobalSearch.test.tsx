@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { GlobalSearch } from "../GlobalSearch";
 import type { GlobalSearchProps } from "../GlobalSearch";
 import type { DecisionItemKind } from "../DecisionItem";
-import type { ContextSection } from "../../api/types";
+import type { ContextSection, TriageAnnotation } from "../../api/types";
+
+const DEFAULT_TRIAGE = { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] as TriageAnnotation[] };
 
 function makePackageItem(name: string, arch = "x86_64"): DecisionItemKind {
   return {
@@ -22,6 +24,7 @@ function makePackageItem(name: string, arch = "x86_64"): DecisionItemKind {
         fleet: null,
       },
       attention: [],
+      triage: DEFAULT_TRIAGE,
     },
   };
 }
@@ -44,6 +47,7 @@ function makeConfigItem(path: string): DecisionItemKind {
         fleet: null,
       },
       attention: [],
+      triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "config_baseline_match" as const, annotations: [] as TriageAnnotation[] },
     },
   };
 }
@@ -98,6 +102,7 @@ describe("GlobalSearch auto-reveal", () => {
         attention: [
           { level: "routine", reason: "package_baseline_match", detail: null },
         ],
+        triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] as TriageAnnotation[] },
       },
     };
 
@@ -142,6 +147,7 @@ describe("GlobalSearch auto-reveal", () => {
         attention: [
           { level: "routine", reason: "config_default", detail: null },
         ],
+        triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "config_default" as const, annotations: [] as TriageAnnotation[] },
       },
     };
 

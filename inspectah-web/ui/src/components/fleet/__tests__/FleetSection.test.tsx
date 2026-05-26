@@ -17,18 +17,20 @@ const defaultAck: UseVariantAckResult = {
 function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetItem {
   return {
     include: true,
-    attention: { level: "none", reason: "", prevalence: 1 },
+    triage: { bucket: "universal" as const, prevalence: { count: 2, total: 3 } },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     ...overrides,
   };
 }
 
-const pkgItem = (name: string, overrides: Partial<FleetItem> = {}): FleetItem =>
-  makeItem({
-    item_id: { kind: "Package", key: { name_arch: name } },
+const pkgItem = (name: string, overrides: Partial<FleetItem> = {}): FleetItem => {
+  const [n, a] = name.includes(".") ? name.split(".") : [name, "x86_64"];
+  return makeItem({
+    item_id: { kind: "Package", key: { name: n, arch: a } },
     ...overrides,
   });
+};
 
 const cfgItem = (path: string, overrides: Partial<FleetItem> = {}): FleetItem =>
   makeItem({

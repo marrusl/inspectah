@@ -74,6 +74,14 @@ const ROUTINE_TAG: AttentionTag = {
   detail: null,
 };
 
+function attentionToTriage(tags: AttentionTag[]): import("../../api/types").TriageTag {
+  const bucketMap: Record<string, string> = { needs_review: "investigate", informational: "site", routine: "baseline" };
+  const tag = tags[0];
+  const bucket = tag ? (bucketMap[tag.level] ?? "baseline") : "baseline";
+  const reason = tag ? (typeof tag.reason === "string" ? tag.reason : "package_baseline_match") : "package_baseline_match";
+  return { triage: { mode: "single_host" as const, [bucket]: null }, primary_reason: reason as any, annotations: [] };
+}
+
 function makePkg(
   overrides: Partial<RefinedPackage["entry"]> = {},
   attention: AttentionTag[] = [],
@@ -92,6 +100,7 @@ function makePkg(
       ...overrides,
     },
     attention,
+    triage: attentionToTriage(attention),
   };
 }
 

@@ -39,12 +39,15 @@ const pkgItem = (
   nameArch: string,
   sectionId: string,
   variantCount: number,
-) => ({
-  item_id: { kind: "Package" as const, key: { name_arch: nameArch } },
-  section_id: sectionId,
-  variant_count: variantCount,
-  max_host_spread: 2,
-});
+) => {
+  const [name, arch] = nameArch.split(".");
+  return {
+    item_id: { kind: "Package" as const, key: { name, arch } },
+    section_id: sectionId,
+    variant_count: variantCount,
+    max_host_spread: 2,
+  };
+};
 
 describe("FleetBanner", () => {
   it("does not render when no actionable variant items", () => {

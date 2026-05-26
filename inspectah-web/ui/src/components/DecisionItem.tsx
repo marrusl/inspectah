@@ -7,11 +7,14 @@ import type {
   AttentionLevel,
   RefinementOp,
   VersionChangeEntry,
+  ItemId,
+  TriageTag,
 } from "../api/types";
 import {
   attentionLabelColor,
   formatReasonText,
-  highestAttention,
+  formatTriageReason,
+  triageBucketToAttention,
 } from "./attentionUtils";
 import { PackageDetail } from "./PackageDetail";
 import { ConfigDetail } from "./ConfigDetail";
@@ -22,7 +25,9 @@ export type DecisionItemKind =
 
 export interface DecisionItemProps {
   item: DecisionItemKind;
-  level: AttentionLevel;
+  /** @deprecated Use triageTag instead. Kept for backward compat during migration. */
+  level?: AttentionLevel;
+  triageTag?: TriageTag;
   rowIndex: number;
   isViewed: boolean;
   isPending: boolean;
@@ -52,28 +57,34 @@ function isIncluded(item: DecisionItemKind): boolean {
   return item.data.entry.include;
 }
 
-function buildToggleOp(item: DecisionItemKind): RefinementOp {
+function buildItemId(item: DecisionItemKind): ItemId {
   if (item.type === "package") {
-    const { name, arch } = item.data.entry;
-    return item.data.entry.include
-      ? { op: "ExcludePackage", target: { name, arch } }
-      : { op: "IncludePackage", target: { name, arch } };
+    return { kind: "Package", key: { name: item.data.entry.name, arch: item.data.entry.arch } };
   }
-  const { path } = item.data.entry;
-  return item.data.entry.include
-    ? { op: "ExcludeConfig", target: { path } }
-    : { op: "IncludeConfig", target: { path } };
+  return { kind: "Config", key: { path: item.data.entry.path } };
+}
+
+function buildToggleOp(item: DecisionItemKind): RefinementOp {
+  const itemId = buildItemId(item);
+  return { op: "SetInclude", target: { item_id: itemId, include: !item.data.entry.include } };
 }
 
 const LEVEL_BORDER: Record<string, string> = {
   needs_review: "3px solid var(--pf-t--global--color--status--danger--default)",
   informational: "3px solid var(--pf-t--global--color--status--info--default)",
   routine: "none",
+  investigate: "3px solid var(--pf-t--global--color--status--danger--default)",
+  divergent: "3px solid var(--pf-t--global--color--status--warning--default)",
+  site: "none",
+  baseline: "none",
+  partial: "3px solid var(--pf-t--global--color--status--custom--default)",
+  universal: "none",
 };
 
 export function DecisionItem({
   item,
   level,
+  triageTag,
   rowIndex,
   isViewed,
   isPending,
@@ -89,7 +100,13 @@ export function DecisionItem({
   const name = itemName(item);
   const included = isIncluded(item);
   const hasBeenToggled = useRef(false);
-  const isNeedsReview = level === "needs_review";
+
+  // Derive effective attention level: triageTag takes priority over legacy level prop
+  const effectiveLevel: AttentionLevel = triageTag
+    ? triageBucketToAttention(triageTag)
+    : level ?? "routine";
+
+  const isNeedsReview = effectiveLevel === "needs_review";
   const showUnviewedDot = isNeedsReview && !isViewed;
 
   const matchingVc = item.type === "package" && versionChanges
@@ -130,24 +147,47 @@ export function DecisionItem({
     [handleToggle, handleExpand, onKeyDownProp],
   );
 
-  const topAttention = item.data.attention.length > 0
-    ? highestAttention(item.data.attention)
-    : level;
-  const topReason = item.data.attention[0];
+  // Derive border and badge from triage or legacy attention
+  const topAttention = item.data.attention && item.data.attention.length > 0
+    ? triageBucketToAttention(item.data as unknown as TriageTag) // Fallback for legacy
+    : effectiveLevel;
+  const topReason = item.data.attention?.[0];
 
-  const borderLeft = LEVEL_BORDER[level] ?? LEVEL_BORDER.routine;
+  // Use triage bucket for border when available, otherwise legacy level
+  const triageBucketKey = triageTag
+    ? (triageTag.triage.mode === "single_host"
+        ? (Object.keys(triageTag.triage).find((k) => k !== "mode") ?? "baseline")
+        : triageTag.triage.bucket)
+    : null;
+  const borderLeft = triageBucketKey
+    ? (LEVEL_BORDER[triageBucketKey] ?? "none")
+    : (LEVEL_BORDER[effectiveLevel] ?? LEVEL_BORDER.routine);
 
-  const badgeText = level === "informational"
-    ? (topReason?.reason === "package_provenance_unavailable"
-      ? "Baseline Unavailable"
-      : topReason?.reason === "package_user_added" && item.type === "package"
-        ? (item.data as RefinedPackage).entry.source_repo || "Unknown"
-        : topReason
-          ? formatReasonText(topReason.reason, topReason.detail)
-          : null)
-    : level === "needs_review" && topReason
-      ? formatReasonText(topReason.reason, topReason.detail)
-      : null;
+  // Badge text from triage primary_reason or legacy attention
+  const badgeText = (() => {
+    if (triageTag) {
+      const reason = triageTag.primary_reason;
+      if (typeof reason === "object" && "custom" in reason) return reason.custom;
+      if (reason === "package_provenance_unavailable") return "Baseline Unavailable";
+      if (reason === "package_user_added" && item.type === "package") {
+        return (item.data as RefinedPackage).entry.source_repo || "Unknown";
+      }
+      if (effectiveLevel === "routine") return null;
+      return formatTriageReason(reason);
+    }
+    // Legacy path
+    if (effectiveLevel === "informational") {
+      if (topReason?.reason === "package_provenance_unavailable") return "Baseline Unavailable";
+      if (topReason?.reason === "package_user_added" && item.type === "package") {
+        return (item.data as RefinedPackage).entry.source_repo || "Unknown";
+      }
+      return topReason ? formatReasonText(topReason.reason, topReason.detail) : null;
+    }
+    if (effectiveLevel === "needs_review" && topReason) {
+      return formatReasonText(topReason.reason, topReason.detail);
+    }
+    return null;
+  })();
 
   return (
     <div

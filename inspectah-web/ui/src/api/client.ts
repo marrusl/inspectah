@@ -65,11 +65,11 @@ export function applyOp(op: RefinementOp): Promise<ViewResponse> {
 }
 
 export function excludeRepo(sectionId: string): Promise<ViewResponse> {
-  return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } });
+  return applyOp({ op: "SetInclude", target: { item_id: { kind: "Repo", key: { path: sectionId } }, include: false } });
 }
 
 export function includeRepo(sectionId: string): Promise<ViewResponse> {
-  return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } });
+  return applyOp({ op: "SetInclude", target: { item_id: { kind: "Repo", key: { path: sectionId } }, include: true } });
 }
 
 export function undo(): Promise<ViewResponse> {
