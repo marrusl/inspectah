@@ -89,6 +89,30 @@ export function triageBucketToAttention(tag: TriageTag): AttentionLevel {
   }
 }
 
+/** Map a triage bucket to a PatternFly Label color for compact bucket badges. */
+export function triageBucketLabelColor(
+  bucket: string,
+): "red" | "blue" | "green" | "grey" {
+  switch (bucket) {
+    case "investigate":
+      return "red";
+    case "site":
+    case "divergent":
+    case "partial":
+      return "grey";
+    case "baseline":
+    case "universal":
+      return "green";
+    default:
+      return "grey";
+  }
+}
+
+/** Capitalize a triage bucket name for display. */
+export function formatTriageBucket(bucket: string): string {
+  return bucket.charAt(0).toUpperCase() + bucket.slice(1);
+}
+
 /** Format a TriageReason for display. */
 export function formatTriageReason(reason: TriageReason): string {
   if (typeof reason === "object" && "custom" in reason) {

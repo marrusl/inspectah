@@ -12,8 +12,11 @@ import type {
 } from "../api/types";
 import {
   attentionLabelColor,
+  extractTriageBucket,
   formatReasonText,
+  formatTriageBucket,
   formatTriageReason,
+  triageBucketLabelColor,
   triageBucketToAttention,
 } from "./attentionUtils";
 import { PackageDetail } from "./PackageDetail";
@@ -163,6 +166,15 @@ export function DecisionItem({
     ? (LEVEL_BORDER[triageBucketKey] ?? "none")
     : (LEVEL_BORDER[effectiveLevel] ?? LEVEL_BORDER.routine);
 
+  // Triage bucket badge for package rows (repo-first exception: badge, not bucket grouping)
+  const bucketBadge = (() => {
+    if (item.type !== "package" || !triageTag) return null;
+    const bucket = extractTriageBucket(triageTag);
+    // Skip badge for baseline — it's the default, no signal value
+    if (bucket === "baseline" || bucket === "universal") return null;
+    return { text: formatTriageBucket(bucket), color: triageBucketLabelColor(bucket) };
+  })();
+
   // Badge text from triage primary_reason or legacy attention
   const badgeText = (() => {
     if (triageTag) {
@@ -226,6 +238,13 @@ export function DecisionItem({
           )}
           <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
         </div>
+        {bucketBadge && (
+          <div role="gridcell" className="inspectah-decision-row__badge" data-testid="triage-bucket-badge">
+            <Label color={bucketBadge.color} isCompact>
+              {bucketBadge.text}
+            </Label>
+          </div>
+        )}
         {badgeText && (
           <div role="gridcell" className="inspectah-decision-row__badge">
             <Label color={attentionLabelColor(topAttention)}>
