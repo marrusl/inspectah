@@ -6,7 +6,6 @@ use inspectah_core::types::containers::{
 use inspectah_core::types::fleet::{
     FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection,
 };
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
@@ -62,6 +61,7 @@ fn fleet_prevalence(count: i32, total: i32) -> Option<FleetPrevalence> {
         count,
         total,
         hosts: (0..count).map(|i| format!("host-{i}")).collect(),
+        ..Default::default()
     })
 }
 
@@ -186,59 +186,9 @@ fn quadlet_zone_classified_on_fleet_init() {
     );
 }
 
-#[test]
-fn fleet_session_populates_fleet_attention_on_refined_package() {
-    let mut snap = make_fleet_snapshot(5);
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![PackageEntry {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            state: PackageState::Added,
-            source_repo: "rhel-9-appstream".into(),
-            include: true,
-            fleet: fleet_prevalence(3, 5),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-
-    let session = RefineSession::new(snap);
-    let view = session.view();
-    assert!(!view.packages.is_empty(), "must have packages");
-    let pkg = &view.packages[0];
-    assert!(
-        pkg.fleet_attention.is_some(),
-        "fleet session must populate fleet_attention on packages",
-    );
-    let fa = pkg.fleet_attention.unwrap();
-    assert_eq!(fa.prevalence, 3);
-}
-
-#[test]
-fn single_host_session_has_no_fleet_attention() {
-    let mut snap = InspectionSnapshot::default();
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![PackageEntry {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            state: PackageState::Added,
-            source_repo: "rhel-9-appstream".into(),
-            include: true,
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-
-    let session = RefineSession::new(snap);
-    let view = session.view();
-    assert!(!view.packages.is_empty(), "must have packages");
-    for pkg in &view.packages {
-        assert!(
-            pkg.fleet_attention.is_none(),
-            "single-host session must NOT populate fleet_attention",
-        );
-    }
-}
+// fleet_attention tests removed — field no longer exists on RefinedPackage.
+// Fleet attention is now handled at the handler/DTO layer, not on the
+// domain type.
 
 // ---------------------------------------------------------------------------
 // R4a: Projection-based dirty state — net-zero variant ops should be clean
@@ -342,6 +292,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     count: 3,
                     total: 5,
                     hosts: vec!["h1".into(), "h2".into(), "h3".into()],
+                    ..Default::default()
                 }),
             },
             ComposeFile {
@@ -357,6 +308,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     count: 2,
                     total: 5,
                     hosts: vec!["h4".into(), "h5".into()],
+                    ..Default::default()
                 }),
             },
         ],
@@ -405,6 +357,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                     count: 3,
                     total: 5,
                     hosts: vec!["h1".into(), "h2".into(), "h3".into()],
+                    ..Default::default()
                 }),
             },
             ComposeFile {
@@ -416,6 +369,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                     count: 2,
                     total: 5,
                     hosts: vec!["h4".into(), "h5".into()],
+                    ..Default::default()
                 }),
             },
         ],
