@@ -1299,7 +1299,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Pattern:** Same as Phase 1 (classify → session handler → pipeline pruning → fleet handler → frontend).
 
-### Task 11: Container classification (Rust)
+### Task 11: Container classification (Rust) ✅ DONE (a707e7b)
 
 - Quadlets are always `Site` (user-deployed). Rare exception: `Baseline` if a quadlet path exists in the base image.
 - Flatpaks are always `Site` with `TriageAnnotation::FirstBootProvisioned`.
@@ -1307,7 +1307,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Fleet: Divergent quadlets activate the variant system.
 - `ItemId::Quadlet { path }`, `ItemId::Flatpak { app_id, remote, branch }`
 
-### Task 11a: Flatpak merge/type update in inspectah-core
+### Task 11a: Flatpak merge/type update in inspectah-core ✅ DONE
 
 **Files:**
 - Modify: `inspectah-core/src/fleet/merge.rs` — flatpak dedup (line 1128) currently uses `app_id` only. Update to dedup by `(app_id, remote, branch)`. Carry `remote_url` as a field that can diverge across hosts (detected by content comparison, resolvable via variant selection).
@@ -1350,23 +1350,23 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 12: Container refinement in session
+### Task 12: Container refinement in session ✅ DONE (2f0502d)
 
 - SetInclude for `ItemId::Quadlet` and `ItemId::Flatpak`
 
-### Task 12a: Pipeline pruning for containers
+### Task 12a: Pipeline pruning for containers ✅ DONE (5e38d7b)
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/configtree.rs` — `write_config_tree()` must skip materializing paths under `/etc/containers/systemd/` (owned by containers renderer)
 - Modify: `inspectah-pipeline/src/render/containerfile.rs` — `render_containerfile()` must gate quadlet/flatpak output on `include` state
 - Test: write render tests proving excluded quadlets do not appear in either the dedicated `quadlet/` tree or the generic `config/etc/` tree
 
-### Task 12b: Fleet handler for containers
+### Task 12b: Fleet handler for containers ✅ DONE (f7fd90b)
 
 **Files:**
 - Modify: `inspectah-web/src/fleet_handlers.rs` — move containers from `build_context_sections()` (line 622) to `build_fleet_sections()` (line 431). Wire up `TriageTag` and variant system for quadlets. Add flatpak lifecycle badge to fleet DTOs.
 
-### Task 13: Containers frontend
+### Task 13: Containers frontend ✅ DONE (62a1624)
 
 - Move Containers from `CONTEXT_SECTIONS` to `DECISION_SECTIONS`
 - Lifecycle badges: `Quadlet` + "Image content", `Flatpak` + "First boot", `Compose` + "Reference only"
