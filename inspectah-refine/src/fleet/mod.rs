@@ -1,4 +1,4 @@
-pub mod attention;
+pub mod classify;
 pub mod diff;
 pub mod variant_ops;
 

@@ -7,15 +7,15 @@ use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
-use crate::attention::{compute_config_attention, compute_package_attention};
+use crate::classify::{classify_configs, classify_packages};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, ContentHash, FleetContext, ItemId, RefineError,
-    RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance, SectionChangeSummary,
-    SectionKind, SectionStats, UserPasswordOp,
+    AnnotatedOp, ChangesSummary, ContentHash, FleetContext, ItemId, RefineError, RefineMode,
+    RefineStats, RefinedView, RefinementOp, RepoProvenance, SectionChangeSummary, SectionKind,
+    SectionStats, TriageBucket, UserPasswordOp,
 };
 
 pub struct RefineSession {
@@ -54,8 +54,8 @@ impl RefineSession {
 
         // Classify then normalize — materializes tier-aware defaults
         // into the snapshot BEFORE the op stack begins.
-        let pkgs = compute_package_attention(&snapshot);
-        let configs = compute_config_attention(&snapshot);
+        let pkgs = classify_packages(&snapshot);
+        let configs = classify_configs(&snapshot);
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
 
@@ -1333,61 +1333,63 @@ impl RefineSession {
 
     fn recompute_view(&mut self) {
         let projected = self.project_snapshot();
-        let mut all_packages = compute_package_attention(&projected);
-        let mut config_files = compute_config_attention(&projected);
+        let mut all_packages = classify_packages(&projected);
+        let mut config_files = classify_configs(&projected);
 
-        // Fleet attention scoring (when in fleet mode).
+        // Fleet triage scoring (when in fleet mode).
         if let RefineMode::Fleet(ref ctx) = self.refine_mode {
             for pkg in &mut all_packages {
                 let item_id = ItemId::Package {
                     name: pkg.entry.name.clone(),
                     arch: pkg.entry.arch.clone(),
                 };
-                let attention_level = pkg
-                    .attention
-                    .first()
-                    .map(|t| t.level)
-                    .unwrap_or(AttentionLevel::Routine);
-                let prevalence = pkg
+                let prevalence_count = pkg
                     .entry
                     .fleet
                     .as_ref()
-                    .map(|f| f.count as u32)
+                    .map(|f| f.count.max(0) as u32)
                     .unwrap_or(0);
-                let score = crate::fleet::attention::score_fleet_attention(
+                let prevalence_total = pkg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.total.max(0) as u32)
+                    .unwrap_or(ctx.total_hosts as u32);
+                let fleet_tag = crate::fleet::classify::classify_fleet_bucket(
                     ctx,
                     &item_id,
-                    attention_level,
-                    prevalence,
+                    pkg.triage.bucket(),
+                    pkg.triage.primary_reason.clone(),
+                    prevalence_count,
+                    prevalence_total,
                 );
-                if let crate::types::AttentionScore::Fleet(fa) = score {
-                    pkg.fleet_attention = Some(fa);
-                }
+                pkg.triage.triage = fleet_tag.triage;
             }
             for cfg in &mut config_files {
                 let item_id = ItemId::Config {
                     path: cfg.entry.path.clone(),
                 };
-                let attention_level = cfg
-                    .attention
-                    .first()
-                    .map(|t| t.level)
-                    .unwrap_or(AttentionLevel::Routine);
-                let prevalence = cfg
+                let prevalence_count = cfg
                     .entry
                     .fleet
                     .as_ref()
-                    .map(|f| f.count as u32)
+                    .map(|f| f.count.max(0) as u32)
                     .unwrap_or(0);
-                let score = crate::fleet::attention::score_fleet_attention(
+                let prevalence_total = cfg
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.total.max(0) as u32)
+                    .unwrap_or(ctx.total_hosts as u32);
+                let fleet_tag = crate::fleet::classify::classify_fleet_bucket(
                     ctx,
                     &item_id,
-                    attention_level,
-                    prevalence,
+                    cfg.triage.bucket(),
+                    cfg.triage.primary_reason.clone(),
+                    prevalence_count,
+                    prevalence_total,
                 );
-                if let crate::types::AttentionScore::Fleet(fa) = score {
-                    cfg.fleet_attention = Some(fa);
-                }
+                cfg.triage.triage = fleet_tag.triage;
             }
         }
 
@@ -1432,11 +1434,9 @@ impl RefineSession {
                 // items stay visible even though they default to include=false.
                 if !p.entry.include
                     && hidden_deps.contains(&(p.entry.name.as_str(), p.entry.arch.as_str()))
+                    && p.triage.bucket() != TriageBucket::Investigate
                 {
-                    let primary = p.attention.first().map(|t| t.level);
-                    if !matches!(primary, Some(AttentionLevel::NeedsReview)) {
-                        return false;
-                    }
+                    return false;
                 }
                 true
             })
@@ -1477,14 +1477,13 @@ impl RefineSession {
                         let package_id =
                             canonical_package_id(pkg.entry.name.as_str(), pkg.entry.arch.as_str());
 
-                        let primary_level = pkg.attention.first().map(|t| t.level);
                         let original_include = original_package_includes
                             .get(&(pkg.entry.name.as_str(), pkg.entry.arch.as_str()))
                             .copied()
                             .unwrap_or(pkg.entry.include);
 
                         leaf_set.contains(package_id.as_str())
-                            || matches!(primary_level, Some(AttentionLevel::NeedsReview))
+                            || pkg.triage.bucket() == TriageBucket::Investigate
                             || pkg.entry.include != original_include
                     })
                     .collect()
@@ -1534,19 +1533,11 @@ impl RefineSession {
             ],
             needs_review_count: packages
                 .iter()
-                .filter(|p| {
-                    p.attention
-                        .iter()
-                        .any(|t| t.level == AttentionLevel::NeedsReview)
-                })
+                .filter(|p| p.triage.bucket() == TriageBucket::Investigate)
                 .count()
                 + config_files
                     .iter()
-                    .filter(|c| {
-                        c.attention
-                            .iter()
-                            .any(|t| t.level == AttentionLevel::NeedsReview)
-                    })
+                    .filter(|c| c.triage.bucket() == TriageBucket::Investigate)
                     .count(),
             ops_applied: self.cursor,
             can_undo: self.can_undo(),
@@ -1793,6 +1784,13 @@ mod tests {
     #[test]
     fn view_filters_to_canonical_leaf_packages_when_available() {
         let mut snap = test_snapshot();
+        // Need baseline so packages get Site bucket (user-added), not Investigate.
+        // Leaf filtering only applies to Site, not Investigate.
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         let rpm = snap.rpm.as_mut().unwrap();
         rpm.packages_added = vec![
             PackageEntry {
@@ -1855,6 +1853,11 @@ mod tests {
     #[test]
     fn containerfile_preview_only_includes_leaf_packages() {
         let mut snap = test_snapshot();
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         let rpm = snap.rpm.as_mut().unwrap();
         rpm.packages_added = vec![
             PackageEntry {
@@ -1892,6 +1895,11 @@ mod tests {
     #[test]
     fn view_stats_respect_canonical_leaf_identity() {
         let mut snap = test_snapshot();
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         let rpm = snap.rpm.as_mut().unwrap();
         rpm.packages_added = vec![
             PackageEntry {
@@ -2001,6 +2009,11 @@ mod tests {
     #[test]
     fn containerfile_excludes_baseline_suppressed_packages() {
         let mut snap = test_snapshot();
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         let rpm = snap.rpm.as_mut().unwrap();
         rpm.packages_added = vec![
             PackageEntry {

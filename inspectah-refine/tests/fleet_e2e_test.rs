@@ -11,11 +11,13 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::fleet::{
     FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection,
 };
-use inspectah_refine::fleet::attention::score_fleet_attention;
+use inspectah_refine::fleet::classify::classify_fleet_bucket;
 use inspectah_refine::fleet::diff::compute_diff;
 use inspectah_refine::fleet::variant_summary;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{AttentionLevel, AttentionScore, ContentHash, ItemId, RefinementOp};
+use inspectah_refine::types::{
+    ContentHash, FleetBucket, ItemId, RefinementOp, Triage, TriageBucket, TriageReason,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -263,13 +265,20 @@ fn fleet_refine_full_lifecycle() {
     // -----------------------------------------------------------------------
     // 4. Attention scoring — verify fleet-aware scoring works
     // -----------------------------------------------------------------------
-    let score = score_fleet_attention(fleet_ctx, &main_id, AttentionLevel::Informational, 3);
-    match &score {
-        AttentionScore::Fleet(fa) => {
-            assert_eq!(fa.attention, AttentionLevel::Informational);
+    let tag = classify_fleet_bucket(
+        fleet_ctx,
+        &main_id,
+        TriageBucket::Investigate,
+        TriageReason::PackageProvenanceUnavailable,
+        3,
+        5,
+    );
+    match &tag.triage {
+        Triage::Fleet(ft) => {
+            assert_eq!(ft.bucket, FleetBucket::Investigate);
         }
-        AttentionScore::SingleHost(_) => {
-            panic!("fleet session must produce Fleet attention score");
+        Triage::SingleHost(_) => {
+            panic!("fleet session must produce Fleet triage");
         }
     }
 

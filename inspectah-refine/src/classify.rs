@@ -1,4 +1,6 @@
-use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
+use crate::types::{
+    RefinedConfig, RefinedPackage, Triage, TriageAnnotation, TriageBucket, TriageReason, TriageTag,
+};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
@@ -26,8 +28,7 @@ fn is_sensitive_path(path: &str) -> bool {
 /// `%config`. The config inspector classifies them as `Unowned` because they
 /// aren't tracked by `rpm -Vc`, but on a stock system they are package defaults.
 ///
-/// Suppresses the SensitivePath promotion (Informational -> NeedsReview) so
-/// these stock files don't flood the NeedsReview tier on unmodified systems.
+/// Suppresses the SensitivePath annotation so these stock files don't add noise.
 const OS_DEFAULT_SENSITIVE_PREFIXES: &[&str] = &[
     // ca-certificates, p11-kit-trust
     "/etc/pki/ca-trust/",
@@ -51,8 +52,7 @@ const OS_DEFAULT_SENSITIVE_PREFIXES: &[&str] = &[
 const OS_DEFAULT_SENSITIVE_EXACT: &[&str] = &["/etc/ssh/moduli", "/etc/ssh/ssh_config"];
 
 /// Returns true when the path is a well-known OS default inside a sensitive
-/// directory. These files should NOT be promoted from Informational to
-/// NeedsReview by the sensitive-path overlay.
+/// directory. These files should NOT get a SensitivePath annotation.
 fn is_os_default_sensitive(path: &str) -> bool {
     OS_DEFAULT_SENSITIVE_PREFIXES
         .iter()
@@ -60,7 +60,7 @@ fn is_os_default_sensitive(path: &str) -> bool {
         || OS_DEFAULT_SENSITIVE_EXACT.contains(&path)
 }
 
-pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
+pub fn classify_packages(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
     let rpm = match &snap.rpm {
         Some(r) => r,
         None => return Vec::new(),
@@ -101,38 +101,23 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
             if suppressed_set.contains(canonical_id.as_str()) {
                 return RefinedPackage {
                     entry: entry.clone(),
-                    attention: vec![AttentionTag {
-                        level: AttentionLevel::Routine,
-                        reason: AttentionReason::PackageBaselineMatch,
-                        detail: None,
-                    }],
-                    fleet_attention: None,
+                    triage: TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Baseline),
+                        primary_reason: TriageReason::PackageBaselineMatch,
+                        annotations: Vec::new(),
+                    },
                 };
             }
 
-            let tag = classify_package(entry, baseline, &rpm.version_changes);
-            let mut tags = vec![tag];
+            let mut tag = classify_package(entry, baseline, &rpm.version_changes);
 
             if is_sensitive_path(&entry.name) {
-                let primary_level = tags[0].level;
-                let should_promote = match primary_level {
-                    AttentionLevel::Informational => true,
-                    AttentionLevel::Routine => baseline.is_none(),
-                    AttentionLevel::NeedsReview => false,
-                };
-                if should_promote {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::SensitivePath,
-                        detail: Some(entry.name.clone()),
-                    });
-                }
+                tag.annotations.push(TriageAnnotation::SensitivePath);
             }
 
             let mut refined = RefinedPackage {
                 entry: entry.clone(),
-                attention: tags,
-                fleet_attention: None,
+                triage: tag,
             };
 
             // Auto-exclude @commandline packages whose files are all config-captured.
@@ -144,11 +129,11 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                     .all(|p| p.starts_with("/etc/") && config_paths.contains(p.as_str()))
             {
                 refined.entry.include = false;
-                refined.attention.push(AttentionTag {
-                    level: AttentionLevel::Informational,
-                    reason: AttentionReason::PackageConfigCaptured,
-                    detail: Some("contents captured via config files".to_string()),
-                });
+                refined.triage = TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Site),
+                    primary_reason: TriageReason::PackageConfigCaptured,
+                    annotations: refined.triage.annotations,
+                };
             }
 
             refined
@@ -160,39 +145,39 @@ fn classify_package(
     entry: &PackageEntry,
     baseline: Option<&[String]>,
     version_changes: &[VersionChange],
-) -> AttentionTag {
-    // LocalInstall and NoRepo are always Tier 3, regardless of baseline or repo.
+) -> TriageTag {
+    // LocalInstall and NoRepo are always Investigate, regardless of baseline or repo.
     match entry.state {
         PackageState::LocalInstall => {
-            return AttentionTag {
-                level: AttentionLevel::NeedsReview,
-                reason: AttentionReason::PackageLocalInstall,
-                detail: None,
+            return TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Investigate),
+                primary_reason: TriageReason::PackageLocalInstall,
+                annotations: Vec::new(),
             };
         }
         PackageState::NoRepo => {
-            return AttentionTag {
-                level: AttentionLevel::NeedsReview,
-                reason: AttentionReason::PackageNoRepoSource,
-                detail: None,
+            return TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Investigate),
+                primary_reason: TriageReason::PackageNoRepoSource,
+                annotations: Vec::new(),
             };
         }
         _ => {}
     }
 
-    // Empty source_repo or @commandline means unknown provenance — always Tier 3.
+    // Empty source_repo or @commandline means unknown provenance — always Investigate.
     if entry.source_repo.is_empty()
         || entry.source_repo.eq_ignore_ascii_case("@commandline")
     {
-        return AttentionTag {
-            level: AttentionLevel::NeedsReview,
-            reason: AttentionReason::PackageNoRepoSource,
-            detail: None,
+        return TriageTag {
+            triage: Triage::SingleHost(TriageBucket::Investigate),
+            primary_reason: TriageReason::PackageNoRepoSource,
+            annotations: Vec::new(),
         };
     }
 
     // Modified packages: check version change direction.
-    // Upgrades are normal maintenance (Routine). Downgrades need review.
+    // Upgrades are normal maintenance (Site). Downgrades need investigation.
     if entry.state == PackageState::Modified {
         return match baseline {
             Some(_) => {
@@ -202,23 +187,23 @@ fn classify_package(
                         && vc.direction == VersionChangeDirection::Downgrade
                 });
                 if is_downgrade {
-                    AttentionTag {
-                        level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::PackageVersionChanged,
-                        detail: Some("Downgrade".to_string()),
+                    TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Investigate),
+                        primary_reason: TriageReason::PackageVersionChanged,
+                        annotations: Vec::new(),
                     }
                 } else {
-                    AttentionTag {
-                        level: AttentionLevel::Routine,
-                        reason: AttentionReason::PackageVersionChanged,
-                        detail: Some("Upgrade".to_string()),
+                    TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Site),
+                        primary_reason: TriageReason::PackageVersionChanged,
+                        annotations: Vec::new(),
                     }
                 }
             }
-            None => AttentionTag {
-                level: AttentionLevel::Informational,
-                reason: AttentionReason::PackageProvenanceUnavailable,
-                detail: None,
+            None => TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Investigate),
+                primary_reason: TriageReason::PackageProvenanceUnavailable,
+                annotations: Vec::new(),
             },
         };
     }
@@ -231,33 +216,33 @@ fn classify_package(
                 n == &entry_key
             }) =>
         {
-            // In baseline with known repo — expected package, Tier 1.
-            AttentionTag {
-                level: AttentionLevel::Routine,
-                reason: AttentionReason::PackageBaselineMatch,
-                detail: None,
+            // In baseline with known repo — expected package, Baseline.
+            TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Baseline),
+                primary_reason: TriageReason::PackageBaselineMatch,
+                annotations: Vec::new(),
             }
         }
         Some(_) => {
-            // Not in baseline but has a known repo — user-added, Tier 1.
-            AttentionTag {
-                level: AttentionLevel::Routine,
-                reason: AttentionReason::PackageUserAdded,
-                detail: None,
+            // Not in baseline but has a known repo — user-added, Site.
+            TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Site),
+                primary_reason: TriageReason::PackageUserAdded,
+                annotations: Vec::new(),
             }
         }
         None => {
-            // No baseline available — can't determine provenance, Tier 2.
-            AttentionTag {
-                level: AttentionLevel::Informational,
-                reason: AttentionReason::PackageProvenanceUnavailable,
-                detail: None,
+            // No baseline available — can't determine provenance, Investigate.
+            TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Investigate),
+                primary_reason: TriageReason::PackageProvenanceUnavailable,
+                annotations: Vec::new(),
             }
         }
     }
 }
 
-pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
+pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
     let config = match &snap.config {
         Some(c) => c,
         None => return Vec::new(),
@@ -267,59 +252,42 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
         .files
         .iter()
         .map(|entry| {
-            let tag = match entry.kind {
-                ConfigFileKind::RpmOwnedDefault => AttentionTag {
-                    level: AttentionLevel::Routine,
-                    reason: AttentionReason::ConfigDefault,
-                    detail: None,
-                },
-                ConfigFileKind::BaselineMatch => AttentionTag {
-                    level: AttentionLevel::Routine,
-                    reason: AttentionReason::ConfigBaselineMatch,
-                    detail: None,
-                },
-                ConfigFileKind::Unowned => AttentionTag {
-                    level: AttentionLevel::Informational,
-                    reason: AttentionReason::ConfigUnowned,
-                    detail: None,
-                },
-                ConfigFileKind::RpmOwnedModified => AttentionTag {
-                    level: AttentionLevel::NeedsReview,
-                    reason: AttentionReason::ConfigModified,
-                    detail: None,
-                },
-                ConfigFileKind::Orphaned => AttentionTag {
-                    level: AttentionLevel::Informational,
-                    reason: AttentionReason::ConfigOrphaned,
-                    detail: None,
-                },
+            let (bucket, reason) = match entry.kind {
+                ConfigFileKind::RpmOwnedDefault => {
+                    (TriageBucket::Baseline, TriageReason::ConfigDefault)
+                }
+                ConfigFileKind::BaselineMatch => {
+                    (TriageBucket::Baseline, TriageReason::ConfigBaselineMatch)
+                }
+                ConfigFileKind::Unowned => (TriageBucket::Site, TriageReason::ConfigUnowned),
+                ConfigFileKind::RpmOwnedModified => {
+                    (TriageBucket::Site, TriageReason::ConfigModified)
+                }
+                ConfigFileKind::Orphaned => (TriageBucket::Site, TriageReason::ConfigOrphaned),
             };
 
-            let mut tags = vec![tag];
-            // Sensitive path overlay: promote Tier 2 -> Tier 3.
-            // Tier 1 is NOT promoted (base image ships these files).
-            // OS-default files in sensitive directories are also NOT promoted —
+            let mut annotations = Vec::new();
+            // Sensitive path annotation: add to items in sensitive directories.
+            // OS-default files in sensitive directories are NOT annotated —
             // they are stock package contents, not meaningful user customizations.
             if is_sensitive_path(&entry.path)
-                && tags[0].level == AttentionLevel::Informational
                 && !is_os_default_sensitive(&entry.path)
             {
-                tags.push(AttentionTag {
-                    level: AttentionLevel::NeedsReview,
-                    reason: AttentionReason::SensitivePath,
-                    detail: Some(entry.path.clone()),
-                });
+                annotations.push(TriageAnnotation::SensitivePath);
             }
 
             RefinedConfig {
                 entry: entry.clone(),
-                attention: tags,
-                fleet_attention: None,
+                triage: TriageTag {
+                    triage: Triage::SingleHost(bucket),
+                    primary_reason: reason,
+                    annotations,
+                },
             }
         })
         .collect();
 
-    // Surface unresolved redaction hints as needs-review tags on matching
+    // Surface unresolved redaction hints as needs-investigation on matching
     // config files. Applies to PartiallyRedacted and SensitiveRetained.
     if let Some(
         RedactionState::PartiallyRedacted {
@@ -334,11 +302,11 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
     {
         for hint in unresolved_hints {
             if let Some(cfg) = configs.iter_mut().find(|c| c.entry.path == hint.path) {
-                cfg.attention.push(AttentionTag {
-                    level: AttentionLevel::NeedsReview,
-                    reason: AttentionReason::Custom("unresolved redaction hint".into()),
-                    detail: Some(hint.reason.clone()),
-                });
+                cfg.triage = TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Investigate),
+                    primary_reason: TriageReason::Custom("unresolved redaction hint".into()),
+                    annotations: cfg.triage.annotations.clone(),
+                };
             }
         }
     }
@@ -352,7 +320,6 @@ mod tests {
     use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
     use inspectah_core::types::rpm::{RpmSection, VersionChange, VersionChangeDirection};
 
-    /// Helper: build a minimal PackageEntry with the given state and source_repo.
     fn pkg(name: &str, state: PackageState, source_repo: &str) -> PackageEntry {
         PackageEntry {
             name: name.to_string(),
@@ -363,7 +330,6 @@ mod tests {
         }
     }
 
-    /// Helper: build a VersionChange with the given direction.
     fn vc(name: &str, direction: VersionChangeDirection) -> VersionChange {
         VersionChange {
             name: name.to_string(),
@@ -373,7 +339,6 @@ mod tests {
         }
     }
 
-    /// Helper: build a VersionChange with a specific architecture.
     fn vc_arch(name: &str, arch: &str, direction: VersionChangeDirection) -> VersionChange {
         VersionChange {
             name: name.to_string(),
@@ -383,7 +348,6 @@ mod tests {
         }
     }
 
-    /// Helper: build a PackageEntry with a specific architecture.
     fn pkg_arch(name: &str, arch: &str, state: PackageState, source_repo: &str) -> PackageEntry {
         PackageEntry {
             name: name.to_string(),
@@ -394,7 +358,6 @@ mod tests {
         }
     }
 
-    /// Helper: build a snapshot with baseline via snap.baseline (Phase 6) and packages_added.
     fn snap_with_baseline(
         baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
@@ -402,7 +365,6 @@ mod tests {
         snap_with_baseline_and_vc(baseline_names, packages, vec![])
     }
 
-    /// Helper: build a snapshot with baseline, packages, and version changes.
     fn snap_with_baseline_and_vc(
         baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
@@ -441,170 +403,138 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Verified mode: baseline present
-    // -----------------------------------------------------------------------
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
 
     #[test]
-    fn verified_added_in_baseline_is_routine_baseline_match() {
+    fn verified_added_in_baseline_is_baseline() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("glibc", PackageState::Added, "rhel-9-baseos")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageBaselineMatch
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Baseline);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
     }
 
     #[test]
-    fn verified_added_not_in_baseline_recognized_repo_is_routine_user_added() {
+    fn verified_added_not_in_baseline_recognized_repo_is_site() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("httpd", PackageState::Added, "rhel-9-appstream")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageUserAdded
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageUserAdded);
     }
 
     #[test]
-    fn verified_added_no_repo_is_needs_review() {
+    fn verified_added_no_repo_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("mystery", PackageState::Added, "")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
-    fn verified_modified_upgrade_is_routine() {
-        // Upgrades are normal maintenance — Routine, not NeedsReview.
+    fn verified_modified_upgrade_is_site() {
         let snap = snap_with_baseline_and_vc(
             Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
             vec![vc("kernel", VersionChangeDirection::Upgrade)],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
     }
 
     #[test]
-    fn verified_modified_downgrade_is_needs_review() {
-        // Downgrades are unusual — NeedsReview.
+    fn verified_modified_downgrade_is_investigate() {
         let snap = snap_with_baseline_and_vc(
             Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
             vec![vc("kernel", VersionChangeDirection::Downgrade)],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
     }
 
     #[test]
-    fn verified_modified_no_version_change_entry_defaults_to_routine() {
-        // Modified with no matching VersionChange entry (no downgrade found) — Routine.
+    fn verified_modified_no_version_change_entry_defaults_to_site() {
         let snap = snap_with_baseline(
             Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
     }
 
     #[test]
-    fn verified_modified_not_in_baseline_upgrade_is_routine() {
+    fn verified_modified_not_in_baseline_upgrade_is_site() {
         let snap = snap_with_baseline_and_vc(
             Some(vec!["glibc".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
             vec![vc("kernel", VersionChangeDirection::Upgrade)],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
     }
 
     #[test]
-    fn verified_modified_no_repo_is_needs_review_no_repo_source() {
+    fn verified_modified_no_repo_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("kernel", PackageState::Modified, "")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
-    fn verified_local_install_is_needs_review() {
+    fn verified_local_install_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("custom-tool", PackageState::LocalInstall, "")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageLocalInstall
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageLocalInstall);
     }
 
     #[test]
-    fn verified_no_repo_state_is_needs_review() {
+    fn verified_no_repo_state_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("orphan-pkg", PackageState::NoRepo, "some-repo")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
     fn snap_baseline_field_drives_verified_mode() {
-        // Verify that compute_package_attention reads snap.baseline,
-        // not the legacy rpm.baseline_package_names field.
         use std::collections::HashMap;
         let mut pkgs = HashMap::new();
         pkgs.insert(
@@ -621,7 +551,6 @@ mod tests {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
                 packages_added: vec![pkg("glibc", PackageState::Added, "rhel-9-baseos")],
-                // baseline_package_names NOT set — only snap.baseline
                 ..Default::default()
             }),
             baseline: Some(BaselineData {
@@ -631,76 +560,55 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        // Should be verified mode (Routine/BaselineMatch), not degraded
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageBaselineMatch
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Baseline);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
     }
 
-    // -----------------------------------------------------------------------
-    // Degraded mode: no baseline
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn degraded_added_is_informational_provenance_unavailable() {
+    fn degraded_added_is_investigate_provenance_unavailable() {
         let snap = snap_with_baseline(
             None,
             vec![pkg("httpd", PackageState::Added, "rhel-9-appstream")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageProvenanceUnavailable
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageProvenanceUnavailable);
     }
 
     #[test]
-    fn degraded_local_install_still_needs_review() {
-        // LocalInstall is always Tier 3 regardless of baseline.
+    fn degraded_local_install_still_investigate() {
         let snap = snap_with_baseline(
             None,
             vec![pkg("custom-tool", PackageState::LocalInstall, "")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageLocalInstall
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageLocalInstall);
     }
 
     #[test]
-    fn degraded_no_repo_state_still_needs_review() {
+    fn degraded_no_repo_state_still_investigate() {
         let snap = snap_with_baseline(None, vec![pkg("orphan", PackageState::NoRepo, "some-repo")]);
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
-    fn commandline_source_repo_is_needs_review() {
+    fn commandline_source_repo_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
             vec![pkg("rpmfusion-free-release", PackageState::Added, "@commandline")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
@@ -742,14 +650,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert!(!result[0].entry.include, "should be auto-excluded");
-        assert!(
-            result[0]
-                .attention
-                .iter()
-                .any(|a| a.reason == AttentionReason::PackageConfigCaptured),
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageConfigCaptured,
             "should have PackageConfigCaptured reason"
         );
     }
@@ -786,96 +692,65 @@ mod tests {
             ..Default::default()
         };
 
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        // epel-release has /usr/bin/crb outside /etc/ -- should NOT be auto-excluded
-        assert!(
-            !result[0]
-                .attention
-                .iter()
-                .any(|a| a.reason == AttentionReason::PackageConfigCaptured),
+        assert_ne!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageConfigCaptured,
             "should not be config-captured"
         );
     }
 
     #[test]
-    fn commandline_source_repo_degraded_is_needs_review() {
+    fn commandline_source_repo_degraded_is_investigate() {
         let snap = snap_with_baseline(
             None,
             vec![pkg("custom-tool", PackageState::Added, "@commandline")],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
 
     #[test]
-    fn degraded_empty_source_repo_is_needs_review() {
+    fn degraded_empty_source_repo_is_investigate() {
         let snap = snap_with_baseline(None, vec![pkg("mystery", PackageState::Added, "")]);
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
-
-    // -----------------------------------------------------------------------
-    // Multiple packages in one snapshot
-    // -----------------------------------------------------------------------
 
     #[test]
     fn verified_mixed_packages_classification() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into(), "bash".into()]),
             vec![
-                pkg("glibc", PackageState::Added, "rhel-9-baseos"), // baseline match -> Routine
-                pkg("httpd", PackageState::Added, "rhel-9-appstream"), // user-added -> Routine
-                pkg("custom", PackageState::LocalInstall, ""),      // local install -> NeedsReview
-                pkg("unknown", PackageState::Added, ""),            // no repo -> NeedsReview
+                pkg("glibc", PackageState::Added, "rhel-9-baseos"),
+                pkg("httpd", PackageState::Added, "rhel-9-appstream"),
+                pkg("custom", PackageState::LocalInstall, ""),
+                pkg("unknown", PackageState::Added, ""),
             ],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 4);
 
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageBaselineMatch
-        );
+        assert_bucket(&result[0].triage, TriageBucket::Baseline);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
 
-        assert_eq!(result[1].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[1].attention[0].reason,
-            AttentionReason::PackageUserAdded
-        );
+        assert_bucket(&result[1].triage, TriageBucket::Site);
+        assert_eq!(result[1].triage.primary_reason, TriageReason::PackageUserAdded);
 
-        assert_eq!(result[2].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[2].attention[0].reason,
-            AttentionReason::PackageLocalInstall
-        );
+        assert_bucket(&result[2].triage, TriageBucket::Investigate);
+        assert_eq!(result[2].triage.primary_reason, TriageReason::PackageLocalInstall);
 
-        assert_eq!(result[3].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[3].attention[0].reason,
-            AttentionReason::PackageNoRepoSource
-        );
+        assert_bucket(&result[3].triage, TriageBucket::Investigate);
+        assert_eq!(result[3].triage.primary_reason, TriageReason::PackageNoRepoSource);
     }
-
-    // -----------------------------------------------------------------------
-    // Multiarch: version direction must respect architecture
-    // -----------------------------------------------------------------------
 
     #[test]
     fn multiarch_downgrade_only_affects_matching_arch() {
-        // openssl.x86_64 upgraded, openssl.i686 downgraded.
-        // Each arch should get its own correct attention level.
         let snap = snap_with_baseline_and_vc(
             Some(vec!["openssl".into()]),
             vec![
@@ -887,29 +762,15 @@ mod tests {
                 vc_arch("openssl", "i686", VersionChangeDirection::Downgrade),
             ],
         );
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         assert_eq!(result.len(), 2);
 
-        // x86_64 was upgraded — should be Routine
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
-        assert_eq!(result[0].attention[0].detail.as_deref(), Some("Upgrade"));
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
 
-        // i686 was downgraded — should be NeedsReview
-        assert_eq!(result[1].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[1].attention[0].reason,
-            AttentionReason::PackageVersionChanged
-        );
-        assert_eq!(result[1].attention[0].detail.as_deref(), Some("Downgrade"));
+        assert_bucket(&result[1].triage, TriageBucket::Investigate);
+        assert_eq!(result[1].triage.primary_reason, TriageReason::PackageVersionChanged);
     }
-
-    // -----------------------------------------------------------------------
-    // Config attention: OS-default sensitive path suppression
-    // -----------------------------------------------------------------------
 
     use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 
@@ -924,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn os_default_pki_rpm_gpg_stays_informational() {
+    fn os_default_pki_rpm_gpg_no_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry(
@@ -935,18 +796,15 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::ConfigUnowned
-        );
+        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::ConfigUnowned);
     }
 
     #[test]
-    fn os_default_security_pam_stays_informational() {
+    fn os_default_security_pam_no_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry(
@@ -957,14 +815,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
     }
 
     #[test]
-    fn os_default_ssl_stays_informational() {
+    fn os_default_ssl_no_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry(
@@ -975,14 +832,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
     }
 
     #[test]
-    fn os_default_ssh_moduli_stays_informational() {
+    fn os_default_ssh_moduli_no_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry("/etc/ssh/moduli", ConfigFileKind::Unowned)],
@@ -990,15 +846,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
     }
 
     #[test]
-    fn non_default_sensitive_path_still_promoted() {
-        // /etc/shadow is sensitive but NOT in the OS-default list — should promote.
+    fn non_default_sensitive_path_gets_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry("/etc/shadow", ConfigFileKind::Unowned)],
@@ -1006,24 +860,16 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(
-            result[0].attention.len(),
-            2,
-            "SensitivePath promotion applied"
-        );
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
-        assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[1].reason,
-            AttentionReason::SensitivePath
+        assert!(
+            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            "SensitivePath annotation expected"
         );
     }
 
     #[test]
-    fn rpm_modified_in_sensitive_path_still_needs_review() {
-        // RpmOwnedModified is already NeedsReview — not affected by the overlay.
+    fn rpm_modified_in_sensitive_path_gets_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry(
@@ -1034,20 +880,18 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(
-            result[0].attention[0].reason,
-            AttentionReason::ConfigModified
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(result[0].triage.primary_reason, TriageReason::ConfigModified);
+        assert!(
+            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            "SensitivePath annotation expected for modified sensitive path"
         );
     }
 
     #[test]
-    fn unknown_pki_subdir_still_promoted() {
-        // A file in /etc/pki/ that is NOT in a known OS-default subdir should
-        // still be promoted. /etc/pki/tls/custom.pem is not under any allowlisted prefix.
+    fn unknown_pki_subdir_gets_annotation() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
                 files: vec![config_entry(
@@ -1058,22 +902,16 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = compute_config_attention(&snap);
+        let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(
-            result[0].attention.len(),
-            2,
-            "SensitivePath promotion applied"
+        assert!(
+            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            "SensitivePath annotation expected"
         );
-        assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
     }
 
-    // -----------------------------------------------------------------------
-    // Baseline-suppressed attention gating
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn test_baseline_suppressed_package_gets_routine_not_needs_review() {
+    fn test_baseline_suppressed_package_gets_baseline_not_investigate() {
         let mut snap = InspectionSnapshot::default();
         let mut rpm = RpmSection::default();
         rpm.packages_added = vec![PackageEntry {
@@ -1099,17 +937,14 @@ mod tests {
         rpm.baseline_suppressed = Some(vec!["bash.x86_64".into()]);
         snap.rpm = Some(rpm);
 
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         let bash = result.iter().find(|p| p.entry.name == "bash").unwrap();
-        assert_eq!(bash.attention[0].level, AttentionLevel::Routine);
-        assert_eq!(
-            bash.attention[0].reason,
-            AttentionReason::PackageBaselineMatch
-        );
+        assert_bucket(&bash.triage, TriageBucket::Baseline);
+        assert_eq!(bash.triage.primary_reason, TriageReason::PackageBaselineMatch);
     }
 
     #[test]
-    fn test_non_suppressed_downgrade_still_gets_needs_review() {
+    fn test_non_suppressed_downgrade_still_gets_investigate() {
         let mut snap = InspectionSnapshot::default();
         let mut rpm = RpmSection::default();
         rpm.packages_added = vec![PackageEntry {
@@ -1140,14 +975,10 @@ mod tests {
             extracted_at: "2026-01-01T00:00:00Z".into(),
         });
 
-        let result = compute_package_attention(&snap);
+        let result = classify_packages(&snap);
         let httpd = result.iter().find(|p| p.entry.name == "httpd").unwrap();
-        assert_eq!(httpd.attention[0].level, AttentionLevel::NeedsReview);
+        assert_bucket(&httpd.triage, TriageBucket::Investigate);
     }
-
-    // -----------------------------------------------------------------------
-    // SensitiveRetained: unresolved hints surface as NeedsReview
-    // -----------------------------------------------------------------------
 
     #[test]
     fn sensitive_retained_surfaces_unresolved_hints() {
@@ -1172,14 +1003,11 @@ mod tests {
             }],
         });
 
-        let result = compute_config_attention(&snap);
-        let config_attention = &result[0].attention;
+        let result = classify_configs(&snap);
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
         assert!(
-            config_attention
-                .iter()
-                .any(|a| a.level == AttentionLevel::NeedsReview
-                    && matches!(a.reason, AttentionReason::Custom(_))),
-            "SensitiveRetained with unresolved hints must surface NeedsReview"
+            matches!(result[0].triage.primary_reason, TriageReason::Custom(_)),
+            "SensitiveRetained with unresolved hints must surface Investigate"
         );
     }
 }

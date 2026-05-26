@@ -1,4 +1,4 @@
-use crate::types::{AttentionLevel, RefineError, RefinedConfig, RefinedPackage};
+use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use serde_json::Value;
@@ -116,16 +116,12 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         if i >= rpm.packages_added.len() {
             break;
         }
-        let primary_level = refined
-            .attention
-            .first()
-            .map(|t| t.level)
-            .unwrap_or(AttentionLevel::Routine);
-        match primary_level {
-            AttentionLevel::Routine => {
+        let bucket = refined.triage.bucket();
+        match bucket {
+            TriageBucket::Baseline => {
                 rpm.packages_added[i].include = true;
             }
-            AttentionLevel::Informational => {
+            TriageBucket::Site => {
                 let package_id = canonical_package_id(
                     rpm.packages_added[i].name.as_str(),
                     rpm.packages_added[i].arch.as_str(),
@@ -136,7 +132,7 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
                 };
                 rpm.packages_added[i].include = is_leaf;
             }
-            AttentionLevel::NeedsReview => {
+            TriageBucket::Investigate => {
                 rpm.packages_added[i].include = false;
             }
         }
@@ -184,24 +180,20 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
         if i >= config.files.len() {
             break;
         }
-        let primary_level = refined
-            .attention
-            .first()
-            .map(|t| t.level)
-            .unwrap_or(AttentionLevel::Routine);
-        match primary_level {
-            AttentionLevel::Routine => {
-                // Tier 1: NOT copied — package manager handles these
+        let bucket = refined.triage.bucket();
+        match bucket {
+            TriageBucket::Baseline => {
+                // Baseline: NOT copied — package manager handles these
                 config.files[i].include = false;
             }
-            AttentionLevel::Informational => {
+            TriageBucket::Site => {
                 config.files[i].include = !matches!(
                     config.files[i].kind,
                     inspectah_core::types::config::ConfigFileKind::Orphaned
                 );
             }
-            AttentionLevel::NeedsReview => {
-                // Tier 3: user-customized, include
+            TriageBucket::Investigate => {
+                // Investigate: user-customized, include
                 config.files[i].include = true;
             }
         }
@@ -371,8 +363,19 @@ mod tests {
 
     #[test]
     fn leaf_set_excludes_transitive_deps() {
-        use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedPackage};
+        use crate::types::{RefinedPackage, Triage, TriageBucket, TriageReason, TriageTag};
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        fn site_package(entry: &PackageEntry) -> RefinedPackage {
+            RefinedPackage {
+                entry: entry.clone(),
+                triage: TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Site),
+                    primary_reason: TriageReason::PackageProvenanceUnavailable,
+                    annotations: Vec::new(),
+                },
+            }
+        }
 
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -416,22 +419,14 @@ mod tests {
             ..Default::default()
         };
 
-        // All packages are Tier 2 (Informational) — no baseline
+        // All packages are Site (user-added) — no baseline
         let packages: Vec<RefinedPackage> = snap
             .rpm
             .as_ref()
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| RefinedPackage {
-                entry: entry.clone(),
-                attention: vec![AttentionTag {
-                    level: AttentionLevel::Informational,
-                    reason: AttentionReason::PackageProvenanceUnavailable,
-                    detail: None,
-                }],
-                fleet_attention: None,
-            })
+            .map(|entry| site_package(entry))
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);
@@ -456,11 +451,19 @@ mod tests {
 
     #[test]
     fn fleet_leaf_also_dep_of_another_leaf_stays_included() {
-        // Fleet/merged scenario: perl-Git is a top-level leaf (user installed
-        // it directly on one host) AND appears as a dep of git. Because it has
-        // its own entry in leaf_dep_tree, it should NOT be subtracted.
-        use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedPackage};
+        use crate::types::{RefinedPackage, Triage, TriageBucket, TriageReason, TriageTag};
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        fn site_package(entry: &PackageEntry) -> RefinedPackage {
+            RefinedPackage {
+                entry: entry.clone(),
+                triage: TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Site),
+                    primary_reason: TriageReason::PackageProvenanceUnavailable,
+                    annotations: Vec::new(),
+                },
+            }
+        }
 
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -511,15 +514,7 @@ mod tests {
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| RefinedPackage {
-                entry: entry.clone(),
-                attention: vec![AttentionTag {
-                    level: AttentionLevel::Informational,
-                    reason: AttentionReason::PackageProvenanceUnavailable,
-                    detail: None,
-                }],
-                fleet_attention: None,
-            })
+            .map(|entry| site_package(entry))
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);
