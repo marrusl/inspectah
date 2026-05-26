@@ -532,7 +532,7 @@ fn build_fleet_sections(
 
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: cfg.entry.include,
                     triage: build_triage_dto(&cfg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -564,7 +564,7 @@ fn build_fleet_sections(
                 let fp = s.entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: s.entry.include,
                     triage: build_triage_dto(&s.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -613,7 +613,7 @@ fn build_fleet_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: d.entry.include,
                     triage: build_triage_dto(&d.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -679,7 +679,7 @@ fn build_fleet_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: q.entry.include,
                     triage: build_triage_dto(&q.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
