@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
+use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
@@ -338,6 +339,23 @@ pub struct RefinedQuadlet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedFlatpak {
     pub entry: FlatpakApp,
+    pub triage: TriageTag,
+}
+
+/// A classified sysctl override with triage assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedSysctl {
+    pub entry: SysctlOverride,
+    pub triage: TriageTag,
+}
+
+/// A classified tuned profile selection with triage assignment.
+///
+/// One entry per host: bundles active profile + custom profile files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedTunedSelection {
+    pub active_profile: String,
+    pub custom_profiles: Vec<String>,
     pub triage: TriageTag,
 }
 
