@@ -20,7 +20,24 @@ import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 import { CubesIcon } from "@patternfly/react-icons";
+import { Content } from "@patternfly/react-core";
 
+/** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */
+const SECTION_LABELS: Record<string, string> = {
+  packages: "Packages",
+  configs: "Config Files",
+  services: "Services",
+  containers: "Containers",
+  system_tuning: "System Tuning",
+  version_changes: "Version Changes",
+  compose: "Compose",
+  network: "Network",
+  storage: "Storage",
+  scheduled_tasks: "Scheduled Tasks",
+  non_rpm_software: "Non-RPM Software",
+  kernel_boot: "Kernel & Boot",
+  selinux: "Security & Access Control",
+};
 
 export interface MainContentProps {
   activeSection: string;
@@ -186,6 +203,7 @@ export function MainContent({
 
     return (
       <>
+        <Content><h2>{SECTION_LABELS.packages}</h2></Content>
         {banner}
         <RepoBar
           repos={viewData?.repo_groups ?? []}
@@ -207,6 +225,7 @@ export function MainContent({
     const noResults = hasFilter && filteredConfigItems.length === 0;
     return (
       <>
+        <Content><h2>{SECTION_LABELS.configs}</h2></Content>
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}
@@ -258,36 +277,45 @@ export function MainContent({
   // Services decision section — promoted from context to decision.
   if (activeSection === "services") {
     return (
+      <>
+      <Content><h2>{SECTION_LABELS.services}</h2></Content>
       <ServiceSection
         services={viewData?.service_states ?? []}
         dropins={viewData?.service_dropins ?? []}
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
       />
+      </>
     );
   }
 
   // Containers decision section — quadlets and flatpaks as toggleable items.
   if (activeSection === "containers") {
     return (
+      <>
+      <Content><h2>{SECTION_LABELS.containers}</h2></Content>
       <ContainerSection
         quadlets={viewData?.quadlets ?? []}
         flatpaks={viewData?.flatpaks ?? []}
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
       />
+      </>
     );
   }
 
   // System Tuning decision section — sysctls and tuned profiles combined.
   if (activeSection === "system_tuning") {
     return (
+      <>
+      <Content><h2>{SECTION_LABELS.system_tuning}</h2></Content>
       <SystemTuningSection
         sysctls={viewData?.sysctls ?? []}
         tuned={viewData?.tuned ?? []}
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
       />
+      </>
     );
   }
 
@@ -320,7 +348,12 @@ export function MainContent({
       return <EmptyState titleText={copy} icon={CubesIcon} headingLevel="h3" />;
     }
 
-    return <ContextList section={section} />;
+    return (
+      <>
+        <Content><h2>{SECTION_LABELS.version_changes}</h2></Content>
+        <ContextList section={section} />
+      </>
+    );
   }
 
   if (contextSectionIds.includes(activeSection)) {
@@ -331,7 +364,13 @@ export function MainContent({
       return <p>Section data not available.</p>;
     }
 
-    return <ContextList section={section} />;
+    const heading = SECTION_LABELS[activeSection] ?? activeSection;
+    return (
+      <>
+        <Content><h2>{heading}</h2></Content>
+        <ContextList section={section} />
+      </>
+    );
   }
 
   return <p>Not yet implemented.</p>;
