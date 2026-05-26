@@ -54,7 +54,7 @@ impl ContentHash {
 #[serde(tag = "kind", content = "key")]
 pub enum ItemId {
     // RPM section
-    Package { name_arch: String },
+    Package { name: String, arch: String },
     Repo { path: String },
     ModuleStream { module_stream: String },
     VersionLock { name_arch: String },
@@ -69,6 +69,7 @@ pub enum ItemId {
     // Containers section
     Quadlet { path: String },
     Compose { path: String },
+    Flatpak { app_id: String, remote: String, branch: String },
 
     // Network section
     NMConnection { path: String },
@@ -77,6 +78,7 @@ pub enum ItemId {
     // Kernel/boot section
     KernelModule { name: String },
     Sysctl { key: String },
+    TunedSelection { profile: String },
 
     // Scheduled section
     CronJob { path: String },
@@ -97,6 +99,13 @@ pub enum ItemId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", content = "target")]
 pub enum RefinementOp {
+    // Unified include/exclude — new canonical form
+    SetInclude {
+        item_id: ItemId,
+        include: bool,
+    },
+
+    // Legacy variants — kept for autosave backward compat (removed in Task 4)
     ExcludePackage(PackageTarget),
     IncludePackage(PackageTarget),
     ExcludeConfig {
@@ -111,6 +120,7 @@ pub enum RefinementOp {
     IncludeRepo {
         section_id: String,
     },
+
     UserStrategy {
         username: String,
         strategy: UserContainerfileStrategy,
@@ -515,5 +525,98 @@ mod triage_tests {
         let json = serde_json::to_string(&tag).unwrap();
         assert!(json.contains("investigate"));
         assert!(json.contains("sensitive_path"));
+    }
+}
+
+#[cfg(test)]
+mod item_id_tests {
+    use super::*;
+
+    #[test]
+    fn set_include_with_package_serde_roundtrip() {
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        let back: RefinementOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, back);
+    }
+
+    #[test]
+    fn set_include_with_service_serde_roundtrip() {
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::Service {
+                unit: "sshd.service".into(),
+            },
+            include: true,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        let back: RefinementOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, back);
+    }
+
+    #[test]
+    fn set_include_with_sysctl_serde_roundtrip() {
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::Sysctl {
+                key: "net.ipv4.ip_forward".into(),
+            },
+            include: false,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        let back: RefinementOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, back);
+    }
+
+    #[test]
+    fn legacy_exclude_package_still_deserializes() {
+        let json = r#"{"op":"ExcludePackage","target":{"name":"httpd","arch":"x86_64"}}"#;
+        let op: RefinementOp = serde_json::from_str(json).unwrap();
+        match op {
+            RefinementOp::ExcludePackage(t) => {
+                assert_eq!(t.name, "httpd");
+                assert_eq!(t.arch, "x86_64");
+            }
+            other => panic!("expected ExcludePackage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn item_id_package_split_fields_serde_roundtrip() {
+        let id = ItemId::Package {
+            name: "vim-enhanced".into(),
+            arch: "aarch64".into(),
+        };
+        let json = serde_json::to_string(&id).unwrap();
+        assert!(json.contains("vim-enhanced"));
+        assert!(json.contains("aarch64"));
+        let back: ItemId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn item_id_flatpak_serde_roundtrip() {
+        let id = ItemId::Flatpak {
+            app_id: "org.mozilla.Firefox".into(),
+            remote: "flathub".into(),
+            branch: "stable".into(),
+        };
+        let json = serde_json::to_string(&id).unwrap();
+        let back: ItemId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn item_id_tuned_selection_serde_roundtrip() {
+        let id = ItemId::TunedSelection {
+            profile: "throughput-performance".into(),
+        };
+        let json = serde_json::to_string(&id).unwrap();
+        let back: ItemId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
     }
 }

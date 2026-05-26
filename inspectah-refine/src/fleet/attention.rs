@@ -50,7 +50,8 @@ mod tests {
     #[test]
     fn known_item_uses_zone_from_context() {
         let item = ItemId::Package {
-            name_arch: "vim.x86_64".into(),
+            name: "vim".into(),
+            arch: "x86_64".into(),
         };
         let zones = HashMap::from([(item.clone(), PrevalenceZone::Divergent)]);
         let ctx = test_ctx(zones);
@@ -69,7 +70,8 @@ mod tests {
     #[test]
     fn unknown_item_is_unclassified() {
         let item = ItemId::Package {
-            name_arch: "unknown.x86_64".into(),
+            name: "unknown".into(),
+            arch: "x86_64".into(),
         };
         let ctx = test_ctx(HashMap::new());
 

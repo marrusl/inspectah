@@ -444,7 +444,8 @@ fn build_fleet_sections(
             .iter()
             .map(|pkg| {
                 let item_id = ItemId::Package {
-                    name_arch: format!("{}.{}", pkg.entry.name, pkg.entry.arch),
+                    name: pkg.entry.name.clone(),
+                    arch: pkg.entry.arch.clone(),
                 };
                 let fa = pkg.fleet_attention;
                 let fp = pkg.entry.fleet.as_ref();
