@@ -5,7 +5,7 @@ use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::classify::{classify_containers, classify_services};
+use inspectah_refine::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
 use inspectah_refine::types::{
     ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
@@ -719,6 +719,92 @@ fn build_fleet_sections(
         }
     }
 
+    // Sysctls — classified as decision items with triage tags
+    {
+        let sysctls = classify_sysctls(snap);
+        let mut items: Vec<FleetItem> = Vec::new();
+
+        // Group sysctl overrides by key to detect fleet variants.
+        // Each key may have different runtime values across hosts.
+        let mut sysctl_groups: std::collections::BTreeMap<
+            &str,
+            Vec<&inspectah_refine::types::RefinedSysctl>,
+        > = std::collections::BTreeMap::new();
+        for s in &sysctls {
+            sysctl_groups
+                .entry(s.entry.key.as_str())
+                .or_default()
+                .push(s);
+        }
+
+        for (key, group) in &sysctl_groups {
+            // Pick the representative: prefer the entry with fleet data
+            // showing the highest count (majority value), else first.
+            let representative = group
+                .iter()
+                .max_by_key(|s| {
+                    s.entry
+                        .fleet
+                        .as_ref()
+                        .map(|f| f.count)
+                        .unwrap_or(0)
+                })
+                .unwrap_or(&group[0]);
+
+            let item_id = ItemId::Sysctl {
+                key: key.to_string(),
+            };
+            let fp = representative.entry.fleet.as_ref();
+
+            // Build variant info using human-readable values (not content hashes).
+            let variants = if group.len() >= 2 {
+                Some(build_sysctl_variants(group))
+            } else {
+                None
+            };
+
+            items.push(FleetItem {
+                item_id,
+                include: representative.entry.include,
+                triage: build_triage_dto(&representative.triage, fp, ctx),
+                prevalence: fleet_prevalence_dto(fp, ctx),
+                variants,
+                source_repo: String::new(),
+                repo_conflict: None,
+            });
+        }
+
+        if !items.is_empty() {
+            sections.push(build_section("sysctls", "Kernel Parameters", true, &items, ctx));
+        }
+    }
+
+    // Tuned — classified as decision items with triage tags
+    {
+        let tuned_selections = classify_tuned(snap);
+        let items: Vec<FleetItem> = tuned_selections
+            .iter()
+            .map(|t| {
+                let item_id = ItemId::TunedSelection {
+                    profile: t.active_profile.clone(),
+                };
+                FleetItem {
+                    item_id,
+                    include: true, // tuned selection is always included when present
+                    triage: build_triage_dto(&t.triage, None, ctx),
+                    prevalence: fleet_prevalence_dto(None, ctx),
+                    variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
+                }
+            })
+            .collect();
+
+        if !items.is_empty() {
+            sections.push(build_section("tuned", "Tuned Profiles", true, &items, ctx));
+        }
+    }
+
     // --- Context sections (read-only, no toggles) ---
     // These sections come from the snapshot, not from RefinedView.
     // Items have fleet prevalence but no include/exclude toggle.
@@ -986,6 +1072,7 @@ fn build_context_sections(
     }
 
     // Kernel & Boot
+    // NOTE: Sysctls moved to build_fleet_sections() as decision items.
     if let Some(ref kb) = snap.kernel_boot {
         let mut items: Vec<FleetItem> = Vec::new();
         for module in &kb.loaded_modules {
@@ -993,21 +1080,6 @@ fn build_context_sections(
                 name: module.name.clone(),
             };
             let fp = module.fleet.as_ref();
-            items.push(FleetItem {
-                item_id,
-                include: fleet_include_default(fp),
-                triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
-                variants: None,
-                source_repo: String::new(),
-                repo_conflict: None,
-            });
-        }
-        for sysctl in &kb.sysctl_overrides {
-            let item_id = ItemId::Sysctl {
-                key: sysctl.key.clone(),
-            };
-            let fp = sysctl.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
@@ -1290,6 +1362,52 @@ fn build_compose_variants(
     FleetVariants {
         count: entries.len(),
         selected: selected_hash.as_str().to_string(),
+        options,
+    }
+}
+
+/// Build `FleetVariants` for sysctl overrides using human-readable runtime
+/// values as the variant identifier instead of content hashes. Sysctl values
+/// are short scalars (e.g. "10", "4096"), so displaying the actual value is
+/// more useful than an opaque hash.
+fn build_sysctl_variants(
+    entries: &[&inspectah_refine::types::RefinedSysctl],
+) -> FleetVariants {
+    // Use runtime value as the "hash" key so the frontend shows
+    // "10 (45 hosts)" vs "60 (5 hosts)" instead of content hashes.
+    let selected_entry = entries
+        .iter()
+        .max_by_key(|s| s.entry.fleet.as_ref().map(|f| f.count).unwrap_or(0));
+    let selected_key = selected_entry
+        .map(|s| s.entry.runtime.clone())
+        .unwrap_or_else(|| entries[0].entry.runtime.clone());
+
+    let options: Vec<FleetVariantOption> = entries
+        .iter()
+        .map(|s| {
+            let is_selected = s.entry.runtime == selected_key;
+            FleetVariantOption {
+                hash: s.entry.runtime.clone(),
+                hosts: s
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.hosts.clone())
+                    .unwrap_or_default(),
+                host_count: s
+                    .entry
+                    .fleet
+                    .as_ref()
+                    .map(|f| f.count.max(0) as usize)
+                    .unwrap_or(0),
+                selected: is_selected,
+            }
+        })
+        .collect();
+
+    FleetVariants {
+        count: entries.len(),
+        selected: selected_key,
         options,
     }
 }
