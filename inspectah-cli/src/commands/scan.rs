@@ -461,14 +461,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     let render_context = RenderContext { target: None };
     render::render_all(&snapshot, &render_context, render_dir.path()).context("render failed")?;
 
-    // Write a minimal schema placeholder (real JSON Schema is Phase 7)
-    let schema_dir = render_dir.path().join("schema");
-    std::fs::create_dir_all(&schema_dir)?;
-    std::fs::write(
-        schema_dir.join("snapshot.schema.json"),
-        r#"{"$schema":"http://json-schema.org/draft-07/schema#","title":"InspectionSnapshot","description":"Phase 7 placeholder","type":"object"}"#,
-    )?;
-
     // Step 8: Create tarball
     let stamp = get_output_stamp(&hostname);
     let tarball_name = format!("{stamp}.tar.gz");
