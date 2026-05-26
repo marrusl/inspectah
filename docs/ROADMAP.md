@@ -182,6 +182,18 @@ Replace the attention-level triage system (NeedsReview/Informational/Routine) wi
 
 The current pipeline collapses all included sysctl overrides into a single synthesized `99-inspectah-migrated.conf`, losing the original source file structure. Instead: preserve the original filenames (e.g., `/etc/sysctl.d/99-kubernetes.conf`, `/etc/sysctl.d/99-tuning.conf`). Group sysctls by source file in the UI — each source file becomes a collapsible group containing its keys. Toggling a key removes it from its source file's rendered output. If all keys from a source file are excluded, the entire file drops from the render. Undo restores the file with the appropriate keys. Touches pipeline rendering (per-file output instead of merged), UI grouping (by-source layout), and the undo model.
 
+### Config Content Viewer (MEDIUM — needs spec)
+
+Config files truncate at 500 chars in a 200px inline box — insufficient for real triage review. Need a modal or drawer that shows the full file content with monospace formatting, the RPM diff when available, and file metadata (path, kind, package owner). Interaction design decision: modal vs drawer vs detail pane. Impacts the row-click behavior (should clicking a config row open the viewer instead of inline expand?). Fern specs, Kit builds.
+
+### Triage Label Vocabulary (MEDIUM — needs spec)
+
+The "informational" attention level label communicates no actionable signal. Especially misleading on items that are toggleable — implies "no action needed" when the user may need to make inclusion decisions. The triage bucket names (Site, Divergent, Partial) are more informative but the three-tier grouping (needs_review / informational / routine) still uses this vocabulary. Needs a labeling decision that affects `attentionUtils.ts`, `DecisionList.tsx`, `RepoGroupHeader.tsx`, and the fleet equivalent. Should align with the triage bucket system from section promotion.
+
+### Single-Host / Fleet UI Convergence (HIGH — needs spec)
+
+Single-host and fleet modes have divergent rendering paths: `MainContent` + `DecisionList` + section components (ServiceSection, ContainerSection, etc.) for single-host, `FleetApp` + `FleetItemRow` for fleet. Only packages achieved visual alignment. Every promoted section (services, containers, sysctls, tuned) added new single-host components that fleet doesn't share. Bugs fixed in one mode don't fix the other. The goal: shared components that render both modes, with fleet adding prevalence/variant overlays. Fix once, both modes benefit. Touches component architecture, not just styling.
+
 ### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
 
 Rust redaction pipeline needs parity with Go's heuristic redaction capabilities. Go has pattern-based redaction for passwords, API keys, tokens, and connection strings embedded in config files. Rust currently handles explicit redaction but lacks the heuristic detection layer. Needs spec.

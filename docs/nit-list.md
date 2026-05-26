@@ -26,6 +26,15 @@ Moved to Completed section.
 
 Moved to Completed section.
 
+## Refine UI Polish (2026-05-26 testing session)
+
+- [ ] **User toggle missing:** UserCard has no top-level checkbox — users must expand and pick a radio strategy. Add checkbox to card header mapping to skip (unchecked) / useradd (checked), matching DecisionItem pattern. Kit.
+- [ ] **Row click to expand:** DecisionItem and ContextItem only expand via the chevron button. Add `onClick={handleExpand}` to the row div with `stopPropagation` on checkbox. Add `cursor: pointer` to row CSS. Kit.
+- [ ] **@commandline repo toggle:** RepoBar shows a toggle switch for `@commandline` (provenance=unknown). Should be non-toggleable — filter `toggleableRepos` by `provenance === "verified"`. Consider display name: "@commandline" → "Local / Manual installs". Kit.
+- [ ] **Missing section titles:** Most content panes have no heading (Packages, Configs, Services, Containers, System Tuning). Users & Groups is the only one that does. Add consistent `<h2>` heading to each section in MainContent, using the sidebar label text. Kit.
+- [ ] **Non-functional chevrons in Storage:** ContextItem renders chevrons when `item.detail !== null` but empty strings pass that check. Fix: `item.detail !== null && item.detail.trim().length > 0`. Kit.
+- [ ] **Storage item duplication:** Same mount points (e.g., `/`, `/dev/mapper/cs-root`) appear in multiple storage subsections. Same pattern as the single-host user dedup fix — items emitted into wrong section buckets in the Rust context builder. Tang.
+
 ## RepoBar Click-to-Filter (v2 backlog)
 
 - [ ] Repo names in the REPOSITORIES bar should be clickable. Clicking a repo name filters the package list to show only that repo's packages (or scrolls + highlights, lighter option). Render names as `<button>`, `cursor: pointer`, hover color shift to brand color, `aria-label="Jump to baseos packages (61)"`. Fern recommends scroll+highlight using existing `.inspectah-highlight` animation; Ember recommends filter-on-click as more useful for triage. Either way, distro repos gain their first interactive purpose beyond the "always included" label.
