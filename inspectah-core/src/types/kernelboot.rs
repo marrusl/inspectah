@@ -69,6 +69,8 @@ pub struct KernelBootSection {
     #[serde(default)]
     pub tuned_active: String,
     #[serde(default)]
+    pub tuned_include: bool,
+    #[serde(default)]
     pub tuned_custom_profiles: Vec<ConfigSnippet>,
     pub locale: Option<String>,
     pub timezone: Option<String>,
@@ -99,6 +101,7 @@ mod tests {
             loaded_modules: vec![],
             non_default_modules: vec![],
             tuned_active: "virtual-guest".to_string(),
+            tuned_include: true,
             tuned_custom_profiles: vec![],
             locale: Some("en_US.UTF-8".to_string()),
             timezone: Some("America/New_York".to_string()),
