@@ -52,7 +52,9 @@ export function RepoBar({
             </span>
             <span className="inspectah-repo-bar__count">{repo.package_count}</span>
           </div>
-          <span className="inspectah-repo-bar__always">always included</span>
+          <span className="inspectah-repo-bar__always">
+            {repo.section_id === "@commandline" ? "not included" : "always included"}
+          </span>
         </div>
       ))}
 
