@@ -205,7 +205,7 @@ The "0/11 confirmed" counter on every fleet Review section is opaque — confirm
 
 ### Clean Export Mode (MEDIUM — needs spec)
 
-A "clean export" or "final export" option in the export modal that produces a tarball containing only the final build artifacts — Containerfile, included config files, and nothing else. No excluded files, no variant metadata, no snapshot JSON, no triage data. The current export is a working-state tarball useful for resuming or auditing; the clean export is what you hand to a build pipeline. Wording TBD (clean / final / production). Could be a toggle in the existing modal or a second button. Needs a spec covering: what's included (Containerfile + selected configs), what's excluded (everything else), naming convention, and whether the Containerfile needs any adjustments when stripped of context.
+A "clean export" option in the export modal that strips working-state files from the tarball, leaving only buildable output. The current export already respects toggles — excluded configs and packages are omitted from the Containerfile and config tree. But it also includes `snapshot.json` (full inspection data), `secrets-review.md`, `session.json` (autosave), and variant metadata. A clean export drops those, producing a tarball you can hand directly to a build pipeline. Wording TBD (clean / final / production). Could be a toggle in the existing modal or a second button.
 
 ### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
 
