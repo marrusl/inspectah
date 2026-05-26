@@ -351,7 +351,7 @@ export function MainContent({
     return (
       <>
         <Content><h2>{SECTION_LABELS.version_changes}</h2></Content>
-        <ContextList section={section} />
+        <ContextList key="version_changes" section={section} />
       </>
     );
   }
@@ -368,7 +368,7 @@ export function MainContent({
     return (
       <>
         <Content><h2>{heading}</h2></Content>
-        <ContextList section={section} />
+        <ContextList key={lookupId} section={section} />
       </>
     );
   }
