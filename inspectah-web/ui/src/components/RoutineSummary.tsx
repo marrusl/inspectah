@@ -101,6 +101,7 @@ export function RoutineSummary({
               key={id}
               item={item}
               level={level}
+              triageTag={item.data.triage}
               rowIndex={startRowIndex + idx}
               isViewed={viewedIds.has(id)}
               isPending={isPending}
