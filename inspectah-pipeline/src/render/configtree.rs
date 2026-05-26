@@ -1428,4 +1428,57 @@ mod tests {
             "tuned custom profile must be materialized when tuned_include=true"
         );
     }
+
+    #[test]
+    fn test_tuned_bundled_files_all_materialized() {
+        // A custom tuned profile can have multiple files (tuned.conf + script.sh).
+        // All bundled files must be materialized when tuned_include is true.
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "my-profile".to_string(),
+            tuned_include: true,
+            tuned_custom_profiles: vec![
+                ConfigSnippet {
+                    path: "etc/tuned/my-profile/tuned.conf".to_string(),
+                    content: "[main]\nsummary=Custom perf profile".to_string(),
+                },
+                ConfigSnippet {
+                    path: "etc/tuned/my-profile/script.sh".to_string(),
+                    content: "#!/bin/bash\necho tuned".to_string(),
+                },
+            ],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert!(
+            dir.path()
+                .join("tuned/etc/tuned/my-profile/tuned.conf")
+                .exists(),
+            "tuned.conf must be materialized"
+        );
+        assert!(
+            dir.path()
+                .join("tuned/etc/tuned/my-profile/script.sh")
+                .exists(),
+            "bundled script.sh must be materialized alongside tuned.conf"
+        );
+        let conf = std::fs::read_to_string(
+            dir.path().join("tuned/etc/tuned/my-profile/tuned.conf"),
+        )
+        .unwrap();
+        assert!(
+            conf.contains("Custom perf profile"),
+            "tuned.conf content must be preserved"
+        );
+        let script = std::fs::read_to_string(
+            dir.path().join("tuned/etc/tuned/my-profile/script.sh"),
+        )
+        .unwrap();
+        assert!(
+            script.contains("#!/bin/bash"),
+            "script.sh content must be preserved"
+        );
+    }
 }
