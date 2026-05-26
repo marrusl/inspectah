@@ -164,7 +164,8 @@
   margin-bottom: var(--pf-t--global--spacer--md);
   border: 1px solid;
   border-left-width: 4px;
-  color: var(--pf-t--global--text--color--regular, #151515);
+  /* Let text color follow the theme — no hardcoded light-mode fallback */
+  color: var(--pf-t--global--text--color--regular);
 }
 
 .fleet-banner button {
@@ -172,17 +173,18 @@
 }
 
 .fleet-banner--success {
-  background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
+  /* Use transparent tint so text stays readable in both light and dark themes */
+  background-color: color-mix(in srgb, var(--pf-t--global--color--status--success--default, #3e8635) 12%, transparent);
   border-color: var(--pf-t--global--color--status--success--default, #3e8635);
 }
 
 .fleet-banner--warning {
-  background-color: var(--pf-t--global--color--status--warning--100, #fef6e7);
+  background-color: color-mix(in srgb, var(--pf-t--global--color--status--warning--default, #f0ab00) 12%, transparent);
   border-color: var(--pf-t--global--color--status--warning--default, #f0ab00);
 }
 
 .fleet-banner--danger {
-  background-color: var(--pf-t--global--color--status--danger--100, #fce8e6);
+  background-color: color-mix(in srgb, var(--pf-t--global--color--status--danger--default, #c9190b) 12%, transparent);
   border-color: var(--pf-t--global--color--status--danger--default, #c9190b);
 }
 
