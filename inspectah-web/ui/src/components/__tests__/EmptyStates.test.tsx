@@ -68,6 +68,8 @@ const MOCK_VIEW: ViewResponse = {
   service_dropins: [],
   quadlets: [],
   flatpaks: [],
+  sysctls: [],
+  tuned: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
@@ -320,6 +322,8 @@ describe("Packages section renders unified components", () => {
       service_dropins: [],
       quadlets: [],
       flatpaks: [],
+      sysctls: [],
+      tuned: [],
       users_groups_decisions: [],
       session_is_sensitive: false,
     };

@@ -151,6 +151,8 @@ describe("App router", () => {
       service_dropins: [],
       quadlets: [],
       flatpaks: [],
+      sysctls: [],
+      tuned: [],
       users_groups_decisions: [],
       session_is_sensitive: false,
     });

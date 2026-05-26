@@ -373,6 +373,26 @@ export interface DropInDecisionDto {
   include: boolean;
 }
 
+// --- Sysctl decision types (inspectah-web/src/handlers.rs) ---
+
+/** A classified sysctl override, projected for the view response. */
+export interface SysctlDecisionDto {
+  key: string;
+  runtime: string;
+  default: string;
+  source: string;
+  triage: TriageTag;
+  include: boolean;
+}
+
+/** A classified tuned profile selection, projected for the view response. */
+export interface TunedDecisionDto {
+  active_profile: string;
+  custom_profiles: string[];
+  triage: TriageTag;
+  include: boolean;
+}
+
 // --- Container decision types (inspectah-web/src/handlers.rs) ---
 
 /** A classified quadlet unit, projected for the view response. */
@@ -402,6 +422,8 @@ export interface ViewResponse extends RefinedView {
   service_dropins: DropInDecisionDto[];
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
+  sysctls: SysctlDecisionDto[];
+  tuned: TunedDecisionDto[];
   users_groups_decisions: UserDecision[];
   session_is_sensitive: boolean;
 }

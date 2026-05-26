@@ -45,6 +45,8 @@ const MOCK_VIEW_DATA: ViewResponse = {
   service_dropins: [],
   quadlets: [],
   flatpaks: [],
+  sysctls: [],
+  tuned: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
@@ -66,7 +68,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 describe("Sidebar", () => {
-  it("renders all 13 section items", () => {
+  it("renders all 15 section items", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -84,6 +86,8 @@ describe("Sidebar", () => {
     expect(screen.getByText("Users & Groups")).toBeInTheDocument();
     expect(screen.getByText("Services")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
+    expect(screen.getByText("Sysctls")).toBeInTheDocument();
+    expect(screen.getByText("Tuned Profiles")).toBeInTheDocument();
     // Reference (context) sections
     expect(screen.getByText("Version Changes")).toBeInTheDocument();
     expect(screen.getByText("Compose")).toBeInTheDocument();

@@ -29,6 +29,8 @@ const SECTION_LABELS: Record<string, string> = {
   non_rpm_software: "Non-RPM Software",
   kernel_boot: "Kernel & Boot",
   selinux: "Security & Access Control",
+  sysctls: "Sysctls",
+  tuned: "Tuned Profiles",
 };
 
 export interface GlobalSearchProps {

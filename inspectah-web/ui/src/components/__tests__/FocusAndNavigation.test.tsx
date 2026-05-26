@@ -65,6 +65,8 @@ const MOCK_VIEW = {
   service_dropins: [],
   quadlets: [],
   flatpaks: [],
+  sysctls: [],
+  tuned: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
