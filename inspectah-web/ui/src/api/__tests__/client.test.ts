@@ -111,6 +111,8 @@ const mockView: ViewResponse = {
     { section_id: "appstream", provenance: "verified", is_distro: true, tier: "distro", package_count: 1, enabled: true },
   ],
   version_changes: [],
+  service_states: [],
+  service_dropins: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };

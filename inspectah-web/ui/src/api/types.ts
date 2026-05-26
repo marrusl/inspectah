@@ -355,10 +355,30 @@ export interface HealthResponse {
   session_is_sensitive: boolean;
 }
 
+// --- Service decision types (inspectah-web/src/handlers.rs) ---
+
+/** A classified service state change, projected for the view response. */
+export interface ServiceDecisionDto {
+  unit: string;
+  triage: TriageTag;
+  include: boolean;
+  owning_package?: string | null;
+}
+
+/** A classified service drop-in override, projected for the view response. */
+export interface DropInDecisionDto {
+  unit: string;
+  path: string;
+  triage: TriageTag;
+  include: boolean;
+}
+
 /** View endpoint response: RefinedView + repo_groups. */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   version_changes: VersionChangeEntry[];
+  service_states: ServiceDecisionDto[];
+  service_dropins: DropInDecisionDto[];
   users_groups_decisions: UserDecision[];
   session_is_sensitive: boolean;
 }

@@ -61,15 +61,17 @@ const MOCK_VIEW = {
   generation: 1,
   repo_groups: [],
   version_changes: [],
+  service_states: [],
+  service_dropins: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
 
 const MOCK_SECTIONS = [
   {
-    id: "services",
-    display_name: "Services",
-    items: [{ id: "svc-1", title: "httpd.service", searchable_text: "httpd service" }],
+    id: "containers",
+    display_name: "Containers",
+    items: [{ id: "ctr-1", title: "nginx-proxy", searchable_text: "nginx proxy container" }],
   },
 ];
 
@@ -256,9 +258,9 @@ describe("Focus fallback for context/empty sections", () => {
       expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
-    // Switch to services (a context section)
-    const servicesNav = screen.getByText("Services");
-    await userEvent.click(servicesNav);
+    // Switch to containers (a context section)
+    const containersNav = screen.getByText("Containers");
+    await userEvent.click(containersNav);
 
     // Wait for requestAnimationFrame focus
     await act(async () => {
@@ -280,9 +282,9 @@ describe("Global search finds context items", () => {
       expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
-    // Type in global search to find the httpd service
+    // Type in global search to find the container
     const searchInput = screen.getByLabelText("Search all sections");
-    await userEvent.type(searchInput, "httpd.service");
+    await userEvent.type(searchInput, "nginx");
 
     // Results should appear
     await waitFor(() => {

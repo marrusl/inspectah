@@ -12,6 +12,7 @@ import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { UsersGroupsSection } from "./UsersGroupsSection";
+import { ServiceSection } from "./ServiceSection";
 import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
@@ -252,10 +253,21 @@ export function MainContent({
     );
   }
 
-  // Context sections: services, containers, network, storage,
+  // Services decision section — promoted from context to decision.
+  if (activeSection === "services") {
+    return (
+      <ServiceSection
+        services={viewData?.service_states ?? []}
+        dropins={viewData?.service_dropins ?? []}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />
+    );
+  }
+
+  // Context sections: containers, network, storage,
   // scheduled_tasks, non_rpm_software, kernel_boot, selinux
   const contextSectionIds = [
-    "services",
     "version_changes",
     "containers",
     "network",
