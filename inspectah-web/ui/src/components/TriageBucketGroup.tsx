@@ -15,7 +15,16 @@ const LEVEL_LABELS: Record<AttentionLevel, string> = {
   routine: "Routine",
 };
 
-export interface AttentionGroupProps {
+/** Levels that default to expanded. */
+const EXPANDED_BY_DEFAULT: Set<AttentionLevel> = new Set([
+  "needs_review",
+  "informational",
+]);
+
+/** Threshold below which sections are always expanded regardless of level. */
+const ALWAYS_EXPAND_THRESHOLD = 3;
+
+export interface TriageBucketGroupProps {
   level: AttentionLevel;
   count: number;
   /** When true, the group is forced open by a filter regardless of user toggle state. */
@@ -25,15 +34,22 @@ export interface AttentionGroupProps {
   children: React.ReactNode;
 }
 
-export function AttentionGroup({ level, count, forceExpanded, gridLabel, children }: AttentionGroupProps) {
-  const defaultExpanded = level === "needs_review";
+export function TriageBucketGroup({ level, count, forceExpanded, gridLabel, children }: TriageBucketGroupProps) {
+  // Collapsible section behavior:
+  //   investigate + divergent/site (needs_review + informational): expanded by default
+  //   partial + universal/baseline (routine): collapsed by default
+  //   Sections with <3 items: always expanded
+  //   Empty sections: show header with "(0)", disabled
+  const smallSection = count < ALWAYS_EXPAND_THRESHOLD;
+  const defaultExpanded = EXPANDED_BY_DEFAULT.has(level) || smallSection;
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const isEmpty = count === 0;
 
   const label = LEVEL_LABELS[level];
   const toggleText = `${label} (${count})`;
 
-  // forceExpanded overrides user toggle; user toggle still controls when filter is inactive
-  const effectiveExpanded = forceExpanded || isExpanded;
+  // forceExpanded overrides user toggle; small sections always expand; user toggle controls otherwise
+  const effectiveExpanded = isEmpty ? false : forceExpanded || smallSection || isExpanded;
 
   return (
     <div
@@ -46,20 +62,24 @@ export function AttentionGroup({ level, count, forceExpanded, gridLabel, childre
     >
       <button
         type="button"
-        onClick={() => setIsExpanded((prev) => !prev)}
+        onClick={() => !isEmpty && setIsExpanded((prev) => !prev)}
         aria-expanded={effectiveExpanded}
+        aria-disabled={isEmpty || undefined}
         style={{
           background: "none",
           border: "none",
-          cursor: "pointer",
+          cursor: isEmpty ? "default" : "pointer",
           padding: "var(--pf-t--global--spacer--xs) 0",
           marginBottom: "var(--pf-t--global--spacer--xs)",
           fontWeight: 600,
           fontSize: "var(--pf-t--global--font--size--md)",
-          color: "var(--pf-t--global--link--color--default)",
+          color: isEmpty
+            ? "var(--pf-t--global--text--color--disabled)"
+            : "var(--pf-t--global--link--color--default)",
           display: "flex",
           alignItems: "center",
           gap: "var(--pf-t--global--spacer--xs)",
+          opacity: isEmpty ? 0.6 : 1,
         }}
       >
         {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}

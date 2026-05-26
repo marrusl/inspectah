@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AttentionGroup } from "../AttentionGroup";
+import { TriageBucketGroup } from "../TriageBucketGroup";
 import { DecisionItem } from "../DecisionItem";
 import type { DecisionItemKind } from "../DecisionItem";
 import { PackageDetail } from "../PackageDetail";
@@ -197,14 +197,14 @@ const ROUTINE_TAG: AttentionTag = {
   detail: null,
 };
 
-// ---- AttentionGroup tests ----
+// ---- TriageBucketGroup tests ----
 
-describe("AttentionGroup", () => {
+describe("TriageBucketGroup", () => {
   it("renders with correct border color for needs_review", () => {
     const { container } = render(
-      <AttentionGroup level="needs_review" count={3}>
+      <TriageBucketGroup level="needs_review" count={3}>
         <div>items</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.style.borderLeft).toContain("--pf-t--global--color--status--danger--default");
@@ -212,9 +212,9 @@ describe("AttentionGroup", () => {
 
   it("renders with correct border color for informational", () => {
     const { container } = render(
-      <AttentionGroup level="informational" count={2}>
+      <TriageBucketGroup level="informational" count={2}>
         <div>items</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.style.borderLeft).toContain("--pf-t--global--color--status--info--default");
@@ -222,9 +222,9 @@ describe("AttentionGroup", () => {
 
   it("renders with correct border color for routine", () => {
     const { container } = render(
-      <AttentionGroup level="routine" count={1}>
+      <TriageBucketGroup level="routine" count={1}>
         <div>items</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.style.borderLeft).toContain("--pf-t--global--color--status--success--default");
@@ -232,39 +232,51 @@ describe("AttentionGroup", () => {
 
   it("starts expanded for needs_review", () => {
     render(
-      <AttentionGroup level="needs_review" count={1}>
+      <TriageBucketGroup level="needs_review" count={1}>
         <div data-testid="child">content</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
     expect(screen.getByTestId("child")).toBeInTheDocument();
   });
 
-  it("starts collapsed for informational", () => {
+  it("starts expanded for informational", () => {
     render(
-      <AttentionGroup level="informational" count={1}>
+      <TriageBucketGroup level="informational" count={5}>
         <div data-testid="child">content</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
-    // PF6 ExpandableSection uses hidden attribute on collapsed content
+    // informational is in the expanded-by-default set
+    expect(screen.getByTestId("child")).toBeInTheDocument();
+    const child = screen.getByTestId("child");
+    expect(child.closest("[hidden]")).toBeFalsy();
+  });
+
+  it("starts collapsed for routine with 3+ items", () => {
+    render(
+      <TriageBucketGroup level="routine" count={5}>
+        <div data-testid="child">content</div>
+      </TriageBucketGroup>,
+    );
     const child = screen.getByTestId("child");
     expect(child.closest("[hidden]")).toBeTruthy();
   });
 
-  it("starts collapsed for routine", () => {
+  it("always expands sections with fewer than 3 items", () => {
     render(
-      <AttentionGroup level="routine" count={1}>
+      <TriageBucketGroup level="routine" count={2}>
         <div data-testid="child">content</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
+    // Small sections (<3 items) are always expanded regardless of level
     const child = screen.getByTestId("child");
-    expect(child.closest("[hidden]")).toBeTruthy();
+    expect(child.closest("[hidden]")).toBeFalsy();
   });
 
   it("shows item count in toggle text", () => {
     render(
-      <AttentionGroup level="needs_review" count={5}>
+      <TriageBucketGroup level="needs_review" count={5}>
         <div>items</div>
-      </AttentionGroup>,
+      </TriageBucketGroup>,
     );
     expect(screen.getByText("Needs Review (5)")).toBeInTheDocument();
   });
@@ -623,7 +635,7 @@ describe("DecisionList", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Grid role is now on each AttentionGroup's inner container, not the outer list
+    // Grid role is now on each TriageBucketGroup's inner container, not the outer list
     expect(screen.getByTestId("decision-list-packages")).toBeInTheDocument();
   });
 });
@@ -1055,15 +1067,17 @@ describe("ArrowDown from SectionSearch", () => {
 
 describe("Filter auto-expand", () => {
   it("force-expands collapsed groups when filter is active", async () => {
-    // informational group starts collapsed by default
+    // routine group with 3+ items starts collapsed by default
     const items: DecisionItemKind[] = [
-      { type: "package", data: makePkg({ name: "info-pkg" }, [INFO_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine1.conf" }, [ROUTINE_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine2.conf" }, [ROUTINE_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine3.conf" }, [ROUTINE_TAG]) },
     ];
 
     const { rerender } = render(
       <DecisionList
         items={items}
-        sectionLabel="Packages"
+        sectionLabel="Configs"
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
       />,
@@ -1073,37 +1087,39 @@ describe("Filter auto-expand", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // informational group should start collapsed (hidden from accessibility tree)
-    const row = screen.getByRole("row", { hidden: true });
-    expect(row.closest("[hidden]")).toBeTruthy();
+    // routine group should start collapsed (hidden from accessibility tree)
+    const rows = screen.getAllByRole("row", { hidden: true });
+    expect(rows[0].closest("[hidden]")).toBeTruthy();
 
     // Re-render with filterText to trigger force-expand
     rerender(
       <DecisionList
         items={items}
-        sectionLabel="Packages"
-        filterText="info"
+        sectionLabel="Configs"
+        filterText="routine"
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
       />,
     );
 
     // Group should now be expanded (not hidden)
-    const rowAfterFilter = screen.getByRole("row");
-    expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
+    const rowsAfterFilter = screen.getAllByRole("row");
+    expect(rowsAfterFilter[0].closest("[hidden]")).toBeFalsy();
   });
 
   it("restores original collapse state when filter is cleared", async () => {
-    // informational group starts collapsed
+    // routine group with 3+ items starts collapsed
     const items: DecisionItemKind[] = [
-      { type: "package", data: makePkg({ name: "info-pkg" }, [INFO_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine1.conf" }, [ROUTINE_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine2.conf" }, [ROUTINE_TAG]) },
+      { type: "config", data: makeConfig({ path: "/etc/routine3.conf" }, [ROUTINE_TAG]) },
     ];
 
     const { rerender } = render(
       <DecisionList
         items={items}
-        sectionLabel="Packages"
-        filterText="info"
+        sectionLabel="Configs"
+        filterText="routine"
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
       />,
@@ -1114,14 +1130,14 @@ describe("Filter auto-expand", () => {
     });
 
     // With filter active, group is force-expanded
-    const row = screen.getByRole("row");
-    expect(row.closest("[hidden]")).toBeFalsy();
+    const rows = screen.getAllByRole("row");
+    expect(rows[0].closest("[hidden]")).toBeFalsy();
 
     // Clear filter
     rerender(
       <DecisionList
         items={items}
-        sectionLabel="Packages"
+        sectionLabel="Configs"
         filterText=""
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
@@ -1129,9 +1145,8 @@ describe("Filter auto-expand", () => {
     );
 
     // Group should restore to its default collapsed state
-    // PF6 ExpandableSection hides content with [hidden], so we need hidden: true to find it
-    const rowAfterClear = screen.getByRole("row", { hidden: true });
-    expect(rowAfterClear.closest("[hidden]")).toBeTruthy();
+    const rowsAfterClear = screen.getAllByRole("row", { hidden: true });
+    expect(rowsAfterClear[0].closest("[hidden]")).toBeTruthy();
   });
 
   it("does not force-expand groups that are already expanded", async () => {
@@ -2432,7 +2447,7 @@ describe("Config section unchanged after repo-first refactor", () => {
       ],
     });
     render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
-    // Config section should still render AttentionGroup, not RepoGroup
+    // Config section should still render TriageBucketGroup, not RepoGroup
     expect(screen.getByTestId("attention-group-needs_review")).toBeInTheDocument();
     expect(screen.queryByTestId(/^repo-group-wrapper-/)).not.toBeInTheDocument();
   });
