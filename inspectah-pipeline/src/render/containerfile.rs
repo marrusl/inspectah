@@ -2180,6 +2180,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_containerfile_excluded_service_generates_no_systemctl() {
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "excluded.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: false, // excluded by triage
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("httpd.service"),
+            "included service must produce systemctl line"
+        );
+        assert!(
+            !output.contains("excluded.service"),
+            "service with include=false must NOT appear in containerfile"
+        );
+    }
+
     /// End-to-end: containerfile service section uses implied_action via the
     /// service_intent authority — enabled/disabled/masked services produce
     /// the correct systemctl verbs.

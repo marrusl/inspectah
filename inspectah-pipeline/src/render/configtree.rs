@@ -89,6 +89,24 @@ pub enum PathError {
     SymlinkEscape,
 }
 
+/// Returns the set of service drop-in paths owned by the services renderer.
+///
+/// These paths live under `etc/systemd/system/*.service.d/` and must NOT be
+/// materialized by the generic config tree — the services section handles
+/// them via its own COPY/enable logic.
+fn service_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    if let Some(services) = &snap.services {
+        for dropin in &services.drop_ins {
+            let rel = dropin.path.trim_start_matches('/');
+            if !rel.is_empty() {
+                paths.insert(rel.to_string());
+            }
+        }
+    }
+    paths
+}
+
 /// Returns the set of NM connection paths that use DHCP (method=auto),
 /// which should be excluded from the config tree copy.
 fn dhcp_connection_paths(snap: &InspectionSnapshot) -> HashSet<String> {
@@ -142,6 +160,7 @@ pub fn write_config_tree(
     let config_dir = output_dir.join("config");
     std::fs::create_dir_all(&config_dir)?;
     let dhcp_paths = dhcp_connection_paths(snap);
+    let svc_paths = service_owned_paths(snap);
 
     // Config files
     if let Some(ref config) = snap.config {
@@ -157,6 +176,9 @@ pub fn write_config_tree(
                 continue;
             }
             if rel.starts_with(QUADLET_PREFIX) {
+                continue;
+            }
+            if svc_paths.contains(rel) {
                 continue;
             }
             if validate_path(rel).is_err() {
@@ -262,7 +284,9 @@ pub fn write_config_tree(
         }
     }
 
-    // Systemd drop-ins -- write to both config/ and drop-ins/
+    // Systemd drop-ins — write to drop-ins/ only. Service-owned paths
+    // are excluded from config/ via the svc_paths filter above; the
+    // services renderer handles their materialization.
     if let Some(ref services) = snap.services {
         let drop_ins_dir = output_dir.join("drop-ins");
         for di in &services.drop_ins {
@@ -273,7 +297,6 @@ pub fn write_config_tree(
             if validate_path(rel).is_err() {
                 continue;
             }
-            safe_write_file(&config_dir.join(rel), &di.content);
             safe_write_file(&drop_ins_dir.join(rel), &di.content);
         }
     }
@@ -673,7 +696,9 @@ mod tests {
     }
 
     #[test]
-    fn test_config_tree_dropin_mirroring() {
+    fn test_config_tree_dropin_only_in_dropins_dir() {
+        // Service drop-ins are written to drop-ins/ only — NOT config/.
+        // The services renderer owns these paths.
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(ServiceSection {
             drop_ins: vec![SystemdDropIn {
@@ -688,30 +713,27 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
 
-        // Must exist in both config/ and drop-ins/
+        // Must NOT exist in config/ (service-owned)
         assert!(
-            dir.path()
+            !dir.path()
                 .join("config/etc/systemd/system/httpd.service.d/override.conf")
-                .exists()
+                .exists(),
+            "service drop-in must NOT be materialized under config/"
         );
+
+        // Must exist in drop-ins/
         assert!(
             dir.path()
                 .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf")
-                .exists()
+                .exists(),
+            "service drop-in must be written to drop-ins/"
         );
-
-        // Content must match
-        let config_content = std::fs::read_to_string(
-            dir.path()
-                .join("config/etc/systemd/system/httpd.service.d/override.conf"),
-        )
-        .unwrap();
-        let dropin_content = std::fs::read_to_string(
+        let content = std::fs::read_to_string(
             dir.path()
                 .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf"),
         )
         .unwrap();
-        assert_eq!(config_content, dropin_content);
+        assert_eq!(content, "[Service]\nLimitNOFILE=65535");
     }
 
     #[test]
@@ -1007,6 +1029,50 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&pam).unwrap(),
             "auth required pam_unix.so"
+        );
+    }
+
+    #[test]
+    fn test_service_dropin_not_in_config_tree() {
+        // Service-owned drop-in paths must NOT be materialized under config/
+        // — the services renderer owns these paths.
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "sshd.service".to_string(),
+                path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),
+                content: "[Service]\nPermitRootLogin=no".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        // Also add the same path as a config file entry to verify the
+        // svc_paths exclusion catches it in the config files loop too.
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/systemd/system/sshd.service.d/override.conf".to_string(),
+                content: "[Service]\nPermitRootLogin=no".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        // Must NOT exist in config/
+        assert!(
+            !dir.path()
+                .join("config/etc/systemd/system/sshd.service.d/override.conf")
+                .exists(),
+            "service-owned drop-in must NOT be materialized under config/"
+        );
+        // Must still exist in drop-ins/
+        assert!(
+            dir.path()
+                .join("drop-ins/etc/systemd/system/sshd.service.d/override.conf")
+                .exists(),
+            "service-owned drop-in must still be written to drop-ins/"
         );
     }
 

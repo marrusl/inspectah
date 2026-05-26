@@ -148,7 +148,8 @@ fn services_in_containerfile() {
 
 // ---------------------------------------------------------------------------
 // Test 2: services_dropins_in_config_tree
-// Drop-in files from services section materialize in the config tree output.
+// Service-owned drop-in files go to drop-ins/ only — NOT config/.
+// The services renderer owns these paths.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -158,29 +159,28 @@ fn services_dropins_in_config_tree() {
 
     configtree::write_config_tree(&snap, dir.path()).unwrap();
 
-    // Drop-in must appear in config/ tree
-    let dropin_path = dir
+    // Service-owned drop-in must NOT appear in config/ tree
+    let config_path = dir
         .path()
         .join("config/etc/systemd/system/httpd.service.d/override.conf");
     assert!(
+        !config_path.exists(),
+        "service-owned drop-in must NOT be in config/ — services renderer owns it"
+    );
+
+    // Drop-in must appear in drop-ins/ directory
+    let dropin_path = dir
+        .path()
+        .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf");
+    assert!(
         dropin_path.exists(),
-        "drop-in must be materialized in config/ tree at {}",
-        dropin_path.display()
+        "drop-in must be written to drop-ins/ directory"
     );
 
     let content = std::fs::read_to_string(&dropin_path).unwrap();
     assert!(
         content.contains("LimitNOFILE=65535"),
         "drop-in content must match the snapshot data"
-    );
-
-    // Drop-in must also appear in drop-ins/ mirror
-    let mirror_path = dir
-        .path()
-        .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf");
-    assert!(
-        mirror_path.exists(),
-        "drop-in must be mirrored in drop-ins/ directory"
     );
 }
 
