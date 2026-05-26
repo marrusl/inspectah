@@ -9,7 +9,7 @@ use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::classify::classify_services;
+use inspectah_refine::classify::{classify_containers, classify_services};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
@@ -143,6 +143,27 @@ pub struct DropInDecisionDto {
     pub include: bool,
 }
 
+/// A classified quadlet unit, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct QuadletDecisionDto {
+    pub path: String,
+    pub name: String,
+    pub image: String,
+    pub triage: TriageTag,
+    pub include: bool,
+}
+
+/// A classified flatpak app, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct FlatpakDecisionDto {
+    pub app_id: String,
+    pub remote: String,
+    pub branch: String,
+    pub triage: TriageTag,
+    pub include: bool,
+    pub lifecycle: String,
+}
+
 #[derive(Serialize)]
 pub struct ViewResponse {
     #[serde(flatten)]
@@ -152,6 +173,8 @@ pub struct ViewResponse {
     pub version_changes: Vec<VersionChangeEntry>,
     pub service_states: Vec<ServiceDecisionDto>,
     pub service_dropins: Vec<DropInDecisionDto>,
+    pub quadlets: Vec<QuadletDecisionDto>,
+    pub flatpaks: Vec<FlatpakDecisionDto>,
     pub users_groups_decisions: Vec<serde_json::Value>,
     pub session_is_sensitive: bool,
 }
@@ -303,6 +326,7 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         })
         .unwrap_or_default();
     let (service_states, service_dropins) = build_service_decisions(session);
+    let (quadlets, flatpaks) = build_container_decisions(session);
     let users_groups_decisions = session
         .snapshot_projected()
         .users_groups
@@ -316,6 +340,8 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         version_changes,
         service_states,
         service_dropins,
+        quadlets,
+        flatpaks,
         users_groups_decisions,
         session_is_sensitive,
     }
@@ -407,6 +433,39 @@ fn build_service_decisions(
         .collect();
 
     (state_dtos, dropin_dtos)
+}
+
+/// Classify containers from the projected snapshot into decision-item DTOs.
+fn build_container_decisions(
+    session: &RefineSession,
+) -> (Vec<QuadletDecisionDto>, Vec<FlatpakDecisionDto>) {
+    let snap = session.snapshot_projected();
+    let (quadlets, flatpaks) = classify_containers(&snap);
+
+    let quadlet_dtos: Vec<QuadletDecisionDto> = quadlets
+        .into_iter()
+        .map(|q| QuadletDecisionDto {
+            path: q.entry.path.clone(),
+            name: q.entry.name.clone(),
+            image: q.entry.image.clone(),
+            triage: q.triage,
+            include: q.entry.include,
+        })
+        .collect();
+
+    let flatpak_dtos: Vec<FlatpakDecisionDto> = flatpaks
+        .into_iter()
+        .map(|f| FlatpakDecisionDto {
+            app_id: f.entry.app_id.clone(),
+            remote: f.entry.remote.clone(),
+            branch: f.entry.branch.clone(),
+            triage: f.triage,
+            include: f.entry.include,
+            lifecycle: "first_boot".to_string(),
+        })
+        .collect();
+
+    (quadlet_dtos, flatpak_dtos)
 }
 
 pub async fn apply_op(
