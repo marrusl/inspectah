@@ -78,6 +78,31 @@ pub struct KernelBootSection {
     pub alternatives: Vec<AlternativeEntry>,
 }
 
+/// Returns true if the given tuned profile is a stock default that tuned's
+/// recommendation engine would auto-select. These profiles ship with the
+/// tuned package and are not admin-configured. Setting them to
+/// profile_mode=manual in the Containerfile would override the automatic
+/// selection, which is almost never the intent.
+pub fn is_stock_tuned_profile(name: &str) -> bool {
+    matches!(
+        name,
+        "throughput-performance"
+            | "virtual-guest"
+            | "balanced"
+            | "desktop"
+            | "latency-performance"
+            | "network-latency"
+            | "network-throughput"
+            | "powersave"
+            | "hpc-compute"
+            | "intel-sst"
+            | "optimize-serial-console"
+            | "aws"
+            | "atomic-guest"
+            | "atomic-host"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
