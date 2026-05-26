@@ -107,6 +107,24 @@ fn service_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
     paths
 }
 
+/// Returns the set of quadlet unit paths owned by the containers renderer.
+///
+/// These paths live under `etc/containers/systemd/` and must NOT be
+/// materialized by the generic config tree — the containers section handles
+/// them via its own quadlet/ directory and COPY logic.
+fn container_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    if let Some(containers) = &snap.containers {
+        for quadlet in &containers.quadlet_units {
+            let rel = quadlet.path.trim_start_matches('/');
+            if !rel.is_empty() {
+                paths.insert(rel.to_string());
+            }
+        }
+    }
+    paths
+}
+
 /// Returns the set of NM connection paths that use DHCP (method=auto),
 /// which should be excluded from the config tree copy.
 fn dhcp_connection_paths(snap: &InspectionSnapshot) -> HashSet<String> {
@@ -161,6 +179,7 @@ pub fn write_config_tree(
     std::fs::create_dir_all(&config_dir)?;
     let dhcp_paths = dhcp_connection_paths(snap);
     let svc_paths = service_owned_paths(snap);
+    let ctr_paths = container_owned_paths(snap);
 
     // Config files
     if let Some(ref config) = snap.config {
@@ -175,7 +194,7 @@ pub fn write_config_tree(
             if dhcp_paths.contains(rel) {
                 continue;
             }
-            if rel.starts_with(QUADLET_PREFIX) {
+            if rel.starts_with(QUADLET_PREFIX) || ctr_paths.contains(rel) {
                 continue;
             }
             if svc_paths.contains(rel) {
@@ -560,6 +579,7 @@ mod tests {
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
     use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
     use tempfile::TempDir;
 
@@ -1073,6 +1093,110 @@ mod tests {
                 .join("drop-ins/etc/systemd/system/sshd.service.d/override.conf")
                 .exists(),
             "service-owned drop-in must still be written to drop-ins/"
+        );
+    }
+
+    #[test]
+    fn test_container_owned_quadlet_excluded_from_config_tree() {
+        // Quadlet paths listed in snap.containers.quadlet_units must NOT be
+        // materialized under config/ — the containers renderer owns them.
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                path: "/etc/containers/systemd/myapp.container".to_string(),
+                name: "myapp.container".to_string(),
+                content: "[Container]\nImage=quay.io/test:latest".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        // Also add the same path as a config file to verify exclusion
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/containers/systemd/myapp.container".to_string(),
+                    content: "[Container]\nImage=quay.io/test:latest".to_string(),
+                    include: true,
+                    ..Default::default()
+                },
+                // A non-quadlet config file should still be materialized
+                ConfigFileEntry {
+                    path: "/etc/httpd/conf/httpd.conf".to_string(),
+                    content: "ServerRoot /etc/httpd".to_string(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        // Quadlet path must NOT exist in config/
+        assert!(
+            !dir.path()
+                .join("config/etc/containers/systemd/myapp.container")
+                .exists(),
+            "container-owned quadlet path must NOT be materialized under config/"
+        );
+        // Non-quadlet config file must still exist
+        assert!(
+            dir.path()
+                .join("config/etc/httpd/conf/httpd.conf")
+                .exists(),
+            "non-quadlet config file must still be materialized"
+        );
+        // Quadlet must be written to quadlet/ directory instead
+        assert!(
+            dir.path().join("quadlet/myapp.container").exists(),
+            "quadlet must be written to quadlet/ directory"
+        );
+    }
+
+    #[test]
+    fn test_excluded_quadlet_not_in_quadlet_dir() {
+        // Quadlet with include=false must not be materialized anywhere
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                path: "/etc/containers/systemd/excluded.container".to_string(),
+                name: "excluded.container".to_string(),
+                content: "[Container]\nImage=quay.io/test:latest".to_string(),
+                include: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert!(
+            !dir.path().join("quadlet/excluded.container").exists(),
+            "excluded quadlet must NOT be written to quadlet/"
+        );
+    }
+
+    #[test]
+    fn test_excluded_flatpak_not_materialized() {
+        // Flatpak with include=false must not produce any output
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.example.Excluded".to_string(),
+                origin: "flathub".to_string(),
+                branch: "stable".to_string(),
+                include: false,
+                remote: "flathub".to_string(),
+                remote_url: "https://flathub.org/repo/".to_string(),
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert!(
+            !dir.path().join("flatpak").exists(),
+            "excluded flatpak must NOT produce flatpak/ directory"
         );
     }
 
