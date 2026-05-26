@@ -2,22 +2,20 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { RefineStats, ContextSection, HealthResponse, ViewResponse } from "../../api/types";
+import type { ContextSection, HealthResponse, ViewResponse } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 42,
-  included_packages: 38,
-  excluded_packages: 4,
-  total_configs: 15,
-  included_configs: 12,
-  package_managed_configs: 8,
-  excluded_configs: 3,
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 42, included: 38, excluded: 4 },
+    { kind: "config", total: 15, included: 12, excluded: 3 },
+  ],
   needs_review_count: 5,
   ops_applied: 2,
   can_undo: true,
   can_redo: false,
   baseline_available: true,
-};
+});
 
 const MOCK_SECTIONS: ContextSection[] = [
   { id: "version_changes", display_name: "Version Changes", items: [] },

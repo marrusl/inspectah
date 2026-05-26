@@ -2,22 +2,20 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { RefineStats, HealthResponse, ContextSection } from "../../api/types";
+import type { HealthResponse, ContextSection } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 10,
-  included_packages: 8,
-  excluded_packages: 2,
-  total_configs: 5,
-  included_configs: 3,
-  package_managed_configs: 2,
-  excluded_configs: 2,
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 10, included: 8, excluded: 2 },
+    { kind: "config", total: 5, included: 3, excluded: 2 },
+  ],
   needs_review_count: 3,
   ops_applied: 1,
   can_undo: true,
   can_redo: false,
   baseline_available: true,
-};
+});
 
 const MOCK_HEALTH: HealthResponse = {
   status: "ok",

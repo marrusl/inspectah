@@ -8,13 +8,10 @@ const MOCK_VIEW: ViewResponse = {
   config_files: [],
   containerfile_preview: "FROM ubi9\n",
   stats: {
-    total_packages: 10,
-    included_packages: 8,
-    excluded_packages: 2,
-    total_configs: 5,
-    included_configs: 3,
-    package_managed_configs: 2,
-    excluded_configs: 2,
+    sections: [
+      { kind: "package", total: 10, included: 8, excluded: 2 },
+      { kind: "config", total: 5, included: 3, excluded: 2 },
+    ],
     needs_review_count: 3,
     ops_applied: 1,
     can_undo: true,

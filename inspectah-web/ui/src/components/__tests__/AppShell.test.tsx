@@ -3,27 +3,24 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "../AppShell";
 import type { AppShellProps } from "../AppShell";
-import type { RefineStats } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
 // Mock fetch for ExportDialog internals
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
 });
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 100,
-  included_packages: 80,
-  excluded_packages: 20,
-  total_configs: 50,
-  included_configs: 40,
-  package_managed_configs: 35,
-  excluded_configs: 10,
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 100, included: 80, excluded: 20 },
+    { kind: "config", total: 50, included: 40, excluded: 10 },
+  ],
   needs_review_count: 5,
   ops_applied: 3,
   can_undo: true,
   can_redo: false,
   baseline_available: false,
-};
+});
 
 function renderAppShell(overrides: Partial<AppShellProps> = {}) {
   const defaultProps: AppShellProps = {

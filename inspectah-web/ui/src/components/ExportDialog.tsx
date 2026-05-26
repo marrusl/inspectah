@@ -35,8 +35,8 @@ export function ExportDialog({
   const [stale, setStale] = useState(false);
   const [sensitiveAck, setSensitiveAck] = useState(false);
 
-  const excludedPackages = stats?.excluded_packages ?? 0;
-  const excludedConfigs = stats?.excluded_configs ?? 0;
+  const excludedPackages = stats?.sections.find(s => s.kind === "package")?.excluded ?? 0;
+  const excludedConfigs = stats?.sections.find(s => s.kind === "config")?.excluded ?? 0;
 
   const handleExport = useCallback(async () => {
     setExporting(true);

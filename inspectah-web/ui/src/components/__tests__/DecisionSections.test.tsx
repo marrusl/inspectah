@@ -18,6 +18,7 @@ import type {
   RepoGroupInfo,
   TriageTag,
 } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
 // --- Mock fetch globally ---
 const mockFetch = vi.fn();
@@ -81,20 +82,13 @@ function attentionToTriage(tags: AttentionTag[]): TriageTag {
 
 // --- Test data factories ---
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 3,
-  included_packages: 2,
-  excluded_packages: 1,
-  total_configs: 2,
-  included_configs: 1,
-  package_managed_configs: 0,
-  excluded_configs: 1,
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 3, included: 2, excluded: 1 },
+    { kind: "config", total: 2, included: 1, excluded: 1 },
+  ],
   needs_review_count: 2,
-  ops_applied: 0,
-  can_undo: false,
-  can_redo: false,
-  baseline_available: false,
-};
+});
 
 const MOCK_VIEW: ViewResponse = {
   packages: [],

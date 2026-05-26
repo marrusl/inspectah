@@ -5,9 +5,9 @@ import type { DecisionItemKind } from "../DecisionItem";
 import type {
   RefinedPackage,
   AttentionTag,
-  RefineStats,
   ViewResponse,
 } from "../../api/types";
+import { mockStats } from "../../test-utils/mockStats";
 
 // --- Mock fetch globally ---
 const mockFetch = vi.fn();
@@ -41,20 +41,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const MOCK_STATS: RefineStats = {
-  total_packages: 0,
-  included_packages: 0,
-  excluded_packages: 0,
-  total_configs: 0,
-  included_configs: 0,
-  package_managed_configs: 0,
-  excluded_configs: 0,
-  needs_review_count: 0,
-  ops_applied: 0,
-  can_undo: false,
-  can_redo: false,
-  baseline_available: false,
-};
+const MOCK_STATS = mockStats({
+  sections: [
+    { kind: "package", total: 0, included: 0, excluded: 0 },
+    { kind: "config", total: 0, included: 0, excluded: 0 },
+  ],
+});
 
 const MOCK_VIEW: ViewResponse = {
   packages: [],
@@ -314,7 +306,12 @@ describe("Packages section renders unified components", () => {
       packages: [makePkg({ name: "httpd" }, [ROUTINE_TAG])],
       config_files: [],
       containerfile_preview: "",
-      stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
+      stats: mockStats({
+        sections: [
+          { kind: "package", total: 1, included: 1, excluded: 0 },
+          { kind: "config", total: 0, included: 0, excluded: 0 },
+        ],
+      }),
       generation: 1,
       repo_groups: [],
       version_changes: [],

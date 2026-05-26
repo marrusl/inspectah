@@ -45,13 +45,10 @@ const MOCK_VIEW = {
   config_files: [],
   containerfile_preview: "FROM ubi9\nRUN dnf install -y httpd",
   stats: {
-    total_packages: 2,
-    included_packages: 2,
-    excluded_packages: 0,
-    total_configs: 0,
-    included_configs: 0,
-    package_managed_configs: 0,
-    excluded_configs: 0,
+    sections: [
+      { kind: "package", total: 2, included: 2, excluded: 0 },
+      { kind: "config", total: 0, included: 0, excluded: 0 },
+    ],
     needs_review_count: 1,
     ops_applied: 0,
     can_undo: false,

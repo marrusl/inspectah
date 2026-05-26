@@ -93,13 +93,10 @@ const mockView: ViewResponse = {
   ],
   containerfile_preview: "FROM registry.redhat.io/rhel9:latest\nRUN dnf install -y httpd",
   stats: {
-    total_packages: 10,
-    included_packages: 8,
-    excluded_packages: 2,
-    total_configs: 5,
-    included_configs: 4,
-    package_managed_configs: 3,
-    excluded_configs: 1,
+    sections: [
+      { kind: "package", total: 10, included: 8, excluded: 2 },
+      { kind: "config", total: 5, included: 4, excluded: 1 },
+    ],
     needs_review_count: 3,
     ops_applied: 1,
     can_undo: true,
