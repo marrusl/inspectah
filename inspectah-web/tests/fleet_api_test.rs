@@ -361,6 +361,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                     count: 3,
                     total: 5,
                     hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -374,6 +375,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                     count: 2,
                     total: 5,
                     hosts: vec!["web-04".into(), "web-05".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -539,6 +541,7 @@ async fn fleet_diff_422_binary() {
                     count: 1,
                     total: 2,
                     hosts: vec!["h1".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -552,6 +555,7 @@ async fn fleet_diff_422_binary() {
                     count: 1,
                     total: 2,
                     hosts: vec!["h2".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -613,6 +617,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                     count: 2,
                     total: 3,
                     hosts: vec!["h1".into(), "h2".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -626,6 +631,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                     count: 1,
                     total: 3,
                     hosts: vec!["h3".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -646,6 +652,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                     count: 2,
                     total: 3,
                     hosts: vec!["h1".into(), "h2".into()],
+                    ..Default::default()
                 }),
             },
             SystemdDropIn {
@@ -658,6 +665,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                     count: 1,
                     total: 3,
                     hosts: vec!["h3".into()],
+                    ..Default::default()
                 }),
             },
         ],

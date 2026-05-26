@@ -56,7 +56,8 @@ fn item_id_config_serde_roundtrip() {
 #[test]
 fn item_id_package_serde_roundtrip() {
     let id = ItemId::Package {
-        name_arch: "httpd.x86_64".into(),
+        name: "httpd".into(),
+        arch: "x86_64".into(),
     };
     let json = serde_json::to_string(&id).unwrap();
     let parsed: ItemId = serde_json::from_str(&json).unwrap();

@@ -323,6 +323,7 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                    ..Default::default()
                 }),
             },
             SystemdDropIn {
@@ -335,6 +336,7 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                     count: 2,
                     total: 5,
                     hosts: vec!["host-3".into(), "host-4".into()],
+                    ..Default::default()
                 }),
             },
         ],
@@ -367,6 +369,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -381,6 +384,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                     count: 2,
                     total: 5,
                     hosts: vec!["host-3".into(), "host-4".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

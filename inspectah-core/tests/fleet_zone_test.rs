@@ -7,6 +7,7 @@ fn consensus_when_all_hosts() {
         count: 5,
         total: 5,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::Consensus);
 }
@@ -17,6 +18,7 @@ fn near_consensus_at_exactly_half() {
         count: 5,
         total: 10,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::NearConsensus);
 }
@@ -28,6 +30,7 @@ fn near_consensus_above_half_odd() {
         count: 3,
         total: 5,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::NearConsensus);
 }
@@ -39,6 +42,7 @@ fn divergent_below_half() {
         count: 2,
         total: 5,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::Divergent);
 }
@@ -49,6 +53,7 @@ fn divergent_single_host_of_twenty() {
         count: 1,
         total: 20,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::Divergent);
 }
@@ -59,6 +64,7 @@ fn consensus_when_count_equals_total_min_case() {
         count: 1,
         total: 1,
         hosts: vec![],
+        ..Default::default()
     };
     assert_eq!(classify_zone(&fp), PrevalenceZone::Consensus);
 }

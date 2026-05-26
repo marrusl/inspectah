@@ -49,6 +49,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -62,6 +63,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-3".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -75,6 +77,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-4".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -93,6 +96,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                         "host-2".into(),
                         "host-3".into(),
                     ],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -106,6 +110,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-4".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -119,6 +124,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                     count: 5,
                     total: 5,
                     hosts: (0..5).map(|i| format!("host-{i}")).collect(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

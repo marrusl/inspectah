@@ -47,6 +47,7 @@ fn make_variant_snapshot(
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -61,6 +62,7 @@ fn make_variant_snapshot(
                     hosts: (count_a as usize..host_count)
                         .map(|i| format!("host-{i}"))
                         .collect(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -94,6 +96,7 @@ fn make_single_variant_snapshot(
                 count: host_count as i32,
                 total: host_count as i32,
                 hosts: (0..host_count).map(|i| format!("host-{i}")).collect(),
+                ..Default::default()
             }),
             ..Default::default()
         }],
@@ -679,6 +682,7 @@ fn make_dropin_variant_snapshot(
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
+                    ..Default::default()
                 }),
             },
             SystemdDropIn {
@@ -693,6 +697,7 @@ fn make_dropin_variant_snapshot(
                     hosts: (count_a as usize..host_count)
                         .map(|i| format!("host-{i}"))
                         .collect(),
+                    ..Default::default()
                 }),
             },
         ],
@@ -732,6 +737,7 @@ fn make_quadlet_variant_snapshot(
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -748,6 +754,7 @@ fn make_quadlet_variant_snapshot(
                     hosts: (count_a as usize..host_count)
                         .map(|i| format!("host-{i}"))
                         .collect(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -783,6 +790,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     count: 3,
                     total: host_count as i32,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                    ..Default::default()
                 }),
             },
             ComposeFile {
@@ -797,6 +805,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     count: 2,
                     total: host_count as i32,
                     hosts: vec!["host-3".into(), "host-4".into()],
+                    ..Default::default()
                 }),
             },
         ],
@@ -1122,6 +1131,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                     count: 3,
                     total: host_count as i32,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -1134,6 +1144,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                     count: 2,
                     total: host_count as i32,
                     hosts: vec!["host-3".into(), "host-4".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -1152,6 +1163,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                         "host-2".into(),
                         "host-3".into(),
                     ],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -1164,6 +1176,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                     count: 1,
                     total: host_count as i32,
                     hosts: vec!["host-4".into()],
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
