@@ -1378,7 +1378,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ## Phase 3: Sysctls + Tuned Promotion
 
-### Task 14: Sysctl classification (Rust)
+### Task 14: Sysctl classification (Rust) ✅ DONE (8394e0d)
 
 - Only file-backed overrides (source under `/etc/sysctl.d/` or `/etc/sysctl.conf`) are promoted
 - Runtime-only observations stay as reference with `TriageAnnotation::RuntimeOnlyObservation`
@@ -1386,7 +1386,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Fleet Divergent: different values for the same key → variant display with human-readable values
 - `ItemId::Sysctl { key }`
 
-### Task 15: Tuned classification (Rust)
+### Task 15: Tuned classification (Rust) ✅ DONE (8394e0d)
 
 - One bundled `TunedSelection` per host (active profile + custom profile files as payload)
 - Baseline: profile matches base image's tuned state
@@ -1395,12 +1395,12 @@ Assisted-by: Claude Code (Opus 4.6)"
 - `RequiresProjectedPackage { name: "tuned" }` annotation when tuned package needs to be in the image
 - `ItemId::TunedSelection { profile }`
 
-### Task 16: Sysctl + Tuned refinement in session
+### Task 16: Sysctl + Tuned refinement in session ✅ DONE (0b3ec51)
 
 - SetInclude for `ItemId::Sysctl` and `ItemId::TunedSelection`
 - Included TunedSelection with custom profile bundles its `/etc/tuned/<name>/` directory
 
-### Task 16a: Pipeline pruning for sysctls + tuned
+### Task 16a: Pipeline pruning for sysctls + tuned ✅ DONE (de9d78f)
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/configtree.rs` — `write_config_tree()` must:
@@ -1414,13 +1414,13 @@ Assisted-by: Claude Code (Opus 4.6)"
   - Custom tuned profile carries bundled files
   - Excluded tuned generates no output
 
-### Task 16b: Fleet handler for sysctls + tuned
+### Task 16b: Fleet handler for sysctls + tuned ✅ DONE (a3db7c7)
 
 **Files:**
 - Modify: `inspectah-web/src/fleet_handlers.rs` — move sysctl and tuned items from `build_context_sections()` to `build_fleet_sections()`. Wire up `TriageTag`. Sysctl divergent items use variant display with human-readable values (not content hashes).
 - Modify: `inspectah-web/src/handlers.rs` — update single-host handler to project sysctls and tuned as decision items with `TriageTag`
 
-### Task 17: Sysctls + Tuned frontend
+### Task 17: Sysctls + Tuned frontend ✅ DONE (66a23b1)
 
 - Move Kernel/Boot (sysctl portion) and Tuned to `DECISION_SECTIONS` as "Sysctls" and "Tuned Profiles"
 - Sysctl fleet: variant display with human-readable values (`10 (45 hosts)` vs `60 (5 hosts)`)
