@@ -1,6 +1,6 @@
 use crate::types::{
-    RefinedConfig, RefinedDropIn, RefinedPackage, RefinedServiceState, Triage, TriageAnnotation,
-    TriageBucket, TriageReason, TriageTag,
+    RefinedConfig, RefinedDropIn, RefinedFlatpak, RefinedPackage, RefinedQuadlet,
+    RefinedServiceState, Triage, TriageAnnotation, TriageBucket, TriageReason, TriageTag,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
@@ -368,6 +368,62 @@ fn classify_dropin(_dropin: &SystemdDropIn) -> TriageTag {
         primary_reason: TriageReason::ServiceDropInPresent,
         annotations: vec![],
     }
+}
+
+/// Classify quadlet units and flatpak apps into triage buckets.
+///
+/// Quadlets are always Site (user-deployed container workloads).
+/// Flatpaks with complete provenance (non-empty remote and branch) are Site
+/// with a FirstBootProvisioned annotation. Flatpaks missing remote or branch
+/// are Investigate with FlatpakIncompleteProvenance.
+pub fn classify_containers(
+    snap: &InspectionSnapshot,
+) -> (Vec<RefinedQuadlet>, Vec<RefinedFlatpak>) {
+    let containers = match &snap.containers {
+        Some(c) => c,
+        None => return (Vec::new(), Vec::new()),
+    };
+
+    let quadlets: Vec<RefinedQuadlet> = containers
+        .quadlet_units
+        .iter()
+        .map(|unit| RefinedQuadlet {
+            entry: unit.clone(),
+            triage: TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Site),
+                primary_reason: TriageReason::QuadletUserDeployed,
+                annotations: vec![],
+            },
+        })
+        .collect();
+
+    let flatpaks: Vec<RefinedFlatpak> = containers
+        .flatpak_apps
+        .iter()
+        .map(|app| {
+            if app.remote.is_empty() || app.branch.is_empty() {
+                RefinedFlatpak {
+                    entry: app.clone(),
+                    triage: TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Investigate),
+                        primary_reason: TriageReason::FlatpakIncompleteProvenance,
+                        annotations: vec![],
+                    },
+                }
+            } else {
+                RefinedFlatpak {
+                    entry: app.clone(),
+                    triage: TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Site),
+                        primary_reason: TriageReason::FlatpakProvisionedOnFirstBoot,
+                        annotations: vec![TriageAnnotation::FirstBootProvisioned],
+                    },
+                }
+            }
+        })
+        .collect();
+
+    (quadlets, flatpaks)
 }
 
 #[cfg(test)]
@@ -1193,5 +1249,131 @@ mod service_classification {
         let (states, dropins) = classify_services(&snap);
         assert!(states.is_empty());
         assert!(dropins.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod container_classification {
+    use super::*;
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
+
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
+
+    #[test]
+    fn quadlet_is_site() {
+        let snap = InspectionSnapshot {
+            containers: Some(ContainerSection {
+                quadlet_units: vec![QuadletUnit {
+                    path: "/etc/containers/systemd/myapp.container".into(),
+                    name: "myapp.container".into(),
+                    image: "quay.io/myorg/myapp:latest".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (quadlets, flatpaks) = classify_containers(&snap);
+        assert_eq!(quadlets.len(), 1);
+        assert_eq!(flatpaks.len(), 0);
+        assert_bucket(&quadlets[0].triage, TriageBucket::Site);
+        assert_eq!(
+            quadlets[0].triage.primary_reason,
+            TriageReason::QuadletUserDeployed
+        );
+    }
+
+    #[test]
+    fn flatpak_with_full_provenance_is_site() {
+        let snap = InspectionSnapshot {
+            containers: Some(ContainerSection {
+                flatpak_apps: vec![FlatpakApp {
+                    app_id: "org.mozilla.Firefox".into(),
+                    remote: "flathub".into(),
+                    branch: "stable".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (quadlets, flatpaks) = classify_containers(&snap);
+        assert_eq!(quadlets.len(), 0);
+        assert_eq!(flatpaks.len(), 1);
+        assert_bucket(&flatpaks[0].triage, TriageBucket::Site);
+        assert_eq!(
+            flatpaks[0].triage.primary_reason,
+            TriageReason::FlatpakProvisionedOnFirstBoot
+        );
+        assert!(
+            flatpaks[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::FirstBootProvisioned),
+            "expected FirstBootProvisioned annotation"
+        );
+    }
+
+    #[test]
+    fn flatpak_missing_remote_is_investigate() {
+        let snap = InspectionSnapshot {
+            containers: Some(ContainerSection {
+                flatpak_apps: vec![FlatpakApp {
+                    app_id: "org.gnome.Calculator".into(),
+                    remote: String::new(),
+                    branch: "stable".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, flatpaks) = classify_containers(&snap);
+        assert_eq!(flatpaks.len(), 1);
+        assert_bucket(&flatpaks[0].triage, TriageBucket::Investigate);
+        assert_eq!(
+            flatpaks[0].triage.primary_reason,
+            TriageReason::FlatpakIncompleteProvenance
+        );
+    }
+
+    #[test]
+    fn flatpak_missing_branch_is_investigate() {
+        let snap = InspectionSnapshot {
+            containers: Some(ContainerSection {
+                flatpak_apps: vec![FlatpakApp {
+                    app_id: "org.gnome.Calculator".into(),
+                    remote: "flathub".into(),
+                    branch: String::new(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, flatpaks) = classify_containers(&snap);
+        assert_eq!(flatpaks.len(), 1);
+        assert_bucket(&flatpaks[0].triage, TriageBucket::Investigate);
+        assert_eq!(
+            flatpaks[0].triage.primary_reason,
+            TriageReason::FlatpakIncompleteProvenance
+        );
+    }
+
+    #[test]
+    fn no_containers_returns_empty() {
+        let snap = InspectionSnapshot::default();
+        let (quadlets, flatpaks) = classify_containers(&snap);
+        assert!(quadlets.is_empty());
+        assert!(flatpaks.is_empty());
     }
 }
