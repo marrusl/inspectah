@@ -18,6 +18,10 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] **Sort toggle for Version Changes tab:** Add a sort control (alpha vs. status). Current sort is by direction (downgrades first, then upgrades). Add an alphabetical-by-name option. Default to status sort, let user toggle. Applies to both the reference section view and the package detail `VersionChangeEntry` list.
 
+## Fleet Triage: Non-Universal Variants
+
+- [ ] **Non-universal items with variants don't require review:** In fleet mode, configs (and any analogous section type) that aren't present on all hosts should not be flagged for review just because they have variants. Only universal items (present on every host) with variant differences are worth reviewing. A config that exists on 3 of 5 hosts with two variants is informational, not actionable — the user already knows it's inconsistent by virtue of not being everywhere. Applies to configs, sysctls, tuned profiles, and any future promoted section with variant tracking.
+
 ## Port Fallback
 
 - [ ] **Auto-select alternate port when 8642 is in use:** `inspectah refine` should detect if port 8642 is occupied and automatically try the next port (8643, 8644, etc.). Print which port it bound to. Avoids the user having to manually kill stale processes.
