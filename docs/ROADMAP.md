@@ -27,6 +27,8 @@
 | Fleet Intersection Default | DONE (2026-05-26) |
 | Fleet/UI Bug Fix Batch (10 fixes) | DONE (2026-05-26) |
 | **v0.8.2-alpha.1** | **TAGGED (2026-05-26)** |
+| Section Promotion & Triage Redesign | DONE (2026-05-26) |
+| Naming Consistency (REVIEW/REFERENCE) | DONE (2026-05-26) |
 
 ## Roadmap to CLI Cutover
 
@@ -67,7 +69,7 @@
     ↓
 ✅ v0.8.2-alpha.1 (tagged 2026-05-26, 282 commits since alpha.4, binaries for darwin-arm64/linux-arm64/linux-amd64)
     ↓
-Section Promotion + Fleet Users/Groups (spec in progress — containers, kernel/boot, SELinux → actionable)
+✅ Section Promotion & Triage Redesign (4 phases, 40 commits, spec+plan — 2026-05-26)
     ↓
 Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓
@@ -177,9 +179,9 @@ Shipped with scan progress (2026-05-24). Dynamic viewport height: 30% of termina
 
 Renamed to `cross_crate_integration_test.rs` — "Phase 6" was too narrow; the tests cover cross-crate data flow (core, pipeline, refine), not just baseline. Schema version assertions updated to use `SCHEMA_VERSION` constant.
 
-### Section Promotion & Triage Redesign (HIGH — next)
+### ~~Section Promotion & Triage Redesign~~ (DONE — 2026-05-26)
 
-Replace the attention-level triage system (NeedsReview/Informational/Routine) with action-oriented buckets. Promote services, quadlets, flatpak provisioning, sysctls, and tuned profiles from read-only Reference to toggleable Review sections. Includes ownership/pruning contract between promoted sections and the generic config carry-forward path. Compose deferred until a render contract exists. Spec: `docs/specs/proposed/2026-05-25-section-promotion-triage-redesign.md`. Plan: `docs/plans/2026-05-25-section-promotion-triage-redesign.md`.
+Replaced the attention-level triage system (NeedsReview/Informational/Routine) with action-oriented triage buckets (Site/Divergent/Partial). Promoted services, quadlets, flatpak provisioning, sysctls, and tuned profiles from read-only Reference to toggleable Review sections. Ownership/pruning contract between promoted sections and config carry-forward path. Compose deferred until a render contract exists. 40 commits across 4 phases. Spec: `docs/specs/proposed/2026-05-25-section-promotion-triage-redesign.md`. Plan: `docs/plans/2026-05-25-section-promotion-triage-redesign.md`.
 
 ### Sysctl Source File Preservation (MEDIUM — needs spec)
 
@@ -189,9 +191,9 @@ The current pipeline collapses all included sysctl overrides into a single synth
 
 Config files truncate at 500 chars in a 200px inline box — insufficient for real triage review. Need a modal or drawer that shows the full file content with monospace formatting, the RPM diff when available, and file metadata (path, kind, package owner). Interaction design decision: modal vs drawer vs detail pane. Impacts the row-click behavior (should clicking a config row open the viewer instead of inline expand?). Fern specs, Kit builds.
 
-### Triage Label Vocabulary (MEDIUM — needs spec)
+### ~~Triage Label Vocabulary~~ (DONE — 2026-05-26)
 
-The "informational" attention level label communicates no actionable signal. Especially misleading on items that are toggleable — implies "no action needed" when the user may need to make inclusion decisions. The triage bucket names (Site, Divergent, Partial) are more informative but the three-tier grouping (needs_review / informational / routine) still uses this vocabulary. Needs a labeling decision that affects `attentionUtils.ts`, `DecisionList.tsx`, `RepoGroupHeader.tsx`, and the fleet equivalent. Should align with the triage bucket system from section promotion.
+Absorbed by Section Promotion & Triage Redesign. Triage bucket system (Site/Divergent/Partial) replaced attention-level labels. `AttentionGroup` → `TriageBucketGroup`, `attention.rs` → `classify.rs`. Some legacy `AttentionLevel` naming persists in `DecisionList.tsx` and `attentionUtils.ts` as internal plumbing — cosmetic, not user-facing.
 
 ### Single-Host / Fleet UI Convergence (HIGH — needs spec)
 
