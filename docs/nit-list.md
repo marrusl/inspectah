@@ -26,6 +26,10 @@ Moved to Completed section.
 
 Moved to Completed section.
 
+## Sysctl Source File Preservation (needs spec)
+
+- [ ] **Stop merging sysctls into a single `99-inspectah-migrated.conf`.** The current pipeline collapses all included sysctl overrides into one synthesized file, losing the original source structure. Instead: preserve the original filenames (e.g., `/etc/sysctl.d/99-kubernetes.conf`, `/etc/sysctl.d/99-tuning.conf`). Group sysctls by source file in the UI. Toggling a key removes it from its source file's rendered output. If all keys from a source file are excluded, the entire file is removed from the render. Undo restores the file with the appropriate keys. This also means the UI should show sysctls organized BY source file rather than as a flat list — each source file becomes a collapsible group containing its keys.
+
 ## RepoBar Click-to-Filter (v2 backlog)
 
 - [ ] Repo names in the REPOSITORIES bar should be clickable. Clicking a repo name filters the package list to show only that repo's packages (or scrolls + highlights, lighter option). Render names as `<button>`, `cursor: pointer`, hover color shift to brand color, `aria-label="Jump to baseos packages (61)"`. Fern recommends scroll+highlight using existing `.inspectah-highlight` animation; Ember recommends filter-on-click as more useful for triage. Either way, distro repos gain their first interactive purpose beyond the "always included" label.
