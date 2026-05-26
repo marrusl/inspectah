@@ -70,9 +70,9 @@ function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewRes
         is_decision_section: true,
         items: [
           {
-            item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+            item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
             include: true,
-            attention: { level: "medium", reason: "variant", prevalence: 2 },
+            triage: { bucket: "divergent", prevalence: { count: 2, total: 3 } },
             prevalence: { count: 2, total: 3 },
             source_repo: "appstream",
           },
@@ -226,9 +226,9 @@ describe("FleetSidebar", () => {
       is_decision_section: true,
       items: [
         {
-          item_id: { kind: "Package" as const, key: { name_arch: "httpd.x86_64" } },
+          item_id: { kind: "Package" as const, key: { name: "httpd", arch: "x86_64" } },
           include: true,
-          attention: { level: "medium", reason: "variant", prevalence: 2 },
+          triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
           prevalence: { count: 2, total: 3 },
           source_repo: "appstream",
         },

@@ -63,6 +63,7 @@ const mockView: ViewResponse = {
           detail: null,
         },
       ],
+      triage: { triage: { mode: "single_host" as const, investigate: null }, primary_reason: "package_user_added" as const, annotations: [] },
     },
   ],
   config_files: [
@@ -87,6 +88,7 @@ const mockView: ViewResponse = {
           detail: "Modified from RPM default",
         },
       ],
+      triage: { triage: { mode: "single_host" as const, investigate: null }, primary_reason: "config_modified" as const, annotations: [] },
     },
   ],
   containerfile_preview: "FROM registry.redhat.io/rhel9:latest\nRUN dnf install -y httpd",

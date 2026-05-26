@@ -115,13 +115,13 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
     if (!view.data) return 0;
     let count = 0;
     for (const pkg of view.data.packages) {
-      if (pkg.attention.some((a) => a.level === "needs_review")) {
+      if ((pkg.attention ?? []).some((a) => a.level === "needs_review")) {
         const id = `packages:${pkg.entry.name}.${pkg.entry.arch}`;
         if (viewedIds.has(id)) count++;
       }
     }
     for (const cfg of view.data.config_files) {
-      if (cfg.attention.some((a) => a.level === "needs_review")) {
+      if ((cfg.attention ?? []).some((a) => a.level === "needs_review")) {
         const id = `configs:${cfg.entry.path}`;
         if (viewedIds.has(id)) count++;
       }
@@ -167,6 +167,16 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
   const mutation = useMutation(onMutationSuccess, onMutationError);
 
   function getItemTestIdFromOp(op: AnnotatedOp): string | null {
+    if (op.op === "SetInclude") {
+      const t = op.target as { item_id: { kind: string; key: Record<string, string> }; include: boolean };
+      if (t.item_id.kind === "Package") {
+        return `decision-item-packages:${t.item_id.key.name}.${t.item_id.key.arch}`;
+      }
+      if (t.item_id.kind === "Config") {
+        return `decision-item-configs:${t.item_id.key.path}`;
+      }
+    }
+    // Legacy op format fallback
     if (op.op === "ExcludePackage" || op.op === "IncludePackage") {
       const t = op.target as { name: string; arch: string };
       return `decision-item-packages:${t.name}.${t.arch}`;

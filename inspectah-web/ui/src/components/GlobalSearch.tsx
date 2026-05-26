@@ -61,11 +61,11 @@ function itemName(item: DecisionItemKind): string {
 function itemSearchText(item: DecisionItemKind): string {
   if (item.type === "package") {
     const e = item.data.entry;
-    const reasons = item.data.attention.map((a) => a.detail ?? "").join(" ");
+    const reasons = (item.data.attention ?? []).map((a) => a.detail ?? "").join(" ");
     return `${e.name} ${e.arch} ${e.version} ${e.source_repo} ${reasons}`.toLowerCase();
   }
   const e = item.data.entry;
-  const reasons = item.data.attention.map((a) => a.detail ?? "").join(" ");
+  const reasons = (item.data.attention ?? []).map((a) => a.detail ?? "").join(" ");
   return `${e.path} ${e.kind} ${e.category} ${e.package ?? ""} ${reasons}`.toLowerCase();
 }
 

@@ -72,28 +72,7 @@ function buildFleetSearchSections(sections: FleetSection[]): ContextSection[] {
 
 /** Build the correct RefinementOp for a fleet item toggle. */
 function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
-  if (itemId.kind === "Package") {
-    const [name, arch] = itemId.key.name_arch.split(".");
-    return include
-      ? { op: "IncludePackage", target: { name, arch } }
-      : { op: "ExcludePackage", target: { name, arch } };
-  }
-  if (itemId.kind === "Config") {
-    return include
-      ? { op: "IncludeConfig", target: { path: itemId.key.path } }
-      : { op: "ExcludeConfig", target: { path: itemId.key.path } };
-  }
-  if (itemId.kind === "Repo") {
-    return include
-      ? { op: "IncludeRepo", target: { section_id: itemId.key.path } }
-      : { op: "ExcludeRepo", target: { section_id: itemId.key.path } };
-  }
-  // Other item kinds don't have dedicated include/exclude ops;
-  // fall back to ExcludeConfig with the item's display name as path.
-  const name = itemDisplayName(itemId);
-  return include
-    ? { op: "IncludeConfig", target: { path: name } }
-    : { op: "ExcludeConfig", target: { path: name } };
+  return { op: "SetInclude", target: { item_id: itemId, include } };
 }
 
 export function FleetApp({ fleet, health: _health }: FleetAppProps) {
@@ -237,10 +216,13 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       if (!view) return;
       const repo = view.repo_groups.find((r) => r.section_id === sectionId);
       if (!repo) return;
-      const op: RefinementOp = repo.enabled
-        ? { op: "ExcludeRepo", target: { section_id: sectionId } }
-        : { op: "IncludeRepo", target: { section_id: sectionId } };
-      mutate(op);
+      mutate({
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Repo", key: { path: sectionId } },
+          include: !repo.enabled,
+        },
+      });
     },
     [view, mutate],
   );

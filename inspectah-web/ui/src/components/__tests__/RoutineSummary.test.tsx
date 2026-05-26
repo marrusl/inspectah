@@ -36,6 +36,7 @@ function makePkg(name: string): DecisionItemKind {
         fleet: null,
       },
       attention: [ROUTINE_TAG],
+      triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] },
     },
   };
 }

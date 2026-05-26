@@ -22,7 +22,7 @@ const MOCK_DIFF: FleetDiffResponse = {
 };
 
 const CONFIG_ITEM: ItemId = { kind: "Config", key: { path: "/etc/foo.conf" } };
-const PKG_ITEM: ItemId = { kind: "Package", key: { name_arch: "httpd.x86_64" } };
+const PKG_ITEM: ItemId = { kind: "Package", key: { name: "httpd", arch: "x86_64" } };
 
 beforeEach(() => {
   vi.restoreAllMocks();

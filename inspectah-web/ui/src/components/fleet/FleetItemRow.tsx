@@ -23,10 +23,10 @@ export function attentionDisplayLabel(level: string): string {
 
 export function itemDisplayName(itemId: ItemId): string {
   switch (itemId.kind) {
+    case "Package":
+      return `${itemId.key.name}.${itemId.key.arch}`;
     case "Config":
       return itemId.key.path;
-    case "Package":
-      return itemId.key.name_arch;
     case "Repo":
       return itemId.key.path;
     case "ModuleStream":
@@ -41,6 +41,8 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.path;
     case "Compose":
       return itemId.key.path;
+    case "Flatpak":
+      return itemId.key.app_id;
     case "NMConnection":
       return itemId.key.path;
     case "FirewallZone":
@@ -49,6 +51,8 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.name;
     case "Sysctl":
       return itemId.key.key;
+    case "TunedSelection":
+      return itemId.key.profile;
     case "CronJob":
       return itemId.key.path;
     case "SystemdTimer":

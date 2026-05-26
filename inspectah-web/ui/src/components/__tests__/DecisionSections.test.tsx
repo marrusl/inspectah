@@ -16,6 +16,7 @@ import type {
   RefineStats,
   ViewResponse,
   RepoGroupInfo,
+  TriageTag,
 } from "../../api/types";
 
 // --- Mock fetch globally ---
@@ -47,6 +48,36 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+// --- Test data helpers ---
+
+/** Map legacy AttentionTag[] to a TriageTag for test backward compat. */
+function attentionToTriage(tags: AttentionTag[]): TriageTag {
+  const tag = tags[0];
+  if (!tag) {
+    return {
+      triage: { mode: "single_host" as const, baseline: null },
+      primary_reason: "package_baseline_match",
+      annotations: [],
+    };
+  }
+  // Map attention level to triage bucket
+  const bucketMap: Record<string, string> = {
+    needs_review: "investigate",
+    informational: "site",
+    routine: "baseline",
+  };
+  const bucket = bucketMap[tag.level] ?? "baseline";
+  // Map attention reason to triage reason
+  const reason = typeof tag.reason === "object" && "custom" in tag.reason
+    ? tag.reason
+    : (tag.reason as string);
+  return {
+    triage: { mode: "single_host" as const, [bucket]: null },
+    primary_reason: reason as TriageTag["primary_reason"],
+    annotations: [],
+  };
+}
 
 // --- Test data factories ---
 
@@ -92,6 +123,7 @@ function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}, attention: At
       ...overrides,
     },
     attention,
+    triage: attentionToTriage(attention),
   };
 }
 
@@ -112,6 +144,7 @@ function makeConfig(overrides: Partial<RefinedConfig["entry"]> = {}, attention: 
       ...overrides,
     },
     attention,
+    triage: attentionToTriage(attention),
   };
 }
 
@@ -269,12 +302,12 @@ describe("DecisionItem", () => {
     const toggle = screen.getByRole("checkbox", { name: /toggle httpd/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
-      op: "ExcludePackage",
-      target: { name: "httpd", arch: "x86_64" },
+      op: "SetInclude",
+      target: { item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } }, include: false },
     });
   });
 
-  it("fires IncludePackage when toggling excluded package", async () => {
+  it("fires SetInclude(true) when toggling excluded package", async () => {
     const onToggle = vi.fn();
     const item: DecisionItemKind = { type: "package", data: makePkg({ include: false }) };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
@@ -282,12 +315,12 @@ describe("DecisionItem", () => {
     const toggle = screen.getByRole("checkbox", { name: /toggle httpd/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
-      op: "IncludePackage",
-      target: { name: "httpd", arch: "x86_64" },
+      op: "SetInclude",
+      target: { item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } }, include: true },
     });
   });
 
-  it("fires ExcludeConfig when toggling included config", async () => {
+  it("fires SetInclude(false) when toggling included config", async () => {
     const onToggle = vi.fn();
     const item: DecisionItemKind = { type: "config", data: makeConfig({ include: true }) };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
@@ -295,8 +328,8 @@ describe("DecisionItem", () => {
     const toggle = screen.getByRole("checkbox", { name: /toggle/i });
     await userEvent.click(toggle);
     expect(onToggle).toHaveBeenCalledWith({
-      op: "ExcludeConfig",
-      target: { path: "/etc/httpd/conf/httpd.conf" },
+      op: "SetInclude",
+      target: { item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } }, include: false },
     });
   });
 

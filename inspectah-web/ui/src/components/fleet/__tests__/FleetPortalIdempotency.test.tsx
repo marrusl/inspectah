@@ -95,7 +95,7 @@ function configItemWithVariants(): FleetItem {
   return {
     item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
     include: true,
-    attention: { level: "high", reason: "variant", prevalence: 2 },
+    triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     variants: {

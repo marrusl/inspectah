@@ -79,9 +79,9 @@ vi.mock("../../../api/client", () => ({
 
 function mockFleetItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
-    item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+    item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     include: true,
-    attention: { level: "none", reason: "", prevalence: 3 },
+    triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
     prevalence: { count: 3, total: 3 },
     source_repo: "appstream",
     ...overrides,
@@ -94,7 +94,7 @@ function mockConfigItem(
 ): FleetItem {
   return mockFleetItem({
     item_id: { kind: "Config", key: { path } },
-    attention: { level: "medium", reason: "variant", prevalence: 2 },
+    triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
     prevalence: { count: 2, total: 3 },
     variants: {
       count: 2,
@@ -169,13 +169,13 @@ function mockFleetViewResponse(
         display_name: "Packages",
         items: [
           mockFleetItem({
-            item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+            item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
             prevalence: { count: 3, total: 3 },
           }),
           mockFleetItem({
-            item_id: { kind: "Package", key: { name_arch: "nginx.x86_64" } },
+            item_id: { kind: "Package", key: { name: "nginx", arch: "x86_64" } },
             prevalence: { count: 2, total: 3 },
-            attention: { level: "low", reason: "partial", prevalence: 2 },
+            triage: { bucket: "partial" as const, prevalence: { count: 2, total: 3 } },
           }),
         ],
       }),
@@ -505,10 +505,10 @@ describe("FleetApp integration", () => {
             display_name: "Packages",
             items: [
               mockFleetItem({
-                item_id: { kind: "Package", key: { name_arch: "vim.x86_64" } },
+                item_id: { kind: "Package", key: { name: "vim", arch: "x86_64" } },
               }),
               mockFleetItem({
-                item_id: { kind: "Package", key: { name_arch: "emacs.x86_64" } },
+                item_id: { kind: "Package", key: { name: "emacs", arch: "x86_64" } },
               }),
             ],
           }),
@@ -699,7 +699,7 @@ describe("FleetApp integration", () => {
             display_name: "Packages",
             items: [
               mockFleetItem({
-                item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+                item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
                 prevalence: { count: 3, total: 3 },
                 source_repo: "baseos",
                 repo_conflict: [
@@ -708,7 +708,7 @@ describe("FleetApp integration", () => {
                 ],
               }),
               mockFleetItem({
-                item_id: { kind: "Package", key: { name_arch: "curl.x86_64" } },
+                item_id: { kind: "Package", key: { name: "curl", arch: "x86_64" } },
                 prevalence: { count: 3, total: 3 },
                 source_repo: "baseos",
               }),

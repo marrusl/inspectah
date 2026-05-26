@@ -19,7 +19,7 @@ const mockFleetView: FleetViewResponse = {
     host_count: 5,
     actionable_variant_items: [
       {
-        item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+        item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
         section_id: "packages",
         variant_count: 2,
         max_host_spread: 3,
@@ -36,13 +36,11 @@ const mockFleetView: FleetViewResponse = {
         consensus: {
           items: [
             {
-              item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+              item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
               include: true,
-              attention: {
-                level: "high",
-                reason: "version divergence",
-                zone: "Consensus",
-                prevalence: 0.8,
+              triage: {
+                bucket: "investigate" as const,
+                prevalence: { count: 4, total: 5 },
               },
               source_repo: "appstream",
               prevalence: {
@@ -87,7 +85,7 @@ const mockFleetView: FleetViewResponse = {
 };
 
 const mockDiffRequest: FleetDiffRequest = {
-  item_id: { kind: "Package", key: { name_arch: "httpd.x86_64" } },
+  item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
   base: "abc123",
   target: "def456",
 };

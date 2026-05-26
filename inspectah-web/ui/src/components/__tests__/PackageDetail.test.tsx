@@ -18,6 +18,7 @@ function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}): RefinedPacka
       ...overrides,
     },
     attention: [],
+    triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] },
   };
 }
 

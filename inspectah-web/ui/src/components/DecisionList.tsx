@@ -24,7 +24,32 @@ import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
-import { highestAttention } from "./attentionUtils";
+import { highestAttention, triageBucketToAttention } from "./attentionUtils";
+
+/** Get the primary reason string from an item, preferring triage over legacy attention. */
+function itemPrimaryReason(item: DecisionItemKind): string {
+  if (item.data.triage) {
+    const r = item.data.triage.primary_reason;
+    return typeof r === "string" ? r : "";
+  }
+  if (item.data.attention && item.data.attention.length > 0) {
+    const r = item.data.attention[0].reason;
+    return typeof r === "string" ? r : "";
+  }
+  return "";
+}
+
+/** Get effective attention level from an item, preferring triage over legacy attention. */
+function itemAttentionLevel(item: DecisionItemKind): AttentionLevel {
+  if (item.data.triage) {
+    return triageBucketToAttention(item.data.triage);
+  }
+  // Legacy fallback
+  if (item.data.attention && item.data.attention.length > 0) {
+    return highestAttention(item.data.attention);
+  }
+  return "routine";
+}
 
 interface GroupedItems {
   needs_review: DecisionItemKind[];
@@ -39,11 +64,7 @@ function groupByAttention(items: DecisionItemKind[]): GroupedItems {
     routine: [],
   };
   for (const item of items) {
-    const level =
-      item.data.attention.length > 0
-        ? highestAttention(item.data.attention)
-        : "routine";
-    groups[level].push(item);
+    groups[itemAttentionLevel(item)].push(item);
   }
   return groups;
 }
@@ -314,9 +335,13 @@ export function DecisionList({
 
   const handleRepoToggle = useCallback(
     (sectionId: string, enabled: boolean) => {
-      const op: RefinementOp = enabled
-        ? { op: "IncludeRepo", target: { section_id: sectionId } }
-        : { op: "ExcludeRepo", target: { section_id: sectionId } };
+      const op: RefinementOp = {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Repo", key: { path: sectionId } },
+          include: enabled,
+        },
+      };
       mutation.mutate(op);
     },
     [mutation],
@@ -363,9 +388,7 @@ export function DecisionList({
       const routine: DecisionItemKind[] = [];
 
       for (const item of repoItems) {
-        const level = item.data.attention.length > 0
-          ? highestAttention(item.data.attention)
-          : "routine";
+        const level = itemAttentionLevel(item);
         if (level === "needs_review") needsReview.push(item);
         else if (level === "informational") informational.push(item);
         else routine.push(item);
@@ -429,13 +452,9 @@ export function DecisionList({
         // Only include "other routine" items — skip baseline and config-managed
         // items that are hidden inside collapsed summaries.
         for (const item of groupItems) {
-          const reason = item.data.attention.length > 0
-            ? item.data.attention[0].reason
-            : "";
+          const reason = itemPrimaryReason(item);
           const isBaseline = reason === "package_baseline_match";
-          const isConfigManaged = CONFIG_MANAGED_REASONS.has(
-            typeof reason === "string" ? reason : "",
-          );
+          const isConfigManaged = CONFIG_MANAGED_REASONS.has(reason);
           if (!isBaseline && !isConfigManaged) {
             ids.push(getItemId(item));
           }
@@ -546,8 +565,8 @@ export function DecisionList({
             };
             // Sort items within unknown group by attention priority
             const sortedItems = [...part.items].sort((a, b) => {
-              const aLevel = a.data.attention.length > 0 ? highestAttention(a.data.attention) : "routine";
-              const bLevel = b.data.attention.length > 0 ? highestAttention(b.data.attention) : "routine";
+              const aLevel = itemAttentionLevel(a);
+              const bLevel = itemAttentionLevel(b);
               return (ATTENTION_PRIORITY[aLevel] ?? 2) - (ATTENTION_PRIORITY[bLevel] ?? 2);
             });
 
@@ -567,15 +586,14 @@ export function DecisionList({
                 {sortedItems.map((item) => {
                   runningRowIndex++;
                   const id = getItemId(item);
-                  const level = item.data.attention.length > 0
-                    ? highestAttention(item.data.attention)
-                    : "routine";
+                  const level = itemAttentionLevel(item);
                   const flatIdx = flatItemIds.indexOf(id);
                   return (
                     <DecisionItem
                       key={id}
                       item={item}
                       level={level}
+                      triageTag={item.data.triage}
                       rowIndex={runningRowIndex}
                       isViewed={viewedIds.has(id)}
                       isPending={mutation.isPending}
@@ -652,6 +670,7 @@ export function DecisionList({
                     key={id}
                     item={item}
                     level="needs_review"
+                    triageTag={item.data.triage}
                     rowIndex={runningRowIndex}
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
@@ -674,6 +693,7 @@ export function DecisionList({
                     key={id}
                     item={item}
                     level="informational"
+                    triageTag={item.data.triage}
                     rowIndex={runningRowIndex}
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
@@ -721,25 +741,16 @@ export function DecisionList({
           // Tier 1: routine items with baseline/managed reasons get collapsed summaries
           if (level === "routine") {
             const baselineItems = groupItems.filter(
-              (item) => item.data.attention.length > 0 &&
-                item.data.attention[0].reason === "package_baseline_match",
+              (item) => itemPrimaryReason(item) === "package_baseline_match",
             );
             const configManagedItems = groupItems.filter(
-              (item) => item.data.attention.length > 0 &&
-                CONFIG_MANAGED_REASONS.has(
-                  typeof item.data.attention[0].reason === "string"
-                    ? item.data.attention[0].reason
-                    : "",
-                ),
+              (item) => CONFIG_MANAGED_REASONS.has(itemPrimaryReason(item)),
             );
             const otherRoutine = groupItems.filter(
-              (item) => item.data.attention.length === 0 ||
-                (item.data.attention[0].reason !== "package_baseline_match" &&
-                  !CONFIG_MANAGED_REASONS.has(
-                    typeof item.data.attention[0].reason === "string"
-                      ? item.data.attention[0].reason
-                      : "",
-                  )),
+              (item) => {
+                const reason = itemPrimaryReason(item);
+                return reason === "" || (reason !== "package_baseline_match" && !CONFIG_MANAGED_REASONS.has(reason));
+              },
             );
 
             return (
@@ -759,6 +770,7 @@ export function DecisionList({
                       key={id}
                       item={item}
                       level={level}
+                      triageTag={item.data.triage}
                       rowIndex={runningRowIndex}
                       isViewed={viewedIds.has(id)}
                       isPending={mutation.isPending}
@@ -786,6 +798,7 @@ export function DecisionList({
                     key={id}
                     item={item}
                     level={level}
+                    triageTag={item.data.triage}
                     rowIndex={runningRowIndex}
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}

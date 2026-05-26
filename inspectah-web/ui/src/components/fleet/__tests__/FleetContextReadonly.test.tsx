@@ -109,7 +109,7 @@ function makeViewWithContextSection(): FleetViewResponse {
           {
             item_id: { kind: "Service", key: { unit: "httpd.service" } },
             include: true,
-            attention: { level: "none", reason: "", prevalence: 3 },
+            triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
             prevalence: { count: 3, total: 3 },
             source_repo: "",
             variants: {

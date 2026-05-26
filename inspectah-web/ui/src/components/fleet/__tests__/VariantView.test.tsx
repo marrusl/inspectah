@@ -15,7 +15,7 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
     item_id: configItemId,
     include: true,
-    attention: { level: "none", reason: "", prevalence: 1 },
+    triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
     prevalence: { count: 3, total: 3 },
     source_repo: "",
     variants: {
