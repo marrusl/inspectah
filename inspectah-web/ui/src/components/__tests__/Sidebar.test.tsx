@@ -68,7 +68,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 describe("Sidebar", () => {
-  it("renders all 15 section items", () => {
+  it("renders all 14 section items", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -86,8 +86,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Users & Groups")).toBeInTheDocument();
     expect(screen.getByText("Services")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
-    expect(screen.getByText("Sysctls")).toBeInTheDocument();
-    expect(screen.getByText("Tuned Profiles")).toBeInTheDocument();
+    expect(screen.getByText("System Tuning")).toBeInTheDocument();
     // Reference (context) sections
     expect(screen.getByText("Version Changes")).toBeInTheDocument();
     expect(screen.getByText("Compose")).toBeInTheDocument();

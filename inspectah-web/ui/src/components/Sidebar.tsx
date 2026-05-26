@@ -19,8 +19,7 @@ const DECISION_SECTIONS = [
   { id: "users_groups", label: "Users & Groups" },
   { id: "services", label: "Services" },
   { id: "containers", label: "Containers" },
-  { id: "sysctls", label: "Sysctls" },
-  { id: "tuned", label: "Tuned Profiles" },
+  { id: "system_tuning", label: "System Tuning" },
 ];
 
 /** Section IDs from the snapshot context endpoint (read-only context). */
@@ -81,13 +80,9 @@ function decisionCount(
     if (!viewData) return "...";
     return String((viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0));
   }
-  if (id === "sysctls") {
+  if (id === "system_tuning") {
     if (!viewData) return "...";
-    return String(viewData.sysctls?.length ?? 0);
-  }
-  if (id === "tuned") {
-    if (!viewData) return "...";
-    return String(viewData.tuned?.length ?? 0);
+    return String((viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0));
   }
   if (!stats) return "...";
   if (id === "packages") return String(stats.total_packages);
