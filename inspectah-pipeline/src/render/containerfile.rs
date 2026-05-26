@@ -2140,6 +2140,56 @@ mod tests {
     }
 
     #[test]
+    fn test_excluded_quadlet_generates_no_containerfile_output() {
+        use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                name: "excluded.container".into(),
+                content: "[Container]\nImage=quay.io/test:latest".into(),
+                include: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("COPY quadlet/"),
+            "excluded quadlet must NOT produce COPY quadlet/ line"
+        );
+        assert!(
+            !output.contains("Container Workloads"),
+            "excluded quadlet must NOT produce Container Workloads section"
+        );
+    }
+
+    #[test]
+    fn test_excluded_flatpak_generates_no_containerfile_output() {
+        use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.example.Excluded".into(),
+                origin: "flathub".into(),
+                branch: "stable".into(),
+                include: false,
+                remote: "flathub".into(),
+                remote_url: "https://flathub.org/repo/".into(),
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("flatpak"),
+            "excluded flatpak must NOT produce any flatpak output"
+        );
+        assert!(
+            !output.contains("Container Workloads"),
+            "excluded flatpak must NOT produce Container Workloads section"
+        );
+    }
+
+    #[test]
     fn test_containerfile_excludes_baseline_suppressed_packages() {
         use inspectah_core::snapshot::InspectionSnapshot;
         use inspectah_core::types::rpm::{PackageEntry, RpmSection};
