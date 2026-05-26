@@ -1132,11 +1132,7 @@ pub fn merge_container_sections(
         let mut result = Vec::new();
         for s in sections.iter().flatten() {
             for app in &s.flatpak_apps {
-                let key = (
-                    app.app_id.clone(),
-                    app.remote.clone(),
-                    app.branch.clone(),
-                );
+                let key = (app.app_id.clone(), app.remote.clone(), app.branch.clone());
                 if seen.insert(key) {
                     result.push(app.clone());
                 }
@@ -1515,8 +1511,8 @@ pub fn merge_kernelboot_sections(
         dracut_conf,
         loaded_modules,
         non_default_modules,
+        tuned_include: !tuned_active.is_empty(),
         tuned_active,
-        tuned_include: true,
         tuned_custom_profiles,
         locale,
         timezone,
@@ -1983,7 +1979,10 @@ mod tests {
                 Some(2),
                 "aggregate count should be 2"
             );
-            let agg_hosts = fleet.aggregate_hosts.as_ref().expect("should have aggregate hosts");
+            let agg_hosts = fleet
+                .aggregate_hosts
+                .as_ref()
+                .expect("should have aggregate hosts");
             assert_eq!(agg_hosts.len(), 2);
             assert!(agg_hosts.contains(&"web-02".to_string()));
             assert!(agg_hosts.contains(&"web-03".to_string()));
@@ -2110,7 +2109,11 @@ mod tests {
             2,
             "same app_id with different remotes must not be collapsed"
         );
-        let remotes: Vec<&str> = merged.flatpak_apps.iter().map(|a| a.remote.as_str()).collect();
+        let remotes: Vec<&str> = merged
+            .flatpak_apps
+            .iter()
+            .map(|a| a.remote.as_str())
+            .collect();
         assert!(remotes.contains(&"fedora"));
         assert!(remotes.contains(&"flathub"));
     }

@@ -4,8 +4,10 @@ use axum::response::IntoResponse;
 use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
+use inspectah_refine::classify::{
+    classify_containers, classify_services, classify_sysctls, classify_tuned,
+};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
 use inspectah_refine::types::{
     ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
@@ -605,7 +607,13 @@ fn build_fleet_sections(
                     Some(build_content_variants(
                         &group
                             .iter()
-                            .map(|d| (&d.entry.content, d.entry.variant_selection, d.entry.fleet.as_ref()))
+                            .map(|d| {
+                                (
+                                    &d.entry.content,
+                                    d.entry.variant_selection,
+                                    d.entry.fleet.as_ref(),
+                                )
+                            })
                             .collect::<Vec<_>>(),
                     ))
                 } else {
@@ -709,13 +717,7 @@ fn build_fleet_sections(
         }
 
         if !items.is_empty() {
-            sections.push(build_section(
-                "containers",
-                "Containers",
-                true,
-                &items,
-                ctx,
-            ));
+            sections.push(build_section("containers", "Containers", true, &items, ctx));
         }
     }
 
@@ -742,13 +744,7 @@ fn build_fleet_sections(
             // showing the highest count (majority value), else first.
             let representative = group
                 .iter()
-                .max_by_key(|s| {
-                    s.entry
-                        .fleet
-                        .as_ref()
-                        .map(|f| f.count)
-                        .unwrap_or(0)
-                })
+                .max_by_key(|s| s.entry.fleet.as_ref().map(|f| f.count).unwrap_or(0))
                 .unwrap_or(&group[0]);
 
             let item_id = ItemId::Sysctl {
@@ -775,13 +771,35 @@ fn build_fleet_sections(
         }
 
         if !items.is_empty() {
-            sections.push(build_section("sysctls", "Kernel Parameters", true, &items, ctx));
+            sections.push(build_section(
+                "sysctls",
+                "Kernel Parameters",
+                true,
+                &items,
+                ctx,
+            ));
         }
     }
 
     // Tuned — classified as decision items with triage tags
     {
         let tuned_selections = classify_tuned(snap);
+        // Use the projected tuned_include from the snapshot (respects user ops).
+        let tuned_include = snap
+            .kernel_boot
+            .as_ref()
+            .map(|kb| kb.tuned_include)
+            .unwrap_or(false);
+        // Tuned is a scalar merged via most_prevalent_scalar; no per-item
+        // FleetPrevalence exists. Use kernel_boot section host count as the
+        // best available prevalence (all hosts with kernel_boot data contributed
+        // to the tuned_active selection).
+        let kb_host_count = ctx
+            .fleet_meta
+            .section_host_counts
+            .get("kernel_boot")
+            .copied()
+            .unwrap_or(0) as u32;
         let items: Vec<FleetItem> = tuned_selections
             .iter()
             .map(|t| {
@@ -790,9 +808,12 @@ fn build_fleet_sections(
                 };
                 FleetItem {
                     item_id,
-                    include: true, // tuned selection is always included when present
+                    include: tuned_include,
                     triage: build_triage_dto(&t.triage, None, ctx),
-                    prevalence: fleet_prevalence_dto(None, ctx),
+                    prevalence: FleetPrevalenceDto {
+                        count: kb_host_count,
+                        total: ctx.total_hosts as u32,
+                    },
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -1218,9 +1239,7 @@ fn triage_reason_to_string(reason: &TriageReason) -> String {
         TriageReason::PackageBaselineMatch => "package_baseline_match".to_string(),
         TriageReason::PackageUserAdded => "package_user_added".to_string(),
         TriageReason::PackageVersionChanged => "package_version_changed".to_string(),
-        TriageReason::PackageProvenanceUnavailable => {
-            "package_provenance_unavailable".to_string()
-        }
+        TriageReason::PackageProvenanceUnavailable => "package_provenance_unavailable".to_string(),
         TriageReason::PackageLocalInstall => "package_local_install".to_string(),
         TriageReason::PackageNoRepoSource => "package_no_repo_source".to_string(),
         TriageReason::PackageConfigCaptured => "package_config_captured".to_string(),
@@ -1370,9 +1389,7 @@ fn build_compose_variants(
 /// values as the variant identifier instead of content hashes. Sysctl values
 /// are short scalars (e.g. "10", "4096"), so displaying the actual value is
 /// more useful than an opaque hash.
-fn build_sysctl_variants(
-    entries: &[&inspectah_refine::types::RefinedSysctl],
-) -> FleetVariants {
+fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) -> FleetVariants {
     // Use runtime value as the "hash" key so the frontend shows
     // "10 (45 hosts)" vs "60 (5 hosts)" instead of content hashes.
     let selected_entry = entries
