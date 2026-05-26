@@ -148,8 +148,8 @@ export function DecisionItem({
   );
 
   // Derive border and badge from triage or legacy attention
-  const topAttention = item.data.attention && item.data.attention.length > 0
-    ? triageBucketToAttention(item.data as unknown as TriageTag) // Fallback for legacy
+  const topAttention = item.data.triage
+    ? triageBucketToAttention(item.data.triage)
     : effectiveLevel;
   const topReason = item.data.attention?.[0];
 
