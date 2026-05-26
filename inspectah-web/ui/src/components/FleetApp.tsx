@@ -41,6 +41,22 @@ function AckProgress({ unackedCount, totalCount }: { unackedCount: number; total
   );
 }
 
+/** Toolbar indicator showing unconfirmed divergent item count. */
+function DivergentProgress({
+  unconfirmedCount,
+  totalCount,
+}: {
+  unconfirmedCount: number;
+  totalCount: number;
+}) {
+  if (totalCount === 0) return null;
+  return (
+    <span className="fleet-ack-progress" data-testid="divergent-progress">
+      Divergent: {totalCount} ({unconfirmedCount} unconfirmed)
+    </span>
+  );
+}
+
 /** Collect all FleetItems from a section (flat items or zone items). */
 function sectionItems(section: FleetSection): FleetItem[] {
   if (section.items) return section.items;
@@ -50,6 +66,22 @@ function sectionItems(section: FleetSection): FleetItem[] {
     ...section.zones.near_consensus.items,
     ...section.zones.divergent.items,
   ];
+}
+
+/** Collect all divergent-zone FleetItems across all sections. */
+function allDivergentItems(sections: FleetSection[]): FleetItem[] {
+  const result: FleetItem[] = [];
+  for (const section of sections) {
+    if (section.zones) {
+      result.push(...section.zones.divergent.items);
+    }
+  }
+  return result;
+}
+
+/** Serialize an ItemId to a stable string key for Set membership. */
+function itemIdKey(id: ItemId): string {
+  return JSON.stringify(id);
 }
 
 /** Build ContextSection[] from fleet sections for GlobalSearch indexing. */
@@ -94,6 +126,11 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     (err) => setError(err.message),
   );
 
+  // --- Divergent review tracking (session-layer state) ---
+  const [confirmedDivergentIds, setConfirmedDivergentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
   const actionableIds = view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
   const ack = useVariantAck(fleet.label, fleet.merged_at, actionableIds);
   const diffHook = useFleetDiff();
@@ -123,11 +160,33 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     setExpandedItemId(null);
   }, [activeSection]);
 
+  // Build a set of divergent item keys for fast membership checks
+  const divergentKeySet = useMemo(() => {
+    if (!view) return new Set<string>();
+    return new Set(allDivergentItems(view.sections).map((i) => itemIdKey(i.item_id)));
+  }, [view]);
+
+  /** Mark a divergent item as confirmed in session state. */
+  const confirmDivergent = useCallback(
+    (itemId: ItemId) => {
+      const key = itemIdKey(itemId);
+      if (!divergentKeySet.has(key)) return;
+      setConfirmedDivergentIds((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    },
+    [divergentKeySet],
+  );
+
   const handleToggle = useCallback(
     (itemId: ItemId, include: boolean) => {
       mutate(buildToggleOp(itemId, include));
+      confirmDivergent(itemId);
     },
-    [mutate],
+    [mutate, confirmDivergent],
   );
 
   const handleExpandVariant = useCallback((itemId: ItemId) => {
@@ -143,8 +202,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   const handleSelectVariant = useCallback(
     (itemId: ItemId, hash: string) => {
       mutate({ op: "SelectVariant", target: { item_id: itemId, target: hash } });
+      confirmDivergent(itemId);
     },
-    [mutate],
+    [mutate, confirmDivergent],
   );
 
   const handleBannerNavigate = useCallback(
@@ -205,6 +265,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       const items = sectionItems(pkgSection);
       const item = items.find((i) => itemDisplayName(i.item_id) === nameArch);
       if (!item) return;
+      // handleToggle already calls confirmDivergent
       handleToggle(item.item_id, !item.include);
     },
     [view, handleToggle],
@@ -310,6 +371,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     0,
   );
 
+  // Compute divergent review progress
+  const totalDivergent = divergentKeySet.size;
+  const unconfirmedDivergent = totalDivergent - [...divergentKeySet].filter(
+    (key) => confirmedDivergentIds.has(key),
+  ).length;
+
   return (
     <div data-testid="fleet-app">
       <AppShell
@@ -330,7 +397,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         searchConfigItems={[]}
         searchContextSections={searchContextSections}
         onSearchNavigate={handleSearchNavigate}
-        toolbarExtra={<AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />}
+        toolbarExtra={
+          <>
+            <AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />
+            <DivergentProgress unconfirmedCount={unconfirmedDivergent} totalCount={totalDivergent} />
+          </>
+        }
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
         fleetSummary={{
           hostCount: fleet.host_count,
