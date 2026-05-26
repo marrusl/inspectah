@@ -80,7 +80,7 @@ pub struct RepoSourceEntryDto {
 pub struct FleetItem {
     pub item_id: ItemId,
     pub include: bool,
-    pub attention: FleetAttentionDto,
+    pub triage: FleetTriageDto,
     pub prevalence: FleetPrevalenceDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variants: Option<FleetVariants>,
@@ -90,7 +90,7 @@ pub struct FleetItem {
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetAttentionDto {
+pub struct FleetTriageDto {
     pub bucket: String,
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -460,7 +460,7 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: pkg.entry.include,
-                    attention: build_triage_dto(&pkg.triage, fp, ctx),
+                    triage: build_triage_dto(&pkg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: pkg.entry.source_repo.clone(),
@@ -532,7 +532,7 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: build_triage_dto(&cfg.triage, fp, ctx),
+                    triage: build_triage_dto(&cfg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
@@ -573,7 +573,7 @@ fn build_section(
         let mut divergent = Vec::new();
 
         for item in items {
-            match &item.attention.zone {
+            match &item.triage.zone {
                 Some(PrevalenceZone::Consensus) => consensus.push(item),
                 Some(PrevalenceZone::NearConsensus) => near_consensus.push(item),
                 Some(PrevalenceZone::Divergent) => divergent.push(item),
@@ -635,7 +635,7 @@ fn build_context_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
@@ -685,7 +685,7 @@ fn build_context_sections(
                 items.push(FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
@@ -739,7 +739,7 @@ fn build_context_sections(
                 items.push(FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
@@ -781,7 +781,7 @@ fn build_context_sections(
                 items.push(FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
@@ -812,7 +812,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -827,7 +827,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -852,7 +852,7 @@ fn build_context_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
@@ -876,7 +876,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -891,7 +891,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -922,7 +922,7 @@ fn build_context_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
@@ -946,7 +946,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -961,7 +961,7 @@ fn build_context_sections(
             items.push(FleetItem {
                 item_id,
                 include: fleet_include_default(fp),
-                attention: default_context_attention(fp, ctx),
+                triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
@@ -992,7 +992,7 @@ fn build_context_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: default_context_attention(fp, ctx),
+                    triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
@@ -1023,7 +1023,7 @@ fn build_triage_dto(
     tag: &TriageTag,
     fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
     ctx: &FleetContext,
-) -> FleetAttentionDto {
+) -> FleetTriageDto {
     let bucket = triage_bucket_to_string(tag.bucket());
     let reason = triage_reason_to_string(&tag.primary_reason);
     let zone = match &tag.triage {
@@ -1043,7 +1043,7 @@ fn build_triage_dto(
         }
     };
     let prevalence = fp.map(|f| f.count.max(0) as u32).unwrap_or(0);
-    FleetAttentionDto {
+    FleetTriageDto {
         bucket,
         reason,
         zone,
@@ -1051,13 +1051,13 @@ fn build_triage_dto(
     }
 }
 
-fn default_context_attention(
+fn default_context_triage(
     fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
     ctx: &FleetContext,
-) -> FleetAttentionDto {
+) -> FleetTriageDto {
     let zone = fp.map(inspectah_core::fleet::classify_zone);
     let zone = if ctx.zones_active { zone } else { None };
-    FleetAttentionDto {
+    FleetTriageDto {
         bucket: "site".to_string(),
         reason: "context_item".to_string(),
         zone,
