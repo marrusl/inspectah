@@ -7,8 +7,8 @@ use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
-use crate::classify::{classify_configs, classify_packages};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
+use crate::classify::{classify_configs, classify_packages};
 use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
@@ -178,14 +178,14 @@ impl RefineSession {
         // Fleet prevalence gate: in fleet mode, items below full prevalence
         // default to excluded (strict intersection). This overrides the
         // single-host triage defaults set by normalize_package_defaults.
-        if matches!(refine_mode, RefineMode::Fleet(_)) {
-            if let Some(ref mut rpm) = snapshot.rpm {
-                for pkg in &mut rpm.packages_added {
-                    if let Some(ref fp) = pkg.fleet {
-                        if fp.count < fp.total {
-                            pkg.include = false;
-                        }
-                    }
+        if matches!(refine_mode, RefineMode::Fleet(_))
+            && let Some(ref mut rpm) = snapshot.rpm
+        {
+            for pkg in &mut rpm.packages_added {
+                if let Some(ref fp) = pkg.fleet
+                    && fp.count < fp.total
+                {
+                    pkg.include = false;
                 }
             }
         }
@@ -600,7 +600,9 @@ impl RefineSession {
             count
         };
 
-        let is_dirty = sections.iter().any(|s| !s.included.is_empty() || !s.excluded.is_empty())
+        let is_dirty = sections
+            .iter()
+            .any(|s| !s.included.is_empty() || !s.excluded.is_empty())
             || variants_changed > 0;
 
         ChangesSummary {
@@ -825,7 +827,8 @@ impl RefineSession {
                                     .any(|s| s.unit == dropin.unit && s.include);
                                 if !parent_included {
                                     return Err(RefineError::BadRequest(
-                                        "cannot include drop-in when parent service is excluded".into(),
+                                        "cannot include drop-in when parent service is excluded"
+                                            .into(),
                                     ));
                                 }
                             }
@@ -1259,19 +1262,15 @@ impl RefineSession {
                         }
                         ItemId::Service { unit } => {
                             if let Some(ref mut services) = snap.services {
-                                if let Some(svc) = services
-                                    .state_changes
-                                    .iter_mut()
-                                    .find(|s| s.unit == *unit)
+                                if let Some(svc) =
+                                    services.state_changes.iter_mut().find(|s| s.unit == *unit)
                                 {
                                     svc.include = *include;
                                 }
                                 // Symmetric cascade: toggling a service cascades
                                 // to all drop-ins for that unit.
-                                for dropin in services
-                                    .drop_ins
-                                    .iter_mut()
-                                    .filter(|d| d.unit == *unit)
+                                for dropin in
+                                    services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
                                 {
                                     dropin.include = *include;
                                 }
@@ -2103,11 +2102,13 @@ mod tests {
 
         // Stats should reflect only the matching canonical package identity.
         assert_eq!(
-            view.stats.total_packages(), 1,
+            view.stats.total_packages(),
+            1,
             "total_packages should be leaf count"
         );
         assert_eq!(
-            view.stats.included_packages(), 1,
+            view.stats.included_packages(),
+            1,
             "included_packages should be leaf count"
         );
     }
@@ -2701,7 +2702,10 @@ mod tests {
             include: true,
         });
 
-        assert!(result.is_err(), "including drop-in with excluded parent must fail");
+        assert!(
+            result.is_err(),
+            "including drop-in with excluded parent must fail"
+        );
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("parent service is excluded"),
@@ -3143,11 +3147,15 @@ mod tests {
 
         // Verify specific files within promoted roots
         assert!(
-            entries.iter().any(|e| e.contains("httpd.service.d/limits.conf")),
+            entries
+                .iter()
+                .any(|e| e.contains("httpd.service.d/limits.conf")),
             "drop-in content must be present. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.contains("99-inspectah-migrated.conf")),
+            entries
+                .iter()
+                .any(|e| e.contains("99-inspectah-migrated.conf")),
             "synthesized sysctl file must be present. entries: {entries:?}"
         );
         assert!(
@@ -3155,21 +3163,29 @@ mod tests {
             "flatpak manifest must be present. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.contains("flatpak-provision.service")),
+            entries
+                .iter()
+                .any(|e| e.contains("flatpak-provision.service")),
             "flatpak provisioning service must be present. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.contains("tuned/etc/tuned/my-profile/tuned.conf")),
+            entries
+                .iter()
+                .any(|e| e.contains("tuned/etc/tuned/my-profile/tuned.conf")),
             "tuned profile must be present. entries: {entries:?}"
         );
 
         // Promoted artifacts must NOT appear under config/
         assert!(
-            !entries.iter().any(|e| e.starts_with("config/etc/systemd/system/httpd.service.d/")),
+            !entries
+                .iter()
+                .any(|e| e.starts_with("config/etc/systemd/system/httpd.service.d/")),
             "drop-ins must NOT be under config/. entries: {entries:?}"
         );
         assert!(
-            !entries.iter().any(|e| e.starts_with("config/etc/containers/systemd/")),
+            !entries
+                .iter()
+                .any(|e| e.starts_with("config/etc/containers/systemd/")),
             "quadlets must NOT be under config/. entries: {entries:?}"
         );
         assert!(
