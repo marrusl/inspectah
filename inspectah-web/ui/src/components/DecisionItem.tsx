@@ -213,7 +213,11 @@ export function DecisionItem({
       className="inspectah-decision-row"
       style={{ borderLeft }}
     >
-      <div className="inspectah-decision-row__main">
+      <div
+        className="inspectah-decision-row__main"
+        onClick={handleExpand}
+        style={{ cursor: "pointer" }}
+      >
         {onToggleInclude && (
           <div role="gridcell" className="inspectah-decision-row__toggle">
             <input
@@ -222,6 +226,7 @@ export function DecisionItem({
               id={`switch-${id}`}
               checked={included}
               onChange={handleToggle}
+              onClick={(e) => e.stopPropagation()}
               disabled={isPending}
               aria-label={`Toggle ${name}`}
             />
