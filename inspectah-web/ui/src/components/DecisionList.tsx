@@ -121,8 +121,8 @@ function BaselineSummary({ count, items, revealItemId, filterActive = false }: {
           {items.map((item) => {
             const id = getItemId(item);
             const name = item.type === "package"
-              ? `${item.data.entry.name}.${(item.data as any).entry.arch}`
-              : (item.data as any).entry.path;
+              ? `${item.data.entry.name}.${item.data.entry.arch}`
+              : item.data.entry.path;
             return (
               <li
                 key={name}
