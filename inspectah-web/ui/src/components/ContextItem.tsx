@@ -21,7 +21,11 @@ export function ContextItem({ item }: ContextItemProps) {
       className="inspectah-context-row"
       tabIndex={-1}
     >
-      <div className="inspectah-context-row__main">
+      <div
+        className="inspectah-context-row__main"
+        onClick={hasDetail ? handleToggle : undefined}
+        style={hasDetail ? { cursor: "pointer" } : undefined}
+      >
         <div id={`context-item-${item.id}`} className="inspectah-context-row__name">
           <span>{item.title}</span>
           {item.subtitle && (
