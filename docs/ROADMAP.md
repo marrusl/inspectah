@@ -178,6 +178,10 @@ Renamed to `cross_crate_integration_test.rs` — "Phase 6" was too narrow; the t
 
 Replace the attention-level triage system (NeedsReview/Informational/Routine) with action-oriented buckets. Promote services, quadlets, flatpak provisioning, sysctls, and tuned profiles from read-only Reference to toggleable Review sections. Includes ownership/pruning contract between promoted sections and the generic config carry-forward path. Compose deferred until a render contract exists. Spec: `docs/specs/proposed/2026-05-25-section-promotion-triage-redesign.md`. Plan: `docs/plans/2026-05-25-section-promotion-triage-redesign.md`.
 
+### Sysctl Source File Preservation (MEDIUM — needs spec)
+
+The current pipeline collapses all included sysctl overrides into a single synthesized `99-inspectah-migrated.conf`, losing the original source file structure. Instead: preserve the original filenames (e.g., `/etc/sysctl.d/99-kubernetes.conf`, `/etc/sysctl.d/99-tuning.conf`). Group sysctls by source file in the UI — each source file becomes a collapsible group containing its keys. Toggling a key removes it from its source file's rendered output. If all keys from a source file are excluded, the entire file drops from the render. Undo restores the file with the appropriate keys. Touches pipeline rendering (per-file output instead of merged), UI grouping (by-source layout), and the undo model.
+
 ### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
 
 Rust redaction pipeline needs parity with Go's heuristic redaction capabilities. Go has pattern-based redaction for passwords, API keys, tokens, and connection strings embedded in config files. Rust currently handles explicit redaction but lacks the heuristic detection layer. Needs spec.
