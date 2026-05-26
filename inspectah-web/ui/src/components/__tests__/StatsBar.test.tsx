@@ -203,7 +203,7 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 5, totalItems: 2480, needsReviewCount: 27 }}
+        fleetSummary={{ hostCount: 5, hostnames: ["host-a", "host-b", "host-c", "host-d", "host-e"], totalItems: 2480, needsReviewCount: 27 }}
       />,
     );
 
@@ -228,10 +228,59 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 3, totalItems: 100, needsReviewCount: 0 }}
+        fleetSummary={{ hostCount: 3, hostnames: ["a", "b", "c"], totalItems: 100, needsReviewCount: 0 }}
       />,
     );
 
     expect(screen.getByTestId("fleet-stats-summary")).toHaveTextContent("All reviewed");
+  });
+
+  it("opens hostname popover when host count is clicked", async () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+        fleetSummary={{ hostCount: 3, hostnames: ["zulu-host", "alpha-host", "mid-host"], totalItems: 100, needsReviewCount: 0 }}
+      />,
+    );
+
+    await userEvent.click(screen.getByTestId("fleet-host-trigger"));
+
+    const list = screen.getByTestId("fleet-hostname-list");
+    expect(list).toBeInTheDocument();
+
+    // Hostnames should be sorted alphabetically
+    const entries = list.querySelectorAll(".fleet-hostname-entry");
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toHaveTextContent("alpha-host");
+    expect(entries[1]).toHaveTextContent("mid-host");
+    expect(entries[2]).toHaveTextContent("zulu-host");
+
+    // Copy button should be present
+    expect(screen.getByTestId("fleet-hostname-copy")).toHaveTextContent("Copy all");
+  });
+
+  it("copies hostnames to clipboard when copy button is clicked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+        fleetSummary={{ hostCount: 2, hostnames: ["beta", "alpha"], totalItems: 50, needsReviewCount: 0 }}
+      />,
+    );
+
+    await userEvent.click(screen.getByTestId("fleet-host-trigger"));
+    await userEvent.click(screen.getByTestId("fleet-hostname-copy"));
+
+    expect(writeText).toHaveBeenCalledWith("alpha\nbeta");
   });
 });
