@@ -9,7 +9,7 @@ use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::classify::{classify_containers, classify_services};
+use inspectah_refine::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
@@ -164,6 +164,26 @@ pub struct FlatpakDecisionDto {
     pub lifecycle: String,
 }
 
+/// A classified sysctl override, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlDecisionDto {
+    pub key: String,
+    pub runtime: String,
+    pub default: String,
+    pub source: String,
+    pub triage: TriageTag,
+    pub include: bool,
+}
+
+/// A classified tuned profile selection, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct TunedDecisionDto {
+    pub active_profile: String,
+    pub custom_profiles: Vec<String>,
+    pub triage: TriageTag,
+    pub include: bool,
+}
+
 #[derive(Serialize)]
 pub struct ViewResponse {
     #[serde(flatten)]
@@ -175,6 +195,8 @@ pub struct ViewResponse {
     pub service_dropins: Vec<DropInDecisionDto>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
+    pub sysctls: Vec<SysctlDecisionDto>,
+    pub tuned: Vec<TunedDecisionDto>,
     pub users_groups_decisions: Vec<serde_json::Value>,
     pub session_is_sensitive: bool,
 }
@@ -327,6 +349,8 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         .unwrap_or_default();
     let (service_states, service_dropins) = build_service_decisions(session);
     let (quadlets, flatpaks) = build_container_decisions(session);
+    let sysctls = build_sysctl_decisions(session);
+    let tuned = build_tuned_decisions(session);
     let users_groups_decisions = session
         .snapshot_projected()
         .users_groups
@@ -342,6 +366,8 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         service_dropins,
         quadlets,
         flatpaks,
+        sysctls,
+        tuned,
         users_groups_decisions,
         session_is_sensitive,
     }
@@ -466,6 +492,36 @@ fn build_container_decisions(
         .collect();
 
     (quadlet_dtos, flatpak_dtos)
+}
+
+/// Classify sysctl overrides from the projected snapshot into decision-item DTOs.
+fn build_sysctl_decisions(session: &RefineSession) -> Vec<SysctlDecisionDto> {
+    let snap = session.snapshot_projected();
+    classify_sysctls(&snap)
+        .into_iter()
+        .map(|s| SysctlDecisionDto {
+            key: s.entry.key.clone(),
+            runtime: s.entry.runtime.clone(),
+            default: s.entry.default.clone(),
+            source: s.entry.source.clone(),
+            triage: s.triage,
+            include: s.entry.include,
+        })
+        .collect()
+}
+
+/// Classify tuned profile selection from the projected snapshot into decision-item DTOs.
+fn build_tuned_decisions(session: &RefineSession) -> Vec<TunedDecisionDto> {
+    let snap = session.snapshot_projected();
+    classify_tuned(&snap)
+        .into_iter()
+        .map(|t| TunedDecisionDto {
+            active_profile: t.active_profile.clone(),
+            custom_profiles: t.custom_profiles.clone(),
+            triage: t.triage,
+            include: true, // tuned selection is always included when present
+        })
+        .collect()
 }
 
 pub async fn apply_op(
