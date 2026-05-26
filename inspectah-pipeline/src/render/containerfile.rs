@@ -53,6 +53,22 @@ pub fn render_containerfile(
     snap: &InspectionSnapshot,
     materialized_roots: Option<&[String]>,
 ) -> String {
+    render_containerfile_inner(snap, materialized_roots, None)
+}
+
+pub fn render_containerfile_with_originals(
+    snap: &InspectionSnapshot,
+    materialized_roots: Option<&[String]>,
+    original_includes: &std::collections::HashMap<String, bool>,
+) -> String {
+    render_containerfile_inner(snap, materialized_roots, Some(original_includes))
+}
+
+fn render_containerfile_inner(
+    snap: &InspectionSnapshot,
+    materialized_roots: Option<&[String]>,
+    original_includes: Option<&std::collections::HashMap<String, bool>>,
+) -> String {
     let base = base_image_from_snapshot(snap);
     let base_str = base.as_deref().unwrap_or("");
     let mut lines: Vec<String> = Vec::new();
@@ -90,7 +106,7 @@ pub fn render_containerfile(
     }
 
     // 1. Packages section (FROM + repos + GPG + modules + packages)
-    lines.extend(packages_section_lines(snap, base.as_deref()));
+    lines.extend(packages_section_lines(snap, base.as_deref(), original_includes));
 
     // bootc label for ostree-desktops base images
     if matches!(snap.system_type, SystemType::RpmOstree | SystemType::Bootc)
@@ -223,7 +239,7 @@ fn install_name_for_package(
     }
 }
 
-fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<String> {
+fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, original_includes: Option<&std::collections::HashMap<String, bool>>) -> Vec<String> {
     let mut lines = Vec::new();
 
     match base {
@@ -383,14 +399,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         }
     }
 
-    let is_fleet = snap.fleet_meta.is_some();
-    let leaf_filter: Option<std::collections::HashSet<String>> = if is_fleet {
-        None
-    } else {
-        rpm.leaf_packages
-            .as_ref()
-            .map(|leaf_packages| leaf_packages.iter().cloned().collect())
-    };
+    let leaf_filter: Option<std::collections::HashSet<String>> = rpm
+        .leaf_packages
+        .as_ref()
+        .map(|leaf_packages| leaf_packages.iter().cloned().collect());
 
     let baseline_suppressed_set: std::collections::HashSet<String> = rpm
         .baseline_suppressed
@@ -404,13 +416,17 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         .filter(|pkg| pkg.include)
         .filter(|pkg| is_package_installable(pkg))
         .filter(|pkg| {
-            // Baseline-suppressed packages never go into RUN dnf install
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
         })
         .filter(|pkg| {
-            leaf_filter.as_ref().is_none_or(|leaf_ids| {
-                leaf_ids.contains(&canonical_package_id(&pkg.name, &pkg.arch))
-            })
+            let id = canonical_package_id(&pkg.name, &pkg.arch);
+            if let Some(orig) = original_includes {
+                let was_included = orig.get(&id).copied().unwrap_or(pkg.include);
+                if was_included != pkg.include {
+                    return true;
+                }
+            }
+            leaf_filter.as_ref().is_none_or(|leaf_ids| leaf_ids.contains(&id))
         })
         .collect();
 
