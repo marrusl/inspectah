@@ -198,6 +198,131 @@ pub struct AttentionTag {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageBucket {
+    Baseline,
+    Site,
+    Investigate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetBucket {
+    Investigate,
+    Divergent,
+    Partial,
+    Universal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prevalence {
+    pub count: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetTriage {
+    pub bucket: FleetBucket,
+    pub prevalence: Prevalence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode")]
+pub enum Triage {
+    #[serde(rename = "single_host")]
+    SingleHost(TriageBucket),
+    #[serde(rename = "fleet")]
+    Fleet(FleetTriage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageAnnotation {
+    SensitivePath,
+    FirstBootProvisioned,
+    RequiresProjectedPackage { name: String },
+    RuntimeOnlyObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageReason {
+    PackageBaselineMatch,
+    PackageUserAdded,
+    PackageVersionChanged,
+    PackageProvenanceUnavailable,
+    PackageLocalInstall,
+    PackageNoRepoSource,
+    PackageConfigCaptured,
+    ConfigDefault,
+    ConfigBaselineMatch,
+    ConfigModified,
+    ConfigUnowned,
+    ConfigOrphaned,
+    ServiceBaselineMatch,
+    ServiceNonDefaultState,
+    ServiceUnknownOrigin,
+    ServiceDropInPresent,
+    QuadletUserDeployed,
+    QuadletPresentInBaseImage,
+    FlatpakProvisionedOnFirstBoot,
+    FlatpakIncompleteProvenance,
+    SysctlBaselineMatch,
+    SysctlFileBackedOverride,
+    SysctlNoBaseline,
+    TunedBaselineMatch,
+    TunedNonDefaultProfile,
+    TunedCustomProfile,
+    TunedUnusualState,
+    SensitivePath,
+    Custom(String),
+}
+
+impl TriageReason {
+    pub fn display_string(&self) -> &'static str {
+        match self {
+            Self::PackageBaselineMatch => "Matches base image",
+            Self::PackageUserAdded => "User-added package",
+            Self::PackageVersionChanged => "Version changed from base image",
+            Self::PackageProvenanceUnavailable => "Unknown origin \u{2014} no baseline available",
+            Self::PackageLocalInstall => "Locally installed RPM \u{2014} not from a repository",
+            Self::PackageNoRepoSource => "Unknown origin \u{2014} no repository source",
+            Self::PackageConfigCaptured => "Contents captured via config files",
+            Self::ConfigDefault => "RPM default \u{2014} unmodified",
+            Self::ConfigBaselineMatch => "Matches base image",
+            Self::ConfigModified => "Modified from RPM default",
+            Self::ConfigUnowned => "Not owned by any installed package",
+            Self::ConfigOrphaned => "Orphaned \u{2014} owning package removed",
+            Self::ServiceBaselineMatch => "Matches base image service state",
+            Self::ServiceNonDefaultState => "Non-default service state",
+            Self::ServiceUnknownOrigin => "Service not from any installed RPM",
+            Self::ServiceDropInPresent => "Drop-in override present",
+            Self::QuadletUserDeployed => "User-deployed container workload",
+            Self::QuadletPresentInBaseImage => "Quadlet present in base image",
+            Self::FlatpakProvisionedOnFirstBoot => "Flatpak provisioned at first boot",
+            Self::FlatpakIncompleteProvenance => "Incomplete provenance for manifest",
+            Self::SysctlBaselineMatch => "Matches base image kernel parameter",
+            Self::SysctlFileBackedOverride => "Non-default kernel parameter",
+            Self::SysctlNoBaseline => "No baseline available for comparison",
+            Self::TunedBaselineMatch => "Matches base image tuned profile",
+            Self::TunedNonDefaultProfile => "Non-default tuned profile",
+            Self::TunedCustomProfile => "Custom profile in /etc/tuned/",
+            Self::TunedUnusualState => "Tuned in unusual state",
+            Self::SensitivePath => "Security-sensitive path \u{2014} verify before including",
+            Self::Custom(_) => "See detail",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TriageTag {
+    pub triage: Triage,
+    pub primary_reason: TriageReason,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<TriageAnnotation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedPackage {
     pub entry: PackageEntry,
@@ -351,4 +476,44 @@ pub enum RefineError {
     BadRequest(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+#[cfg(test)]
+mod triage_tests {
+    use super::*;
+
+    #[test]
+    fn triage_bucket_serde_roundtrip() {
+        let buckets = vec![TriageBucket::Baseline, TriageBucket::Site, TriageBucket::Investigate];
+        for b in buckets {
+            let json = serde_json::to_string(&b).unwrap();
+            let back: TriageBucket = serde_json::from_str(&json).unwrap();
+            assert_eq!(b, back);
+        }
+    }
+
+    #[test]
+    fn fleet_triage_serde_roundtrip() {
+        let ft = FleetTriage {
+            bucket: FleetBucket::Divergent,
+            prevalence: Prevalence { count: 42, total: 50 },
+        };
+        let json = serde_json::to_string(&ft).unwrap();
+        let back: FleetTriage = serde_json::from_str(&json).unwrap();
+        assert_eq!(ft.bucket, back.bucket);
+        assert_eq!(ft.prevalence.count, 42);
+        assert_eq!(ft.prevalence.total, 50);
+    }
+
+    #[test]
+    fn triage_tag_with_annotations() {
+        let tag = TriageTag {
+            triage: Triage::SingleHost(TriageBucket::Investigate),
+            primary_reason: TriageReason::PackageLocalInstall,
+            annotations: vec![TriageAnnotation::SensitivePath],
+        };
+        let json = serde_json::to_string(&tag).unwrap();
+        assert!(json.contains("investigate"));
+        assert!(json.contains("sensitive_path"));
+    }
 }
