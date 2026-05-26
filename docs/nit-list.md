@@ -2,6 +2,10 @@
 
 Small output quality and polish items. Not worth individual specs — just fix when touching nearby code.
 
+## Naming Consistency (Rust)
+
+- [ ] **ContextSection → ReferenceSection:** The `ContextSection` struct in `inspectah-web/src/handlers.rs` and the `normalize_for_context()` function use "context" where the UI says "Reference." Rename to `ReferenceSection` / `normalize_for_reference()`. Also update the `context_section()` helper and the API test in `api_test.rs`. Frontend type in `api/types.ts` should match.
+
 ## Repo Tier Model
 
 - [ ] **RPM upload feature (needs spec):** Let users upload a local RPM into the tarball for repo-less packages. Separate folder in the tarball, direct `COPY + rpm -i` in the Containerfile. Turns "this package has no migration path" into "here's the RPM, install it directly." Solves the case for vendor installers, one-off downloads, and manual builds.
