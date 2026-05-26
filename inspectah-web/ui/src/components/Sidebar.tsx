@@ -12,8 +12,8 @@ import type { ContextSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 
-/** Section IDs that represent decision sections (packages, configs, users, services, containers). */
-const DECISION_SECTIONS = [
+/** Section IDs that represent review sections (packages, configs, users, services, containers). */
+const REVIEW_SECTIONS = [
   { id: "packages", label: "Packages" },
   { id: "configs", label: "Config Files" },
   { id: "users_groups", label: "Users & Groups" },
@@ -22,8 +22,8 @@ const DECISION_SECTIONS = [
   { id: "system_tuning", label: "System Tuning" },
 ];
 
-/** Section IDs from the snapshot context endpoint (read-only context). */
-const CONTEXT_SECTIONS = [
+/** Section IDs from the snapshot context endpoint (read-only reference). */
+const REFERENCE_SECTIONS = [
   { id: "version_changes", label: "Version Changes" },
   { id: "compose", label: "Compose" },
   { id: "network", label: "Network" },
@@ -180,7 +180,7 @@ export function Sidebar({
       {searchSlot}
       <Nav aria-label="Sections">
         <NavGroup title="Review">
-          {DECISION_SECTIONS.map((sec) => (
+          {REVIEW_SECTIONS.map((sec) => (
             <NavItem
               key={sec.id}
               itemId={sec.id}
@@ -194,7 +194,7 @@ export function Sidebar({
           ))}
         </NavGroup>
         <NavGroup title="Reference">
-          {CONTEXT_SECTIONS.map((sec) => (
+          {REFERENCE_SECTIONS.map((sec) => (
             <NavItem
               key={sec.id}
               itemId={sec.id}
