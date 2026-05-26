@@ -126,6 +126,18 @@ export function UserCard({
           flexWrap: "wrap",
         }}
       >
+        <input
+          type="checkbox"
+          checked={user.containerfile_strategy === "useradd"}
+          onChange={() =>
+            handleStrategyChange(
+              user.containerfile_strategy === "useradd" ? "skip" : "useradd",
+            )
+          }
+          disabled={isPending}
+          aria-label={`Include ${user.name}`}
+          style={{ flexShrink: 0 }}
+        />
         <strong>{user.name}</strong>
         <span
           style={{
