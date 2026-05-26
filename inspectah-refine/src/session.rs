@@ -850,13 +850,33 @@ impl RefineSession {
                             )));
                         }
                     }
+                    ItemId::Sysctl { key } => {
+                        let found = self
+                            .original
+                            .kernel_boot
+                            .as_ref()
+                            .map(|kb| kb.sysctl_overrides.iter().any(|s| s.key == *key))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(key.clone()));
+                        }
+                    }
+                    ItemId::TunedSelection { profile } => {
+                        let found = self
+                            .original
+                            .kernel_boot
+                            .as_ref()
+                            .map(|kb| kb.tuned_active == *profile)
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(profile.clone()));
+                        }
+                    }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
                     | ItemId::NMConnection { .. }
                     | ItemId::FirewallZone { .. }
                     | ItemId::KernelModule { .. }
-                    | ItemId::Sysctl { .. }
-                    | ItemId::TunedSelection { .. }
                     | ItemId::CronJob { .. }
                     | ItemId::SystemdTimer { .. }
                     | ItemId::AtJob { .. }
@@ -1274,6 +1294,21 @@ impl RefineSession {
                                     })
                             {
                                 flatpak.include = *include;
+                            }
+                        }
+                        ItemId::Sysctl { key } => {
+                            if let Some(ref mut kb) = snap.kernel_boot
+                                && let Some(sysctl) =
+                                    kb.sysctl_overrides.iter_mut().find(|s| s.key == *key)
+                            {
+                                sysctl.include = *include;
+                            }
+                        }
+                        ItemId::TunedSelection { profile } => {
+                            if let Some(ref mut kb) = snap.kernel_boot
+                                && kb.tuned_active == *profile
+                            {
+                                kb.tuned_include = *include;
                             }
                         }
                         // Phase 2-3 item kinds: not yet handled
@@ -2849,6 +2884,142 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("org.ghost.App"),
+            "error must name the unknown target, got: {err}"
+        );
+    }
+
+    // ── Sysctl / Tuned SetInclude tests ───────────────────────────────
+
+    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+
+    /// Build a snapshot with sysctl overrides and tuned profile for SetInclude tests.
+    fn test_snapshot_with_kernel_boot() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection::default()),
+            kernel_boot: Some(KernelBootSection {
+                sysctl_overrides: vec![
+                    SysctlOverride {
+                        key: "net.ipv4.ip_forward".into(),
+                        runtime: "1".into(),
+                        default: "0".into(),
+                        source: "/etc/sysctl.d/99-custom.conf".into(),
+                        include: true,
+                        fleet: None,
+                    },
+                    SysctlOverride {
+                        key: "vm.swappiness".into(),
+                        runtime: "10".into(),
+                        default: "60".into(),
+                        source: "/etc/sysctl.d/99-custom.conf".into(),
+                        include: true,
+                        fleet: None,
+                    },
+                ],
+                tuned_active: "throughput-performance".into(),
+                tuned_include: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exclude_sysctl_sets_include_false() {
+        let snap = test_snapshot_with_kernel_boot();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Sysctl {
+                    key: "net.ipv4.ip_forward".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let kb = projected.kernel_boot.as_ref().unwrap();
+
+        let ip_fwd = kb
+            .sysctl_overrides
+            .iter()
+            .find(|s| s.key == "net.ipv4.ip_forward")
+            .unwrap();
+        assert!(!ip_fwd.include, "ip_forward sysctl must be excluded");
+
+        // Other sysctl must be unaffected.
+        let swappiness = kb
+            .sysctl_overrides
+            .iter()
+            .find(|s| s.key == "vm.swappiness")
+            .unwrap();
+        assert!(swappiness.include, "vm.swappiness must remain included");
+    }
+
+    #[test]
+    fn exclude_tuned_sets_include_false() {
+        let snap = test_snapshot_with_kernel_boot();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::TunedSelection {
+                    profile: "throughput-performance".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let kb = projected.kernel_boot.as_ref().unwrap();
+
+        assert!(
+            !kb.tuned_include,
+            "tuned_include must be false after excluding tuned profile"
+        );
+        assert_eq!(
+            kb.tuned_active, "throughput-performance",
+            "tuned_active profile name must be preserved"
+        );
+    }
+
+    #[test]
+    fn unknown_sysctl_key_is_error() {
+        let snap = test_snapshot_with_kernel_boot();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Sysctl {
+                key: "kernel.nonexistent".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown sysctl key must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("kernel.nonexistent"),
+            "error must name the unknown target, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_tuned_profile_is_error() {
+        let snap = test_snapshot_with_kernel_boot();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::TunedSelection {
+                profile: "balanced".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown tuned profile must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("balanced"),
             "error must name the unknown target, got: {err}"
         );
     }
