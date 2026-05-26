@@ -43,6 +43,28 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* Fleet hostname popover */
+.fleet-host-trigger {
+  font-size: inherit;
+  padding: 0;
+}
+
+.fleet-hostname-list {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--sm);
+  line-height: 1.6;
+}
+
+.fleet-hostname-entry {
+  white-space: nowrap;
+}
+
+.fleet-hostname-copy {
+  margin-top: var(--pf-t--global--spacer--sm);
+}
+
 /* Three-zone layout */
 .inspectah-layout {
   display: flex;

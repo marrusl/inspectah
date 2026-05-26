@@ -7,8 +7,10 @@ import {
   Button,
   Content,
   Label,
+  Popover,
+  Badge,
 } from "@patternfly/react-core";
-import { UndoIcon, RedoIcon, ExportIcon, SunIcon, MoonIcon } from "@patternfly/react-icons";
+import { UndoIcon, RedoIcon, ExportIcon, SunIcon, MoonIcon, CopyIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
 
 function ThemeToggle() {
@@ -35,8 +37,60 @@ function ThemeToggle() {
   );
 }
 
+function HostnamePopover({ hostCount, hostnames }: { hostCount: number; hostnames: string[] }) {
+  const [copied, setCopied] = useState(false);
+  const sorted = [...hostnames].sort((a, b) => a.localeCompare(b));
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(sorted.join("\n")).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [sorted]);
+
+  return (
+    <Popover
+      aria-label="Fleet hosts"
+      headerContent={
+        <span>
+          Fleet Hosts <Badge isRead>{hostCount}</Badge>
+        </span>
+      }
+      bodyContent={
+        <div>
+          <div className="fleet-hostname-list" data-testid="fleet-hostname-list">
+            {sorted.map((h) => (
+              <div key={h} className="fleet-hostname-entry">{h}</div>
+            ))}
+          </div>
+          <Button
+            variant="link"
+            icon={<CopyIcon />}
+            onClick={handleCopy}
+            className="fleet-hostname-copy"
+            data-testid="fleet-hostname-copy"
+            size="sm"
+          >
+            {copied ? "Copied!" : "Copy all"}
+          </Button>
+        </div>
+      }
+    >
+      <Button
+        variant="link"
+        isInline
+        className="fleet-host-trigger"
+        data-testid="fleet-host-trigger"
+      >
+        <strong>{hostCount}</strong> hosts
+      </Button>
+    </Popover>
+  );
+}
+
 export interface FleetSummary {
   hostCount: number;
+  hostnames: string[];
   totalItems: number;
   needsReviewCount: number;
 }
@@ -88,7 +142,10 @@ export function StatsBar({
           {fleetSummary ? (
             <ToolbarItem>
               <Content component="small" data-testid="fleet-stats-summary">
-                <strong>{fleetSummary.hostCount}</strong> hosts{" · "}
+                <HostnamePopover
+                  hostCount={fleetSummary.hostCount}
+                  hostnames={fleetSummary.hostnames}
+                />{" · "}
                 <strong>{fleetSummary.totalItems.toLocaleString()}</strong> items{" · "}
                 {fleetSummary.needsReviewCount > 0 ? (
                   <Label color="blue">{fleetSummary.needsReviewCount} need review</Label>

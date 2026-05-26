@@ -403,6 +403,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
         fleetSummary={{
           hostCount: fleet.host_count,
+          hostnames: fleet.hostnames,
           totalItems,
           needsReviewCount: ack.unackedCount,
         }}
