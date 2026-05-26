@@ -106,6 +106,7 @@ pub fn render_containerfile(
         lines.push("# FIXME: services data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(services_section_lines(snap));
+    lines.extend(drop_ins_section_lines(snap));
 
     // 3. Firewall zones
     if is_degraded(&snap.completeness, InspectorId::Network) {
@@ -485,6 +486,29 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
 fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let plan = render_service_intent(snap);
     section("Service Enablement", plan.lines)
+}
+
+// --- Service Drop-ins section ---
+
+fn drop_ins_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    let services = match &snap.services {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let included_count = services.drop_ins.iter().filter(|d| d.include).count();
+    if included_count == 0 {
+        return Vec::new();
+    }
+
+    let mut body = Vec::new();
+    body.push(format!(
+        "# {} service drop-in(s) — override snippets for systemd units",
+        included_count
+    ));
+    body.push("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/".into());
+
+    section("Service Drop-ins", body)
 }
 
 // --- Network section ---
@@ -982,7 +1006,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
             if !kb.tuned_custom_profiles.is_empty() {
                 body.push(
-                    "COPY config/etc/tuned/ /etc/tuned/".into(),
+                    "COPY tuned/etc/tuned/ /etc/tuned/".into(),
                 );
             }
             body.push(format!(
@@ -2427,7 +2451,7 @@ mod tests {
         });
         let output = render_containerfile(&snap, None);
         assert!(
-            output.contains("COPY config/etc/tuned/ /etc/tuned/"),
+            output.contains("COPY tuned/etc/tuned/ /etc/tuned/"),
             "included tuned with custom profile must COPY profile files, got:\n{output}"
         );
         assert!(
@@ -2437,6 +2461,56 @@ mod tests {
         assert!(
             output.contains("RUN systemctl enable tuned.service"),
             "must enable tuned.service"
+        );
+    }
+
+    #[test]
+    fn test_included_drop_in_generates_copy_line() {
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
+                content: "[Service]\nLimitNOFILE=65535".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+            "included drop-in must produce COPY drop-ins/ line, got:\n{output}"
+        );
+        assert!(
+            output.contains("Service Drop-ins"),
+            "included drop-in must produce Service Drop-ins section header"
+        );
+    }
+
+    #[test]
+    fn test_excluded_drop_in_generates_no_copy_line() {
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
+                content: "[Service]\nLimitNOFILE=65535".into(),
+                include: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("COPY drop-ins/"),
+            "excluded drop-in must NOT produce COPY drop-ins/ line"
+        );
+        assert!(
+            !output.contains("Service Drop-ins"),
+            "excluded drop-in must NOT produce Service Drop-ins section"
         );
     }
 }
