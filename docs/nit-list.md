@@ -33,7 +33,7 @@ Moved to Completed section.
 - [ ] **@commandline repo toggle:** RepoBar shows a toggle switch for `@commandline` (provenance=unknown). Should be non-toggleable — filter `toggleableRepos` by `provenance === "verified"`. Consider display name: "@commandline" → "Local / Manual installs". Kit.
 - [ ] **Missing section titles:** Most content panes have no heading (Packages, Configs, Services, Containers, System Tuning). Users & Groups is the only one that does. Add consistent `<h2>` heading to each section in MainContent, using the sidebar label text. Kit.
 - [ ] **Non-functional chevrons in Storage:** ContextItem renders chevrons when `item.detail !== null` but empty strings pass that check. Fix: `item.detail !== null && item.detail.trim().length > 0`. Kit.
-- [ ] **Storage item duplication:** Same mount points (e.g., `/`, `/dev/mapper/cs-root`) appear in multiple storage subsections. Same pattern as the single-host user dedup fix — items emitted into wrong section buckets in the Rust context builder. Tang.
+- [ ] **Storage mounts leaking into unrelated sections:** Mount points (e.g., `/`, `/dev/mapper/cs-root (xfs)`) appear not just duplicated within Storage but in entirely wrong Reference tabs (Network, Scheduled Tasks, etc.). The Rust context section builder is putting storage items into the wrong section buckets — same class of bug as the earlier single-host user dedup fix. Tang.
 
 ## RepoBar Click-to-Filter (v2 backlog)
 
