@@ -1,9 +1,11 @@
 use crate::types::{
     RefinedConfig, RefinedDropIn, RefinedFlatpak, RefinedPackage, RefinedQuadlet,
-    RefinedServiceState, Triage, TriageAnnotation, TriageBucket, TriageReason, TriageTag,
+    RefinedServiceState, RefinedSysctl, RefinedTunedSelection, Triage, TriageAnnotation,
+    TriageBucket, TriageReason, TriageTag,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
@@ -424,6 +426,137 @@ pub fn classify_containers(
         .collect();
 
     (quadlets, flatpaks)
+}
+
+/// Sysctl keys that produce transient or non-reproducible effects and should
+/// be excluded from migration output.
+const SYSCTL_DENY_LIST: &[&str] = &["vm.drop_caches", "vm.compact_memory", "kernel.sysrq"];
+
+/// Classify sysctl overrides into triage buckets.
+///
+/// Only file-backed overrides (source under `/etc/sysctl.d/` or `/etc/sysctl.conf`)
+/// are promoted to Site. Runtime-only observations also get Site classification
+/// but carry a `RuntimeOnlyObservation` annotation so the frontend can present
+/// them differently. Deny-listed keys are excluded entirely.
+pub fn classify_sysctls(snap: &InspectionSnapshot) -> Vec<RefinedSysctl> {
+    let kernel_boot = match &snap.kernel_boot {
+        Some(kb) => kb,
+        None => return Vec::new(),
+    };
+
+    kernel_boot
+        .sysctl_overrides
+        .iter()
+        .filter(|s| !SYSCTL_DENY_LIST.contains(&s.key.as_str()))
+        .map(|s| RefinedSysctl {
+            entry: s.clone(),
+            triage: classify_single_sysctl(s),
+        })
+        .collect()
+}
+
+fn is_file_backed(source: &str) -> bool {
+    source.starts_with("/etc/sysctl.d/") || source == "/etc/sysctl.conf"
+}
+
+fn classify_single_sysctl(s: &SysctlOverride) -> TriageTag {
+    let file_backed = is_file_backed(&s.source);
+
+    let reason = if file_backed {
+        TriageReason::SysctlFileBackedOverride
+    } else {
+        TriageReason::SysctlNoBaseline
+    };
+
+    let annotations = if file_backed {
+        vec![]
+    } else {
+        vec![TriageAnnotation::RuntimeOnlyObservation]
+    };
+
+    TriageTag {
+        triage: Triage::SingleHost(TriageBucket::Site),
+        primary_reason: reason,
+        annotations,
+    }
+}
+
+/// Classify tuned profile selection into triage buckets.
+///
+/// Produces at most one `RefinedTunedSelection` per host, bundling the active
+/// profile name and any custom profile file paths. Returns empty if tuned is
+/// not active (empty `tuned_active` field).
+///
+/// Classification rules:
+/// - Non-default profile or custom profiles present → **Site**
+/// - Tuned active but package missing from RPM list → **Investigate** +
+///   `RequiresProjectedPackage { name: "tuned" }` annotation
+/// - Default profile with no custom profiles → **Site** (baseline deferred)
+pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
+    let kernel_boot = match &snap.kernel_boot {
+        Some(kb) => kb,
+        None => return Vec::new(),
+    };
+
+    let active = &kernel_boot.tuned_active;
+    if active.is_empty() {
+        return Vec::new();
+    }
+
+    let custom_paths: Vec<String> = kernel_boot
+        .tuned_custom_profiles
+        .iter()
+        .map(|c| c.path.clone())
+        .collect();
+
+    // Check whether the tuned RPM is installed.
+    let tuned_pkg_installed = snap
+        .rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.packages_added
+                .iter()
+                .any(|p| p.name == "tuned")
+        })
+        .unwrap_or(false);
+
+    let (reason, bucket, annotations) = if !tuned_pkg_installed {
+        // Tuned service active but package not in the RPM list — unusual state.
+        (
+            TriageReason::TunedUnusualState,
+            TriageBucket::Investigate,
+            vec![TriageAnnotation::RequiresProjectedPackage {
+                name: "tuned".to_string(),
+            }],
+        )
+    } else if !custom_paths.is_empty() {
+        (TriageReason::TunedCustomProfile, TriageBucket::Site, vec![])
+    } else if active != "virtual-guest" && active != "balanced" {
+        // Non-default profile.
+        (
+            TriageReason::TunedNonDefaultProfile,
+            TriageBucket::Site,
+            vec![],
+        )
+    } else {
+        // Default profile, no custom profiles — Site until baseline comparison
+        // is implemented.
+        (
+            TriageReason::TunedNonDefaultProfile,
+            TriageBucket::Site,
+            vec![],
+        )
+    };
+
+    vec![RefinedTunedSelection {
+        active_profile: active.clone(),
+        custom_profiles: custom_paths,
+        triage: TriageTag {
+            triage: Triage::SingleHost(bucket),
+            primary_reason: reason,
+            annotations,
+        },
+    }]
 }
 
 #[cfg(test)]
@@ -1375,5 +1508,296 @@ mod container_classification {
         let (quadlets, flatpaks) = classify_containers(&snap);
         assert!(quadlets.is_empty());
         assert!(flatpaks.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod sysctl_classification {
+    use super::*;
+    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
+
+    #[test]
+    fn sysctl_file_backed_is_site() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                sysctl_overrides: vec![SysctlOverride {
+                    key: "net.ipv4.ip_forward".into(),
+                    runtime: "1".into(),
+                    default: "0".into(),
+                    source: "/etc/sysctl.d/99-custom.conf".into(),
+                    include: true,
+                    fleet: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_sysctls(&snap);
+        assert_eq!(result.len(), 1);
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::SysctlFileBackedOverride
+        );
+        assert!(
+            result[0].triage.annotations.is_empty(),
+            "file-backed sysctl should have no annotations"
+        );
+    }
+
+    #[test]
+    fn sysctl_sysctl_conf_is_site() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                sysctl_overrides: vec![SysctlOverride {
+                    key: "net.core.somaxconn".into(),
+                    runtime: "4096".into(),
+                    default: "128".into(),
+                    source: "/etc/sysctl.conf".into(),
+                    include: true,
+                    fleet: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_sysctls(&snap);
+        assert_eq!(result.len(), 1);
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::SysctlFileBackedOverride
+        );
+    }
+
+    #[test]
+    fn sysctl_runtime_only_has_annotation() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                sysctl_overrides: vec![SysctlOverride {
+                    key: "net.ipv4.ip_forward".into(),
+                    runtime: "1".into(),
+                    default: "0".into(),
+                    source: "runtime".into(),
+                    include: true,
+                    fleet: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_sysctls(&snap);
+        assert_eq!(result.len(), 1);
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::SysctlNoBaseline
+        );
+        assert!(
+            result[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::RuntimeOnlyObservation),
+            "runtime-only sysctl must have RuntimeOnlyObservation annotation"
+        );
+    }
+
+    #[test]
+    fn sysctl_deny_list_excluded() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                sysctl_overrides: vec![
+                    SysctlOverride {
+                        key: "vm.drop_caches".into(),
+                        runtime: "3".into(),
+                        default: "0".into(),
+                        source: "/etc/sysctl.d/99-custom.conf".into(),
+                        include: true,
+                        fleet: None,
+                    },
+                    SysctlOverride {
+                        key: "vm.compact_memory".into(),
+                        runtime: "1".into(),
+                        default: "0".into(),
+                        source: "runtime".into(),
+                        include: true,
+                        fleet: None,
+                    },
+                    SysctlOverride {
+                        key: "kernel.sysrq".into(),
+                        runtime: "16".into(),
+                        default: "0".into(),
+                        source: "/etc/sysctl.d/10-sysrq.conf".into(),
+                        include: true,
+                        fleet: None,
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_sysctls(&snap);
+        assert!(
+            result.is_empty(),
+            "all deny-listed sysctls should be excluded, got {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn no_sysctls_returns_empty() {
+        let snap = InspectionSnapshot::default();
+        let result = classify_sysctls(&snap);
+        assert!(result.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tuned_classification {
+    use super::*;
+    use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
+
+    fn tuned_pkg() -> PackageEntry {
+        PackageEntry {
+            name: "tuned".to_string(),
+            arch: "noarch".to_string(),
+            state: PackageState::Added,
+            source_repo: "rhel-9-baseos".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tuned_non_default_profile_is_site() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "throughput-performance".to_string(),
+                ..Default::default()
+            }),
+            rpm: Some(RpmSection {
+                packages_added: vec![tuned_pkg()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_tuned(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].active_profile, "throughput-performance");
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::TunedNonDefaultProfile
+        );
+    }
+
+    #[test]
+    fn tuned_package_missing_is_investigate() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "throughput-performance".to_string(),
+                ..Default::default()
+            }),
+            // No RPM section — tuned package not present.
+            ..Default::default()
+        };
+        let result = classify_tuned(&snap);
+        assert_eq!(result.len(), 1);
+        assert_bucket(&result[0].triage, TriageBucket::Investigate);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::TunedUnusualState
+        );
+        assert!(
+            result[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::RequiresProjectedPackage {
+                    name: "tuned".to_string()
+                }),
+            "expected RequiresProjectedPackage annotation"
+        );
+    }
+
+    #[test]
+    fn tuned_default_profile_is_site_until_baseline() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "virtual-guest".to_string(),
+                ..Default::default()
+            }),
+            rpm: Some(RpmSection {
+                packages_added: vec![tuned_pkg()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_tuned(&snap);
+        assert_eq!(result.len(), 1);
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+    }
+
+    #[test]
+    fn no_tuned_returns_empty() {
+        let snap = InspectionSnapshot::default();
+        let result = classify_tuned(&snap);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn tuned_custom_profiles_are_captured() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "my-custom-profile".to_string(),
+                tuned_custom_profiles: vec![ConfigSnippet {
+                    path: "/etc/tuned/my-custom-profile/tuned.conf".to_string(),
+                    content: "[main]\nsummary=Custom profile".to_string(),
+                }],
+                ..Default::default()
+            }),
+            rpm: Some(RpmSection {
+                packages_added: vec![tuned_pkg()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_tuned(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].custom_profiles,
+            vec!["/etc/tuned/my-custom-profile/tuned.conf"]
+        );
+        assert_bucket(&result[0].triage, TriageBucket::Site);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::TunedCustomProfile
+        );
+    }
+
+    #[test]
+    fn tuned_empty_active_returns_empty() {
+        let snap = InspectionSnapshot {
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: String::new(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = classify_tuned(&snap);
+        assert!(result.is_empty());
     }
 }
