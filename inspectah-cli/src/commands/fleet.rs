@@ -6,7 +6,6 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::fleet::manifest::FleetManifest;
@@ -14,7 +13,6 @@ use inspectah_core::fleet::merge_snapshots;
 use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
-use inspectah_core::types::fleet::VariantSelection;
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 
@@ -213,8 +211,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         r#"{"$schema":"http://json-schema.org/draft-07/schema#","title":"InspectionSnapshot","description":"Phase 7 placeholder","type":"object"}"#,
     )?;
 
-    // --- Step 6.5: Write variant files and prepend Containerfile header ---
-    write_variant_files(&merged, render_dir.path())?;
+    // --- Step 6.5: Prepend Containerfile header ---
     prepend_containerfile_header(&merged, render_dir.path(), &label)?;
 
     // --- Step 7: Create tarball ---
@@ -630,95 +627,6 @@ fn load_snapshot_from_tarball(tarball_path: &Path) -> Result<InspectionSnapshot>
     )
 }
 
-// ---------------------------------------------------------------------------
-// Variant file writing
-// ---------------------------------------------------------------------------
-
-/// Write alternative variant files to fleet/variants/ directory.
-fn write_variant_files(merged: &InspectionSnapshot, render_dir: &Path) -> Result<()> {
-    let variants_dir = render_dir.join("fleet").join("variants");
-
-    // Walk all sections and write Alternative items to variant files
-
-    // Config files
-    if let Some(config) = &merged.config {
-        for file in &config.files {
-            if file.variant_selection == VariantSelection::Alternative {
-                write_variant_file(&variants_dir, &file.path, "conf", &file.content)?;
-            }
-        }
-    }
-
-    // Systemd drop-ins
-    if let Some(services) = &merged.services {
-        for dropin in &services.drop_ins {
-            if dropin.variant_selection == VariantSelection::Alternative {
-                write_variant_file(&variants_dir, &dropin.path, "conf", &dropin.content)?;
-            }
-        }
-    }
-
-    // Quadlet units
-    if let Some(containers) = &merged.containers {
-        for unit in &containers.quadlet_units {
-            if unit.variant_selection == VariantSelection::Alternative {
-                // Extract extension from path
-                let ext = Path::new(&unit.path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("container");
-                write_variant_file(&variants_dir, &unit.path, ext, &unit.content)?;
-            }
-        }
-
-        // Compose files (serialize images to JSON)
-        for compose in &containers.compose_files {
-            if compose.variant_selection == VariantSelection::Alternative {
-                let json_content = serde_json::to_string_pretty(&compose.images)
-                    .context("failed to serialize compose images")?;
-                write_variant_file(&variants_dir, &compose.path, "json", &json_content)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Write a single variant file with 8-char hash prefix.
-fn write_variant_file(
-    variants_dir: &Path,
-    item_path: &str,
-    extension: &str,
-    content: &str,
-) -> Result<()> {
-    // Compute 8-char hash prefix
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let hash = hasher.finalize();
-    let hash_hex = hash
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
-    let hash_prefix = hash_hex.chars().take(8).collect::<String>();
-
-    // Create subdirectory matching the item path structure.
-    // Strip leading '/' so that joining never escapes the render tree
-    // (Path::join replaces the base when the rhs is absolute).
-    let sanitized_path = item_path.trim_start_matches('/');
-    let item_parent = Path::new(sanitized_path).parent().unwrap_or(Path::new(""));
-    let target_dir = variants_dir.join(item_parent);
-    std::fs::create_dir_all(&target_dir)?;
-
-    // Write file with hash-prefixed name
-    let filename = format!("{}.{}", hash_prefix, extension);
-    let file_path = target_dir.join(filename);
-
-    std::fs::write(&file_path, content)
-        .with_context(|| format!("failed to write variant file {}", file_path.display()))?;
-
-    Ok(())
-}
-
 /// Prepend a draft header to the rendered Containerfile.
 fn prepend_containerfile_header(
     merged: &InspectionSnapshot,
@@ -827,44 +735,6 @@ fn format_validation_errors(errors: &[FleetValidationError]) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_variant_file_stays_under_render_tree() {
-        let dir = tempfile::tempdir().unwrap();
-        let variants_dir = dir.path().join("fleet").join("variants");
-
-        write_variant_file(
-            &variants_dir,
-            "/etc/httpd/conf/httpd.conf",
-            "conf",
-            "ServerRoot /etc/httpd",
-        )
-        .unwrap();
-
-        // Must land under fleet/variants/etc/httpd/conf/
-        let expected_parent = variants_dir.join("etc/httpd/conf");
-        assert!(
-            expected_parent.exists(),
-            "variant dir should be under render tree, not at host /etc/httpd/conf"
-        );
-
-        let entries: Vec<_> = std::fs::read_dir(&expected_parent).unwrap().collect();
-        assert_eq!(entries.len(), 1, "exactly one variant file expected");
-    }
-
-    #[test]
-    fn test_variant_file_relative_path_works() {
-        let dir = tempfile::tempdir().unwrap();
-        let variants_dir = dir.path().join("fleet").join("variants");
-
-        write_variant_file(&variants_dir, "etc/foo.conf", "conf", "key=value").unwrap();
-
-        let expected_parent = variants_dir.join("etc");
-        assert!(
-            expected_parent.exists(),
-            "relative path should resolve under variants_dir"
-        );
-    }
 
     // -----------------------------------------------------------------------
     // Fleet init metadata extraction regression tests
