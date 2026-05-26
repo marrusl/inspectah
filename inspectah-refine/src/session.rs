@@ -816,10 +816,42 @@ impl RefineSession {
                             }
                         }
                     }
+                    ItemId::Quadlet { path } => {
+                        let found = self
+                            .original
+                            .containers
+                            .as_ref()
+                            .map(|c| c.quadlet_units.iter().any(|q| q.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Flatpak {
+                        app_id,
+                        remote,
+                        branch,
+                    } => {
+                        let found = self
+                            .original
+                            .containers
+                            .as_ref()
+                            .map(|c| {
+                                c.flatpak_apps.iter().any(|f| {
+                                    f.app_id == *app_id
+                                        && f.remote == *remote
+                                        && f.branch == *branch
+                                })
+                            })
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(format!(
+                                "{app_id} ({remote}/{branch})"
+                            )));
+                        }
+                    }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
-                    ItemId::Quadlet { .. }
-                    | ItemId::Compose { .. }
-                    | ItemId::Flatpak { .. }
+                    ItemId::Compose { .. }
                     | ItemId::NMConnection { .. }
                     | ItemId::FirewallZone { .. }
                     | ItemId::KernelModule { .. }
@@ -1216,6 +1248,32 @@ impl RefineSession {
                                     services.drop_ins.iter_mut().find(|d| d.path == *path)
                             {
                                 dropin.include = *include;
+                            }
+                        }
+                        ItemId::Quadlet { path } => {
+                            if let Some(ref mut containers) = snap.containers
+                                && let Some(quadlet) = containers
+                                    .quadlet_units
+                                    .iter_mut()
+                                    .find(|q| q.path == *path)
+                            {
+                                quadlet.include = *include;
+                            }
+                        }
+                        ItemId::Flatpak {
+                            app_id,
+                            remote,
+                            branch,
+                        } => {
+                            if let Some(ref mut containers) = snap.containers
+                                && let Some(flatpak) =
+                                    containers.flatpak_apps.iter_mut().find(|f| {
+                                        f.app_id == *app_id
+                                            && f.remote == *remote
+                                            && f.branch == *branch
+                                    })
+                            {
+                                flatpak.include = *include;
                             }
                         }
                         // Phase 2-3 item kinds: not yet handled
@@ -2633,6 +2691,164 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("nope.conf"),
+            "error must name the unknown target, got: {err}"
+        );
+    }
+
+    // ── Container (Quadlet / Flatpak) SetInclude tests ──────────────
+
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
+
+    /// Build a snapshot with quadlets and flatpaks for SetInclude tests.
+    fn test_snapshot_with_containers() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection::default()),
+            containers: Some(ContainerSection {
+                quadlet_units: vec![
+                    QuadletUnit {
+                        path: "/etc/containers/systemd/myapp.container".into(),
+                        name: "myapp.container".into(),
+                        image: "quay.io/myorg/myapp:latest".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                    QuadletUnit {
+                        path: "/etc/containers/systemd/db.container".into(),
+                        name: "db.container".into(),
+                        image: "docker.io/library/postgres:16".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+                flatpak_apps: vec![
+                    FlatpakApp {
+                        app_id: "org.mozilla.firefox".into(),
+                        remote: "flathub".into(),
+                        branch: "stable".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                    FlatpakApp {
+                        app_id: "org.gimp.GIMP".into(),
+                        remote: "flathub".into(),
+                        branch: "stable".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exclude_quadlet_sets_include_false() {
+        let snap = test_snapshot_with_containers();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Quadlet {
+                    path: "/etc/containers/systemd/myapp.container".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let containers = projected.containers.as_ref().unwrap();
+
+        let myapp = containers
+            .quadlet_units
+            .iter()
+            .find(|q| q.path.contains("myapp"))
+            .unwrap();
+        assert!(!myapp.include, "myapp quadlet must be excluded");
+
+        // Other quadlet must be unaffected.
+        let db = containers
+            .quadlet_units
+            .iter()
+            .find(|q| q.path.contains("db"))
+            .unwrap();
+        assert!(db.include, "db quadlet must remain included");
+    }
+
+    #[test]
+    fn exclude_flatpak_sets_include_false() {
+        let snap = test_snapshot_with_containers();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Flatpak {
+                    app_id: "org.mozilla.firefox".into(),
+                    remote: "flathub".into(),
+                    branch: "stable".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let containers = projected.containers.as_ref().unwrap();
+
+        let firefox = containers
+            .flatpak_apps
+            .iter()
+            .find(|f| f.app_id == "org.mozilla.firefox")
+            .unwrap();
+        assert!(!firefox.include, "firefox flatpak must be excluded");
+
+        // Other flatpak must be unaffected.
+        let gimp = containers
+            .flatpak_apps
+            .iter()
+            .find(|f| f.app_id == "org.gimp.GIMP")
+            .unwrap();
+        assert!(gimp.include, "GIMP flatpak must remain included");
+    }
+
+    #[test]
+    fn unknown_quadlet_path_is_error() {
+        let snap = test_snapshot_with_containers();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Quadlet {
+                path: "/etc/containers/systemd/ghost.container".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown quadlet path must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("ghost.container"),
+            "error must name the unknown target, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_flatpak_is_error() {
+        let snap = test_snapshot_with_containers();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Flatpak {
+                app_id: "org.ghost.App".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown flatpak must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("org.ghost.App"),
             "error must name the unknown target, got: {err}"
         );
     }
