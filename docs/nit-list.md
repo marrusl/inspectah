@@ -14,6 +14,10 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] Aggregate output should surface useful information about divergence and agreement across the fleet. Give the user a sense of the mess they're dealing with — how consistent are the hosts, where do they diverge, what's uniform vs. scattered.
 
+## Version Changes Sort
+
+- [ ] **Sort toggle for Version Changes tab:** Add a sort control (alpha vs. status). Current sort is by direction (downgrades first, then upgrades). Add an alphabetical-by-name option. Default to status sort, let user toggle. Applies to both the reference section view and the package detail `VersionChangeEntry` list.
+
 ## Git History Cleanup
 
 - [ ] Scrub `.git-backup/` from git history using `git filter-repo`. The directory was accidentally committed and contains a 68MB packfile. It's removed from the working tree and `.gitignore`'d, but still inflates clone size. Do this before the repo goes more public — requires a force push.
