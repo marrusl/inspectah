@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import {
   Toolbar,
   ToolbarContent,
@@ -7,8 +8,32 @@ import {
   Content,
   Label,
 } from "@patternfly/react-core";
-import { UndoIcon, RedoIcon, ExportIcon } from "@patternfly/react-icons";
+import { UndoIcon, RedoIcon, ExportIcon, SunIcon, MoonIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(
+    () => document.documentElement.classList.contains("pf-v6-theme-dark"),
+  );
+  const toggle = useCallback(() => {
+    const next = !dark;
+    document.documentElement.classList.toggle("pf-v6-theme-dark", next);
+    if (next === window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      localStorage.removeItem("inspectah-theme");
+    } else {
+      localStorage.setItem("inspectah-theme", next ? "dark" : "light");
+    }
+    setDark(next);
+  }, [dark]);
+  return (
+    <Button
+      variant="plain"
+      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+      onClick={toggle}
+      icon={dark ? <SunIcon /> : <MoonIcon />}
+    />
+  );
+}
 
 export interface FleetSummary {
   hostCount: number;
@@ -137,6 +162,9 @@ export function StatsBar({
             >
               Export
             </Button>
+          </ToolbarItem>
+          <ToolbarItem>
+            <ThemeToggle />
           </ToolbarItem>
         </ToolbarGroup>
       </ToolbarContent>
