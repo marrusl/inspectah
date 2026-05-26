@@ -105,7 +105,7 @@ export function SysctlSection({
         const badge = badgeTextForTriage(s.triage);
         const level = triageBucketToAttention(s.triage);
         const isPending = pendingIds.has(`sysctl:${s.key}`);
-        const runtimeOnly = isRuntimeOnly(s.triage.annotations);
+        const runtimeOnly = isRuntimeOnly(s.triage.annotations ?? []);
 
         return (
           <div
