@@ -1,14 +1,12 @@
 mod helpers;
 
-use std::path::PathBuf;
-
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::fleet::FleetPrevalence;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
+use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
 use helpers::*;
 
@@ -99,10 +97,7 @@ fn new_session_has_correct_stats() {
 fn apply_exclude_package() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
 
     assert_eq!(session.view().generation, 1);
@@ -114,20 +109,14 @@ fn apply_exclude_package() {
 #[test]
 fn apply_unknown_target_returns_error() {
     let mut session = RefineSession::new(test_snapshot());
-    let result = session.apply(RefinementOp::ExcludePackage(PackageTarget {
-        name: "nonexistent".into(),
-        arch: "x86_64".into(),
-    }));
+    let result = session.apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "nonexistent".into(), arch: "x86_64".into() }, include: false });
     assert!(matches!(result, Err(RefineError::UnknownTarget(_))));
 }
 
 #[test]
 fn apply_wrong_arch_returns_error() {
     let mut session = RefineSession::new(test_snapshot());
-    let result = session.apply(RefinementOp::ExcludePackage(PackageTarget {
-        name: "glibc".into(),
-        arch: "s390x".into(),
-    }));
+    let result = session.apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "glibc".into(), arch: "s390x".into() }, include: false });
     assert!(matches!(result, Err(RefineError::UnknownTarget(_))));
 }
 
@@ -135,19 +124,13 @@ fn apply_wrong_arch_returns_error() {
 fn idempotent_exclude_is_noop() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     let gen_after_first = session.view().generation;
 
     // Second exclude of the same target should be a no-op
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
 
     assert_eq!(session.view().generation, gen_after_first);
@@ -158,10 +141,7 @@ fn idempotent_exclude_is_noop() {
 fn undo_reverts_to_original() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     session.undo().unwrap();
 
@@ -180,10 +160,7 @@ fn undo_on_empty_returns_error() {
 fn redo_after_undo() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     session.undo().unwrap();
     session.redo().unwrap();
@@ -203,18 +180,13 @@ fn redo_with_nothing_undone_returns_error() {
 fn apply_after_undo_truncates_redo_history() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     session.undo().unwrap();
 
     // Apply a different op -- should truncate the undone op
     session
-        .apply(RefinementOp::ExcludeConfig {
-            path: PathBuf::from("/etc/httpd/conf/httpd.conf"),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Config { path: "/etc/httpd/conf/httpd.conf".into() }, include: false })
         .unwrap();
 
     assert!(matches!(session.redo(), Err(RefineError::NothingToRedo)));
@@ -225,10 +197,7 @@ fn apply_after_undo_truncates_redo_history() {
 fn multiarch_targeting() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "glibc".into(),
-            arch: "i686".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "glibc".into(), arch: "i686".into() }, include: false })
         .unwrap();
 
     let view = session.view();
@@ -251,9 +220,7 @@ fn multiarch_targeting() {
 fn exclude_config_file() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludeConfig {
-            path: PathBuf::from("/etc/httpd/conf/httpd.conf"),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Config { path: "/etc/httpd/conf/httpd.conf".into() }, include: false })
         .unwrap();
 
     let view = session.view();
@@ -265,10 +232,7 @@ fn exclude_config_file() {
 fn pending_changes_tracks_excludes() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
 
     let changes = session.pending_changes();
@@ -287,16 +251,10 @@ fn pending_changes_tracks_excludes() {
 fn exclude_then_include_returns_to_clean() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     session
-        .apply(RefinementOp::IncludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: true })
         .unwrap();
 
     // State-based dirty: not dirty because state matches original
@@ -307,15 +265,10 @@ fn exclude_then_include_returns_to_clean() {
 fn undo_all_then_redo_all() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false })
         .unwrap();
     session
-        .apply(RefinementOp::ExcludeConfig {
-            path: PathBuf::from("/etc/httpd/conf/httpd.conf"),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Config { path: "/etc/httpd/conf/httpd.conf".into() }, include: false })
         .unwrap();
 
     let view_after_ops = session.view().clone();
@@ -555,10 +508,7 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
     );
 
     session
-        .apply(RefinementOp::IncludePackage(PackageTarget {
-            name: "apr".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "apr".into(), arch: "x86_64".into() }, include: true })
         .unwrap();
 
     let apr = session
@@ -848,9 +798,7 @@ fn test_exclude_repo_cascades_packages_in_view() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: false })
         .unwrap();
     let epel_pkg = session
         .view()
@@ -869,9 +817,7 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: false })
         .unwrap();
     let projected = session.snapshot_projected();
     let epel_pkg = projected
@@ -902,9 +848,7 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
 fn test_exclude_repo_rejects_distro_repo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    let result = session.apply(RefinementOp::ExcludeRepo {
-        section_id: "baseos".into(),
-    });
+    let result = session.apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "baseos".into() }, include: false });
     assert!(result.is_err());
 }
 
@@ -924,9 +868,7 @@ fn test_exclude_repo_rejects_incomplete_provenance() {
             ..Default::default()
         });
     let mut session = RefineSession::new(snap);
-    let result = session.apply(RefinementOp::ExcludeRepo {
-        section_id: "no-repo-file".into(),
-    });
+    let result = session.apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "no-repo-file".into() }, include: false });
     assert!(result.is_err());
 }
 
@@ -936,9 +878,7 @@ fn test_exclude_repo_is_dirty_with_repo_tracking() {
     let mut session = RefineSession::new(snap);
     assert!(!session.is_dirty());
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: false })
         .unwrap();
     assert!(session.is_dirty());
     let changes = session.pending_changes();
@@ -951,9 +891,7 @@ fn test_shared_repo_file_retained_until_last_section() {
     let mut session = RefineSession::new(snap);
 
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "custom-a".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "custom-a".into() }, include: false })
         .unwrap();
     let projected = session.snapshot_projected();
     let repo_file = projected
@@ -982,9 +920,7 @@ fn test_shared_repo_file_retained_until_last_section() {
     );
 
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "custom-b".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "custom-b".into() }, include: false })
         .unwrap();
     let projected2 = session.snapshot_projected();
     let gpg2 = projected2
@@ -1003,9 +939,7 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: false })
         .unwrap();
     assert!(
         !session
@@ -1019,10 +953,7 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
     );
 
     session
-        .apply(RefinementOp::IncludePackage(PackageTarget {
-            name: "epel-release".into(),
-            arch: "noarch".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "epel-release".into(), arch: "noarch".into() }, include: true })
         .unwrap();
     assert!(
         session
@@ -1036,9 +967,7 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
     );
 
     session
-        .apply(RefinementOp::IncludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: true })
         .unwrap();
     assert!(
         session
@@ -1070,9 +999,7 @@ fn test_exclude_repo_undo_redo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel".into() }, include: false })
         .unwrap();
     assert!(
         !session
@@ -1111,7 +1038,7 @@ fn test_exclude_repo_undo_redo() {
 #[test]
 fn test_exclude_repo_case_insensitive() {
     // Build a snapshot where packages have source_repo in mixed case ("Epel-Testing")
-    // but ExcludeRepo uses lowercase ("epel-testing"). The exclude must still match.
+    // but SetInclude(exclude repo) uses lowercase ("epel-testing"). The exclude must still match.
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
@@ -1132,11 +1059,9 @@ fn test_exclude_repo_case_insensitive() {
         ..Default::default()
     });
     let mut session = RefineSession::new(snap);
-    // ExcludeRepo with lowercase section_id (as the UI sends after RepoIndex lowercasing)
+    // SetInclude(exclude repo) with lowercase section_id (as the UI sends after RepoIndex lowercasing)
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel-testing".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel-testing".into() }, include: false })
         .unwrap();
     let projected = session.snapshot_projected();
     let httpd = projected
@@ -1147,12 +1072,12 @@ fn test_exclude_repo_case_insensitive() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    assert!(!httpd.include, "ExcludeRepo must match case-insensitively");
+    assert!(!httpd.include, "SetInclude(exclude repo) must match case-insensitively");
 }
 
 #[test]
 fn test_include_repo_case_insensitive() {
-    // Verify IncludeRepo also works case-insensitively after an ExcludeRepo
+    // Verify SetInclude(include repo) also works case-insensitively after an SetInclude(exclude repo)
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
@@ -1174,14 +1099,10 @@ fn test_include_repo_case_insensitive() {
     });
     let mut session = RefineSession::new(snap);
     session
-        .apply(RefinementOp::ExcludeRepo {
-            section_id: "epel-testing".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel-testing".into() }, include: false })
         .unwrap();
     session
-        .apply(RefinementOp::IncludeRepo {
-            section_id: "epel-testing".into(),
-        })
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Repo { path: "epel-testing".into() }, include: true })
         .unwrap();
     let projected = session.snapshot_projected();
     let nginx = projected
@@ -1194,6 +1115,6 @@ fn test_include_repo_case_insensitive() {
         .unwrap();
     assert!(
         nginx.include,
-        "IncludeRepo must match case-insensitively after ExcludeRepo"
+        "SetInclude(include repo) must match case-insensitively after SetInclude(exclude repo)"
     );
 }

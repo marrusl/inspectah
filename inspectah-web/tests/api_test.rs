@@ -117,8 +117,11 @@ async fn apply_valid_op() {
         &app,
         "/api/op",
         serde_json::json!({
-            "op": "IncludePackage",
-            "target": {"name": "httpd", "arch": "x86_64"}
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": "httpd", "arch": "x86_64"}},
+                "include": true
+            }
         }),
     )
     .await;
@@ -141,8 +144,11 @@ async fn apply_unknown_target_returns_422() {
         &app,
         "/api/op",
         serde_json::json!({
-            "op": "ExcludePackage",
-            "target": {"name": "nonexistent", "arch": "x86_64"}
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": "nonexistent", "arch": "x86_64"}},
+                "include": false
+            }
         }),
     )
     .await;

@@ -173,10 +173,13 @@ mod tests {
         let s1 = summary1.unwrap();
 
         // Exclude a package
-        let op = RefinementOp::ExcludePackage(crate::types::PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        });
+        let op = RefinementOp::SetInclude {
+            item_id: crate::types::ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        };
         session.apply(op).unwrap();
 
         // Counts must be identical — they reflect classification, not triage

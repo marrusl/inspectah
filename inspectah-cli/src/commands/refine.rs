@@ -236,12 +236,9 @@ mod tests {
         write_test_tarball(&tarball);
         let mut session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
         session.set_tarball_path(tarball.clone());
-        let op = inspectah_refine::types::RefinementOp::ExcludeConfig {
-            path: "/nonexistent".into(),
-        };
         // Force a session file by saving directly
         let state = inspectah_refine::autosave::SessionState {
-            schema_version: 1,
+            schema_version: 2,
             tarball_path: tarball.clone(),
             tarball_hash: inspectah_refine::autosave::compute_tarball_hash(&tarball).unwrap(),
             ops: vec![],

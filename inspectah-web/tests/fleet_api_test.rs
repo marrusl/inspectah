@@ -978,13 +978,16 @@ async fn fleet_exclude_repo_round_trip() {
         .unwrap();
     assert_eq!(epel_group["enabled"], true);
 
-    // 2. ExcludeRepo
+    // 2. SetInclude (exclude repo)
     let (status, _) = post_json(
         &app,
         "/api/op",
         serde_json::json!({
-            "op": "ExcludeRepo",
-            "target": { "section_id": "epel" }
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Repo", "key": {"path": "epel"}},
+                "include": false
+            }
         }),
     )
     .await;
@@ -996,7 +999,7 @@ async fn fleet_exclude_repo_round_trip() {
     for item in &epel_items {
         assert_eq!(
             item["include"], false,
-            "epel packages should be excluded after ExcludeRepo"
+            "epel packages should be excluded after SetInclude exclude"
         );
     }
     let epel_group = after_exclude["repo_groups"]
@@ -1007,16 +1010,19 @@ async fn fleet_exclude_repo_round_trip() {
         .unwrap();
     assert_eq!(
         epel_group["enabled"], false,
-        "epel repo should be disabled after ExcludeRepo"
+        "epel repo should be disabled after SetInclude exclude"
     );
 
-    // 4. IncludeRepo
+    // 4. SetInclude (include repo)
     let (status, _) = post_json(
         &app,
         "/api/op",
         serde_json::json!({
-            "op": "IncludeRepo",
-            "target": { "section_id": "epel" }
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Repo", "key": {"path": "epel"}},
+                "include": true
+            }
         }),
     )
     .await;
@@ -1028,7 +1034,7 @@ async fn fleet_exclude_repo_round_trip() {
     for item in &epel_items {
         assert_eq!(
             item["include"], true,
-            "epel packages should be re-included after IncludeRepo"
+            "epel packages should be re-included after SetInclude include"
         );
     }
     let epel_group = after_include["repo_groups"]
@@ -1039,6 +1045,6 @@ async fn fleet_exclude_repo_round_trip() {
         .unwrap();
     assert_eq!(
         epel_group["enabled"], true,
-        "epel repo should be re-enabled after IncludeRepo"
+        "epel repo should be re-enabled after SetInclude include"
     );
 }

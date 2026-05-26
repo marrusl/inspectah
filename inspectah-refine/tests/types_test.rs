@@ -1,8 +1,7 @@
 use inspectah_refine::types::PackageTarget;
 use inspectah_refine::types::{
-    AnnotatedOp, AttentionLevel, AttentionReason, AttentionTag, RefinementOp,
+    AnnotatedOp, AttentionLevel, AttentionReason, AttentionTag, ItemId, RefinementOp,
 };
-use std::path::PathBuf;
 
 #[test]
 fn package_target_serde_roundtrip() {
@@ -25,13 +24,16 @@ fn package_target_display() {
 }
 
 #[test]
-fn refinement_op_exclude_package_json() {
-    let op = RefinementOp::ExcludePackage(PackageTarget {
-        name: "httpd".into(),
-        arch: "x86_64".into(),
-    });
+fn set_include_exclude_package_json() {
+    let op = RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+        },
+        include: false,
+    };
     let json = serde_json::to_string(&op).unwrap();
-    assert!(json.contains(r#""op":"ExcludePackage""#));
+    assert!(json.contains(r#""op":"SetInclude""#));
     assert!(json.contains(r#""name":"httpd""#));
     assert!(json.contains(r#""arch":"x86_64""#));
     let parsed: RefinementOp = serde_json::from_str(&json).unwrap();
@@ -39,9 +41,12 @@ fn refinement_op_exclude_package_json() {
 }
 
 #[test]
-fn refinement_op_exclude_config_json() {
-    let op = RefinementOp::ExcludeConfig {
-        path: PathBuf::from("/etc/httpd/conf/httpd.conf"),
+fn set_include_exclude_config_json() {
+    let op = RefinementOp::SetInclude {
+        item_id: ItemId::Config {
+            path: "/etc/httpd/conf/httpd.conf".into(),
+        },
+        include: false,
     };
     let json = serde_json::to_string(&op).unwrap();
     let parsed: RefinementOp = serde_json::from_str(&json).unwrap();
@@ -51,14 +56,17 @@ fn refinement_op_exclude_config_json() {
 #[test]
 fn annotated_op_json_flattens() {
     let aop = AnnotatedOp {
-        op: RefinementOp::ExcludePackage(PackageTarget {
-            name: "vim".into(),
-            arch: "x86_64".into(),
-        }),
+        op: RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "vim".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        },
         active: true,
     };
     let json = serde_json::to_string(&aop).unwrap();
-    assert!(json.contains(r#""op":"ExcludePackage""#));
+    assert!(json.contains(r#""op":"SetInclude""#));
     assert!(json.contains(r#""active":true"#));
 }
 

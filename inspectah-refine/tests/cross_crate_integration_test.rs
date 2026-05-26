@@ -15,7 +15,7 @@ use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{PackageTarget, RefinementOp};
+use inspectah_refine::types::{ItemId, RefinementOp};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -330,10 +330,13 @@ fn baseline_summary_count_stability() {
     let s1 = summary1.unwrap();
 
     // Apply an exclude operation on httpd
-    let op = RefinementOp::ExcludePackage(PackageTarget {
-        name: "httpd".into(),
-        arch: "x86_64".into(),
-    });
+    let op = RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+        },
+        include: false,
+    };
     session.apply(op).unwrap();
 
     // Get summary after exclude

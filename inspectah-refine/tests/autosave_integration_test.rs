@@ -3,7 +3,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::autosave::{load_session, session_file_path};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
+use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
@@ -85,17 +85,11 @@ fn make_session_with_real_tarball() -> (RefineSession, tempfile::TempDir) {
 }
 
 fn exclude_httpd() -> RefinementOp {
-    RefinementOp::ExcludePackage(PackageTarget {
-        name: "httpd".into(),
-        arch: "x86_64".into(),
-    })
+    RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false }
 }
 
 fn exclude_glibc() -> RefinementOp {
-    RefinementOp::ExcludePackage(PackageTarget {
-        name: "glibc".into(),
-        arch: "x86_64".into(),
-    })
+    RefinementOp::SetInclude { item_id: ItemId::Package { name: "glibc".into(), arch: "x86_64".into() }, include: false }
 }
 
 #[test]
@@ -207,7 +201,7 @@ fn tarball_path_round_trips_through_session_state() {
 
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(state.tarball_path, tarball);
-    assert_eq!(state.schema_version, 1);
+    assert_eq!(state.schema_version, 2);
 }
 
 #[test]
@@ -275,10 +269,7 @@ fn resume_preserves_redo_tail() {
     session.apply(exclude_httpd()).unwrap();
     session.apply(exclude_glibc()).unwrap();
     session
-        .apply(RefinementOp::IncludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: true })
         .unwrap();
 
     // Undo once: cursor=2, ops=3
@@ -314,10 +305,7 @@ fn resume_does_not_truncate_redo_on_autosave() {
     session.apply(exclude_httpd()).unwrap();
     session.apply(exclude_glibc()).unwrap();
     session
-        .apply(RefinementOp::IncludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: true })
         .unwrap();
     session.undo().unwrap();
 

@@ -221,7 +221,7 @@ impl RefineSession {
         };
 
         let state = crate::autosave::SessionState {
-            schema_version: 1,
+            schema_version: 2,
             tarball_path: tarball.clone(),
             tarball_hash,
             ops: self.ops.clone(),
@@ -734,56 +734,68 @@ impl RefineSession {
 
     fn validate_target(&self, op: &RefinementOp) -> Result<(), RefineError> {
         match op {
-            RefinementOp::ExcludePackage(target) | RefinementOp::IncludePackage(target) => {
-                let found = self
-                    .original
-                    .rpm
-                    .as_ref()
-                    .map(|r| r.packages_added.iter().any(|e| target.matches(e)))
-                    .unwrap_or(false);
-                if !found {
-                    return Err(RefineError::UnknownTarget(target.to_string()));
-                }
-            }
-            RefinementOp::ExcludeConfig { path } | RefinementOp::IncludeConfig { path } => {
-                let found = self
-                    .original
-                    .config
-                    .as_ref()
-                    .map(|c| c.files.iter().any(|e| e.path == path.to_string_lossy()))
-                    .unwrap_or(false);
-                if !found {
-                    return Err(RefineError::UnknownTarget(
-                        path.to_string_lossy().to_string(),
-                    ));
-                }
-            }
-            RefinementOp::ExcludeRepo { section_id } => {
-                if RepoIndex::is_distro_repo(section_id) {
-                    return Err(RefineError::BadRequest(format!(
-                        "cannot exclude distro repo: {section_id}"
-                    )));
-                }
-                match self.repo_index.provenance(section_id) {
-                    RepoProvenance::Verified => {}
-                    prov => {
-                        return Err(RefineError::BadRequest(format!(
-                            "cannot exclude repo '{section_id}': provenance is {prov:?}"
-                        )));
+            RefinementOp::SetInclude { item_id, include } => {
+                match item_id {
+                    ItemId::Package { name, arch } => {
+                        let found = self
+                            .original
+                            .rpm
+                            .as_ref()
+                            .map(|r| {
+                                r.packages_added
+                                    .iter()
+                                    .any(|e| e.name == *name && e.arch == *arch)
+                            })
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(format!("{name}.{arch}")));
+                        }
                     }
-                }
-            }
-            RefinementOp::IncludeRepo { section_id } => {
-                if RepoIndex::is_distro_repo(section_id) {
-                    return Err(RefineError::BadRequest(format!(
-                        "cannot toggle distro repo: {section_id}"
-                    )));
-                }
-                let prov = self.repo_index.provenance(section_id);
-                if !matches!(prov, RepoProvenance::Verified) {
-                    return Err(RefineError::BadRequest(format!(
-                        "cannot include repo '{section_id}': provenance is {prov:?}"
-                    )));
+                    ItemId::Config { path } => {
+                        let found = self
+                            .original
+                            .config
+                            .as_ref()
+                            .map(|c| c.files.iter().any(|e| e.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                    }
+                    ItemId::Repo { path: section_id } => {
+                        if RepoIndex::is_distro_repo(section_id) {
+                            return Err(RefineError::BadRequest(format!(
+                                "cannot toggle distro repo: {section_id}"
+                            )));
+                        }
+                        let prov = self.repo_index.provenance(section_id);
+                        if !matches!(prov, RepoProvenance::Verified) {
+                            let verb = if *include { "include" } else { "exclude" };
+                            return Err(RefineError::BadRequest(format!(
+                                "cannot {verb} repo '{section_id}': provenance is {prov:?}"
+                            )));
+                        }
+                    }
+                    // Phase 1-3 item kinds: not yet handled, accept without validation
+                    ItemId::Service { .. }
+                    | ItemId::DropIn { .. }
+                    | ItemId::Quadlet { .. }
+                    | ItemId::Compose { .. }
+                    | ItemId::Flatpak { .. }
+                    | ItemId::NMConnection { .. }
+                    | ItemId::FirewallZone { .. }
+                    | ItemId::KernelModule { .. }
+                    | ItemId::Sysctl { .. }
+                    | ItemId::TunedSelection { .. }
+                    | ItemId::CronJob { .. }
+                    | ItemId::SystemdTimer { .. }
+                    | ItemId::AtJob { .. }
+                    | ItemId::GeneratedTimer { .. }
+                    | ItemId::SelinuxPort { .. }
+                    | ItemId::Fstab { .. }
+                    | ItemId::NonRpm { .. }
+                    | ItemId::ModuleStream { .. }
+                    | ItemId::VersionLock { .. } => {}
                 }
             }
             RefinementOp::UserStrategy { username, .. } => {
@@ -878,9 +890,6 @@ impl RefineSession {
                 let state = self.build_variant_state();
                 variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
             }
-            // SetInclude validation deferred to Task 4 (autosave migration);
-            // for now, accept all SetInclude ops without target validation.
-            RefinementOp::SetInclude { .. } => {}
         }
         Ok(())
     }
@@ -976,52 +985,42 @@ impl RefineSession {
     fn is_op_noop(&self, op: &RefinementOp) -> bool {
         let projected = self.project_snapshot();
         match op {
-            RefinementOp::ExcludePackage(target) => {
-                projected
+            RefinementOp::SetInclude { item_id, include } => match item_id {
+                ItemId::Package { name, arch } => projected
                     .rpm
                     .as_ref()
-                    .and_then(|r| r.packages_added.iter().find(|e| target.matches(e)))
-                    .map(|e| !e.include) // already excluded = noop
-                    .unwrap_or(false)
-            }
-            RefinementOp::IncludePackage(target) => {
-                projected
-                    .rpm
+                    .and_then(|r| {
+                        r.packages_added
+                            .iter()
+                            .find(|e| e.name == *name && e.arch == *arch)
+                    })
+                    .map(|e| e.include == *include)
+                    .unwrap_or(false),
+                ItemId::Config { path } => projected
+                    .config
                     .as_ref()
-                    .and_then(|r| r.packages_added.iter().find(|e| target.matches(e)))
-                    .map(|e| e.include) // already included = noop
-                    .unwrap_or(false)
-            }
-            RefinementOp::ExcludeConfig { path } => projected
-                .config
-                .as_ref()
-                .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
-                .map(|e| !e.include)
-                .unwrap_or(false),
-            RefinementOp::IncludeConfig { path } => projected
-                .config
-                .as_ref()
-                .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
-                .map(|e| e.include)
-                .unwrap_or(false),
-            RefinementOp::ExcludeRepo { section_id } => {
-                // Noop if the section is already in the excluded set
-                let excluded = self.excluded_sections_at(&projected);
-                excluded.contains(section_id)
-            }
-            RefinementOp::IncludeRepo { section_id } => {
-                // Noop if the section is NOT in the excluded set
-                let excluded = self.excluded_sections_at(&projected);
-                !excluded.contains(section_id)
-            }
+                    .and_then(|c| c.files.iter().find(|e| e.path == *path))
+                    .map(|e| e.include == *include)
+                    .unwrap_or(false),
+                ItemId::Repo { path: section_id } => {
+                    let excluded = self.excluded_sections_at(&projected);
+                    if *include {
+                        // Noop if the section is NOT in the excluded set
+                        !excluded.contains(section_id)
+                    } else {
+                        // Noop if the section is already in the excluded set
+                        excluded.contains(section_id)
+                    }
+                }
+                // Other item kinds: never noop for now
+                _ => false,
+            },
             // User ops are never noop — always replay to ensure correctness
             RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
             // Fleet ops are never noop — projection-derived state makes idempotency detection fragile
             RefinementOp::SelectVariant { .. }
             | RefinementOp::EditVariant { .. }
             | RefinementOp::DiscardVariant { .. } => false,
-            // SetInclude noop detection deferred to Task 4
-            RefinementOp::SetInclude { .. } => false,
         }
     }
 
@@ -1031,130 +1030,130 @@ impl RefineSession {
 
         for op in &self.ops[..self.cursor] {
             match op {
-                RefinementOp::ExcludePackage(target) => {
-                    if let Some(ref mut rpm) = snap.rpm
-                        && let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
-                    {
-                        pkg.include = false;
-                    }
-                }
-                RefinementOp::IncludePackage(target) => {
-                    if let Some(ref mut rpm) = snap.rpm
-                        && let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
-                    {
-                        pkg.include = true;
-                    }
-                }
-                RefinementOp::ExcludeConfig { path } => {
-                    if let Some(ref mut config) = snap.config
-                        && let Some(entry) = config
-                            .files
-                            .iter_mut()
-                            .find(|e| e.path == path.to_string_lossy())
-                    {
-                        entry.include = false;
-                    }
-                }
-                RefinementOp::IncludeConfig { path } => {
-                    if let Some(ref mut config) = snap.config
-                        && let Some(entry) = config
-                            .files
-                            .iter_mut()
-                            .find(|e| e.path == path.to_string_lossy())
-                    {
-                        entry.include = true;
-                    }
-                }
-                RefinementOp::ExcludeRepo { section_id } => {
-                    // Compute excluded sections BEFORE mutably borrowing snap
-                    let excluded_sections = self.excluded_sections_at(&snap);
-
-                    if let Some(ref mut rpm) = snap.rpm {
-                        // 1. Exclude all packages from this repo (case-insensitive)
-                        for pkg in &mut rpm.packages_added {
-                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                pkg.include = false;
+                RefinementOp::SetInclude { item_id, include } => {
+                    match item_id {
+                        ItemId::Package { name, arch } => {
+                            if let Some(ref mut rpm) = snap.rpm
+                                && let Some(pkg) = rpm
+                                    .packages_added
+                                    .iter_mut()
+                                    .find(|e| e.name == *name && e.arch == *arch)
+                            {
+                                pkg.include = *include;
                             }
                         }
-
-                        // 2. For repo files: exclude only if ALL sections
-                        // defined in that file are now excluded
-                        if let Some(file_paths) =
-                            self.repo_index.repo_file_by_section.get(section_id)
-                        {
-                            for file_path in file_paths {
-                                let all_sections_excluded = self
-                                    .repo_index
-                                    .repo_file_by_section
-                                    .iter()
-                                    .filter(|(_, paths)| paths.contains(file_path))
-                                    .all(|(sid, _)| excluded_sections.contains(sid));
-                                if all_sections_excluded
-                                    && let Some(rf) =
-                                        rpm.repo_files.iter_mut().find(|r| r.path == *file_path)
-                                {
-                                    rf.include = false;
-                                }
+                        ItemId::Config { path } => {
+                            if let Some(ref mut config) = snap.config
+                                && let Some(entry) =
+                                    config.files.iter_mut().find(|e| e.path == *path)
+                            {
+                                entry.include = *include;
                             }
                         }
+                        ItemId::Repo { path: section_id } => {
+                            if !*include {
+                                // Exclude repo: cascade to packages, repo files, GPG keys
+                                let excluded_sections = self.excluded_sections_at(&snap);
 
-                        // 3. For GPG keys: exclude only if ALL sections
-                        // that reference this key are excluded
-                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id)
-                        {
-                            for key_path in key_paths {
-                                if let Some(referencing_sections) =
-                                    self.repo_index.sections_by_gpg_key.get(key_path)
-                                {
-                                    let all_excluded = referencing_sections
-                                        .iter()
-                                        .all(|sid| excluded_sections.contains(sid));
-                                    if all_excluded
-                                        && let Some(k) =
-                                            rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
+                                if let Some(ref mut rpm) = snap.rpm {
+                                    // 1. Exclude all packages from this repo (case-insensitive)
+                                    for pkg in &mut rpm.packages_added {
+                                        if pkg.source_repo.eq_ignore_ascii_case(section_id) {
+                                            pkg.include = false;
+                                        }
+                                    }
+
+                                    // 2. For repo files: exclude only if ALL sections
+                                    // defined in that file are now excluded
+                                    if let Some(file_paths) =
+                                        self.repo_index.repo_file_by_section.get(section_id)
                                     {
-                                        k.include = false;
+                                        for file_path in file_paths {
+                                            let all_sections_excluded = self
+                                                .repo_index
+                                                .repo_file_by_section
+                                                .iter()
+                                                .filter(|(_, paths)| paths.contains(file_path))
+                                                .all(|(sid, _)| excluded_sections.contains(sid));
+                                            if all_sections_excluded
+                                                && let Some(rf) = rpm
+                                                    .repo_files
+                                                    .iter_mut()
+                                                    .find(|r| r.path == *file_path)
+                                            {
+                                                rf.include = false;
+                                            }
+                                        }
+                                    }
+
+                                    // 3. For GPG keys: exclude only if ALL sections
+                                    // that reference this key are excluded
+                                    if let Some(key_paths) =
+                                        self.repo_index.gpg_keys_by_section.get(section_id)
+                                    {
+                                        for key_path in key_paths {
+                                            if let Some(referencing_sections) =
+                                                self.repo_index.sections_by_gpg_key.get(key_path)
+                                            {
+                                                let all_excluded = referencing_sections
+                                                    .iter()
+                                                    .all(|sid| excluded_sections.contains(sid));
+                                                if all_excluded
+                                                    && let Some(k) = rpm
+                                                        .gpg_keys
+                                                        .iter_mut()
+                                                        .find(|g| g.path == *key_path)
+                                                {
+                                                    k.include = false;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Include repo: re-enable packages, repo files, GPG keys
+                                if let Some(ref mut rpm) = snap.rpm {
+                                    // 1. Include all packages from this repo (case-insensitive)
+                                    for pkg in &mut rpm.packages_added {
+                                        if pkg.source_repo.eq_ignore_ascii_case(section_id) {
+                                            pkg.include = true;
+                                        }
+                                    }
+
+                                    // 2. Re-enable repo files for this section
+                                    if let Some(file_paths) =
+                                        self.repo_index.repo_file_by_section.get(section_id)
+                                    {
+                                        for file_path in file_paths {
+                                            if let Some(rf) = rpm
+                                                .repo_files
+                                                .iter_mut()
+                                                .find(|r| r.path == *file_path)
+                                            {
+                                                rf.include = true;
+                                            }
+                                        }
+                                    }
+
+                                    // 3. Re-enable GPG keys for this section
+                                    if let Some(key_paths) =
+                                        self.repo_index.gpg_keys_by_section.get(section_id)
+                                    {
+                                        for key_path in key_paths {
+                                            if let Some(k) = rpm
+                                                .gpg_keys
+                                                .iter_mut()
+                                                .find(|g| g.path == *key_path)
+                                            {
+                                                k.include = true;
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                }
-                // SetInclude projection deferred to Task 4 (autosave migration)
-                RefinementOp::SetInclude { .. } => {}
-                RefinementOp::IncludeRepo { section_id } => {
-                    if let Some(ref mut rpm) = snap.rpm {
-                        // 1. Include all packages from this repo (case-insensitive)
-                        for pkg in &mut rpm.packages_added {
-                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                pkg.include = true;
-                            }
-                        }
-
-                        // 2. Re-enable repo files for this section
-                        if let Some(file_paths) =
-                            self.repo_index.repo_file_by_section.get(section_id)
-                        {
-                            for file_path in file_paths {
-                                if let Some(rf) =
-                                    rpm.repo_files.iter_mut().find(|r| r.path == *file_path)
-                                {
-                                    rf.include = true;
-                                }
-                            }
-                        }
-
-                        // 3. Re-enable GPG keys for this section
-                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id)
-                        {
-                            for key_path in key_paths {
-                                if let Some(k) =
-                                    rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
-                                {
-                                    k.include = true;
-                                }
-                            }
-                        }
+                        // Phase 1-3 item kinds: not yet handled
+                        _ => {}
                     }
                 }
                 RefinementOp::UserStrategy { username, strategy } => {
@@ -1313,18 +1312,20 @@ impl RefineSession {
     }
 
     /// Compute the set of section IDs that are currently excluded based on the
-    /// active op stack. An ExcludeRepo adds to the set, an IncludeRepo removes.
+    /// active op stack. A SetInclude(Repo, false) adds to the set, SetInclude(Repo, true) removes.
     fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
         let mut excluded = HashSet::new();
         for op in &self.ops[..self.cursor] {
-            match op {
-                RefinementOp::ExcludeRepo { section_id } => {
+            if let RefinementOp::SetInclude {
+                item_id: ItemId::Repo { path: section_id },
+                include,
+            } = op
+            {
+                if *include {
+                    excluded.remove(section_id);
+                } else {
                     excluded.insert(section_id.clone());
                 }
-                RefinementOp::IncludeRepo { section_id } => {
-                    excluded.remove(section_id);
-                }
-                _ => {}
             }
         }
         excluded
