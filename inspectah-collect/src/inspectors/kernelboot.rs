@@ -138,6 +138,7 @@ impl Inspector for KernelbootInspector {
             loaded_modules,
             non_default_modules: Vec::new(),
             tuned_active,
+            tuned_include: true,
             tuned_custom_profiles: Vec::new(),
             locale,
             timezone,

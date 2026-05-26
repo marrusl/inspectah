@@ -964,19 +964,27 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Sysctl overrides
+    // Sysctl overrides — synthesized into a single drop-in
     let included_sysctl: usize = kb.sysctl_overrides.iter().filter(|s| s.include).count();
     if included_sysctl > 0 {
         body.push(format!(
-            "# {} sysctl override(s) — config files in COPY config/etc/ above",
+            "# {} sysctl override(s) — merged into single drop-in",
             included_sysctl
         ));
+        body.push(
+            "COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into(),
+        );
     }
 
-    // Tuned
-    if !kb.tuned_active.is_empty() {
+    // Tuned — gated on include
+    if kb.tuned_include && !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
+            if !kb.tuned_custom_profiles.is_empty() {
+                body.push(
+                    "COPY config/etc/tuned/ /etc/tuned/".into(),
+                );
+            }
             body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
                 kb.tuned_active
@@ -2330,6 +2338,105 @@ mod tests {
         assert!(
             output.contains("systemctl disable \\\n    avahi-daemon.service"),
             "disabled service must produce systemctl disable with continuation"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_sysctl_copy_synthesized_file() {
+        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl_overrides: vec![
+                SysctlOverride {
+                    key: "net.ipv4.ip_forward".into(),
+                    runtime: "1".into(),
+                    source: "/etc/sysctl.d/99-custom.conf".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                SysctlOverride {
+                    key: "vm.swappiness".into(),
+                    runtime: "10".into(),
+                    source: "/etc/sysctl.d/99-custom.conf".into(),
+                    include: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/"),
+            "included sysctls must produce COPY for synthesized file, got:\n{output}"
+        );
+        assert!(
+            output.contains("1 sysctl override(s)"),
+            "count must reflect only included overrides"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_sysctl_excluded_no_copy() {
+        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl_overrides: vec![SysctlOverride {
+                key: "vm.swappiness".into(),
+                runtime: "10".into(),
+                source: "/etc/sysctl.d/99-custom.conf".into(),
+                include: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("sysctl"),
+            "all-excluded sysctls must produce no sysctl output, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_tuned_excluded_no_output() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "virtual-guest".into(),
+            tuned_include: false,
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("tuned"),
+            "excluded tuned must produce no tuned output, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_tuned_included_with_custom_profile() {
+        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "my-profile".into(),
+            tuned_include: true,
+            tuned_custom_profiles: vec![ConfigSnippet {
+                path: "etc/tuned/my-profile/tuned.conf".into(),
+                content: "[main]\nsummary=Custom".into(),
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("COPY config/etc/tuned/ /etc/tuned/"),
+            "included tuned with custom profile must COPY profile files, got:\n{output}"
+        );
+        assert!(
+            output.contains("RUN echo \"my-profile\" > /etc/tuned/active_profile"),
+            "must set active_profile"
+        );
+        assert!(
+            output.contains("RUN systemctl enable tuned.service"),
+            "must enable tuned.service"
         );
     }
 }
