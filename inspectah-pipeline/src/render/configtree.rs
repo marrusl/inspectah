@@ -598,7 +598,7 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
     let included: Vec<_> = nrs
         .env_files
         .iter()
-        .filter(|e| e.include && !e.path.is_empty())
+        .filter(|e| e.include && !e.path.is_empty() && !e.content.trim().is_empty())
         .collect();
 
     if included.is_empty() {
