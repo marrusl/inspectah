@@ -373,12 +373,35 @@ export interface DropInDecisionDto {
   include: boolean;
 }
 
+// --- Container decision types (inspectah-web/src/handlers.rs) ---
+
+/** A classified quadlet unit, projected for the view response. */
+export interface QuadletDecisionDto {
+  path: string;
+  name: string;
+  image: string;
+  triage: TriageTag;
+  include: boolean;
+}
+
+/** A classified flatpak app, projected for the view response. */
+export interface FlatpakDecisionDto {
+  app_id: string;
+  remote: string;
+  branch: string;
+  triage: TriageTag;
+  include: boolean;
+  lifecycle: string;
+}
+
 /** View endpoint response: RefinedView + repo_groups. */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   version_changes: VersionChangeEntry[];
   service_states: ServiceDecisionDto[];
   service_dropins: DropInDecisionDto[];
+  quadlets: QuadletDecisionDto[];
+  flatpaks: FlatpakDecisionDto[];
   users_groups_decisions: UserDecision[];
   session_is_sensitive: boolean;
 }

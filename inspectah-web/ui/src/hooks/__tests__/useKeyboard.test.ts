@@ -90,18 +90,18 @@ describe("useKeyboard", () => {
     expect(opts.onSectionChange).toHaveBeenCalledWith("configs");
 
     fireEvent.keyDown(document, { key: "3" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("services");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("users_groups");
   });
 
-  it("maps key 4 to version_changes after insertion", () => {
+  it("maps key 4 to services", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "4" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("services");
   });
 
-  it("maps key 5 to containers (shifted from 4)", () => {
+  it("maps key 5 to containers", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
@@ -109,12 +109,12 @@ describe("useKeyboard", () => {
     expect(opts.onSectionChange).toHaveBeenCalledWith("containers");
   });
 
-  it("maps key 9 to scheduled_tasks (shifted from 8)", () => {
+  it("maps key 9 to storage", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "9" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("scheduled_tasks");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("storage");
   });
 
   it("suppresses single-key shortcuts when focus is in an input", () => {

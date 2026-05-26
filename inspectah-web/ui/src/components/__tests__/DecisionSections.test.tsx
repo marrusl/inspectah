@@ -106,6 +106,8 @@ const MOCK_VIEW: ViewResponse = {
   version_changes: [],
   service_states: [],
   service_dropins: [],
+  quadlets: [],
+  flatpaks: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
@@ -167,6 +169,8 @@ function makeViewResponse(overrides: {
     version_changes: [],
     service_states: [],
     service_dropins: [],
+    quadlets: [],
+    flatpaks: [],
     users_groups_decisions: [],
     session_is_sensitive: false,
     ...(overrides.baseline_summary ? { baseline_summary: overrides.baseline_summary } : {}),

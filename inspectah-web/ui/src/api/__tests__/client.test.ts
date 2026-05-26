@@ -113,6 +113,8 @@ const mockView: ViewResponse = {
   version_changes: [],
   service_states: [],
   service_dropins: [],
+  quadlets: [],
+  flatpaks: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };

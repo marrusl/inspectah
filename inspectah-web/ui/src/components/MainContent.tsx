@@ -13,6 +13,7 @@ import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import { ServiceSection } from "./ServiceSection";
+import { ContainerSection } from "./ContainerSection";
 import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
@@ -265,11 +266,23 @@ export function MainContent({
     );
   }
 
-  // Context sections: containers, network, storage,
+  // Containers decision section — quadlets and flatpaks as toggleable items.
+  if (activeSection === "containers") {
+    return (
+      <ContainerSection
+        quadlets={viewData?.quadlets ?? []}
+        flatpaks={viewData?.flatpaks ?? []}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />
+    );
+  }
+
+  // Context sections: compose, network, storage,
   // scheduled_tasks, non_rpm_software, kernel_boot, selinux
   const contextSectionIds = [
     "version_changes",
-    "containers",
+    "compose",
     "network",
     "storage",
     "scheduled_tasks",
@@ -298,7 +311,9 @@ export function MainContent({
   }
 
   if (contextSectionIds.includes(activeSection)) {
-    const section = sections?.find((s) => s.id === activeSection);
+    // "compose" sidebar entry maps to the "containers" backend context section
+    const lookupId = activeSection === "compose" ? "containers" : activeSection;
+    const section = sections?.find((s) => s.id === lookupId);
     if (!section) {
       return <p>Section data not available.</p>;
     }
