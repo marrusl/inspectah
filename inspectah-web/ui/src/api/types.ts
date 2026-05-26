@@ -205,19 +205,19 @@ export interface BaselineSummary {
   review_count: number;
 }
 
+export interface SectionStats {
+  kind: string;
+  total: number;
+  included: number;
+  excluded: number;
+}
+
 export interface RefineStats {
-  total_packages: number;
-  included_packages: number;
-  excluded_packages: number;
-  total_configs: number;
-  included_configs: number;
-  package_managed_configs: number;
-  excluded_configs: number;
+  sections: SectionStats[];
   needs_review_count: number;
   ops_applied: number;
   can_undo: boolean;
   can_redo: boolean;
-  /** @deprecated Use baseline_summary instead. Kept for backward compatibility. */
   baseline_available: boolean;
 }
 
