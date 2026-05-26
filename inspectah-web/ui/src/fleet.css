@@ -69,6 +69,26 @@
 
 .fleet-item-row__prevalence {
   flex-shrink: 0;
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--pf-t--global--border--radius--small);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.fleet-item-row__prevalence--full {
+  background-color: #e6f2e6;
+  color: #1e4620;
+}
+
+.fleet-item-row__prevalence--partial {
+  background-color: #fef3cd;
+  color: #664d03;
+}
+
+.fleet-item-row__prevalence--low {
+  background-color: #fce8e6;
+  color: #842029;
 }
 
 .fleet-item-row__variants {

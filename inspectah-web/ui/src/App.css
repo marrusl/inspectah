@@ -477,16 +477,28 @@ html, body, #root {
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
+.inspectah-package-row__prevalence--full,
+.inspectah-package-row__prevalence--partial,
+.inspectah-package-row__prevalence--low {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--pf-t--global--border--radius--small);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
 .inspectah-package-row__prevalence--full {
-  color: var(--pf-t--global--color--status--success--default, #3e8635);
+  background-color: #e6f2e6;
+  color: #1e4620;
 }
 
 .inspectah-package-row__prevalence--partial {
-  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  background-color: #fef3cd;
+  color: #664d03;
 }
 
 .inspectah-package-row__prevalence--low {
-  color: var(--pf-t--global--color--status--danger--default, #c9190b);
+  background-color: #fce8e6;
+  color: #842029;
 }
 
 /* ─── Decision row (configs, packages — single-machine) ──────────────── */
