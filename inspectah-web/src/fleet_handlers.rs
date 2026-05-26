@@ -5,7 +5,7 @@ use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::classify::classify_services;
+use inspectah_refine::classify::{classify_containers, classify_services};
 use inspectah_refine::types::{
     ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
@@ -628,6 +628,97 @@ fn build_fleet_sections(
         }
     }
 
+    // Containers — quadlets and flatpaks classified as decision items
+    {
+        let (quadlets, flatpaks) = classify_containers(snap);
+
+        let mut items: Vec<FleetItem> = Vec::new();
+
+        // Quadlets: group by path for variant detection (same pattern as drop-ins)
+        let mut quadlet_groups: std::collections::BTreeMap<
+            &str,
+            Vec<&inspectah_refine::types::RefinedQuadlet>,
+        > = std::collections::BTreeMap::new();
+        for q in &quadlets {
+            quadlet_groups
+                .entry(q.entry.path.as_str())
+                .or_default()
+                .push(q);
+        }
+
+        for (path, group) in &quadlet_groups {
+            let representative = group
+                .iter()
+                .find(|q| {
+                    matches!(
+                        q.entry.variant_selection,
+                        VariantSelection::Selected | VariantSelection::Only
+                    )
+                })
+                .or_else(|| group.first());
+            if let Some(q) = representative {
+                let item_id = ItemId::Quadlet {
+                    path: path.to_string(),
+                };
+                let fp = q.entry.fleet.as_ref();
+                let variants = if group.len() >= 2 {
+                    Some(build_content_variants(
+                        &group
+                            .iter()
+                            .map(|q| {
+                                (
+                                    &q.entry.content,
+                                    q.entry.variant_selection,
+                                    q.entry.fleet.as_ref(),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                };
+                items.push(FleetItem {
+                    item_id,
+                    include: fleet_include_default(fp),
+                    triage: build_triage_dto(&q.triage, fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
+                });
+            }
+        }
+
+        // Flatpaks: no fleet field, so no variant detection or prevalence.
+        // Each flatpak is a standalone decision item with lifecycle badge.
+        for f in &flatpaks {
+            let item_id = ItemId::Flatpak {
+                app_id: f.entry.app_id.clone(),
+                remote: f.entry.remote.clone(),
+                branch: f.entry.branch.clone(),
+            };
+            items.push(FleetItem {
+                item_id,
+                include: f.entry.include,
+                triage: build_triage_dto(&f.triage, None, ctx),
+                prevalence: fleet_prevalence_dto(None, ctx),
+                variants: None,
+                source_repo: String::new(),
+                repo_conflict: None,
+            });
+        }
+
+        if !items.is_empty() {
+            sections.push(build_section(
+                "containers",
+                "Containers",
+                true,
+                &items,
+                ctx,
+            ));
+        }
+    }
+
     // --- Context sections (read-only, no toggles) ---
     // These sections come from the snapshot, not from RefinedView.
     // Items have fleet prevalence but no include/exclude toggle.
@@ -700,56 +791,12 @@ fn build_context_sections(
     snap: &InspectionSnapshot,
     ctx: &FleetContext,
 ) {
-    // NOTE: Services moved to build_fleet_sections() as decision items.
+    // NOTE: Services and containers (quadlets + flatpaks) moved to
+    // build_fleet_sections() as decision items.
 
-    // Containers (quadlets + compose)
+    // Compose files — remain as context items (read-only, no toggles).
     if let Some(ref containers) = snap.containers {
         let mut items: Vec<FleetItem> = Vec::new();
-
-        // Group quadlet units by path to detect variants.
-        let mut quadlet_groups: std::collections::BTreeMap<
-            &str,
-            Vec<&inspectah_core::types::containers::QuadletUnit>,
-        > = std::collections::BTreeMap::new();
-        for q in &containers.quadlet_units {
-            quadlet_groups.entry(q.path.as_str()).or_default().push(q);
-        }
-        for (path, group) in &quadlet_groups {
-            let representative = group
-                .iter()
-                .find(|q| {
-                    matches!(
-                        q.variant_selection,
-                        VariantSelection::Selected | VariantSelection::Only
-                    )
-                })
-                .or_else(|| group.first());
-            if let Some(q) = representative {
-                let item_id = ItemId::Quadlet {
-                    path: path.to_string(),
-                };
-                let fp = q.fleet.as_ref();
-                let variants = if group.len() >= 2 {
-                    Some(build_content_variants(
-                        &group
-                            .iter()
-                            .map(|q| (&q.content, q.variant_selection, q.fleet.as_ref()))
-                            .collect::<Vec<_>>(),
-                    ))
-                } else {
-                    None
-                };
-                items.push(FleetItem {
-                    item_id,
-                    include: fleet_include_default(fp),
-                    triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
-                    variants,
-                    source_repo: String::new(),
-                    repo_conflict: None,
-                });
-            }
-        }
 
         // Group compose files by path to detect variants.
         let mut compose_groups: std::collections::BTreeMap<
@@ -795,8 +842,8 @@ fn build_context_sections(
 
         if !items.is_empty() {
             sections.push(build_section(
-                "containers",
-                "Containers",
+                "compose",
+                "Compose Files",
                 false,
                 &items,
                 ctx,
