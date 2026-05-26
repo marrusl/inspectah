@@ -1,4 +1,4 @@
-use inspectah_refine::types::{AttentionReason, RefinementOp, RepoProvenance};
+use inspectah_refine::types::{AttentionReason, ItemId, RefinementOp, RepoProvenance};
 
 #[test]
 fn attention_reason_custom_serialization() {
@@ -9,9 +9,12 @@ fn attention_reason_custom_serialization() {
 }
 
 #[test]
-fn test_exclude_repo_op_roundtrip() {
-    let op = RefinementOp::ExcludeRepo {
-        section_id: "epel".into(),
+fn test_set_include_repo_op_roundtrip() {
+    let op = RefinementOp::SetInclude {
+        item_id: ItemId::Repo {
+            path: "epel".into(),
+        },
+        include: false,
     };
     let json = serde_json::to_string(&op).unwrap();
     let parsed: RefinementOp = serde_json::from_str(&json).unwrap();

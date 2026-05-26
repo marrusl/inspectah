@@ -5,7 +5,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{PackageTarget, RefinementOp};
+use inspectah_refine::types::{ItemId, RefinementOp};
 use std::collections::BTreeSet;
 
 fn test_snapshot() -> InspectionSnapshot {
@@ -67,10 +67,13 @@ fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
 fn export_exact_file_set() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
         .unwrap();
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -111,10 +114,13 @@ fn export_exact_file_set() {
 fn export_snapshot_reflects_refinements() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
         .unwrap();
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -168,10 +174,13 @@ fn export_snapshot_reflects_refinements() {
 fn preview_export_containerfile_fidelity() {
     let mut session = RefineSession::new(test_snapshot());
     session
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
         .unwrap();
 
     // Capture the preview Containerfile
@@ -303,10 +312,13 @@ fn reimport_is_clean_and_coherent() {
     // First session: exclude httpd, export
     let mut session1 = RefineSession::new(test_snapshot());
     session1
-        .apply(RefinementOp::ExcludePackage(PackageTarget {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-        }))
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
         .unwrap();
 
     let tempdir = tempfile::tempdir().unwrap();

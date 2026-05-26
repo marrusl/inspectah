@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
@@ -99,26 +98,10 @@ pub enum ItemId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", content = "target")]
 pub enum RefinementOp {
-    // Unified include/exclude — new canonical form
+    // Unified include/exclude — canonical form (v2)
     SetInclude {
         item_id: ItemId,
         include: bool,
-    },
-
-    // Legacy variants — kept for autosave backward compat (removed in Task 4)
-    ExcludePackage(PackageTarget),
-    IncludePackage(PackageTarget),
-    ExcludeConfig {
-        path: PathBuf,
-    },
-    IncludeConfig {
-        path: PathBuf,
-    },
-    ExcludeRepo {
-        section_id: String,
-    },
-    IncludeRepo {
-        section_id: String,
     },
 
     UserStrategy {
@@ -633,19 +616,6 @@ mod item_id_tests {
         let json = serde_json::to_string(&op).unwrap();
         let back: RefinementOp = serde_json::from_str(&json).unwrap();
         assert_eq!(op, back);
-    }
-
-    #[test]
-    fn legacy_exclude_package_still_deserializes() {
-        let json = r#"{"op":"ExcludePackage","target":{"name":"httpd","arch":"x86_64"}}"#;
-        let op: RefinementOp = serde_json::from_str(json).unwrap();
-        match op {
-            RefinementOp::ExcludePackage(t) => {
-                assert_eq!(t.name, "httpd");
-                assert_eq!(t.arch, "x86_64");
-            }
-            other => panic!("expected ExcludePackage, got {:?}", other),
-        }
     }
 
     #[test]

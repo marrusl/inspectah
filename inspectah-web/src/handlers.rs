@@ -2348,11 +2348,14 @@ mod tests {
 
         let mut session = RefineSession::new(snap);
 
-        // Apply ExcludeRepo via the op API
-        let op = RefinementOp::ExcludeRepo {
-            section_id: "epel".into(),
+        // Apply SetInclude (exclude repo) via the op API
+        let op = RefinementOp::SetInclude {
+            item_id: inspectah_refine::types::ItemId::Repo {
+                path: "epel".into(),
+            },
+            include: false,
         };
-        session.apply(op).expect("ExcludeRepo should succeed");
+        session.apply(op).expect("SetInclude exclude repo should succeed");
 
         // Verify epel packages are now excluded
         let view = session.view();

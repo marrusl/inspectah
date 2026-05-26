@@ -1,9 +1,77 @@
-use crate::types::{ContentHash, RefinementOp};
+use crate::types::{ContentHash, ItemId, RefinementOp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
+
+/// Legacy op enum used solely for deserializing v1 autosave files.
+/// These variants were removed from `RefinementOp` in the v2 migration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", content = "target")]
+enum LegacyRefinementOp {
+    ExcludePackage(LegacyPackageTarget),
+    IncludePackage(LegacyPackageTarget),
+    ExcludeConfig { path: PathBuf },
+    IncludeConfig { path: PathBuf },
+    ExcludeRepo { section_id: String },
+    IncludeRepo { section_id: String },
+    // Forward-compatible: pass through any v2 op as raw JSON
+    #[serde(untagged)]
+    Other(serde_json::Value),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyPackageTarget {
+    name: String,
+    arch: String,
+}
+
+/// Convert a v1 legacy op to the v2 `SetInclude` form.
+/// Returns `None` for ops that don't map to SetInclude (passed through as Other).
+fn migrate_legacy_op(legacy: &LegacyRefinementOp) -> Option<RefinementOp> {
+    match legacy {
+        LegacyRefinementOp::ExcludePackage(t) => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: t.name.clone(),
+                arch: t.arch.clone(),
+            },
+            include: false,
+        }),
+        LegacyRefinementOp::IncludePackage(t) => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: t.name.clone(),
+                arch: t.arch.clone(),
+            },
+            include: true,
+        }),
+        LegacyRefinementOp::ExcludeConfig { path } => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: path.to_string_lossy().to_string(),
+            },
+            include: false,
+        }),
+        LegacyRefinementOp::IncludeConfig { path } => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: path.to_string_lossy().to_string(),
+            },
+            include: true,
+        }),
+        LegacyRefinementOp::ExcludeRepo { section_id } => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: section_id.clone(),
+            },
+            include: false,
+        }),
+        LegacyRefinementOp::IncludeRepo { section_id } => Some(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: section_id.clone(),
+            },
+            include: true,
+        }),
+        LegacyRefinementOp::Other(_) => None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
@@ -65,6 +133,11 @@ pub fn save_session(state: &SessionState, tarball: &Path) -> Result<(), std::io:
 
 /// Load session state from the sidecar file next to the tarball.
 ///
+/// Supports both v1 (legacy op names) and v2 (SetInclude) formats.
+/// v1 files are migrated on load: legacy ops are rewritten to SetInclude
+/// and `schema_version` is set to 2. Cursor position and op count are
+/// preserved through migration.
+///
 /// Returns `Ok(None)` if no session file exists. Returns an error if the
 /// file exists but has an unknown schema version or is malformed.
 pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std::error::Error>> {
@@ -74,17 +147,62 @@ pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std:
     }
 
     let contents = std::fs::read_to_string(&path)?;
-    let state: SessionState = serde_json::from_str(&contents)?;
 
-    if state.schema_version != 1 {
-        return Err(format!(
-            "unsupported session schema version: {} (expected 1)",
-            state.schema_version
+    // Parse as raw JSON first to check schema_version before deserializing ops.
+    let raw: serde_json::Value = serde_json::from_str(&contents)?;
+    let version = raw
+        .get("schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    match version {
+        1 => {
+            // v1: deserialize ops using the legacy enum, then migrate each to SetInclude.
+            #[derive(Deserialize)]
+            struct V1State {
+                tarball_path: PathBuf,
+                tarball_hash: ContentHash,
+                ops: Vec<LegacyRefinementOp>,
+                cursor: usize,
+                saved_at: String,
+            }
+
+            let v1: V1State = serde_json::from_str(&contents)?;
+
+            // Migrate ops: legacy variants become SetInclude, others deserialize as v2.
+            let mut migrated_ops = Vec::with_capacity(v1.ops.len());
+            for legacy_op in &v1.ops {
+                match migrate_legacy_op(legacy_op) {
+                    Some(op) => migrated_ops.push(op),
+                    None => {
+                        // Non-legacy op — deserialize as v2 RefinementOp from the raw JSON.
+                        if let LegacyRefinementOp::Other(val) = legacy_op {
+                            let op: RefinementOp = serde_json::from_value(val.clone())?;
+                            migrated_ops.push(op);
+                        }
+                    }
+                }
+            }
+
+            Ok(Some(SessionState {
+                schema_version: 2,
+                tarball_path: v1.tarball_path,
+                tarball_hash: v1.tarball_hash,
+                ops: migrated_ops,
+                cursor: v1.cursor,
+                saved_at: v1.saved_at,
+            }))
+        }
+        2 => {
+            // v2: deserialize directly.
+            let state: SessionState = serde_json::from_str(&contents)?;
+            Ok(Some(state))
+        }
+        other => Err(format!(
+            "unsupported session schema version: {other} (expected 1 or 2)"
         )
-        .into());
+        .into()),
     }
-
-    Ok(Some(state))
 }
 
 /// Compute the SHA-256 hash of a tarball file.
@@ -103,4 +221,233 @@ pub fn compute_tarball_hash(tarball: &Path) -> Result<ContentHash, std::io::Erro
     }
     let hash = format!("{:x}", hasher.finalize());
     ContentHash::new(hash).map_err(std::io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: write a tiny tarball so compute_tarball_hash works.
+    fn write_dummy_tarball(path: &Path) {
+        let f = std::fs::File::create(path).unwrap();
+        let gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let data = b"hello";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_cksum();
+        tar.append_data(&mut header, "dummy.txt", &data[..]).unwrap();
+        tar.finish().unwrap();
+    }
+
+    #[test]
+    fn v1_json_migrates_legacy_ops_to_set_include() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        // Write a v1 session file with legacy ops
+        let v1_json = serde_json::json!({
+            "schema_version": 1,
+            "tarball_path": tarball.to_string_lossy(),
+            "tarball_hash": hash.as_str(),
+            "ops": [
+                {"op": "ExcludePackage", "target": {"name": "httpd", "arch": "x86_64"}},
+                {"op": "IncludeConfig", "target": {"path": "/etc/foo.conf"}},
+                {"op": "ExcludeRepo", "target": {"section_id": "epel"}}
+            ],
+            "cursor": 2,
+            "saved_at": "100s"
+        });
+        let session_path = session_file_path(&tarball);
+        std::fs::write(&session_path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
+
+        let loaded = load_session(&tarball).unwrap().unwrap();
+
+        // Schema version bumped to 2
+        assert_eq!(loaded.schema_version, 2);
+        // All 3 ops migrated
+        assert_eq!(loaded.ops.len(), 3);
+        // Cursor preserved
+        assert_eq!(loaded.cursor, 2);
+
+        // Check first op: ExcludePackage -> SetInclude { Package, include: false }
+        match &loaded.ops[0] {
+            RefinementOp::SetInclude { item_id, include } => {
+                assert!(!include);
+                match item_id {
+                    ItemId::Package { name, arch } => {
+                        assert_eq!(name, "httpd");
+                        assert_eq!(arch, "x86_64");
+                    }
+                    other => panic!("expected Package, got {:?}", other),
+                }
+            }
+            other => panic!("expected SetInclude, got {:?}", other),
+        }
+
+        // Check second op: IncludeConfig -> SetInclude { Config, include: true }
+        match &loaded.ops[1] {
+            RefinementOp::SetInclude { item_id, include } => {
+                assert!(*include);
+                match item_id {
+                    ItemId::Config { path } => assert_eq!(path, "/etc/foo.conf"),
+                    other => panic!("expected Config, got {:?}", other),
+                }
+            }
+            other => panic!("expected SetInclude, got {:?}", other),
+        }
+
+        // Check third op: ExcludeRepo -> SetInclude { Repo, include: false }
+        match &loaded.ops[2] {
+            RefinementOp::SetInclude { item_id, include } => {
+                assert!(!include);
+                match item_id {
+                    ItemId::Repo { path } => assert_eq!(path, "epel"),
+                    other => panic!("expected Repo, got {:?}", other),
+                }
+            }
+            other => panic!("expected SetInclude, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v2_json_loads_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        let v2_json = serde_json::json!({
+            "schema_version": 2,
+            "tarball_path": tarball.to_string_lossy(),
+            "tarball_hash": hash.as_str(),
+            "ops": [
+                {
+                    "op": "SetInclude",
+                    "target": {
+                        "item_id": {"kind": "Package", "key": {"name": "vim", "arch": "x86_64"}},
+                        "include": false
+                    }
+                }
+            ],
+            "cursor": 1,
+            "saved_at": "200s"
+        });
+        let session_path = session_file_path(&tarball);
+        std::fs::write(&session_path, serde_json::to_string_pretty(&v2_json).unwrap()).unwrap();
+
+        let loaded = load_session(&tarball).unwrap().unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.ops.len(), 1);
+        assert_eq!(loaded.cursor, 1);
+
+        match &loaded.ops[0] {
+            RefinementOp::SetInclude { item_id, include } => {
+                assert!(!include);
+                match item_id {
+                    ItemId::Package { name, arch } => {
+                        assert_eq!(name, "vim");
+                        assert_eq!(arch, "x86_64");
+                    }
+                    other => panic!("expected Package, got {:?}", other),
+                }
+            }
+            other => panic!("expected SetInclude, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v2_save_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        let state = SessionState {
+            schema_version: 2,
+            tarball_path: tarball.clone(),
+            tarball_hash: hash,
+            ops: vec![
+                RefinementOp::SetInclude {
+                    item_id: ItemId::Package {
+                        name: "httpd".into(),
+                        arch: "x86_64".into(),
+                    },
+                    include: false,
+                },
+                RefinementOp::SetInclude {
+                    item_id: ItemId::Config {
+                        path: "/etc/httpd/httpd.conf".into(),
+                    },
+                    include: true,
+                },
+            ],
+            cursor: 1,
+            saved_at: "300s".into(),
+        };
+
+        save_session(&state, &tarball).unwrap();
+        let loaded = load_session(&tarball).unwrap().unwrap();
+
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.ops.len(), 2);
+        assert_eq!(loaded.cursor, 1);
+        assert_eq!(loaded.ops, state.ops);
+    }
+
+    #[test]
+    fn cursor_preserved_through_v1_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        // 5 ops, cursor at 3 (2 ops undone)
+        let v1_json = serde_json::json!({
+            "schema_version": 1,
+            "tarball_path": tarball.to_string_lossy(),
+            "tarball_hash": hash.as_str(),
+            "ops": [
+                {"op": "ExcludePackage", "target": {"name": "a", "arch": "x86_64"}},
+                {"op": "IncludePackage", "target": {"name": "b", "arch": "x86_64"}},
+                {"op": "ExcludeConfig", "target": {"path": "/etc/c"}},
+                {"op": "IncludeRepo", "target": {"section_id": "epel"}},
+                {"op": "ExcludeRepo", "target": {"section_id": "rpmfusion"}}
+            ],
+            "cursor": 3,
+            "saved_at": "400s"
+        });
+        let session_path = session_file_path(&tarball);
+        std::fs::write(&session_path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
+
+        let loaded = load_session(&tarball).unwrap().unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.ops.len(), 5);
+        assert_eq!(loaded.cursor, 3, "cursor must be preserved through migration");
+    }
+
+    #[test]
+    fn unsupported_version_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        let bad_json = serde_json::json!({
+            "schema_version": 99,
+            "tarball_path": tarball.to_string_lossy(),
+            "tarball_hash": hash.as_str(),
+            "ops": [],
+            "cursor": 0,
+            "saved_at": "0s"
+        });
+        let session_path = session_file_path(&tarball);
+        std::fs::write(&session_path, serde_json::to_string_pretty(&bad_json).unwrap()).unwrap();
+
+        let result = load_session(&tarball);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unsupported"));
+    }
 }
