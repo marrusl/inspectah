@@ -151,7 +151,10 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       return results;
     }, [packageItems, configItems, userDecisions, contextSections]);
 
-    // Build searchable text for decision items (keyed by itemId)
+    // Build searchable text keyed by a composite of sectionId + itemId.
+    // Context section items use bare IDs (e.g. "/" for a mount point) that
+    // can collide across sections, so the section prefix is required to
+    // keep each entry's search text distinct.
     const searchTextMap = useMemo(() => {
       const map = new Map<string, string>();
       for (const item of packageItems) {
@@ -171,12 +174,12 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       if (contextSections) {
         for (const section of contextSections) {
           for (const ci of section.items) {
-            map.set(ci.id, ci.searchable_text.toLowerCase());
+            map.set(`${section.id}:${ci.id}`, ci.searchable_text.toLowerCase());
           }
           if (section.subsections) {
             for (const sub of section.subsections) {
               for (const ci of sub.items) {
-                map.set(ci.id, ci.searchable_text.toLowerCase());
+                map.set(`${section.id}:${ci.id}`, ci.searchable_text.toLowerCase());
               }
             }
           }
@@ -191,7 +194,12 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       const q = query.toLowerCase();
       return allItems
         .filter((r) => {
-          const text = searchTextMap.get(r.itemId) ?? r.title.toLowerCase();
+          // Decision items are keyed by bare itemId; context items use a
+          // "sectionId:itemId" composite key to avoid cross-section collisions.
+          const text =
+            searchTextMap.get(r.itemId) ??
+            searchTextMap.get(`${r.sectionId}:${r.itemId}`) ??
+            r.title.toLowerCase();
           return text.includes(q) || r.title.toLowerCase().includes(q);
         })
         .slice(0, 50); // Cap at 50 results
