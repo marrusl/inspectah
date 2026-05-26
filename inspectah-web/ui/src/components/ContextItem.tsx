@@ -8,7 +8,7 @@ export interface ContextItemProps {
 
 export function ContextItem({ item }: ContextItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const hasDetail = item.detail !== null;
+  const hasDetail = item.detail !== null && item.detail.trim().length > 0;
 
   const handleToggle = useCallback(() => {
     setIsExpanded((prev) => !prev);
