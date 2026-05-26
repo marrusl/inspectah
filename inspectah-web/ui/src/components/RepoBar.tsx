@@ -12,7 +12,7 @@ export interface RepoBarProps {
 const tierColors: Record<string, string> = {
   distro: "var(--pf-t--global--text--color--subtle)",
   official_optional: "var(--pf-t--global--color--status--success--default)",
-  third_party: "var(--pf-t--global--color--status--warning--default)",
+  third_party: "var(--pf-t--global--text--color--status--warning--default)",
 };
 
 export function RepoBar({
