@@ -35,6 +35,14 @@ Moved to Completed section.
 - [ ] **Non-functional chevrons in Storage:** ContextItem renders chevrons when `item.detail !== null` but empty strings pass that check. Fix: `item.detail !== null && item.detail.trim().length > 0`. Kit.
 - [ ] **Storage mounts leaking into unrelated sections:** Mount points (e.g., `/`, `/dev/mapper/cs-root (xfs)`) appear not just duplicated within Storage but in entirely wrong Reference tabs (Network, Scheduled Tasks, etc.). The Rust context section builder is putting storage items into the wrong section buckets — same class of bug as the earlier single-host user dedup fix. Tang.
 
+## Fleet Refine UI (2026-05-26 testing session)
+
+- [ ] **Warning banners too dark:** Package and Config tab warning/info banners have overly dark fill colors — text is hard to read. Likely a PatternFly Alert variant or custom background issue. Kit.
+- [ ] **Fleet defaults to 2/3 prevalence, not intersection:** Packages on 2 of 3 hosts start included. Should default to strict intersection only — items below full prevalence start excluded. Related to the "Fleet Default: Intersection Not Union" roadmap item, but this was supposed to be fixed already. Tang (merge logic).
+- [ ] **Fleet toggles broken except packages and sysctls:** Enable/disable toggles don't work on Services, Containers, Configs, Users in fleet mode. Package checkboxes visually toggle but Containerfile preview doesn't update. Sysctls do work. Likely the fleet `FleetApp.tsx` mutation handler doesn't cover the new promoted section ItemId kinds. Kit (frontend) + Tang (fleet handler).
+- [ ] **Tuned fleet data wrong:** Shows "throughput" enabled at 0/3 hosts. Containerfile emits "manual" instead of nothing. If no hosts have a non-default tuned profile, the section should be empty or the item should show as not-included. Tuned fleet merge may not be handling the no-profile case correctly. Tang (fleet merge + handler).
+- [ ] **Storage reference looks good in fleet** — use this as the reference visual for converging single-host reference sections to match.
+
 ## RepoBar Click-to-Filter (v2 backlog)
 
 - [ ] Repo names in the REPOSITORIES bar should be clickable. Clicking a repo name filters the package list to show only that repo's packages (or scrolls + highlights, lighter option). Render names as `<button>`, `cursor: pointer`, hover color shift to brand color, `aria-label="Jump to baseos packages (61)"`. Fern recommends scroll+highlight using existing `.inspectah-highlight` animation; Ember recommends filter-on-click as more useful for triage. Either way, distro repos gain their first interactive purpose beyond the "always included" label.
