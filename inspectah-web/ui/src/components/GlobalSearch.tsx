@@ -311,12 +311,9 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
                     cursor: "pointer",
                     background:
                       idx === selectedIndex
-                        ? "var(--pf-t--global--color--brand--default)"
+                        ? "var(--pf-t--global--background--color--primary--hover)"
                         : "transparent",
-                    color:
-                      idx === selectedIndex
-                        ? "var(--pf-t--global--color--nonstatus--white--default)"
-                        : "inherit",
+                    color: "inherit",
                     borderRadius: "var(--pf-t--global--border--radius--small)",
                     display: "flex",
                     alignItems: "center",
