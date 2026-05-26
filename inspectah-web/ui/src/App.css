@@ -559,6 +559,21 @@ html, body, #root {
   padding-left: calc(var(--pf-t--global--spacer--sm) + 18px);
 }
 
+/* ─── Service drop-in child rows ─────────────────────────────────────── */
+
+.inspectah-service-dropin {
+  position: relative;
+}
+
+.inspectah-service-dropin__connector {
+  position: absolute;
+  left: var(--pf-t--global--spacer--md);
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--pf-t--global--border--color--default);
+}
+
 /* ─── Context row (reference sections — single-machine) ──────────────── */
 
 .inspectah-context-row {

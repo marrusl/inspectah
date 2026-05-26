@@ -376,6 +376,7 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
                   stats={view.data?.stats ?? null}
                   sections={sections.data}
                   health={health.data}
+                  viewData={view.data}
                   userDecisionCount={view.data?.users_groups_decisions?.length}
                   searchSlot={searchSlot}
                 />
@@ -403,6 +404,7 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
                 stats={view.data?.stats ?? null}
                 sections={sections.data}
                 health={health.data}
+                viewData={view.data}
                 userDecisionCount={view.data?.users_groups_decisions?.length}
                 overlay
                 onClose={closeSidebarOverlay}

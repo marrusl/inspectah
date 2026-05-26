@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { RefineStats, ContextSection, HealthResponse } from "../../api/types";
+import type { RefineStats, ContextSection, HealthResponse, ViewResponse } from "../../api/types";
 
 const MOCK_STATS: RefineStats = {
   total_packages: 42,
@@ -20,7 +20,6 @@ const MOCK_STATS: RefineStats = {
 };
 
 const MOCK_SECTIONS: ContextSection[] = [
-  { id: "services", display_name: "Services", items: [{ id: "s1", title: "sshd", subtitle: null, detail: null, searchable_text: "sshd" }] },
   { id: "version_changes", display_name: "Version Changes", items: [] },
   { id: "containers", display_name: "Containers", items: [] },
   { id: "users_groups", display_name: "Users & Groups", items: [{ id: "u1", title: "root", subtitle: null, detail: null, searchable_text: "root" }, { id: "u2", title: "nobody", subtitle: null, detail: null, searchable_text: "nobody" }] },
@@ -31,6 +30,23 @@ const MOCK_SECTIONS: ContextSection[] = [
   { id: "kernel_boot", display_name: "Kernel & Boot", items: [] },
   { id: "selinux", display_name: "Security & Access Control", items: [] },
 ];
+
+/** Minimal ViewResponse for Sidebar badge counting. */
+const MOCK_VIEW_DATA: ViewResponse = {
+  packages: [],
+  config_files: [],
+  containerfile_preview: "",
+  stats: MOCK_STATS,
+  generation: 1,
+  repo_groups: [],
+  version_changes: [],
+  service_states: [
+    { unit: "sshd.service", triage: { triage: { mode: "single_host", baseline: null }, primary_reason: "service_baseline_match", annotations: [] }, include: true },
+  ],
+  service_dropins: [],
+  users_groups_decisions: [],
+  session_is_sensitive: false,
+};
 
 const MOCK_HEALTH: HealthResponse = {
   status: "ok",
@@ -89,7 +105,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("15")).toBeInTheDocument();
   });
 
-  it("shows context section item counts", () => {
+  it("shows decision and context section item counts", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -97,11 +113,12 @@ describe("Sidebar", () => {
         stats={MOCK_STATS}
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
         userDecisionCount={3}
       />,
     );
 
-    // Services has 1 item in context; Users & Groups decision count is 3
+    // Services has 1 service_state in viewData; Users & Groups decision count is 3
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });

@@ -147,6 +147,8 @@ describe("App router", () => {
       generation: 0,
       repo_groups: [],
       version_changes: [],
+      service_states: [],
+      service_dropins: [],
       users_groups_decisions: [],
       session_is_sensitive: false,
     });
