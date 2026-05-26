@@ -1432,7 +1432,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ## Phase 4: Integration Polish
 
-### Task 18: Divergent review tracking (session layer — client-side)
+### Task 18: Divergent review tracking (session layer — client-side) ✅ DONE (aa725e7)
 
 Divergent review confirmation is session-layer state per the spec — not
 in the triage struct, not a RefinementOp, not persisted in autosave. For
@@ -1472,15 +1472,15 @@ count shown in status bar. Progress excludes unconfirmed Divergent items.
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-### Task 19: Package section repo-first exception
+### Task 19: Package section repo-first exception ✅ DONE (28c3a17)
 
 - Packages keep the existing `RepoBar` / `RepoGroup` layout as primary grouping
 - Add `TriageTag` badge to each package row (Baseline/Site/Investigate)
 - No structural change to packages — the triage model applies via badges, not via bucket grouping
 
-### Task 20: End-to-end validation
+### Task 20: End-to-end validation ✅ DONE (9a422b7)
 
-### Task 19a: Export contract update for promoted roots
+### Task 19a: Export contract update for promoted roots ✅ DONE (a543516)
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/configtree.rs` — `write_config_tree()` and `config_copy_roots()` (line 462) must produce promoted-owned output roots: `drop-ins/` (service drop-in files), `quadlet/` (quadlet units), `flatpak/` (manifest + provisioning service), `sysctl/` (synthesized sysctl conf), `tuned/` (profile files + activation). These are new directories alongside the existing `config/` root.
@@ -1523,7 +1523,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 20: End-to-end validation
+### Task 20: End-to-end validation ✅ DONE (9a422b7)
 
 - [ ] Test each validation matrix case from the spec:
   - Excluded service drop-in absent from both `drop-ins/` and generic config output
