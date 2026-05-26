@@ -23,7 +23,10 @@ export function RepoBar({
   onRestoreDismissed,
 }: RepoBarProps) {
   const distroRepos = repos.filter((r) => r.is_distro);
-  const toggleableRepos = repos.filter((r) => !r.is_distro);
+  // Repos with unknown provenance (e.g. @commandline / locally installed) are
+  // not toggleable — they represent packages installed outside any repo.
+  const nonToggleableRepos = repos.filter((r) => !r.is_distro && r.provenance === "unknown");
+  const toggleableRepos = repos.filter((r) => !r.is_distro && r.provenance !== "unknown");
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
 
@@ -35,6 +38,18 @@ export function RepoBar({
         <div key={repo.section_id} className="inspectah-repo-bar__row">
           <div className="inspectah-repo-bar__name">
             <span style={{ color: tierColors.distro }}>{repo.section_id}</span>
+            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+          </div>
+          <span className="inspectah-repo-bar__always">always included</span>
+        </div>
+      ))}
+
+      {nonToggleableRepos.map((repo) => (
+        <div key={repo.section_id} className="inspectah-repo-bar__row">
+          <div className="inspectah-repo-bar__name">
+            <span style={{ color: tierColors.distro }}>
+              {repo.section_id === "@commandline" ? "Local / Manual installs" : repo.section_id}
+            </span>
             <span className="inspectah-repo-bar__count">{repo.package_count}</span>
           </div>
           <span className="inspectah-repo-bar__always">always included</span>
