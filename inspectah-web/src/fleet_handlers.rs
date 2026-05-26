@@ -6,8 +6,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    AttentionLevel, AttentionReason, AttentionTag, ContentHash, FleetAttention, FleetContext,
-    ItemId,
+    ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -92,7 +91,7 @@ pub struct FleetItem {
 
 #[derive(Clone, Serialize)]
 pub struct FleetAttentionDto {
-    pub level: AttentionLevel,
+    pub bucket: String,
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone: Option<PrevalenceZone>,
@@ -447,7 +446,6 @@ fn build_fleet_sections(
                     name: pkg.entry.name.clone(),
                     arch: pkg.entry.arch.clone(),
                 };
-                let fa = pkg.fleet_attention;
                 let fp = pkg.entry.fleet.as_ref();
                 let name_arch_key = format!("{}.{}", pkg.entry.name, pkg.entry.arch);
                 let repo_conflict = ctx.repo_conflicts.get(&name_arch_key).map(|entries| {
@@ -462,7 +460,7 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: pkg.entry.include,
-                    attention: build_attention_dto(&pkg.attention, fa),
+                    attention: build_triage_dto(&pkg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: pkg.entry.source_repo.clone(),
@@ -523,7 +521,6 @@ fn build_fleet_sections(
                 let item_id = ItemId::Config {
                     path: cfg.entry.path.clone(),
                 };
-                let fa = cfg.fleet_attention;
                 let fp = cfg.entry.fleet.as_ref();
 
                 // Build variant info if this path has multiple entries.
@@ -535,7 +532,7 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: fleet_include_default(fp),
-                    attention: build_attention_dto(&cfg.attention, fa),
+                    attention: build_triage_dto(&cfg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
@@ -576,7 +573,7 @@ fn build_section(
         let mut divergent = Vec::new();
 
         for item in items {
-            match item.attention.zone {
+            match &item.attention.zone {
                 Some(PrevalenceZone::Consensus) => consensus.push(item),
                 Some(PrevalenceZone::NearConsensus) => near_consensus.push(item),
                 Some(PrevalenceZone::Divergent) => divergent.push(item),
@@ -1022,24 +1019,32 @@ fn build_context_sections(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_attention_dto(
-    tags: &[AttentionTag],
-    fleet_attention: Option<FleetAttention>,
+fn build_triage_dto(
+    tag: &TriageTag,
+    fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
+    ctx: &FleetContext,
 ) -> FleetAttentionDto {
-    let level = tags
-        .first()
-        .map(|t| t.level)
-        .unwrap_or(AttentionLevel::Routine);
-    let reason = tags
-        .first()
-        .map(|t| attention_reason_to_string(&t.reason))
-        .unwrap_or_else(|| "routine".to_string());
-    let (zone, prevalence) = match fleet_attention {
-        Some(fa) => (fa.zone, fa.prevalence),
-        None => (None, 0),
+    let bucket = triage_bucket_to_string(tag.bucket());
+    let reason = triage_reason_to_string(&tag.primary_reason);
+    let zone = match &tag.triage {
+        Triage::Fleet(ft) => {
+            // Derive zone from fleet bucket for wire compat
+            Some(match ft.bucket {
+                inspectah_refine::types::FleetBucket::Investigate => PrevalenceZone::Divergent,
+                inspectah_refine::types::FleetBucket::Divergent => PrevalenceZone::Divergent,
+                inspectah_refine::types::FleetBucket::Partial => PrevalenceZone::NearConsensus,
+                inspectah_refine::types::FleetBucket::Universal => PrevalenceZone::Consensus,
+            })
+        }
+        Triage::SingleHost(_) => {
+            // Fall back to zone classification from fleet prevalence
+            let z = fp.map(inspectah_core::fleet::classify_zone);
+            if ctx.zones_active { z } else { None }
+        }
     };
+    let prevalence = fp.map(|f| f.count.max(0) as u32).unwrap_or(0);
     FleetAttentionDto {
-        level,
+        bucket,
         reason,
         zone,
         prevalence,
@@ -1053,7 +1058,7 @@ fn default_context_attention(
     let zone = fp.map(inspectah_core::fleet::classify_zone);
     let zone = if ctx.zones_active { zone } else { None };
     FleetAttentionDto {
-        level: AttentionLevel::Informational,
+        bucket: "site".to_string(),
         reason: "context_item".to_string(),
         zone,
         prevalence: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
@@ -1078,27 +1083,34 @@ fn fleet_prevalence_dto(
     }
 }
 
-fn attention_reason_to_string(reason: &AttentionReason) -> String {
+fn triage_bucket_to_string(bucket: TriageBucket) -> String {
+    match bucket {
+        TriageBucket::Baseline => "baseline".to_string(),
+        TriageBucket::Site => "site".to_string(),
+        TriageBucket::Investigate => "investigate".to_string(),
+    }
+}
+
+fn triage_reason_to_string(reason: &TriageReason) -> String {
     match reason {
-        AttentionReason::PackageBaselineMatch => "package_baseline_match".to_string(),
-        AttentionReason::PackageUserAdded => "package_user_added".to_string(),
-        AttentionReason::PackageVersionChanged => "package_version_changed".to_string(),
-        AttentionReason::PackageProvenanceUnavailable => {
+        TriageReason::PackageBaselineMatch => "package_baseline_match".to_string(),
+        TriageReason::PackageUserAdded => "package_user_added".to_string(),
+        TriageReason::PackageVersionChanged => "package_version_changed".to_string(),
+        TriageReason::PackageProvenanceUnavailable => {
             "package_provenance_unavailable".to_string()
         }
-        AttentionReason::PackageLocalInstall => "package_local_install".to_string(),
-        AttentionReason::PackageNoRepoSource => "package_no_repo_source".to_string(),
-        AttentionReason::ConfigDefault => "config_default".to_string(),
-        AttentionReason::ConfigBaselineMatch => "config_baseline_match".to_string(),
-        AttentionReason::ConfigModified => "config_modified".to_string(),
-        AttentionReason::ConfigUnowned => "config_unowned".to_string(),
-        AttentionReason::ConfigOrphaned => "config_orphaned".to_string(),
-        AttentionReason::SensitivePath => "sensitive_path".to_string(),
-        AttentionReason::ServiceImageModeIncompatible => {
-            "service_image_mode_incompatible".to_string()
-        }
-        AttentionReason::PackageConfigCaptured => "package_config_captured".to_string(),
-        AttentionReason::Custom(s) => s.clone(),
+        TriageReason::PackageLocalInstall => "package_local_install".to_string(),
+        TriageReason::PackageNoRepoSource => "package_no_repo_source".to_string(),
+        TriageReason::PackageConfigCaptured => "package_config_captured".to_string(),
+        TriageReason::ConfigDefault => "config_default".to_string(),
+        TriageReason::ConfigBaselineMatch => "config_baseline_match".to_string(),
+        TriageReason::ConfigModified => "config_modified".to_string(),
+        TriageReason::ConfigUnowned => "config_unowned".to_string(),
+        TriageReason::ConfigOrphaned => "config_orphaned".to_string(),
+        TriageReason::SensitivePath => "sensitive_path".to_string(),
+        TriageReason::Custom(s) => s.clone(),
+        // All remaining reasons get a snake_case string from the variant name
+        other => format!("{:?}", other).to_lowercase(),
     }
 }
 

@@ -139,33 +139,6 @@ pub enum UserPasswordOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttentionLevel {
-    NeedsReview,
-    Informational,
-    Routine,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttentionReason {
-    PackageBaselineMatch,
-    PackageUserAdded,
-    PackageVersionChanged,
-    PackageProvenanceUnavailable,
-    PackageLocalInstall,
-    PackageNoRepoSource,
-    ConfigDefault,
-    ConfigBaselineMatch,
-    ConfigModified,
-    ConfigUnowned,
-    ConfigOrphaned,
-    SensitivePath,
-    ServiceImageModeIncompatible,
-    PackageConfigCaptured,
-    Custom(String),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -184,12 +157,6 @@ pub enum RepoTier {
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AttentionTag {
-    pub level: AttentionLevel,
-    pub reason: AttentionReason,
-    pub detail: Option<String>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -316,20 +283,32 @@ pub struct TriageTag {
     pub annotations: Vec<TriageAnnotation>,
 }
 
+impl TriageTag {
+    /// Returns the single-host bucket, or maps fleet buckets to the closest
+    /// single-host equivalent for filtering/counting purposes.
+    pub fn bucket(&self) -> TriageBucket {
+        match &self.triage {
+            Triage::SingleHost(b) => *b,
+            Triage::Fleet(ft) => match ft.bucket {
+                FleetBucket::Investigate => TriageBucket::Investigate,
+                FleetBucket::Divergent => TriageBucket::Investigate,
+                FleetBucket::Partial => TriageBucket::Site,
+                FleetBucket::Universal => TriageBucket::Baseline,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedPackage {
     pub entry: PackageEntry,
-    pub attention: Vec<AttentionTag>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fleet_attention: Option<FleetAttention>,
+    pub triage: TriageTag,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedConfig {
     pub entry: ConfigFileEntry,
-    pub attention: Vec<AttentionTag>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fleet_attention: Option<FleetAttention>,
+    pub triage: TriageTag,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -464,44 +443,6 @@ pub enum RefineMode {
     Fleet(FleetContext),
 }
 
-/// Fleet-aware attention score combining zone placement, attention level,
-/// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus,
-/// None/unclassified sorts last), then attention (NeedsReview < Informational
-/// < Routine), then prevalence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FleetAttention {
-    pub zone: Option<PrevalenceZone>,
-    pub attention: AttentionLevel,
-    pub prevalence: u32,
-}
-
-impl Ord for FleetAttention {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // None (unclassified) sorts after all Some zones
-        let zone_ord = match (self.zone, other.zone) {
-            (Some(a), Some(b)) => a.cmp(&b),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        };
-        zone_ord
-            .then(self.attention.cmp(&other.attention))
-            .then(self.prevalence.cmp(&other.prevalence))
-    }
-}
-
-impl PartialOrd for FleetAttention {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Attention score that works for both single-host and fleet modes.
-#[derive(Debug, Clone)]
-pub enum AttentionScore {
-    SingleHost(AttentionLevel),
-    Fleet(FleetAttention),
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RefineError {

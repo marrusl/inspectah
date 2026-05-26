@@ -1,8 +1,8 @@
-use inspectah_refine::types::{AttentionReason, ItemId, RefinementOp, RepoProvenance};
+use inspectah_refine::types::{ItemId, RefinementOp, RepoProvenance, TriageReason};
 
 #[test]
-fn attention_reason_custom_serialization() {
-    let reason = AttentionReason::Custom("detail".to_string());
+fn triage_reason_custom_serialization() {
+    let reason = TriageReason::Custom("detail".to_string());
     let json = serde_json::to_string(&reason).unwrap();
     println!("Custom variant JSON: {}", json);
     assert!(json.contains("custom"));
@@ -22,19 +22,19 @@ fn test_set_include_repo_op_roundtrip() {
 }
 
 #[test]
-fn test_new_attention_reasons_roundtrip() {
+fn test_triage_reasons_roundtrip() {
     let reasons = vec![
-        AttentionReason::PackageBaselineMatch,
-        AttentionReason::PackageUserAdded,
-        AttentionReason::PackageVersionChanged,
-        AttentionReason::PackageProvenanceUnavailable,
-        AttentionReason::PackageNoRepoSource,
-        AttentionReason::ConfigDefault,
-        AttentionReason::ConfigBaselineMatch,
+        TriageReason::PackageBaselineMatch,
+        TriageReason::PackageUserAdded,
+        TriageReason::PackageVersionChanged,
+        TriageReason::PackageProvenanceUnavailable,
+        TriageReason::PackageNoRepoSource,
+        TriageReason::ConfigDefault,
+        TriageReason::ConfigBaselineMatch,
     ];
     for reason in &reasons {
         let json = serde_json::to_string(reason).unwrap();
-        let parsed: AttentionReason = serde_json::from_str(&json).unwrap();
+        let parsed: TriageReason = serde_json::from_str(&json).unwrap();
         assert_eq!(*reason, parsed);
     }
 }

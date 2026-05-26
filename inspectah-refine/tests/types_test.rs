@@ -1,7 +1,5 @@
 use inspectah_refine::types::PackageTarget;
-use inspectah_refine::types::{
-    AnnotatedOp, AttentionLevel, AttentionReason, AttentionTag, ItemId, RefinementOp,
-};
+use inspectah_refine::types::{AnnotatedOp, ItemId, RefinementOp};
 
 #[test]
 fn package_target_serde_roundtrip() {
@@ -71,21 +69,10 @@ fn annotated_op_json_flattens() {
 }
 
 #[test]
-fn attention_tag_serde() {
-    let tag = AttentionTag {
-        level: AttentionLevel::NeedsReview,
-        reason: AttentionReason::ConfigModified,
-        detail: Some("RPM-owned config was modified".into()),
-    };
-    let json = serde_json::to_string(&tag).unwrap();
-    let parsed: AttentionTag = serde_json::from_str(&json).unwrap();
-    assert_eq!(tag, parsed);
-}
-
-#[test]
-fn attention_reason_custom_variant() {
-    let reason = AttentionReason::Custom("fleet-uncommon".into());
+fn triage_reason_custom_variant() {
+    use inspectah_refine::types::TriageReason;
+    let reason = TriageReason::Custom("fleet-uncommon".into());
     let json = serde_json::to_string(&reason).unwrap();
-    let parsed: AttentionReason = serde_json::from_str(&json).unwrap();
+    let parsed: TriageReason = serde_json::from_str(&json).unwrap();
     assert_eq!(reason, parsed);
 }

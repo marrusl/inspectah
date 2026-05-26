@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 
-use crate::types::{AttentionLevel, AttentionReason, RefinedPackage};
+use crate::types::{RefinedPackage, TriageBucket, TriageReason};
 
 /// Summary of baseline resolution for the web UI.
 ///
@@ -34,27 +34,15 @@ pub fn derive_baseline_summary(
 
     let baseline_count = packages
         .iter()
-        .filter(|p| {
-            p.attention
-                .iter()
-                .any(|t| t.reason == AttentionReason::PackageBaselineMatch)
-        })
+        .filter(|p| p.triage.primary_reason == TriageReason::PackageBaselineMatch)
         .count();
     let user_added_count = packages
         .iter()
-        .filter(|p| {
-            p.attention
-                .iter()
-                .any(|t| t.reason == AttentionReason::PackageUserAdded)
-        })
+        .filter(|p| p.triage.primary_reason == TriageReason::PackageUserAdded)
         .count();
     let review_count = packages
         .iter()
-        .filter(|p| {
-            p.attention
-                .iter()
-                .any(|t| t.level == AttentionLevel::NeedsReview)
-        })
+        .filter(|p| p.triage.bucket() == TriageBucket::Investigate)
         .count();
 
     Some(BaselineSummary {
@@ -80,7 +68,7 @@ mod tests {
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
 
-    use crate::attention::compute_package_attention;
+    use crate::classify::classify_packages;
 
     fn snapshot_with_baseline() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
@@ -132,7 +120,7 @@ mod tests {
     #[test]
     fn test_derive_baseline_summary_basic() {
         let snap = snapshot_with_baseline();
-        let packages = compute_package_attention(&snap);
+        let packages = classify_packages(&snap);
         let summary = derive_baseline_summary(&snap, &packages);
         assert!(summary.is_some(), "summary should be present with baseline");
         let s = summary.unwrap();
@@ -145,7 +133,7 @@ mod tests {
     fn test_derive_baseline_summary_none_without_target_image() {
         let mut snap = snapshot_with_baseline();
         snap.target_image = None;
-        let packages = compute_package_attention(&snap);
+        let packages = classify_packages(&snap);
         let summary = derive_baseline_summary(&snap, &packages);
         assert!(summary.is_none(), "no target_image -> None");
     }
@@ -154,7 +142,7 @@ mod tests {
     fn test_derive_baseline_summary_none_without_baseline() {
         let mut snap = snapshot_with_baseline();
         snap.baseline = None;
-        let packages = compute_package_attention(&snap);
+        let packages = classify_packages(&snap);
         let summary = derive_baseline_summary(&snap, &packages);
         assert!(summary.is_none(), "no baseline -> None");
     }

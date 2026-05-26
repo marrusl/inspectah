@@ -122,7 +122,7 @@ use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_refine::attention::{compute_config_attention, compute_package_attention};
+use inspectah_refine::classify::{classify_configs, classify_packages};
 use inspectah_refine::normalize::{normalize_config_defaults, normalize_package_defaults};
 
 /// Helper: build a BaselineData with the given package names (all x86_64).
@@ -164,7 +164,7 @@ fn test_tier1_packages_include_true() {
         ..Default::default()
     });
     snap.baseline = Some(make_baseline(&["glibc"]));
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(snap.rpm.as_ref().unwrap().packages_added[0].include);
 }
@@ -183,18 +183,18 @@ fn test_tier3_packages_include_false() {
         }],
         ..Default::default()
     });
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(!snap.rpm.as_ref().unwrap().packages_added[0].include);
 }
 
 #[test]
-fn test_leaf_filtering_hides_non_leaf_tier2() {
-    // Leaf filtering applies to Tier 2 (Informational) packages.
-    // With baseline present, user-added packages from recognized repos are
-    // now Routine (Tier 1), so we use degraded mode (no baseline) to get
-    // Informational/ProvenanceUnavailable classification for leaf filtering.
+fn test_leaf_filtering_hides_non_leaf_site() {
+    // Leaf filtering applies to Site (user-added) packages.
+    // Baseline present (empty) puts us in verified mode where user-added
+    // packages from recognized repos are Site. Non-leaf Site packages are hidden.
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(make_baseline(&[]));
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -214,11 +214,10 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None, // degraded mode -> Informational
         leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
     });
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
     assert!(rpm.packages_added[0].include, "httpd is leaf");
@@ -228,6 +227,7 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
 #[test]
 fn test_leaf_defaults_do_not_leak_across_arches() {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(make_baseline(&[]));
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -247,14 +247,13 @@ fn test_leaf_defaults_do_not_leak_across_arches() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None,
         leaf_packages: Some(vec!["glibc.x86_64".into()]),
         auto_packages: Some(vec!["glibc.i686".into()]),
         leaf_dep_tree: serde_json::json!({}),
         ..Default::default()
     });
 
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
 
     let rpm = snap.rpm.as_ref().unwrap();
@@ -293,7 +292,7 @@ fn test_tier1_configs_include_false_not_copied() {
             },
         ],
     });
-    let configs = compute_config_attention(&snap);
+    let configs = classify_configs(&snap);
     normalize_config_defaults(&mut snap, &configs);
     let files = &snap.config.as_ref().unwrap().files;
     assert!(!files[0].include, "RpmOwnedDefault must not be copied");
@@ -312,16 +311,17 @@ fn test_orphaned_configs_include_false() {
             ..Default::default()
         }],
     });
-    let configs = compute_config_attention(&snap);
+    let configs = classify_configs(&snap);
     normalize_config_defaults(&mut snap, &configs);
     assert!(!snap.config.as_ref().unwrap().files[0].include);
 }
 
 #[test]
-fn test_tier2_leaf_fallback_when_no_leaf_data() {
-    // Use degraded mode (no baseline) to produce Tier 2 (Informational).
-    // With baseline present, user-added packages are now Routine (Tier 1).
+fn test_site_leaf_fallback_when_no_leaf_data() {
+    // Use baseline present (empty) to get Site (user-added) classification.
+    // Without leaf data, all Site packages should be visible.
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(make_baseline(&[]));
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "httpd".into(),
@@ -331,22 +331,21 @@ fn test_tier2_leaf_fallback_when_no_leaf_data() {
             include: false,
             ..Default::default()
         }],
-        baseline_package_names: None, // degraded mode -> Informational
-        leaf_packages: None,          // no leaf data
+        leaf_packages: None, // no leaf data
         ..Default::default()
     });
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(
         snap.rpm.as_ref().unwrap().packages_added[0].include,
-        "without leaf data, all Tier 2 should be visible"
+        "without leaf data, all Site packages should be visible"
     );
 }
 
 #[test]
-fn test_user_added_with_baseline_is_routine_included() {
+fn test_user_added_with_baseline_is_site_leaf_filtered() {
     // With baseline present, user-added packages from recognized repos
-    // are Routine (Tier 1) and always included, regardless of leaf status.
+    // are Site. Leaf filtering applies: only leaf packages are included.
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
@@ -372,15 +371,15 @@ fn test_user_added_with_baseline_is_routine_included() {
     });
     // Empty baseline (no packages) — presence of baseline puts us in verified mode
     snap.baseline = Some(make_baseline(&[]));
-    let pkgs = compute_package_attention(&snap);
+    let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
     assert!(
         rpm.packages_added[0].include,
-        "httpd: Routine, always included"
+        "httpd: Site leaf, included"
     );
     assert!(
-        rpm.packages_added[1].include,
-        "apr: also Routine with baseline, always included"
+        !rpm.packages_added[1].include,
+        "apr: Site non-leaf, excluded by leaf filter"
     );
 }
