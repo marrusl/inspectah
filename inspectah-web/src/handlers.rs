@@ -9,10 +9,11 @@ use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
+use inspectah_refine::classify::classify_services;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    RefinedView, RefinementOp, RepoProvenance, RepoTier, UserPasswordOp,
+    RefinedView, RefinementOp, RepoProvenance, RepoTier, TriageTag, UserPasswordOp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -123,6 +124,25 @@ pub struct RepoGroupInfo {
     pub enabled: bool,
 }
 
+/// A classified service state change, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct ServiceDecisionDto {
+    pub unit: String,
+    pub triage: TriageTag,
+    pub include: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owning_package: Option<String>,
+}
+
+/// A classified service drop-in override, projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct DropInDecisionDto {
+    pub unit: String,
+    pub path: String,
+    pub triage: TriageTag,
+    pub include: bool,
+}
+
 #[derive(Serialize)]
 pub struct ViewResponse {
     #[serde(flatten)]
@@ -130,6 +150,8 @@ pub struct ViewResponse {
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
+    pub service_states: Vec<ServiceDecisionDto>,
+    pub service_dropins: Vec<DropInDecisionDto>,
     pub users_groups_decisions: Vec<serde_json::Value>,
     pub session_is_sensitive: bool,
 }
@@ -280,6 +302,7 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
                 .collect()
         })
         .unwrap_or_default();
+    let (service_states, service_dropins) = build_service_decisions(session);
     let users_groups_decisions = session
         .snapshot_projected()
         .users_groups
@@ -291,6 +314,8 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
         repo_groups,
         baseline_summary,
         version_changes,
+        service_states,
+        service_dropins,
         users_groups_decisions,
         session_is_sensitive,
     }
@@ -352,6 +377,36 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     });
 
     groups
+}
+
+/// Classify services from the projected snapshot into decision-item DTOs.
+fn build_service_decisions(
+    session: &RefineSession,
+) -> (Vec<ServiceDecisionDto>, Vec<DropInDecisionDto>) {
+    let snap = session.snapshot_projected();
+    let (states, dropins) = classify_services(&snap);
+
+    let state_dtos: Vec<ServiceDecisionDto> = states
+        .into_iter()
+        .map(|s| ServiceDecisionDto {
+            unit: s.entry.unit.clone(),
+            triage: s.triage,
+            include: s.entry.include,
+            owning_package: s.entry.owning_package.clone(),
+        })
+        .collect();
+
+    let dropin_dtos: Vec<DropInDecisionDto> = dropins
+        .into_iter()
+        .map(|d| DropInDecisionDto {
+            unit: d.entry.unit.clone(),
+            path: d.entry.path.clone(),
+            triage: d.triage,
+            include: d.entry.include,
+        })
+        .collect();
+
+    (state_dtos, dropin_dtos)
 }
 
 pub async fn apply_op(

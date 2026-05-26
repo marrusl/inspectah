@@ -5,6 +5,7 @@ use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::classify::classify_services;
 use inspectah_refine::types::{
     ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
@@ -550,6 +551,83 @@ fn build_fleet_sections(
         ));
     }
 
+    // Services — classified as decision items with triage tags
+    {
+        let (states, dropins) = classify_services(snap);
+
+        let mut items: Vec<FleetItem> = states
+            .iter()
+            .map(|s| {
+                let item_id = ItemId::Service {
+                    unit: s.entry.unit.clone(),
+                };
+                let fp = s.entry.fleet.as_ref();
+                FleetItem {
+                    item_id,
+                    include: fleet_include_default(fp),
+                    triage: build_triage_dto(&s.triage, fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
+                }
+            })
+            .collect();
+
+        // Drop-in overrides — group by (unit, path) for variant detection
+        let mut dropin_groups: std::collections::BTreeMap<
+            (&str, &str),
+            Vec<&inspectah_refine::types::RefinedDropIn>,
+        > = std::collections::BTreeMap::new();
+        for d in &dropins {
+            dropin_groups
+                .entry((d.entry.unit.as_str(), d.entry.path.as_str()))
+                .or_default()
+                .push(d);
+        }
+
+        for ((_, path), group) in &dropin_groups {
+            let representative = group
+                .iter()
+                .find(|d| {
+                    matches!(
+                        d.entry.variant_selection,
+                        VariantSelection::Selected | VariantSelection::Only
+                    )
+                })
+                .or_else(|| group.first());
+            if let Some(d) = representative {
+                let item_id = ItemId::DropIn {
+                    path: path.to_string(),
+                };
+                let fp = d.entry.fleet.as_ref();
+                let variants = if group.len() >= 2 {
+                    Some(build_content_variants(
+                        &group
+                            .iter()
+                            .map(|d| (&d.entry.content, d.entry.variant_selection, d.entry.fleet.as_ref()))
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                };
+                items.push(FleetItem {
+                    item_id,
+                    include: fleet_include_default(fp),
+                    triage: build_triage_dto(&d.triage, fp, ctx),
+                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    variants,
+                    source_repo: String::new(),
+                    repo_conflict: None,
+                });
+            }
+        }
+
+        if !items.is_empty() {
+            sections.push(build_section("services", "Services", true, &items, ctx));
+        }
+    }
+
     // --- Context sections (read-only, no toggles) ---
     // These sections come from the snapshot, not from RefinedView.
     // Items have fleet prevalence but no include/exclude toggle.
@@ -622,82 +700,7 @@ fn build_context_sections(
     snap: &InspectionSnapshot,
     ctx: &FleetContext,
 ) {
-    // Services (state changes + drop-in overrides)
-    if let Some(ref svc) = snap.services {
-        let mut items: Vec<FleetItem> = svc
-            .state_changes
-            .iter()
-            .map(|unit| {
-                let item_id = ItemId::Service {
-                    unit: unit.unit.clone(),
-                };
-                let fp = unit.fleet.as_ref();
-                FleetItem {
-                    item_id,
-                    include: fleet_include_default(fp),
-                    triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
-                    variants: None,
-                    source_repo: String::new(),
-                    repo_conflict: None,
-                }
-            })
-            .collect();
-
-        // Group drop-ins by (unit, path) to detect variants.
-        let mut dropin_groups: std::collections::BTreeMap<
-            (&str, &str),
-            Vec<&inspectah_core::types::services::SystemdDropIn>,
-        > = std::collections::BTreeMap::new();
-        for d in &svc.drop_ins {
-            dropin_groups
-                .entry((d.unit.as_str(), d.path.as_str()))
-                .or_default()
-                .push(d);
-        }
-
-        for ((_, path), group) in &dropin_groups {
-            // Emit only the Selected/Only entry as the representative item.
-            let representative = group
-                .iter()
-                .find(|d| {
-                    matches!(
-                        d.variant_selection,
-                        VariantSelection::Selected | VariantSelection::Only
-                    )
-                })
-                .or_else(|| group.first());
-            if let Some(d) = representative {
-                let item_id = ItemId::DropIn {
-                    path: path.to_string(),
-                };
-                let fp = d.fleet.as_ref();
-                let variants = if group.len() >= 2 {
-                    Some(build_content_variants(
-                        &group
-                            .iter()
-                            .map(|d| (&d.content, d.variant_selection, d.fleet.as_ref()))
-                            .collect::<Vec<_>>(),
-                    ))
-                } else {
-                    None
-                };
-                items.push(FleetItem {
-                    item_id,
-                    include: fleet_include_default(fp),
-                    triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
-                    variants,
-                    source_repo: String::new(),
-                    repo_conflict: None,
-                });
-            }
-        }
-
-        if !items.is_empty() {
-            sections.push(build_section("services", "Services", false, &items, ctx));
-        }
-    }
+    // NOTE: Services moved to build_fleet_sections() as decision items.
 
     // Containers (quadlets + compose)
     if let Some(ref containers) = snap.containers {
