@@ -23,6 +23,7 @@
 | CLI Scan Progress | SHIPPED (2026-05-24) |
 | Go Retirement + Legacy Removal | DONE (2026-05-24/25) |
 | Nit List Sweep (5 items) | DONE (2026-05-25) |
+| Nit List Batch A+B (6 fixes) | DONE (2026-05-25) |
 
 ## Roadmap to CLI Cutover
 
@@ -56,6 +57,10 @@
 ✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
     ↓
 ✅ Fleet Phase 2a: Refine Engine (21 commits, 4 review rounds, 2026-05-21)
+    ↓
+✅ Nit List Batch A+B (6 fixes: @commandline handling, fleet prevalence, conflict count, baseline summary — 2026-05-25)
+    ↓
+Section Promotion + Fleet Users/Groups (spec in progress — containers, kernel/boot, SELinux → actionable)
     ↓
 Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓
@@ -169,13 +174,25 @@ Shipped with scan progress (2026-05-24). Dynamic viewport height: 30% of termina
 
 Renamed to `cross_crate_integration_test.rs` — "Phase 6" was too narrow; the tests cover cross-crate data flow (core, pipeline, refine), not just baseline. Schema version assertions updated to use `SCHEMA_VERSION` constant.
 
+### Section Promotion & Triage Redesign (HIGH — next)
+
+Replace the attention-level triage system (NeedsReview/Informational/Routine) with action-oriented buckets. Promote services, quadlets, flatpak provisioning, sysctls, and tuned profiles from read-only Reference to toggleable Review sections. Includes ownership/pruning contract between promoted sections and the generic config carry-forward path. Compose deferred until a render contract exists. Spec: `docs/specs/proposed/2026-05-25-section-promotion-triage-redesign.md`. Plan: `docs/plans/2026-05-25-section-promotion-triage-redesign.md`.
+
+### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
+
+Rust redaction pipeline needs parity with Go's heuristic redaction capabilities. Go has pattern-based redaction for passwords, API keys, tokens, and connection strings embedded in config files. Rust currently handles explicit redaction but lacks the heuristic detection layer. Needs spec.
+
+### Tier 2 Section Promotion (MEDIUM — after Tier 1)
+
+Promote scheduled tasks (cron + systemd timers), SELinux booleans, and boot parameters (kargs) from Reference to Review. Follows the pattern established by Tier 1 but with additional complexity: SELinux booleans use JSON value dedup instead of prevalence-based merge, kargs need cmdline decomposition for per-argument prevalence, and scheduled tasks need RPM-owned vs user-created filtering. Separate spec after Tier 1 ships.
+
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 
 Audit and remove defensive backward-compatibility code added during the Rust rewrite. Before 1.0, old tarballs are not sacred — users re-scan. Remove: legacy snapshot field sniffing, dual-carrier fallbacks, serde(default) shims for fields that only existed in transitional schemas, and any "if old format, try X" branching. The goal is a clean codebase where every code path serves the current schema, not historical ones.
 
-### Go Compat Removal from Rust Codebase (MEDIUM — pre-cutover)
+### ~~Go Compat Removal from Rust Codebase~~ (DONE — 2026-05-24)
 
-Audit the Rust codebase for Go-compatibility shims, parity test fixtures, schema compat code, and output-matching workarounds that exist only to maintain equivalence with the Go implementation during the transition. Once the Rust binary is the sole path, these are dead weight. Includes: Go-referencing test data, output-format compat checks, dual-format snapshot loading, and any code gated on "match Go behavior." Distinct from the Pre-1.0 Compat Sweep (which targets old Rust schema transitions) — this targets Go-era artifacts specifically.
+Completed as part of Go Retirement. Go source tree, CI workflow, schema compat code, parity tests all removed. Schema floor raised to current version.
 
 ### CLI Cutover
 
@@ -184,6 +201,7 @@ Rust binary becomes primary `inspectah` command. Go binary deprecated.
 ### Post-Cutover
 
 - Architect v2 (multi-artifact decomposition)
-- Remove Go source tree (`cmd/`, `go.mod`, `go.sum`) — see also nit-list
+- ~~Remove Go source tree~~ (DONE — 2026-05-24)
+- Documentation overhaul
 - TUI mode
 - `inspectah build` command
