@@ -25,7 +25,7 @@ export function RepoBar({
   const distroRepos = repos.filter((r) => r.is_distro);
   // Repos with unknown provenance (e.g. @commandline / locally installed) are
   // not toggleable — they represent packages installed outside any repo.
-  const nonToggleableRepos = repos.filter((r) => !r.is_distro && r.provenance === "unknown");
+  const nonToggleableRepos = repos.filter((r) => !r.is_distro && r.provenance === "unknown" && r.package_count > 0);
   const toggleableRepos = repos.filter((r) => !r.is_distro && r.provenance !== "unknown");
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
