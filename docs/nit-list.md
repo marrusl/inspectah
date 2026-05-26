@@ -26,22 +26,13 @@ Moved to Completed section.
 
 Moved to Completed section.
 
-## Refine UI Polish (2026-05-26 testing session)
+## ~~Refine UI Polish~~ (DONE — 2026-05-26)
 
-- [ ] **User toggle missing:** UserCard has no top-level checkbox — users must expand and pick a radio strategy. Add checkbox to card header mapping to skip (unchecked) / useradd (checked), matching DecisionItem pattern. Kit.
-- [ ] **Row click to expand:** DecisionItem and ContextItem only expand via the chevron button. Add `onClick={handleExpand}` to the row div with `stopPropagation` on checkbox. Add `cursor: pointer` to row CSS. Kit.
-- [ ] **@commandline repo toggle:** RepoBar shows a toggle switch for `@commandline` (provenance=unknown). Should be non-toggleable — filter `toggleableRepos` by `provenance === "verified"`. Consider display name: "@commandline" → "Local / Manual installs". Kit.
-- [ ] **Missing section titles:** Most content panes have no heading (Packages, Configs, Services, Containers, System Tuning). Users & Groups is the only one that does. Add consistent `<h2>` heading to each section in MainContent, using the sidebar label text. Kit.
-- [ ] **Non-functional chevrons in Storage:** ContextItem renders chevrons when `item.detail !== null` but empty strings pass that check. Fix: `item.detail !== null && item.detail.trim().length > 0`. Kit.
-- [ ] **Storage mounts leaking into unrelated sections:** Mount points (e.g., `/`, `/dev/mapper/cs-root (xfs)`) appear not just duplicated within Storage but in entirely wrong Reference tabs (Network, Scheduled Tasks, etc.). The Rust context section builder is putting storage items into the wrong section buckets — same class of bug as the earlier single-host user dedup fix. Tang.
+Moved to Completed section.
 
-## Fleet Refine UI (2026-05-26 testing session)
+## ~~Fleet Refine UI~~ (DONE — 2026-05-26)
 
-- [ ] **Warning banners too dark:** Package and Config tab warning/info banners have overly dark fill colors — text is hard to read. Likely a PatternFly Alert variant or custom background issue. Kit.
-- [ ] **Fleet defaults to 2/3 prevalence, not intersection:** Packages on 2 of 3 hosts start included. Should default to strict intersection only — items below full prevalence start excluded. Related to the "Fleet Default: Intersection Not Union" roadmap item, but this was supposed to be fixed already. Tang (merge logic).
-- [ ] **Fleet toggles broken except packages and sysctls:** Enable/disable toggles don't work on Services, Containers, Configs, Users in fleet mode. Package checkboxes visually toggle but Containerfile preview doesn't update. Sysctls do work. Likely the fleet `FleetApp.tsx` mutation handler doesn't cover the new promoted section ItemId kinds. Kit (frontend) + Tang (fleet handler).
-- [ ] **Tuned fleet data wrong:** Shows "throughput" enabled at 0/3 hosts. Containerfile emits "manual" instead of nothing. If no hosts have a non-default tuned profile, the section should be empty or the item should show as not-included. Tuned fleet merge may not be handling the no-profile case correctly. Tang (fleet merge + handler).
-- [ ] **Storage reference looks good in fleet** — use this as the reference visual for converging single-host reference sections to match.
+Moved to Completed section.
 
 ## RepoBar Click-to-Filter (v2 backlog)
 
@@ -101,3 +92,20 @@ Moved to Completed section.
 ### Scan Progress Follow-ups
 
 - [x] **`--verbose` / `--quiet` flags:** Added `-v` and `-q` flags to `inspectah scan`. `--quiet` suppresses progress checklist (null renderer), still prints completion + output path. `--verbose` plumbed through to all three renderers (sub-step collapsing not yet implemented — plumbing ready). `conflicts_with` enforced via clap. *(DONE — 2026-05-25)*
+
+### Refine UI Polish (2026-05-26 testing session)
+
+- [x] **User toggle missing:** Added checkbox to UserCard header mapping to skip (unchecked) / useradd (checked), matching DecisionItem pattern. *(DONE — 2026-05-26)*
+- [x] **Row click to expand:** Added `onClick={handleExpand}` to DecisionItem and ContextItem row divs with `stopPropagation` on interactive children. `cursor: pointer` styling. *(DONE — 2026-05-26)*
+- [x] **@commandline repo toggle:** Made non-toggleable by filtering on `provenance === "unknown"`. Display name changed to "Local / Manual installs". *(DONE — 2026-05-26)*
+- [x] **Missing section titles:** Added consistent `<h2>` headings to all content panes via `SECTION_LABELS` map in MainContent. *(DONE — 2026-05-26)*
+- [x] **Non-functional chevrons in Storage:** Added `item.detail.trim().length > 0` check to ContextItem. *(DONE — 2026-05-26)*
+- [x] **Storage mounts leaking into unrelated sections:** Frontend bug — missing React keys on ContextList caused cross-section state reuse, and GlobalSearch `searchTextMap` had bare-ID key collisions across sections. Fixed with section-scoped keys. *(DONE — 2026-05-26)*
+
+### Fleet Refine UI (2026-05-26 testing session)
+
+- [x] **Warning banners too dark:** Replaced hardcoded backgrounds with `color-mix()` tints that work in both themes. *(DONE — 2026-05-26)*
+- [x] **Fleet defaults to intersection:** Applied strict intersection default to all 14 section types — items below full prevalence start excluded but visible. *(DONE — 2026-05-26)*
+- [x] **Fleet toggles broken:** Configs, services, drop-ins, and quadlets were recalculating include from raw prevalence instead of reading projected snapshot state. Fixed to use `entry.include`. *(DONE — 2026-05-26)*
+- [x] **Tuned fleet data wrong:** Three fixes — merge hardcoded `true`, view hardcoded `true`, prevalence passed as `None`. Added `is_stock_tuned_profile()` recognizing 14 stock profiles; both single-host and fleet paths suppress stock defaults. *(DONE — 2026-05-26)*
+- [x] **Prevalence badge contrast:** Replaced yellow-on-white text with tinted pill badges (green/amber/red) all exceeding WCAG AA 4.5:1. *(DONE — 2026-05-26)*
