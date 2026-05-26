@@ -1,3 +1,14 @@
+/// Extract a package section stat from a view JSON response.
+fn pkg_stat(view: &serde_json::Value, field: &str) -> i64 {
+    view["stats"]["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "package")
+        .and_then(|s| s[field].as_i64())
+        .unwrap_or(0)
+}
+
 /// Create a minimal test tarball with a FullyRedacted snapshot.
 fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let snap = serde_json::json!({
@@ -102,7 +113,7 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 0);
-    assert_eq!(view["stats"]["total_packages"], 1);
+    assert_eq!(pkg_stat(&view, "total"), 1);
 
     // 3. Apply an operation (exclude httpd)
     let resp = client
@@ -117,7 +128,7 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 1);
-    assert_eq!(view["stats"]["excluded_packages"], 1);
+    assert_eq!(pkg_stat(&view, "excluded"), 1);
 
     // 4. Undo (requires JSON body)
     let resp = client
@@ -129,7 +140,7 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 2);
-    assert_eq!(view["stats"]["excluded_packages"], 0);
+    assert_eq!(pkg_stat(&view, "excluded"), 0);
 
     // 5. Redo (requires JSON body)
     let resp = client

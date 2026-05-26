@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
@@ -14,9 +13,9 @@ use crate::fleet::variant_ops::{self, VariantProjectionState};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, ContentHash, FleetContext, ItemId, PackageTarget,
-    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
-    UserPasswordOp,
+    AnnotatedOp, AttentionLevel, ChangesSummary, ContentHash, FleetContext, ItemId, RefineError,
+    RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance, SectionChangeSummary,
+    SectionKind, SectionStats, UserPasswordOp,
 };
 
 pub struct RefineSession {
@@ -396,52 +395,84 @@ impl RefineSession {
 
     pub fn pending_changes(&self) -> ChangesSummary {
         let projected = self.project_snapshot();
-        let mut packages_included = Vec::new();
-        let mut packages_excluded = Vec::new();
-        let mut configs_included = Vec::new();
-        let mut configs_excluded = Vec::new();
 
+        // --- Package changes ---
+        let mut pkg_included = Vec::new();
+        let mut pkg_excluded = Vec::new();
         if let (Some(orig_rpm), Some(proj_rpm)) = (&self.original.rpm, &projected.rpm) {
             for (orig, proj) in orig_rpm.packages_added.iter().zip(&proj_rpm.packages_added) {
-                let target = PackageTarget {
-                    name: orig.name.clone(),
-                    arch: orig.arch.clone(),
-                };
                 if orig.include != proj.include {
+                    let id = ItemId::Package {
+                        name: orig.name.clone(),
+                        arch: orig.arch.clone(),
+                    };
                     if proj.include {
-                        packages_included.push(target);
+                        pkg_included.push(id);
                     } else {
-                        packages_excluded.push(target);
+                        pkg_excluded.push(id);
                     }
                 }
             }
         }
 
+        // --- Config changes ---
+        let mut cfg_included = Vec::new();
+        let mut cfg_excluded = Vec::new();
         if let (Some(orig_cfg), Some(proj_cfg)) = (&self.original.config, &projected.config) {
             for (orig, proj) in orig_cfg.files.iter().zip(&proj_cfg.files) {
                 if orig.include != proj.include {
+                    let id = ItemId::Config {
+                        path: orig.path.clone(),
+                    };
                     if proj.include {
-                        configs_included.push(orig.path.clone());
+                        cfg_included.push(id);
                     } else {
-                        configs_excluded.push(orig.path.clone());
+                        cfg_excluded.push(id);
                     }
                 }
             }
         }
 
-        let repos_excluded: Vec<String> =
-            self.excluded_sections_at(&projected).into_iter().collect();
+        // --- Repo changes ---
+        let repos_excluded_set = self.excluded_sections_at(&projected);
+        let repo_excluded: Vec<ItemId> = repos_excluded_set
+            .into_iter()
+            .map(|s| ItemId::Repo { path: s })
+            .collect();
+
+        // --- Build sections vec (only non-empty sections) ---
+        let mut sections = Vec::new();
+        if !pkg_included.is_empty() || !pkg_excluded.is_empty() {
+            sections.push(SectionChangeSummary {
+                kind: SectionKind::Package,
+                included: pkg_included,
+                excluded: pkg_excluded,
+            });
+        }
+        if !cfg_included.is_empty() || !cfg_excluded.is_empty() {
+            sections.push(SectionChangeSummary {
+                kind: SectionKind::Config,
+                included: cfg_included,
+                excluded: cfg_excluded,
+            });
+        }
+        if !repo_excluded.is_empty() {
+            sections.push(SectionChangeSummary {
+                kind: SectionKind::Repo,
+                included: Vec::new(),
+                excluded: repo_excluded,
+            });
+        }
 
         // Projection-based variant dirty check: compare projected variant_selection
         // values against originals. A variant op followed by its reverse
-        // (e.g., select A→B then B→A) correctly reports variants_changed == 0.
+        // (e.g., select A->B then B->A) correctly reports variants_changed == 0.
         let variants_changed = {
             use inspectah_core::types::fleet::VariantSelection;
             let mut count = 0usize;
 
             // Config variants
             if let (Some(orig_cfg), Some(proj_cfg)) = (&self.original.config, &projected.config) {
-                // Check for selection changes in original entries
                 for orig_entry in &orig_cfg.files {
                     if let Some(proj_entry) = proj_cfg.files.iter().find(|e| {
                         e.path == orig_entry.path
@@ -452,10 +483,9 @@ impl RefineSession {
                             count += 1;
                         }
                     } else {
-                        count += 1; // entry removed (discarded)
+                        count += 1;
                     }
                 }
-                // Check for user-created variants (in projected but not original)
                 for proj_entry in &proj_cfg.files {
                     let in_original = orig_cfg.files.iter().any(|e| {
                         e.path == proj_entry.path
@@ -525,7 +555,7 @@ impl RefineSession {
                 }
             }
 
-            // Compose variant selection changes (keyed by path + serialized images hash)
+            // Compose variant selection changes
             if let (Some(orig_cont), Some(proj_cont)) =
                 (&self.original.containers, &projected.containers)
             {
@@ -555,19 +585,11 @@ impl RefineSession {
             count
         };
 
-        let is_dirty = !packages_included.is_empty()
-            || !packages_excluded.is_empty()
-            || !configs_included.is_empty()
-            || !configs_excluded.is_empty()
-            || !repos_excluded.is_empty()
+        let is_dirty = sections.iter().any(|s| !s.included.is_empty() || !s.excluded.is_empty())
             || variants_changed > 0;
 
         ChangesSummary {
-            packages_included,
-            packages_excluded,
-            configs_included,
-            configs_excluded,
-            repos_excluded,
+            sections,
             variants_changed,
             is_dirty,
         }
@@ -1487,13 +1509,28 @@ impl RefineSession {
         let containerfile_preview = render_containerfile(&projected, Some(&materialized_roots));
         drop(preview_dir);
 
+        let pkg_total = packages.len();
+        let pkg_included = packages.iter().filter(|p| p.entry.include).count();
+        let pkg_excluded = packages.iter().filter(|p| !p.entry.include).count();
+        let cfg_total = config_files.len();
+        let cfg_included = config_files.iter().filter(|c| c.entry.include).count();
+        let cfg_excluded = config_files.iter().filter(|c| !c.entry.include).count();
+
         let stats = RefineStats {
-            total_packages: packages.len(),
-            included_packages: packages.iter().filter(|p| p.entry.include).count(),
-            excluded_packages: packages.iter().filter(|p| !p.entry.include).count(),
-            total_configs: config_files.len(),
-            included_configs: config_files.iter().filter(|c| c.entry.include).count(),
-            excluded_configs: config_files.iter().filter(|c| !c.entry.include).count(),
+            sections: vec![
+                SectionStats {
+                    kind: SectionKind::Package,
+                    total: pkg_total,
+                    included: pkg_included,
+                    excluded: pkg_excluded,
+                },
+                SectionStats {
+                    kind: SectionKind::Config,
+                    total: cfg_total,
+                    included: cfg_included,
+                    excluded: cfg_excluded,
+                },
+            ],
             needs_review_count: packages
                 .iter()
                 .filter(|p| {
@@ -1513,22 +1550,6 @@ impl RefineSession {
             ops_applied: self.cursor,
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
-            package_managed_configs: projected
-                .config
-                .as_ref()
-                .map(|c| {
-                    c.files
-                        .iter()
-                        .filter(|f| {
-                            !f.include
-                                && matches!(
-                                    f.kind,
-                                    ConfigFileKind::RpmOwnedDefault | ConfigFileKind::BaselineMatch
-                                )
-                        })
-                        .count()
-                })
-                .unwrap_or(0),
             baseline_available: self.baseline_available,
         };
 
@@ -1827,7 +1848,7 @@ mod tests {
 
         // All packages visible (degraded mode)
         assert_eq!(view.packages.len(), 2);
-        assert_eq!(view.stats.total_packages, 2);
+        assert_eq!(view.stats.total_packages(), 2);
     }
 
     #[test]
@@ -1895,11 +1916,11 @@ mod tests {
 
         // Stats should reflect only the matching canonical package identity.
         assert_eq!(
-            view.stats.total_packages, 1,
+            view.stats.total_packages(), 1,
             "total_packages should be leaf count"
         );
         assert_eq!(
-            view.stats.included_packages, 1,
+            view.stats.included_packages(), 1,
             "included_packages should be leaf count"
         );
     }

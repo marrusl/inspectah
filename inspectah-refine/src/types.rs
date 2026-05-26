@@ -349,15 +349,39 @@ pub struct RefinedConfig {
     pub fleet_attention: Option<FleetAttention>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionKind {
+    Package,
+    Config,
+    Repo,
+    User,
+    Service,
+    Quadlet,
+    Flatpak,
+    Sysctl,
+    Tuned,
+    ComposeContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionStats {
+    pub kind: SectionKind,
+    pub total: usize,
+    pub included: usize,
+    pub excluded: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionChangeSummary {
+    pub kind: SectionKind,
+    pub included: Vec<ItemId>,
+    pub excluded: Vec<ItemId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefineStats {
-    pub total_packages: usize,
-    pub included_packages: usize,
-    pub excluded_packages: usize,
-    pub total_configs: usize,
-    pub included_configs: usize,
-    pub package_managed_configs: usize,
-    pub excluded_configs: usize,
+    pub sections: Vec<SectionStats>,
     pub needs_review_count: usize,
     pub ops_applied: usize,
     pub can_undo: bool,
@@ -374,15 +398,54 @@ pub struct RefinedView {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChangesSummary {
-    pub packages_included: Vec<PackageTarget>,
-    pub packages_excluded: Vec<PackageTarget>,
-    pub configs_included: Vec<String>,
-    pub configs_excluded: Vec<String>,
-    pub repos_excluded: Vec<String>,
+    pub sections: Vec<SectionChangeSummary>,
     pub variants_changed: usize,
     pub is_dirty: bool,
+}
+
+impl RefineStats {
+    /// Look up a section's stats by kind. Returns zeros if the section is absent.
+    pub fn section(&self, kind: SectionKind) -> &SectionStats {
+        static EMPTY: SectionStats = SectionStats {
+            kind: SectionKind::Package, // placeholder, caller matches on kind
+            total: 0,
+            included: 0,
+            excluded: 0,
+        };
+        self.sections.iter().find(|s| s.kind == kind).unwrap_or(&EMPTY)
+    }
+
+    // Convenience accessors for the two sections that existing callers use most.
+    pub fn total_packages(&self) -> usize { self.section(SectionKind::Package).total }
+    pub fn included_packages(&self) -> usize { self.section(SectionKind::Package).included }
+    pub fn excluded_packages(&self) -> usize { self.section(SectionKind::Package).excluded }
+    pub fn total_configs(&self) -> usize { self.section(SectionKind::Config).total }
+    pub fn included_configs(&self) -> usize { self.section(SectionKind::Config).included }
+    pub fn excluded_configs(&self) -> usize { self.section(SectionKind::Config).excluded }
+}
+
+impl ChangesSummary {
+    /// Look up a section's change summary by kind.
+    pub fn section(&self, kind: SectionKind) -> Option<&SectionChangeSummary> {
+        self.sections.iter().find(|s| s.kind == kind)
+    }
+
+    /// Convenience: collect excluded repo ItemIds as string section IDs.
+    pub fn repos_excluded(&self) -> Vec<String> {
+        self.section(SectionKind::Repo)
+            .map(|s| {
+                s.excluded
+                    .iter()
+                    .filter_map(|id| match id {
+                        ItemId::Repo { path } => Some(path.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

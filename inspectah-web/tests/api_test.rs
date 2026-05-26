@@ -124,7 +124,14 @@ async fn apply_valid_op() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["generation"], 1);
-    assert_eq!(json["stats"]["included_packages"], 1);
+    // Package stats are now in sections array
+    let pkg_stats = json["stats"]["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "package")
+        .expect("package section should exist");
+    assert_eq!(pkg_stats["included"], 1);
 }
 
 #[tokio::test]

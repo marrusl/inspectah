@@ -67,6 +67,7 @@ fn fleet(count: i32, total: i32, hosts: &[&str]) -> FleetPrevalence {
         count,
         total,
         hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        ..Default::default()
     }
 }
 
@@ -86,12 +87,12 @@ fn new_session_is_not_dirty() {
 fn new_session_has_correct_stats() {
     let session = RefineSession::new(test_snapshot());
     let view = session.view();
-    assert_eq!(view.stats.total_packages, 3);
-    assert_eq!(view.stats.included_packages, 3);
-    assert_eq!(view.stats.excluded_packages, 0);
-    assert_eq!(view.stats.total_configs, 1);
-    assert_eq!(view.stats.included_configs, 1);
-    assert_eq!(view.stats.excluded_configs, 0);
+    assert_eq!(view.stats.total_packages(), 3);
+    assert_eq!(view.stats.included_packages(), 3);
+    assert_eq!(view.stats.excluded_packages(), 0);
+    assert_eq!(view.stats.total_configs(), 1);
+    assert_eq!(view.stats.included_configs(), 1);
+    assert_eq!(view.stats.excluded_configs(), 0);
 }
 
 #[test]
@@ -105,8 +106,8 @@ fn apply_exclude_package() {
         .unwrap();
 
     assert_eq!(session.view().generation, 1);
-    assert_eq!(session.view().stats.excluded_packages, 1);
-    assert_eq!(session.view().stats.included_packages, 2);
+    assert_eq!(session.view().stats.excluded_packages(), 1);
+    assert_eq!(session.view().stats.included_packages(), 2);
     assert!(session.is_dirty());
 }
 
@@ -165,7 +166,7 @@ fn undo_reverts_to_original() {
     session.undo().unwrap();
 
     assert!(!session.is_dirty());
-    assert_eq!(session.view().stats.excluded_packages, 0);
+    assert_eq!(session.view().stats.excluded_packages(), 0);
     assert_eq!(session.view().generation, 2); // apply=1, undo=2
 }
 
@@ -188,7 +189,7 @@ fn redo_after_undo() {
     session.redo().unwrap();
 
     assert!(session.is_dirty());
-    assert_eq!(session.view().stats.excluded_packages, 1);
+    assert_eq!(session.view().stats.excluded_packages(), 1);
     assert_eq!(session.view().generation, 3);
 }
 
@@ -256,7 +257,7 @@ fn exclude_config_file() {
         .unwrap();
 
     let view = session.view();
-    assert_eq!(view.stats.excluded_configs, 1);
+    assert_eq!(view.stats.excluded_configs(), 1);
     assert!(session.is_dirty());
 }
 
@@ -271,8 +272,14 @@ fn pending_changes_tracks_excludes() {
         .unwrap();
 
     let changes = session.pending_changes();
-    assert_eq!(changes.packages_excluded.len(), 1);
-    assert_eq!(changes.packages_excluded[0].name, "httpd");
+    let pkg_section = changes
+        .section(inspectah_refine::types::SectionKind::Package)
+        .expect("package section should exist");
+    assert_eq!(pkg_section.excluded.len(), 1);
+    match &pkg_section.excluded[0] {
+        inspectah_refine::types::ItemId::Package { name, .. } => assert_eq!(name, "httpd"),
+        other => panic!("expected Package ItemId, got {:?}", other),
+    }
     assert!(changes.is_dirty);
 }
 
@@ -322,12 +329,12 @@ fn undo_all_then_redo_all() {
 
     // Stats should match the fully-applied state
     assert_eq!(
-        session.view().stats.excluded_packages,
-        view_after_ops.stats.excluded_packages
+        session.view().stats.excluded_packages(),
+        view_after_ops.stats.excluded_packages()
     );
     assert_eq!(
-        session.view().stats.excluded_configs,
-        view_after_ops.stats.excluded_configs
+        session.view().stats.excluded_configs(),
+        view_after_ops.stats.excluded_configs()
     );
 }
 
@@ -503,9 +510,9 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
         !mystery.entry.include,
         "needs-review package stays excluded by default"
     );
-    assert_eq!(view.stats.total_packages, 2);
-    assert_eq!(view.stats.included_packages, 1);
-    assert_eq!(view.stats.excluded_packages, 1);
+    assert_eq!(view.stats.total_packages(), 2);
+    assert_eq!(view.stats.included_packages(), 1);
+    assert_eq!(view.stats.excluded_packages(), 1);
     assert_eq!(view.stats.needs_review_count, 1);
 }
 
@@ -592,7 +599,7 @@ fn test_leaf_data_unavailable_shows_all_packages_in_view() {
 
     let session = RefineSession::new(snap);
     assert_eq!(session.view().packages.len(), 2);
-    assert_eq!(session.view().stats.total_packages, 2);
+    assert_eq!(session.view().stats.total_packages(), 2);
 }
 
 #[test]
@@ -632,9 +639,9 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
         "only the matching arch should remain visible"
     );
     assert_eq!(view.packages[0].entry.arch, "x86_64");
-    assert_eq!(view.stats.total_packages, 1);
-    assert_eq!(view.stats.included_packages, 1);
-    assert_eq!(view.stats.excluded_packages, 0);
+    assert_eq!(view.stats.total_packages(), 1);
+    assert_eq!(view.stats.included_packages(), 1);
+    assert_eq!(view.stats.excluded_packages(), 0);
 }
 
 #[test]
@@ -935,7 +942,7 @@ fn test_exclude_repo_is_dirty_with_repo_tracking() {
         .unwrap();
     assert!(session.is_dirty());
     let changes = session.pending_changes();
-    assert!(changes.repos_excluded.contains(&"epel".to_string()));
+    assert!(changes.repos_excluded().contains(&"epel".to_string()));
 }
 
 #[test]
