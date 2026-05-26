@@ -1,4 +1,4 @@
-import { Switch, Badge } from "@patternfly/react-core";
+import { Switch } from "@patternfly/react-core";
 import type { FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
@@ -70,6 +70,14 @@ export function itemDisplayName(itemId: ItemId): string {
   }
 }
 
+function prevalenceLevel(count: number, total: number): string {
+  if (total === 0) return "full";
+  const ratio = count / total;
+  if (ratio >= 1) return "full";
+  if (ratio >= 0.6) return "partial";
+  return "low";
+}
+
 export function FleetItemRow({
   item,
   isDecisionSection,
@@ -117,9 +125,9 @@ export function FleetItemRow({
 
       <div className="fleet-item-row__name">{name}</div>
 
-      <Badge isRead className="fleet-item-row__prevalence">
+      <span className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}>
         {count}/{total} hosts
-      </Badge>
+      </span>
 
       {hasVariants && isDecisionSection && (
         <button
