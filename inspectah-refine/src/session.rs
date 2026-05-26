@@ -776,10 +776,48 @@ impl RefineSession {
                             )));
                         }
                     }
-                    // Phase 1-3 item kinds: not yet handled, accept without validation
-                    ItemId::Service { .. }
-                    | ItemId::DropIn { .. }
-                    | ItemId::Quadlet { .. }
+                    ItemId::Service { unit } => {
+                        let found = self
+                            .original
+                            .services
+                            .as_ref()
+                            .map(|s| s.state_changes.iter().any(|sc| sc.unit == *unit))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(unit.clone()));
+                        }
+                    }
+                    ItemId::DropIn { path } => {
+                        let found = self
+                            .original
+                            .services
+                            .as_ref()
+                            .map(|s| s.drop_ins.iter().any(|d| d.path == *path))
+                            .unwrap_or(false);
+                        if !found {
+                            return Err(RefineError::UnknownTarget(path.clone()));
+                        }
+                        // Cannot include a drop-in when its parent service is excluded.
+                        if *include {
+                            let projected = self.project_snapshot();
+                            if let Some(ref svc_section) = projected.services
+                                && let Some(dropin) =
+                                    svc_section.drop_ins.iter().find(|d| d.path == *path)
+                            {
+                                let parent_included = svc_section
+                                    .state_changes
+                                    .iter()
+                                    .any(|s| s.unit == dropin.unit && s.include);
+                                if !parent_included {
+                                    return Err(RefineError::BadRequest(
+                                        "cannot include drop-in when parent service is excluded".into(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    // Phase 2-3 item kinds: not yet handled, accept without validation
+                    ItemId::Quadlet { .. }
                     | ItemId::Compose { .. }
                     | ItemId::Flatpak { .. }
                     | ItemId::NMConnection { .. }
@@ -1152,7 +1190,35 @@ impl RefineSession {
                                 }
                             }
                         }
-                        // Phase 1-3 item kinds: not yet handled
+                        ItemId::Service { unit } => {
+                            if let Some(ref mut services) = snap.services {
+                                if let Some(svc) = services
+                                    .state_changes
+                                    .iter_mut()
+                                    .find(|s| s.unit == *unit)
+                                {
+                                    svc.include = *include;
+                                }
+                                // Symmetric cascade: toggling a service cascades
+                                // to all drop-ins for that unit.
+                                for dropin in services
+                                    .drop_ins
+                                    .iter_mut()
+                                    .filter(|d| d.unit == *unit)
+                                {
+                                    dropin.include = *include;
+                                }
+                            }
+                        }
+                        ItemId::DropIn { path } => {
+                            if let Some(ref mut services) = snap.services
+                                && let Some(dropin) =
+                                    services.drop_ins.iter_mut().find(|d| d.path == *path)
+                            {
+                                dropin.include = *include;
+                            }
+                        }
+                        // Phase 2-3 item kinds: not yet handled
                         _ => {}
                     }
                 }
@@ -2314,5 +2380,260 @@ mod tests {
             }
             other => panic!("expected SensitiveRetained, got {other:?}"),
         }
+    }
+
+    // --- Service refinement tests ---
+
+    use inspectah_core::types::services::{
+        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    };
+
+    /// Build a snapshot with services and drop-ins for SetInclude tests.
+    fn test_snapshot_with_services() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection::default()),
+            services: Some(ServiceSection {
+                state_changes: vec![
+                    ServiceStateChange {
+                        unit: "httpd.service".into(),
+                        current_state: ServiceUnitState::Enabled,
+                        default_state: Some(PresetDefault::Disable),
+                        include: true,
+                        owning_package: Some("httpd".into()),
+                        fleet: None,
+                        attention_reason: None,
+                    },
+                    ServiceStateChange {
+                        unit: "sshd.service".into(),
+                        current_state: ServiceUnitState::Enabled,
+                        default_state: Some(PresetDefault::Enable),
+                        include: true,
+                        owning_package: Some("openssh-server".into()),
+                        fleet: None,
+                        attention_reason: None,
+                    },
+                ],
+                enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
+                disabled_units: vec![],
+                drop_ins: vec![
+                    SystemdDropIn {
+                        unit: "httpd.service".into(),
+                        path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+                        content: "[Service]\nLimitNOFILE=65536".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                    SystemdDropIn {
+                        unit: "httpd.service".into(),
+                        path: "/etc/systemd/system/httpd.service.d/timeout.conf".into(),
+                        content: "[Service]\nTimeoutStartSec=120".into(),
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+                preset_matched_units: vec![],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exclude_service_cascades_to_drop_ins() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let svc = projected.services.as_ref().unwrap();
+
+        // Service itself must be excluded.
+        let httpd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(!httpd.include, "httpd.service must be excluded");
+
+        // Both drop-ins for httpd must also be excluded.
+        for dropin in svc.drop_ins.iter().filter(|d| d.unit == "httpd.service") {
+            assert!(
+                !dropin.include,
+                "drop-in {} must be excluded when parent service is excluded",
+                dropin.path
+            );
+        }
+
+        // sshd.service must remain unaffected.
+        let sshd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "sshd.service")
+            .unwrap();
+        assert!(sshd.include, "sshd.service must remain included");
+    }
+
+    #[test]
+    fn re_include_service_re_includes_drop_ins() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        // Exclude first.
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Re-include.
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let svc = projected.services.as_ref().unwrap();
+
+        let httpd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(httpd.include, "httpd.service must be re-included");
+
+        for dropin in svc.drop_ins.iter().filter(|d| d.unit == "httpd.service") {
+            assert!(
+                dropin.include,
+                "drop-in {} must be re-included when parent service is re-included",
+                dropin.path
+            );
+        }
+    }
+
+    #[test]
+    fn exclude_individual_drop_in_while_parent_included() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::DropIn {
+                    path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let svc = projected.services.as_ref().unwrap();
+
+        // Parent service stays included.
+        let httpd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(httpd.include, "parent service must remain included");
+
+        // Only the targeted drop-in is excluded.
+        let limits = svc
+            .drop_ins
+            .iter()
+            .find(|d| d.path.contains("limits.conf"))
+            .unwrap();
+        assert!(!limits.include, "limits.conf drop-in must be excluded");
+
+        let timeout = svc
+            .drop_ins
+            .iter()
+            .find(|d| d.path.contains("timeout.conf"))
+            .unwrap();
+        assert!(timeout.include, "timeout.conf drop-in must remain included");
+    }
+
+    #[test]
+    fn include_drop_in_when_parent_excluded_is_error() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        // Exclude the parent service (cascades to drop-ins).
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Attempt to include a drop-in while parent is excluded.
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::DropIn {
+                path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+            },
+            include: true,
+        });
+
+        assert!(result.is_err(), "including drop-in with excluded parent must fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("parent service is excluded"),
+            "error must mention parent service, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_service_unit_is_error() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Service {
+                unit: "nonexistent.service".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown service unit must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent.service"),
+            "error must name the unknown target, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_drop_in_path_is_error() {
+        let snap = test_snapshot_with_services();
+        let mut session = RefineSession::new(snap);
+
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::DropIn {
+                path: "/etc/systemd/system/ghost.service.d/nope.conf".into(),
+            },
+            include: false,
+        });
+
+        assert!(result.is_err(), "unknown drop-in path must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nope.conf"),
+            "error must name the unknown target, got: {err}"
+        );
     }
 }

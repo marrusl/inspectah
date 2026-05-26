@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -308,6 +309,20 @@ pub struct RefinedPackage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedConfig {
     pub entry: ConfigFileEntry,
+    pub triage: TriageTag,
+}
+
+/// A classified service state change with triage assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedServiceState {
+    pub entry: ServiceStateChange,
+    pub triage: TriageTag,
+}
+
+/// A classified systemd drop-in with triage assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinedDropIn {
+    pub entry: SystemdDropIn,
     pub triage: TriageTag,
 }
 
