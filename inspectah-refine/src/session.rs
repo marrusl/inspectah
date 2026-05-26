@@ -5,7 +5,7 @@ use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_pipeline::render::containerfile::render_containerfile;
+use inspectah_pipeline::render::containerfile::{render_containerfile, render_containerfile_with_originals};
 
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
@@ -880,7 +880,18 @@ impl RefineSession {
         }
 
         let projected = self.project_snapshot();
-        render_refine_export(&projected, path)
+        let orig_inc: std::collections::HashMap<String, bool> = self
+            .original
+            .rpm
+            .as_ref()
+            .map(|r| {
+                r.packages_added
+                    .iter()
+                    .map(|p| (canonical_package_id(&p.name, &p.arch), p.include))
+                    .collect()
+            })
+            .unwrap_or_default();
+        render_refine_export(&projected, path, Some(&orig_inc))
     }
 
     // --- Private helpers ---
@@ -1835,7 +1846,14 @@ impl RefineSession {
             preview_dir.path(),
         )
         .unwrap_or_default();
-        let containerfile_preview = render_containerfile(&projected, Some(&materialized_roots));
+        let containerfile_preview = render_containerfile_with_originals(
+            &projected,
+            Some(&materialized_roots),
+            &original_package_includes
+                .iter()
+                .map(|((n, a), &inc)| (canonical_package_id(n, a), inc))
+                .collect(),
+        );
         drop(preview_dir);
 
         let pkg_total = packages.len();
@@ -1904,6 +1922,7 @@ impl RefineSession {
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
+    original_includes: Option<&std::collections::HashMap<String, bool>>,
 ) -> Result<(), RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
@@ -1968,7 +1987,11 @@ pub fn render_refine_export(
     //    tree write that populated the tarball's config/ directory.
     //    Preview also materializes to a tempdir for the same roots,
     //    guaranteeing byte-identical output.
-    let containerfile = render_containerfile(snap, Some(&materialized_roots));
+    let containerfile = if let Some(orig) = original_includes {
+        render_containerfile_with_originals(snap, Some(&materialized_roots), orig)
+    } else {
+        render_containerfile(snap, Some(&materialized_roots))
+    };
     std::fs::write(out.join("Containerfile"), containerfile)?;
 
     // 4. audit-report.md
@@ -3192,7 +3215,7 @@ mod tests {
 
         let tmpdir = tempfile::tempdir().unwrap();
         let tarball_path = tmpdir.path().join("export.tar.gz");
-        render_refine_export(&snap, &tarball_path).unwrap();
+        render_refine_export(&snap, &tarball_path, None).unwrap();
 
         // Read tarball entries
         let f = std::fs::File::open(&tarball_path).unwrap();

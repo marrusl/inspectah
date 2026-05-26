@@ -598,7 +598,7 @@ pub async fn export_tarball(
     })?;
 
     // Snapshot state under the lock, then release before expensive work.
-    let (projected, _generation, sensitive) = {
+    let (projected, _generation, sensitive, original_includes) = {
         let session = state.session.lock().unwrap();
         if req.generation != session.generation() {
             return Err(AppError(
@@ -608,10 +608,22 @@ pub async fn export_tarball(
                 },
             ));
         }
+        let orig_inc: std::collections::HashMap<String, bool> = session
+            .snapshot()
+            .rpm
+            .as_ref()
+            .map(|r| {
+                r.packages_added
+                    .iter()
+                    .map(|p| (format!("{}.{}", p.name, p.arch), p.include))
+                    .collect()
+            })
+            .unwrap_or_default();
         (
             session.snapshot_projected(),
             session.generation(),
             session.is_sensitive(),
+            orig_inc,
         )
     };
     // Lock is released here.
@@ -638,7 +650,7 @@ pub async fn export_tarball(
         move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join("inspectah-refine-output.tar.gz");
-            inspectah_refine::session::render_refine_export(&projected, &tarball_path)?;
+            inspectah_refine::session::render_refine_export(&projected, &tarball_path, Some(&original_includes))?;
             Ok(std::fs::read(&tarball_path)?)
         },
     )
