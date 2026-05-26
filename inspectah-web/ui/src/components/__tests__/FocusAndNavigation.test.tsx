@@ -63,6 +63,8 @@ const MOCK_VIEW = {
   version_changes: [],
   service_states: [],
   service_dropins: [],
+  quadlets: [],
+  flatpaks: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
@@ -72,6 +74,11 @@ const MOCK_SECTIONS = [
     id: "containers",
     display_name: "Containers",
     items: [{ id: "ctr-1", title: "nginx-proxy", searchable_text: "nginx proxy container" }],
+  },
+  {
+    id: "network",
+    display_name: "Network",
+    items: [{ id: "net-1", title: "eth0", searchable_text: "eth0 network" }],
   },
 ];
 
@@ -258,9 +265,9 @@ describe("Focus fallback for context/empty sections", () => {
       expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
-    // Switch to containers (a context section)
-    const containersNav = screen.getByText("Containers");
-    await userEvent.click(containersNav);
+    // Switch to compose (a context/reference section — maps to backend "containers" section)
+    const composeNav = screen.getByText("Compose");
+    await userEvent.click(composeNav);
 
     // Wait for requestAnimationFrame focus
     await act(async () => {

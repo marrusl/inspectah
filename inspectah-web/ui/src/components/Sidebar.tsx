@@ -12,18 +12,19 @@ import type { ContextSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 
-/** Section IDs that represent decision sections (packages, configs, users, services). */
+/** Section IDs that represent decision sections (packages, configs, users, services, containers). */
 const DECISION_SECTIONS = [
   { id: "packages", label: "Packages" },
   { id: "configs", label: "Config Files" },
   { id: "users_groups", label: "Users & Groups" },
   { id: "services", label: "Services" },
+  { id: "containers", label: "Containers" },
 ];
 
 /** Section IDs from the snapshot context endpoint (read-only context). */
 const CONTEXT_SECTIONS = [
   { id: "version_changes", label: "Version Changes" },
-  { id: "containers", label: "Containers" },
+  { id: "compose", label: "Compose" },
   { id: "network", label: "Network" },
   { id: "storage", label: "Storage" },
   { id: "scheduled_tasks", label: "Scheduled Tasks" },
@@ -55,7 +56,9 @@ function sectionCount(
   id: string,
 ): string | undefined {
   if (!sections) return "...";
-  const sec = sections.find((s) => s.id === id);
+  // "compose" sidebar entry maps to the "containers" context section from the backend
+  const lookupId = id === "compose" ? "containers" : id;
+  const sec = sections.find((s) => s.id === lookupId);
   return sec ? String(sec.items.length) : "0";
 }
 
@@ -71,6 +74,10 @@ function decisionCount(
   if (id === "services") {
     if (!viewData) return "...";
     return String(viewData.service_states?.length ?? 0);
+  }
+  if (id === "containers") {
+    if (!viewData) return "...";
+    return String((viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0));
   }
   if (!stats) return "...";
   if (id === "packages") return String(stats.total_packages);

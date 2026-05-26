@@ -21,6 +21,7 @@ const SECTION_LABELS: Record<string, string> = {
   configs: "Config Files",
   services: "Services",
   containers: "Containers",
+  compose: "Compose",
   users_groups: "Users & Groups",
   network: "Network",
   storage: "Storage",

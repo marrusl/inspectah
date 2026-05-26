@@ -4,13 +4,14 @@ import { useEffect, useCallback } from "react";
 const SECTION_IDS = [
   "packages",          // 1
   "configs",           // 2
-  "services",          // 3
-  "version_changes",   // 4
+  "users_groups",      // 3
+  "services",          // 4
   "containers",        // 5
-  "users_groups",      // 6
-  "network",           // 7
-  "storage",           // 8
-  "scheduled_tasks",   // 9
+  "version_changes",   // 6
+  "compose",           // 7
+  "network",           // 8
+  "storage",           // 9
+  "scheduled_tasks",
   "non_rpm_software",
   "kernel_boot",
   "selinux",

@@ -22,7 +22,6 @@ const MOCK_STATS: RefineStats = {
 const MOCK_SECTIONS: ContextSection[] = [
   { id: "version_changes", display_name: "Version Changes", items: [] },
   { id: "containers", display_name: "Containers", items: [] },
-  { id: "users_groups", display_name: "Users & Groups", items: [{ id: "u1", title: "root", subtitle: null, detail: null, searchable_text: "root" }, { id: "u2", title: "nobody", subtitle: null, detail: null, searchable_text: "nobody" }] },
   { id: "network", display_name: "Network", items: [] },
   { id: "storage", display_name: "Storage", items: [] },
   { id: "scheduled_tasks", display_name: "Scheduled Tasks", items: [] },
@@ -44,6 +43,8 @@ const MOCK_VIEW_DATA: ViewResponse = {
     { unit: "sshd.service", triage: { triage: { mode: "single_host", baseline: null }, primary_reason: "service_baseline_match", annotations: [] }, include: true },
   ],
   service_dropins: [],
+  quadlets: [],
+  flatpaks: [],
   users_groups_decisions: [],
   session_is_sensitive: false,
 };
@@ -65,7 +66,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 describe("Sidebar", () => {
-  it("renders all 12 section items", () => {
+  it("renders all 13 section items", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -73,15 +74,19 @@ describe("Sidebar", () => {
         stats={MOCK_STATS}
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
       />,
     );
 
+    // Review (decision) sections
     expect(screen.getByText("Packages")).toBeInTheDocument();
     expect(screen.getByText("Config Files")).toBeInTheDocument();
-    expect(screen.getByText("Services")).toBeInTheDocument();
-    expect(screen.getByText("Version Changes")).toBeInTheDocument();
-    expect(screen.getByText("Containers")).toBeInTheDocument();
     expect(screen.getByText("Users & Groups")).toBeInTheDocument();
+    expect(screen.getByText("Services")).toBeInTheDocument();
+    expect(screen.getByText("Containers")).toBeInTheDocument();
+    // Reference (context) sections
+    expect(screen.getByText("Version Changes")).toBeInTheDocument();
+    expect(screen.getByText("Compose")).toBeInTheDocument();
     expect(screen.getByText("Network")).toBeInTheDocument();
     expect(screen.getByText("Storage")).toBeInTheDocument();
     expect(screen.getByText("Scheduled Tasks")).toBeInTheDocument();
@@ -121,6 +126,9 @@ describe("Sidebar", () => {
     // Services has 1 service_state in viewData; Users & Groups decision count is 3
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+    // Containers count: 0 quadlets + 0 flatpaks = 0
+    const zeroBadges = screen.getAllByText("0");
+    expect(zeroBadges.length).toBeGreaterThan(0);
   });
 
   it("shows '...' when data is loading", () => {
