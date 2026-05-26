@@ -18,6 +18,10 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] **Sort toggle for Version Changes tab:** Add a sort control (alpha vs. status). Current sort is by direction (downgrades first, then upgrades). Add an alphabetical-by-name option. Default to status sort, let user toggle. Applies to both the reference section view and the package detail `VersionChangeEntry` list.
 
+## Port Fallback
+
+- [ ] **Auto-select alternate port when 8642 is in use:** `inspectah refine` should detect if port 8642 is occupied and automatically try the next port (8643, 8644, etc.). Print which port it bound to. Avoids the user having to manually kill stale processes.
+
 ## Git History Cleanup
 
 - [ ] Scrub `.git-backup/` from git history using `git filter-repo`. The directory was accidentally committed and contains a 68MB packfile. It's removed from the working tree and `.gitignore`'d, but still inflates clone size. Do this before the repo goes more public — requires a force push.
