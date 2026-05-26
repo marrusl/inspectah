@@ -107,7 +107,7 @@ export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetail
               <DescriptionListTerm>Version Change</DescriptionListTerm>
               <DescriptionListDescription>
                 <Content component="small">
-                  {baseEvr} → {hostEvr}{" "}
+                  {hostEvr} → {baseEvr}{" "}
                   <Label color={versionChange.direction === "downgrade" ? "red" : "blue"}>
                     {versionChange.direction}
                   </Label>

@@ -1006,7 +1006,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
             VersionChangeDirection::Upgrade => "",
         };
         let title = format!("{}{}.{}", prefix, vc.name, vc.arch);
-        let subtitle = format!("{} \u{2192} {} ({})", base_fmt, host_fmt, dir_label);
+        let subtitle = format!("{} \u{2192} {} ({})", host_fmt, base_fmt, dir_label);
         let searchable = format!("{} {} {}", vc.name, vc.arch, dir_label);
 
         items.push(ContextItem {
