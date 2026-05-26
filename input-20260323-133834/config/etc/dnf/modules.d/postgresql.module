@@ -1,5 +1,0 @@
-[postgresql]
-name=postgresql
-stream=
-profiles=
-state=disabled
