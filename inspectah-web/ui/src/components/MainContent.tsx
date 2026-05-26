@@ -14,6 +14,8 @@ import { ContextList } from "./ContextList";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
+import { SysctlSection } from "./SysctlSection";
+import { TunedSection } from "./TunedSection";
 import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
@@ -272,6 +274,28 @@ export function MainContent({
       <ContainerSection
         quadlets={viewData?.quadlets ?? []}
         flatpaks={viewData?.flatpaks ?? []}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />
+    );
+  }
+
+  // Sysctls decision section — sysctl overrides as toggleable items.
+  if (activeSection === "sysctls") {
+    return (
+      <SysctlSection
+        sysctls={viewData?.sysctls ?? []}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />
+    );
+  }
+
+  // Tuned decision section — tuned profile selections as toggleable items.
+  if (activeSection === "tuned") {
+    return (
+      <TunedSection
+        tuned={viewData?.tuned ?? []}
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
       />
