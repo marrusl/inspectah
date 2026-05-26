@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-25)
+## Current Status (2026-05-26)
 
 | Phase | Status |
 |-------|--------|
@@ -24,6 +24,9 @@
 | Go Retirement + Legacy Removal | DONE (2026-05-24/25) |
 | Nit List Sweep (5 items) | DONE (2026-05-25) |
 | Nit List Batch A+B (6 fixes) | DONE (2026-05-25) |
+| Fleet Intersection Default | DONE (2026-05-26) |
+| Fleet/UI Bug Fix Batch (10 fixes) | DONE (2026-05-26) |
+| **v0.8.2-alpha.1** | **TAGGED (2026-05-26)** |
 
 ## Roadmap to CLI Cutover
 
@@ -59,6 +62,10 @@
 ✅ Fleet Phase 2a: Refine Engine (21 commits, 4 review rounds, 2026-05-21)
     ↓
 ✅ Nit List Batch A+B (6 fixes: @commandline handling, fleet prevalence, conflict count, baseline summary — 2026-05-25)
+    ↓
+✅ Fleet Intersection Default + Bug Fix Batch (10 fixes: intersection default all sections, fleet toggles, tuned stock suppression, UI polish — 2026-05-26)
+    ↓
+✅ v0.8.2-alpha.1 (tagged 2026-05-26, 282 commits since alpha.4, binaries for darwin-arm64/linux-arm64/linux-amd64)
     ↓
 Section Promotion + Fleet Users/Groups (spec in progress — containers, kernel/boot, SELinux → actionable)
     ↓
@@ -140,13 +147,9 @@ Shared `baseline_fmt` presentation helpers render baseline comparison sections a
 
 ## Upcoming Work
 
-### Fleet Default: Intersection Not Union (HIGH — next)
+### ~~Fleet Default: Intersection Not Union~~ (DONE — 2026-05-26)
 
-Fleet merge currently includes ALL items from ALL hosts by default. A package appearing on only 1 of 3 hosts starts as "included" — the user has to manually exclude it. This produces wrong defaults: 54 packages at 1/3 prevalence all start checked on.
-
-**Required behavior:** Default to the intersection. Only items present on ALL hosts start included. Items below full prevalence start excluded. Users opt in from there. Applies to all section types: packages, configs, users/groups, containers, services, everything.
-
-**Where to fix:** The default `include` state is set during fleet snapshot merging in `inspectah-refine`. The merge logic needs to set `include = false` for any item where `prevalence.count < prevalence.total`.
+Applied strict intersection default to all 14 section types. Items below full prevalence start excluded but remain visible in the UI. Stock tuned profiles (14 recognized) suppressed by default.
 
 ### Package Group Detection (MEDIUM — future)
 
