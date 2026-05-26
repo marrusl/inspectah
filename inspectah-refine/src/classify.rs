@@ -1,5 +1,6 @@
 use crate::types::{
-    RefinedConfig, RefinedPackage, Triage, TriageAnnotation, TriageBucket, TriageReason, TriageTag,
+    RefinedConfig, RefinedDropIn, RefinedPackage, RefinedServiceState, Triage, TriageAnnotation,
+    TriageBucket, TriageReason, TriageTag,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
@@ -7,6 +8,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
 };
+use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
 
 const SENSITIVE_PATHS: &[&str] = &[
     "/etc/shadow",
@@ -312,6 +314,60 @@ pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
     }
 
     configs
+}
+
+/// Classify service state changes and drop-ins into triage buckets.
+///
+/// All known services classify as Site (baseline data for non-package
+/// items does not exist yet). Services without an owning package
+/// classify as Investigate.
+pub fn classify_services(
+    snap: &InspectionSnapshot,
+) -> (Vec<RefinedServiceState>, Vec<RefinedDropIn>) {
+    let services = match &snap.services {
+        Some(s) => s,
+        None => return (Vec::new(), Vec::new()),
+    };
+    let states: Vec<RefinedServiceState> = services
+        .state_changes
+        .iter()
+        .map(|change| RefinedServiceState {
+            entry: change.clone(),
+            triage: classify_service(change),
+        })
+        .collect();
+    let dropins: Vec<RefinedDropIn> = services
+        .drop_ins
+        .iter()
+        .map(|dropin| RefinedDropIn {
+            entry: dropin.clone(),
+            triage: classify_dropin(dropin),
+        })
+        .collect();
+    (states, dropins)
+}
+
+fn classify_service(change: &ServiceStateChange) -> TriageTag {
+    if change.owning_package.is_none() {
+        return TriageTag {
+            triage: Triage::SingleHost(TriageBucket::Investigate),
+            primary_reason: TriageReason::ServiceUnknownOrigin,
+            annotations: vec![],
+        };
+    }
+    TriageTag {
+        triage: Triage::SingleHost(TriageBucket::Site),
+        primary_reason: TriageReason::ServiceNonDefaultState,
+        annotations: vec![],
+    }
+}
+
+fn classify_dropin(_dropin: &SystemdDropIn) -> TriageTag {
+    TriageTag {
+        triage: Triage::SingleHost(TriageBucket::Site),
+        primary_reason: TriageReason::ServiceDropInPresent,
+        annotations: vec![],
+    }
 }
 
 #[cfg(test)]
@@ -1009,5 +1065,133 @@ mod tests {
             matches!(result[0].triage.primary_reason, TriageReason::Custom(_)),
             "SensitiveRetained with unresolved hints must surface Investigate"
         );
+    }
+}
+
+#[cfg(test)]
+mod service_classification {
+    use super::*;
+    use inspectah_core::types::services::{
+        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    };
+
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
+
+    #[test]
+    fn service_matching_preset_default_is_site_until_baseline() {
+        let snap = InspectionSnapshot {
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    owning_package: Some("openssh-server".into()),
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (states, dropins) = classify_services(&snap);
+        assert_eq!(states.len(), 1);
+        assert_eq!(dropins.len(), 0);
+        // Until baseline exists, even preset-matching services are Site
+        assert_bucket(&states[0].triage, TriageBucket::Site);
+        assert_eq!(
+            states[0].triage.primary_reason,
+            TriageReason::ServiceNonDefaultState
+        );
+    }
+
+    #[test]
+    fn service_differing_from_preset_is_site() {
+        let snap = InspectionSnapshot {
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("firewalld".into()),
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (states, _) = classify_services(&snap);
+        assert_eq!(states.len(), 1);
+        assert_bucket(&states[0].triage, TriageBucket::Site);
+        assert_eq!(
+            states[0].triage.primary_reason,
+            TriageReason::ServiceNonDefaultState
+        );
+    }
+
+    #[test]
+    fn service_without_owning_package_is_investigate() {
+        let snap = InspectionSnapshot {
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "mystery.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: None,
+                    include: true,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (states, _) = classify_services(&snap);
+        assert_eq!(states.len(), 1);
+        assert_bucket(&states[0].triage, TriageBucket::Investigate);
+        assert_eq!(
+            states[0].triage.primary_reason,
+            TriageReason::ServiceUnknownOrigin
+        );
+    }
+
+    #[test]
+    fn dropin_is_always_site() {
+        let snap = InspectionSnapshot {
+            services: Some(ServiceSection {
+                drop_ins: vec![SystemdDropIn {
+                    unit: "sshd.service".into(),
+                    path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
+                    content: "[Service]\nTimeoutStartSec=90".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (states, dropins) = classify_services(&snap);
+        assert_eq!(states.len(), 0);
+        assert_eq!(dropins.len(), 1);
+        assert_bucket(&dropins[0].triage, TriageBucket::Site);
+        assert_eq!(
+            dropins[0].triage.primary_reason,
+            TriageReason::ServiceDropInPresent
+        );
+    }
+
+    #[test]
+    fn no_services_returns_empty() {
+        let snap = InspectionSnapshot::default();
+        let (states, dropins) = classify_services(&snap);
+        assert!(states.is_empty());
+        assert!(dropins.is_empty());
     }
 }
