@@ -281,7 +281,7 @@ fn fleet_refine_full_lifecycle() {
     );
     match &tag.triage {
         Triage::Fleet(ft) => {
-            assert_eq!(ft.bucket, FleetBucket::Investigate);
+            assert_eq!(ft.bucket, FleetBucket::Divergent);
         }
         Triage::SingleHost(_) => {
             panic!("fleet session must produce Fleet triage");

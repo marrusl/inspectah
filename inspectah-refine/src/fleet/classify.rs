@@ -22,7 +22,10 @@ pub fn classify_fleet_bucket(
     let zone = ctx.zones.get(item_id).copied();
 
     let fleet_bucket = match zone {
-        Some(PrevalenceZone::Divergent) => FleetBucket::Investigate,
+        Some(PrevalenceZone::Divergent) if prevalence_count >= prevalence_total => {
+            FleetBucket::Investigate
+        }
+        Some(PrevalenceZone::Divergent) => FleetBucket::Divergent,
         Some(PrevalenceZone::NearConsensus) => FleetBucket::Partial,
         Some(PrevalenceZone::Consensus) => FleetBucket::Universal,
         None => {
@@ -73,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn known_item_uses_zone_from_context() {
+    fn non_universal_divergent_demoted_to_divergent_bucket() {
         let item = ItemId::Package {
             name: "vim".into(),
             arch: "x86_64".into(),
@@ -91,9 +94,34 @@ mod tests {
         );
         match &tag.triage {
             Triage::Fleet(ft) => {
-                assert_eq!(ft.bucket, FleetBucket::Investigate);
+                assert_eq!(ft.bucket, FleetBucket::Divergent);
                 assert_eq!(ft.prevalence.count, 2);
                 assert_eq!(ft.prevalence.total, 5);
+            }
+            _ => panic!("expected Fleet triage"),
+        }
+    }
+
+    #[test]
+    fn universal_divergent_stays_investigate() {
+        let item = ItemId::Package {
+            name: "resolv-conf".into(),
+            arch: "x86_64".into(),
+        };
+        let zones = HashMap::from([(item.clone(), PrevalenceZone::Divergent)]);
+        let ctx = test_ctx(zones);
+
+        let tag = classify_fleet_bucket(
+            &ctx,
+            &item,
+            TriageBucket::Investigate,
+            TriageReason::PackageNoRepoSource,
+            5,
+            5,
+        );
+        match &tag.triage {
+            Triage::Fleet(ft) => {
+                assert_eq!(ft.bucket, FleetBucket::Investigate);
             }
             _ => panic!("expected Fleet triage"),
         }
