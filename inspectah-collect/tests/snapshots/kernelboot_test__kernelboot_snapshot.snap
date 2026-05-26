@@ -1,6 +1,5 @@
 ---
 source: inspectah-collect/tests/kernelboot_test.rs
-assertion_line: 552
 expression: section
 ---
 {
@@ -92,6 +91,7 @@ expression: section
   ],
   "non_default_modules": [],
   "tuned_active": "virtual-guest",
+  "tuned_include": false,
   "tuned_custom_profiles": [],
   "locale": "en_US.UTF-8",
   "timezone": "America/New_York",

@@ -735,7 +735,7 @@ where
 
 use crate::types::config::ConfigSection;
 use crate::types::containers::ContainerSection;
-use crate::types::kernelboot::KernelBootSection;
+use crate::types::kernelboot::{KernelBootSection, is_stock_tuned_profile};
 use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
@@ -1502,6 +1502,18 @@ pub fn merge_kernelboot_sections(
     let locale = first_host_option(&sections, hostnames, |s| &s.locale);
     let timezone = first_host_option(&sections, hostnames, |s| &s.timezone);
 
+    // Stock default profiles are auto-selected by tuned's recommendation
+    // engine (e.g. throughput-performance on servers, virtual-guest on VMs,
+    // balanced on desktops). Including these in the Containerfile with
+    // profile_mode=manual would override tuned's automatic selection in the
+    // image, which is not the admin's intent. Default to excluded; the
+    // operator can opt in via the UI toggle.
+    let tuned_include = if tuned_active.is_empty() {
+        false
+    } else {
+        !is_stock_tuned_profile(&tuned_active)
+    };
+
     Some(KernelBootSection {
         cmdline,
         grub_defaults,
@@ -1511,7 +1523,7 @@ pub fn merge_kernelboot_sections(
         dracut_conf,
         loaded_modules,
         non_default_modules,
-        tuned_include: !tuned_active.is_empty(),
+        tuned_include,
         tuned_active,
         tuned_custom_profiles,
         locale,
