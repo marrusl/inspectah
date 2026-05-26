@@ -2,10 +2,6 @@
 
 Small output quality and polish items. Not worth individual specs — just fix when touching nearby code.
 
-## Naming Consistency
-
-- [ ] **DECISION_SECTIONS / CONTEXT_SECTIONS → Review / Reference:** Backend and frontend code uses `DECISION_SECTIONS` and `CONTEXT_SECTIONS` but the UI labels are "Review" and "Reference." Rename the code-level constants to match what users see (`REVIEW_SECTIONS` / `REFERENCE_SECTIONS`). Tang handles Rust side, Kit handles frontend.
-
 ## Repo Tier Model
 
 - [ ] **RPM upload feature (needs spec):** Let users upload a local RPM into the tarball for repo-less packages. Separate folder in the tarball, direct `COPY + rpm -i` in the Containerfile. Turns "this package has no migration path" into "here's the RPM, install it directly." Solves the case for vendor installers, one-off downloads, and manual builds.
@@ -45,6 +41,10 @@ Moved to Completed section.
 ---
 
 ## Completed
+
+### Naming Consistency (DONE — 2026-05-26)
+
+- [x] **DECISION_SECTIONS / CONTEXT_SECTIONS → Review / Reference:** Renamed `DECISION_SECTIONS` → `REVIEW_SECTIONS` and `CONTEXT_SECTIONS` → `REFERENCE_SECTIONS` in `Sidebar.tsx`. No Rust-side constants existed. *(DONE — 2026-05-26)*
 
 ### Containerfile Output
 
