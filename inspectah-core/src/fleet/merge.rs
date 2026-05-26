@@ -1516,6 +1516,7 @@ pub fn merge_kernelboot_sections(
         loaded_modules,
         non_default_modules,
         tuned_active,
+        tuned_include: true,
         tuned_custom_profiles,
         locale,
         timezone,
