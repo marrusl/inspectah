@@ -20,7 +20,7 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 ## Fleet Triage: Non-Universal Variants
 
-- [ ] **Non-universal items with variants don't require review:** In fleet mode, configs (and any analogous section type) that aren't present on all hosts should not be flagged for review just because they have variants. Only universal items (present on every host) with variant differences are worth reviewing. A config that exists on 3 of 5 hosts with two variants is informational, not actionable — the user already knows it's inconsistent by virtue of not being everywhere. Applies to configs, sysctls, tuned profiles, and any future promoted section with variant tracking.
+- [x] **Non-universal items with variants don't require review:** Divergent items with prevalence < total demoted from `Investigate` (needs_review) to `Divergent` (informational). Only universal items with variant differences get review-level triage. *(DONE — 2026-05-26)*
 
 ## Port Fallback
 
