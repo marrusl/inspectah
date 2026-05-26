@@ -310,13 +310,15 @@ pub fn write_config_tree(
                 }
             }
         }
-        // Custom tuned profiles — only when tuned is included
+        // Custom tuned profiles — written to tuned/ (promoted root),
+        // not config/. Only when tuned is included.
         if kb.tuned_include {
             for tp in &kb.tuned_custom_profiles {
                 if !tp.path.is_empty() {
                     let rel = tp.path.trim_start_matches('/');
                     if validate_path(rel).is_ok() {
-                        safe_write_file(&config_dir.join(rel), &tp.content);
+                        let tuned_dir = output_dir.join("tuned");
+                        safe_write_file(&tuned_dir.join(rel), &tp.content);
                     }
                 }
             }
@@ -750,7 +752,7 @@ mod tests {
         );
         assert!(
             dir.path()
-                .join("config/etc/tuned/my-profile/tuned.conf")
+                .join("tuned/etc/tuned/my-profile/tuned.conf")
                 .exists()
         );
         assert!(
@@ -1421,7 +1423,7 @@ mod tests {
 
         assert!(
             dir.path()
-                .join("config/etc/tuned/my-profile/tuned.conf")
+                .join("tuned/etc/tuned/my-profile/tuned.conf")
                 .exists(),
             "tuned custom profile must be materialized when tuned_include=true"
         );

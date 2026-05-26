@@ -1760,9 +1760,13 @@ pub fn render_refine_export(
         .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
 
     // 2c. Remove any top-level artifacts outside the approved export contract.
-    // write_config_tree() can emit drop-ins/, quadlet/, flatpak/ at root.
     let allowed_top_level: std::collections::HashSet<&str> = [
         "config",
+        "drop-ins",
+        "quadlet",
+        "flatpak",
+        "sysctl",
+        "tuned",
         "env-files",
         "fleet",
         "schema",
@@ -3021,6 +3025,141 @@ mod tests {
         assert!(
             err.to_string().contains("balanced"),
             "error must name the unknown target, got: {err}"
+        );
+    }
+
+    #[test]
+    fn export_tarball_includes_promoted_roots() {
+        use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
+        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+
+        let mut snap = test_snapshot();
+
+        // Service drop-in → drop-ins/ root
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
+                content: "[Service]\nLimitNOFILE=65535".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        // Quadlet → quadlet/ root
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                path: "/etc/containers/systemd/myapp.container".into(),
+                name: "myapp.container".into(),
+                content: "[Container]\nImage=quay.io/test:latest".into(),
+                include: true,
+                ..Default::default()
+            }],
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.example.App".into(),
+                remote: "flathub".into(),
+                branch: "stable".into(),
+                include: true,
+                remote_url: "https://flathub.org/repo/".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        // Sysctl → sysctl/ root
+        // Tuned → tuned/ root
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl_overrides: vec![SysctlOverride {
+                key: "net.ipv4.ip_forward".into(),
+                runtime: "1".into(),
+                source: "/etc/sysctl.d/99-custom.conf".into(),
+                include: true,
+                ..Default::default()
+            }],
+            tuned_include: true,
+            tuned_active: "my-profile".into(),
+            tuned_custom_profiles: vec![ConfigSnippet {
+                path: "etc/tuned/my-profile/tuned.conf".into(),
+                content: "[main]\nsummary=Custom".into(),
+            }],
+            ..Default::default()
+        });
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tarball_path = tmpdir.path().join("export.tar.gz");
+        render_refine_export(&snap, &tarball_path).unwrap();
+
+        // Read tarball entries
+        let f = std::fs::File::open(&tarball_path).unwrap();
+        let gz = flate2::read::GzDecoder::new(f);
+        let mut ar = tar::Archive::new(gz);
+        let entries: Vec<String> = ar
+            .entries()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.path().ok().map(|p| p.to_string_lossy().to_string()))
+            .collect();
+
+        // Promoted roots must appear in the tarball
+        assert!(
+            entries.iter().any(|e| e.starts_with("drop-ins/")),
+            "tarball must contain drop-ins/ root. entries: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e == "quadlet/myapp.container" || e == "quadlet/myapp.container/"),
+            "tarball must contain quadlet/myapp.container. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.starts_with("flatpak/")),
+            "tarball must contain flatpak/ root. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.starts_with("sysctl/")),
+            "tarball must contain sysctl/ root. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.starts_with("tuned/")),
+            "tarball must contain tuned/ root. entries: {entries:?}"
+        );
+
+        // Verify specific files within promoted roots
+        assert!(
+            entries.iter().any(|e| e.contains("httpd.service.d/limits.conf")),
+            "drop-in content must be present. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.contains("99-inspectah-migrated.conf")),
+            "synthesized sysctl file must be present. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.contains("flatpak-install.json")),
+            "flatpak manifest must be present. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.contains("flatpak-provision.service")),
+            "flatpak provisioning service must be present. entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.contains("tuned/etc/tuned/my-profile/tuned.conf")),
+            "tuned profile must be present. entries: {entries:?}"
+        );
+
+        // Promoted artifacts must NOT appear under config/
+        assert!(
+            !entries.iter().any(|e| e.starts_with("config/etc/systemd/system/httpd.service.d/")),
+            "drop-ins must NOT be under config/. entries: {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|e| e.starts_with("config/etc/containers/systemd/")),
+            "quadlets must NOT be under config/. entries: {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|e| e.starts_with("config/etc/tuned/")),
+            "tuned profiles must NOT be under config/. entries: {entries:?}"
         );
     }
 }
