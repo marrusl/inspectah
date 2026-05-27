@@ -1,0 +1,20 @@
+{
+  "status": "ok",
+  "host": {
+    "hostname": "test-host-01.example.com",
+    "os_name": "Red Hat Enterprise Linux",
+    "os_version": "9.4",
+    "os_id": "rhel",
+    "system_type": "package",
+    "schema_version": 3
+  },
+  "completeness": "full",
+  "policy": {
+    "distro_repos": [
+      "rhel-9-for-x86_64-baseos-rpms",
+      "rhel-9-for-x86_64-appstream-rpms"
+    ]
+  },
+  "fleet": null,
+  "session_is_sensitive": false
+}

@@ -1,0 +1,161 @@
+[
+  {
+    "id": "packages",
+    "display_name": "Packages",
+    "items": [
+      {
+        "id": "pkg:bash:x86_64",
+        "title": "bash",
+        "subtitle": "5.2.26-3.el9.x86_64",
+        "detail": "baseos",
+        "searchable_text": "bash 5.2.26-3.el9 x86_64 baseos"
+      },
+      {
+        "id": "pkg:httpd:x86_64",
+        "title": "httpd",
+        "subtitle": "2.4.57-11.el9_4.1.x86_64",
+        "detail": "appstream",
+        "searchable_text": "httpd 2.4.57-11.el9_4.1 x86_64 appstream"
+      },
+      {
+        "id": "pkg:openssl:x86_64",
+        "title": "openssl",
+        "subtitle": "1:3.0.7-28.el9_4.x86_64",
+        "detail": "baseos",
+        "searchable_text": "openssl 3.0.7-28.el9_4 x86_64 baseos"
+      },
+      {
+        "id": "pkg:vim-enhanced:x86_64",
+        "title": "vim-enhanced",
+        "subtitle": "2:9.0.2153-1.el9.x86_64",
+        "detail": "appstream",
+        "searchable_text": "vim-enhanced 9.0.2153-1.el9 x86_64 appstream"
+      },
+      {
+        "id": "pkg:custom-agent:x86_64",
+        "title": "custom-agent",
+        "subtitle": "1.0.0-1.el9.x86_64",
+        "detail": null,
+        "searchable_text": "custom-agent 1.0.0-1.el9 x86_64"
+      }
+    ]
+  },
+  {
+    "id": "configs",
+    "display_name": "Config Files",
+    "items": [
+      {
+        "id": "cfg:/etc/sysconfig/network",
+        "title": "/etc/sysconfig/network",
+        "subtitle": "modified (initscripts)",
+        "detail": null,
+        "searchable_text": "/etc/sysconfig/network initscripts modified"
+      },
+      {
+        "id": "cfg:/etc/chrony.conf",
+        "title": "/etc/chrony.conf",
+        "subtitle": "modified (chrony)",
+        "detail": null,
+        "searchable_text": "/etc/chrony.conf chrony modified"
+      },
+      {
+        "id": "cfg:/etc/sysctl.d/99-custom.conf",
+        "title": "/etc/sysctl.d/99-custom.conf",
+        "subtitle": "unowned",
+        "detail": null,
+        "searchable_text": "/etc/sysctl.d/99-custom.conf unowned sysctl"
+      }
+    ]
+  },
+  {
+    "id": "services",
+    "display_name": "Services",
+    "items": [
+      {
+        "id": "svc:httpd.service",
+        "title": "httpd.service",
+        "subtitle": "enabled (httpd)",
+        "detail": null,
+        "searchable_text": "httpd.service enabled httpd"
+      },
+      {
+        "id": "svc:custom-agent.service",
+        "title": "custom-agent.service",
+        "subtitle": "enabled",
+        "detail": null,
+        "searchable_text": "custom-agent.service enabled"
+      }
+    ]
+  },
+  {
+    "id": "sysctls",
+    "display_name": "Sysctl Overrides",
+    "items": [
+      {
+        "id": "sysctl:net.core.somaxconn",
+        "title": "net.core.somaxconn",
+        "subtitle": "4096 (file-backed)",
+        "detail": "/etc/sysctl.d/99-custom.conf",
+        "searchable_text": "net.core.somaxconn 4096 sysctl override"
+      }
+    ]
+  },
+  {
+    "id": "version_changes",
+    "display_name": "Version Changes",
+    "items": [
+      {
+        "id": "vc:openssl:x86_64",
+        "title": "openssl",
+        "subtitle": "3.0.6 -> 3.0.7",
+        "detail": "upgrade",
+        "searchable_text": "openssl x86_64 upgrade 3.0.6 3.0.7"
+      }
+    ]
+  },
+  {
+    "id": "users_groups",
+    "display_name": "Users & Groups",
+    "items": [
+      {
+        "id": "user:testuser",
+        "title": "testuser",
+        "subtitle": "uid=1000, interactive",
+        "detail": "/bin/bash",
+        "searchable_text": "testuser 1000 interactive bash wheel"
+      }
+    ]
+  },
+  {
+    "id": "repos",
+    "display_name": "Repositories",
+    "items": [
+      {
+        "id": "repo:rhel-9-for-x86_64-baseos-rpms",
+        "title": "rhel-9-for-x86_64-baseos-rpms",
+        "subtitle": "2 packages, verified",
+        "detail": "distro",
+        "searchable_text": "rhel-9-for-x86_64-baseos-rpms baseos distro verified"
+      },
+      {
+        "id": "repo:rhel-9-for-x86_64-appstream-rpms",
+        "title": "rhel-9-for-x86_64-appstream-rpms",
+        "subtitle": "2 packages, verified",
+        "detail": "distro",
+        "searchable_text": "rhel-9-for-x86_64-appstream-rpms appstream distro verified"
+      }
+    ]
+  },
+  {
+    "id": "containers",
+    "display_name": "Containers",
+    "items": [],
+    "empty_reason": "No quadlet or flatpak definitions found"
+  },
+  {
+    "id": "tuned",
+    "display_name": "Tuned Profiles",
+    "items": [],
+    "empty_reason": "Using default tuned profile"
+  }
+]
