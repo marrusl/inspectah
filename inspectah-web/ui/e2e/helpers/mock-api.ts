@@ -2,11 +2,14 @@
 import { Page } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 export type Preset = "single-host" | "fleet-3" | "empty";
 export type RouteOverrides = Record<string, string>;
 export type ErrorKind = "500" | "timeout" | "malformed";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const FIXTURES_DIR = path.join(__dirname, "..", "fixtures");
 
 // Lookup table: fixture filename → API route (not convention-based)
