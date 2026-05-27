@@ -169,10 +169,10 @@
   "containerfile_preview": "FROM registry.redhat.io/rhel9/rhel-bootc:9.4\n\n# Packages\nRUN dnf install -y \\\n    httpd-2.4.57-11.el9_4.1.x86_64 \\\n    openssl-1:3.0.7-28.el9_4.x86_64 \\\n    custom-agent-1.0.0-1.el9.x86_64 \\\n    && dnf clean all\n\n# Config files\nCOPY etc/sysconfig/network /etc/sysconfig/network\nCOPY etc/chrony.conf /etc/chrony.conf\n\n# Users\nRUN useradd -u 1000 -g 1000 -s /bin/bash -d /home/testuser testuser\n",
   "stats": {
     "sections": [
-      { "kind": "packages", "total": 5, "included": 4, "excluded": 1 },
-      { "kind": "configs", "total": 3, "included": 2, "excluded": 1 },
-      { "kind": "services", "total": 2, "included": 1, "excluded": 1 },
-      { "kind": "users_groups", "total": 1, "included": 1, "excluded": 0 }
+      { "kind": "package", "total": 5, "included": 4, "excluded": 1 },
+      { "kind": "config", "total": 3, "included": 2, "excluded": 1 },
+      { "kind": "service", "total": 2, "included": 1, "excluded": 1 },
+      { "kind": "user", "total": 1, "included": 1, "excluded": 0 }
     ],
     "needs_review_count": 2,
     "ops_applied": 1,
