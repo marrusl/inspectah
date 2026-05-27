@@ -17,12 +17,17 @@ the new one on every render. Any text change, from any cause, produces
 highlights. This keeps the feature decoupled from the refinement operation
 types and automatically covers future operations.
 
-### First Load
+### Baseline Establishment
 
-On first render, there is no previous containerfile to diff against. The
-initial render establishes the baseline: no highlights, no scroll, no dot.
-Same applies if the panel starts in a collapsed state — the initial
-`containerfilePreview` string becomes the baseline.
+`ContainerfilePanel` may mount before the API has returned data, receiving
+`containerfilePreview = null` initially. The first non-null
+`containerfilePreview` value observed by the hook establishes the baseline.
+This initial observation produces no highlights, no scroll, no dot, and no
+live-region announcement — it is not a "change," it is the starting state.
+
+Same applies if the panel starts collapsed: the first non-null preview
+string becomes the baseline, regardless of whether the panel is open or
+collapsed when it arrives.
 
 ## Diffing Strategy
 
@@ -148,16 +153,28 @@ When the `ContainerfilePanel` is collapsed and the containerfile changes:
 1. **Show a dot indicator** on the collapsed panel tab — simple
    presence/absence, no count or magnitude. A CSS pseudo-element or a
    small `<span>` is sufficient.
-2. **On expand**, run the diff between the containerfile as it was when
+2. **Update the collapsed control's accessible label** to include
+   pending-change state. When the dot is visible, the expand button's
+   `aria-label` changes from `"Expand Containerfile panel"` to
+   `"Expand Containerfile panel, pending changes"`. When the dot
+   clears, the label reverts.
+3. **On expand**, run the diff between the containerfile as it was when
    the panel was last open (or last expanded) and the current version.
    Apply the normal highlight animations to the cumulative diff.
-3. **Clear the dot** once the panel is expanded and highlights have been
-   shown.
+4. **Clear the dot** (and revert the `aria-label`) once the panel is
+   expanded and highlights have been shown.
 
 The "last seen" containerfile string is captured when the panel
 transitions from open to collapsed. This is the baseline for the
 cumulative diff on re-expand. On first load with the panel already
-collapsed, the initial `containerfilePreview` is the baseline.
+collapsed, the first non-null `containerfilePreview` is the baseline.
+
+### Collapse/Expand Focus
+
+When the user expands the panel (clicks the tab or activates via
+keyboard), focus moves to the panel's scroll container so keyboard
+users can immediately scroll through the highlighted changes. When
+the panel collapses, focus returns to the collapsed tab button.
 
 ## Accessibility
 
@@ -265,4 +282,3 @@ change to `ContainerfilePanel`.
 - Highlight replay for collapsed-panel changes — on expand, show the
   cumulative diff, not a step-by-step replay of intermediate states.
 - Fleet mode — this feature is scoped to single-host refine view only.
-- Collapse/expand focus management — Kit decides during build.
