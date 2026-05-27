@@ -84,7 +84,7 @@ export interface DiffResult {
 
 - [ ] **Step 2: Write failing tests for the pure diff function**
 
-The hook has React lifecycle concerns (timers, refs). Extract the pure diff computation into a testable function `computeDiff(prev, next)` that the hook calls internally.
+The hook has React lifecycle concerns (timers, refs). Extract the pure diff computation into a testable function `computeDiff(prev, next, priorLines?)` that the hook calls internally. The hook owns identity preservation: it passes the prior render model's lines into `computeDiff` so that unchanged lines keep their existing IDs across successive diffs. New and removed lines get fresh IDs.
 
 ```typescript
 // inspectah-web/ui/src/hooks/__tests__/useContainerfileDiff.test.ts
@@ -150,6 +150,18 @@ describe("computeDiff", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("preserves IDs for unchanged lines across successive diffs", () => {
+    const v1 = "FROM ubi9\nRUN dnf install -y httpd";
+    const v2 = "FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    // "FROM ubi9" and "RUN dnf..." are unchanged — their IDs must survive
+    const firstIds = first.lines.map((l) => l.id);
+    const stableInSecond = second.lines.filter((l) => l.state === "stable");
+    expect(stableInSecond[0].id).toBe(firstIds[0]);
+    expect(stableInSecond[1].id).toBe(firstIds[1]);
+  });
+
   it("returns baseline (all stable) when prev is null", () => {
     const result = computeDiff(null, "FROM ubi9\nRUN dnf install -y httpd");
     expect(result.hasChanges).toBe(false);
@@ -203,6 +215,7 @@ export function _resetIdCounter(): void {
 export function computeDiff(
   prev: string | null,
   next: string | null,
+  priorLines?: DiffLine[],
 ): DiffResult {
   if (next == null) {
     return { lines: [], addedCount: 0, removedCount: 0, hasChanges: false };
@@ -217,6 +230,16 @@ export function computeDiff(
     }));
     return { lines, addedCount: 0, removedCount: 0, hasChanges: false };
   }
+
+  // Build a queue of prior stable-line IDs to reuse for unchanged lines.
+  // This preserves React key identity across successive diffs.
+  const priorStableIds: string[] = [];
+  if (priorLines) {
+    for (const pl of priorLines) {
+      if (pl.state === "stable") priorStableIds.push(pl.id);
+    }
+  }
+  let priorIdx = 0;
 
   const changes = diffLines(prev, next);
   const lines: DiffLine[] = [];
@@ -239,7 +262,11 @@ export function computeDiff(
         lines.push({ id: makeId(), text, state: "removing" });
         removedCount++;
       } else {
-        lines.push({ id: makeId(), text, state: "stable" });
+        // Reuse prior ID for unchanged lines when available.
+        const id = priorIdx < priorStableIds.length
+          ? priorStableIds[priorIdx++]
+          : makeId();
+        lines.push({ id, text, state: "stable" });
       }
     }
   }
@@ -395,6 +422,8 @@ export interface UseContainerfileDiffReturn {
   hasPendingChanges: boolean;
   /** Call after removing-line animation completes to prune it from the model. */
   pruneRemovingLine: (id: string) => void;
+  /** Call to clear an added-line highlight (used by reduced-motion 2s timer). */
+  clearHighlight: (id: string) => void;
 }
 
 export function useContainerfileDiff(
@@ -409,6 +438,10 @@ export function useContainerfileDiff(
   const lastOpenContentRef = useRef<string | null>(null);
   // IDs of lines manually pruned after animation.
   const prunedIdsRef = useRef<Set<string>>(new Set());
+  // IDs of added lines whose highlight has been cleared (reduced-motion path).
+  const clearedIdsRef = useRef<Set<string>>(new Set());
+  // Prior render model for ID preservation across diffs.
+  const priorLinesRef = useRef<DiffLine[]>([]);
 
   // Establish baseline on first non-null content.
   if (content != null && !hasBaselineRef.current) {
@@ -442,13 +475,14 @@ export function useContainerfileDiff(
     if (!isOpen) {
       // While collapsed, return stable lines from the last-open snapshot.
       // No diff — changes are tracked via hasPendingChanges.
-      const result = computeDiff(null, lastOpenContentRef.current);
+      const result = computeDiff(null, lastOpenContentRef.current, priorLinesRef.current);
+      priorLinesRef.current = result.lines;
       return result;
     }
 
     // On the first open render after mount or re-expand, diff against baseline.
     const prev = prevContentRef.current ?? baselineRef.current;
-    const result = computeDiff(prev, content);
+    const result = computeDiff(prev, content, priorLinesRef.current);
 
     // Filter out previously pruned removing lines.
     if (prunedIdsRef.current.size > 0) {
@@ -457,7 +491,17 @@ export function useContainerfileDiff(
       );
     }
 
+    // Downgrade cleared added lines to stable (reduced-motion path).
+    if (clearedIdsRef.current.size > 0) {
+      for (const line of result.lines) {
+        if (line.state === "added" && clearedIdsRef.current.has(line.id)) {
+          line.state = "stable";
+        }
+      }
+    }
+
     prevContentRef.current = content;
+    priorLinesRef.current = result.lines;
     return result;
   }, [content, isOpen]);
 
@@ -470,7 +514,11 @@ export function useContainerfileDiff(
     prunedIdsRef.current.add(id);
   }, []);
 
-  return { diffResult, hasPendingChanges, pruneRemovingLine };
+  const clearHighlight = useCallback((id: string) => {
+    clearedIdsRef.current.add(id);
+  }, []);
+
+  return { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight };
 }
 ```
 
@@ -794,8 +842,10 @@ The redaction logic (`sessionIsSensitive` / `hashesRevealed`) applies to the `te
 ```typescript
 // Key structural change in the render:
 // OLD: lines.map((line, i) => <span key={i}>...)
-// NEW: diffResult.lines.map((dl) => <div key={dl.id} className={lineClass(dl)} ...>...)
+// NEW: diffResult.lines.map((dl) => <span key={dl.id} style={{display:'block'}} className={lineClass(dl)} ...>...)
 ```
+
+**DOM structure note:** The current panel renders inside `<pre><code>...</code></pre>`. Use block-level `<span>` elements (`display: block` via CSS class) for each line — `<div>` inside `<code>` is invalid HTML. The `inspectah-cf-panel__line` class already exists and can be extended with `display: block`.
 
 The full implementation integrates the hook, CSS classes, collapsed-panel dot, aria-live region, and removal animation lifecycle. Keep the existing resize drag, auto-collapse, keyword tokenization, and footer intact.
 
@@ -936,73 +986,7 @@ git commit -m "feat(ui): add scroll-to-change behavior for containerfile highlig
 
 ---
 
-### Task 7: Add collapse/expand focus management
-
-**Files:**
-- Modify: `inspectah-web/ui/src/components/ContainerfilePanel.tsx`
-- Add tests to: `inspectah-web/ui/src/components/__tests__/ContainerfilePanel.test.tsx`
-
-- [ ] **Step 1: Write failing test**
-
-```tsx
-it("moves focus to panel body on expand", () => {
-  const onToggle = vi.fn();
-  const { rerender } = render(
-    <ContainerfilePanel
-      content={"FROM ubi9"}
-      isOpen={false}
-      onToggle={onToggle}
-      loading={false}
-    />,
-  );
-
-  // Simulate expand
-  rerender(
-    <ContainerfilePanel
-      content={"FROM ubi9"}
-      isOpen={true}
-      onToggle={onToggle}
-      loading={false}
-    />,
-  );
-
-  const panelBody = document.querySelector(".inspectah-cf-panel__body");
-  expect(document.activeElement).toBe(panelBody);
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cd inspectah-web/ui && npx vitest run src/components/__tests__/ContainerfilePanel.test.tsx
-```
-
-- [ ] **Step 3: Implement focus management**
-
-Add a `useEffect` that watches the `isOpen` transition:
-
-- When transitioning from `false` to `true` (expand): focus the `.inspectah-cf-panel__body` element (it already has `tabIndex={0}`).
-- When transitioning from `true` to `false` (collapse): the collapsed tab button receives focus naturally since the panel body unmounts and focus falls to the next focusable element. If it doesn't, explicitly focus the tab button via a ref.
-
-Use a `useRef` to track the previous `isOpen` value and a ref on the panel body element.
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-```bash
-cd inspectah-web/ui && npx vitest run src/components/__tests__/ContainerfilePanel.test.tsx
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add inspectah-web/ui/src/components/ContainerfilePanel.tsx \
-       inspectah-web/ui/src/components/__tests__/ContainerfilePanel.test.tsx
-git commit -m "feat(ui): add collapse/expand focus management to ContainerfilePanel"
-```
-
----
-
-### Task 8: Reduced motion support
+### Task 7: Reduced motion support
 
 **Files:**
 - Modify: `inspectah-web/ui/src/components/ContainerfilePanel.tsx`
@@ -1079,8 +1063,8 @@ cd inspectah-web/ui && npx vitest run src/components/__tests__/ContainerfilePane
 
 In the removal/highlight lifecycle logic, check `window.matchMedia("(prefers-reduced-motion: reduce)").matches`:
 
-- If `true` and the line is `added`: set a 2s `setTimeout` to remove the `--added` class (clear the highlight state for that line ID).
-- If `true` and the line is `removing`: prune immediately from the render model (no animation).
+- If `true` and the line is `added`: set a 2s `setTimeout` that calls `clearHighlight(id)` to downgrade the line to `stable` (removes the highlight class).
+- If `true` and the line is `removing`: call `pruneRemovingLine(id)` immediately (no animation).
 - The CSS `@media (prefers-reduced-motion: reduce)` block from Task 4 already zeroes animation durations, so this JS timer is the only additional work needed.
 
 - [ ] **Step 4: Run tests**
@@ -1099,7 +1083,7 @@ git commit -m "feat(ui): add reduced-motion support for containerfile highlights
 
 ---
 
-### Task 9: Full integration test and type check
+### Task 8: Full integration test and type check
 
 **Files:**
 - No new files — validation only.
