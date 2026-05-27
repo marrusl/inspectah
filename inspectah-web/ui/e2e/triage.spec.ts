@@ -1,4 +1,99 @@
 import { test, expect } from "@playwright/test";
+import { applyMockApi, clearMocks, mockSequence, mockError } from "./helpers/mock-api";
+
+test.describe("Triage workflow (mock tier)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test.beforeEach(async ({ page }) => {
+    await applyMockApi(page, "single-host");
+    await page.goto("/");
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
+  });
+
+  test.afterEach(async ({ page }) => {
+    await clearMocks(page);
+  });
+
+  test("toggle package exclude — view updates via GET refetch", async ({ page }) => {
+    // Verify initial stats: Packages: 4 included / 1 excluded
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible();
+
+    // Wire mockSequence: POST /api/op advances GET /api/view to after-exclude state
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "single-host/view.json",
+        "sequences/exclude-undo-redo/01-after-exclude.json",
+      ],
+      { triggerOn: "/api/op" },
+    );
+
+    // Find an included package toggle and click to exclude it.
+    // PackageList renders <input type="checkbox" role="checkbox" aria-label="<name>">.
+    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
+    await firstToggle.click({ force: true });
+
+    // Wait for the POST response + GET refetch to settle, then verify stats changed
+    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({ timeout: 5000 });
+    await expect(statsBar.getByText(/2 excluded/)).toBeVisible();
+  });
+
+  test("undo reverts state — redo button becomes enabled", async ({ page }) => {
+    // Wire mockSequence: /api/op and /api/undo advance the view through two states
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "single-host/view.json",
+        "sequences/exclude-undo-redo/01-after-exclude.json",
+        "sequences/exclude-undo-redo/02-after-undo.json",
+      ],
+      { triggerOn: ["/api/op", "/api/undo"] },
+    );
+
+    // Step 1: toggle to exclude → advances to state 1
+    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
+    await firstToggle.click({ force: true });
+
+    // Wait for exclude to take effect
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({ timeout: 5000 });
+
+    // Step 2: click undo → advances to state 2 (after-undo fixture has can_redo: true)
+    const undoBtn = page.getByRole("button", { name: "Undo" });
+    await undoBtn.click();
+
+    // Verify stats reverted to original counts
+    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible({ timeout: 5000 });
+
+    // Verify redo button is now enabled (after-undo fixture has can_redo: true)
+    const redoBtn = page.getByRole("button", { name: "Redo" });
+    await expect(redoBtn).toBeEnabled({ timeout: 3000 });
+  });
+
+  test("server error on mutation — page stays interactive", async ({ page }) => {
+    // Wire /api/op to return 500 on POST
+    await mockError(page, "/api/op", "500");
+
+    // Find a toggle and click it
+    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
+    await firstToggle.click({ force: true });
+
+    // Give the error response time to process
+    await page.waitForTimeout(500);
+
+    // Page should still be interactive: statsbar visible, toggles still present
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
+    const toggleCount = await page.locator("input[type=checkbox]").count();
+    expect(toggleCount).toBeGreaterThan(0);
+
+    // Stats should remain unchanged (original values from the initial mock)
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible();
+  });
+});
 
 test.describe("Triage workflow", () => {
   // These tests mutate shared server state; must run serially
