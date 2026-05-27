@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  computeDiff,
-  _resetIdCounter,
-  type DiffLine,
-  type DiffResult,
-} from "../useContainerfileDiff";
+import { computeDiff, _resetIdCounter } from "../useContainerfileDiff";
 
 beforeEach(() => {
   _resetIdCounter();
@@ -146,7 +141,7 @@ describe("computeDiff", () => {
     const d1 = computeDiff(v1, v1);
     const aLines = d1.lines.filter((l) => l.text === "a");
     expect(aLines).toHaveLength(2);
-    const [aId0, aId1] = aLines.map((l) => l.id);
+    const [_aId0, aId1] = aLines.map((l) => l.id);
     const bId = d1.lines.find((l) => l.text === "b")!.id;
 
     const d2 = computeDiff(v1, v2, d1.lines);
