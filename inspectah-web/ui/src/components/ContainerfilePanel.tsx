@@ -208,14 +208,18 @@ export function ContainerfilePanel({
       }
     }
 
-    // Cleanup on unmount
+    // Cleanup: clear timers AND map entries so the guard doesn't
+    // see stale entries when the effect re-runs after highlightsActive
+    // cycles false → true.
     return () => {
       for (const timer of removingTimers.current.values()) {
         clearTimeout(timer);
       }
+      removingTimers.current.clear();
       for (const timer of addedTimers.current.values()) {
         clearTimeout(timer);
       }
+      addedTimers.current.clear();
     };
   }, [diffResult, highlightsActive, pruneRemovingLine, clearHighlight]);
 
