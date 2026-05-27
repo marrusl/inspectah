@@ -169,13 +169,6 @@ transitions from open to collapsed. This is the baseline for the
 cumulative diff on re-expand. On first load with the panel already
 collapsed, the first non-null `containerfilePreview` is the baseline.
 
-### Collapse/Expand Focus
-
-When the user expands the panel (clicks the tab or activates via
-keyboard), focus moves to the panel's scroll container so keyboard
-users can immediately scroll through the highlighted changes. When
-the panel collapses, focus returns to the collapsed tab button.
-
 ## Accessibility
 
 ### Reduced Motion
