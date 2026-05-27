@@ -53,9 +53,12 @@ export async function expectContainerfileContains(
 export async function expectNoAxeViolations(
   page: Page,
   tags: string[] = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"],
+  disableRules: string[] = [],
 ): Promise<void> {
   await page.waitForTimeout(500);
-  const results = await new AxeBuilder({ page }).withTags(tags).analyze();
+  let builder = new AxeBuilder({ page }).withTags(tags);
+  if (disableRules.length > 0) builder = builder.disableRules(disableRules);
+  const results = await builder.analyze();
   const critical = results.violations.filter(
     (v) => v.impact === "critical" || v.impact === "serious",
   );
