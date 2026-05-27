@@ -803,137 +803,173 @@ git commit -m "feat(e2e): add mutation proof tests to triage.spec.ts (toggle, un
 
 ### Task 7: Schema export test with insta JSON snapshots
 
-**Approach (from Tang consult):** No `JsonSchema` derives. No feature flags. No changes to `inspectah-core` or `inspectah-refine`. The test reads each fixture JSON file, deserializes it into the actual Rust response type (`serde_json::from_str::<ViewResponse>(...)`), re-serializes it, and snapshots the output with `insta`. If the fixture can't deserialize into the Rust type, the test **fails** (not skips). If the Rust type changes, the re-serialized snapshot changes. This is the contract boundary.
+**What this task proves and what it doesn't:**
+
+Task 7 validates that fixture JSON files are **structurally intentional** — any change to a fixture breaks its insta snapshot and requires explicit review. This catches accidental fixture edits and ensures fixture changes are deliberate.
+
+Task 7 does **not** validate fixtures against Rust types. The response DTOs (`ViewResponse`, `FleetViewResponse`, etc.) derive `Serialize` only — adding `Deserialize` would require transitive derives across ~50 types in 3 crates, the same cascade we avoided by dropping `schemars`. **Rust-type compatibility is proven by the real-server tier** (Task 8), where the actual server serializes responses and Playwright asserts against them.
+
+The `manifest.json` (Task 5) documents fixture categories for future CI validation tooling. Task 7 does not implement manifest-driven validation — it provides the insta-snapshot safety net only.
 
 **Files:**
-- Modify: `inspectah-web/Cargo.toml`
-- Create: `inspectah-web/tests/fixture_contract_test.rs`
+- Modify: `inspectah-web/Cargo.toml` (verify `insta` dev-dep)
+- Create: `inspectah-web/tests/fixture_structure_test.rs`
 
-- [ ] **Step 1: Verify insta is already a dev-dependency**
+- [ ] **Step 1: Verify insta is a dev-dependency**
 
-`insta` is already in the workspace deps (`Cargo.toml` line: `insta = { version = "1", features = ["json"] }`). Verify `inspectah-web/Cargo.toml` has it under `[dev-dependencies]`. If not, add:
+`insta` is already in workspace deps. Verify `inspectah-web/Cargo.toml` has it under `[dev-dependencies]`:
 
 ```toml
 insta = { workspace = true }
 ```
 
-No `schemars` needed — we're using `serde_json::from_str` deserialization, not schema generation.
+If it's not there, add it. No other dependency changes needed.
 
-- [ ] **Step 2: Write the fixture contract test**
+- [ ] **Step 2: Write the fixture structure test**
 
 ```rust
-// inspectah-web/tests/fixture_contract_test.rs
+// inspectah-web/tests/fixture_structure_test.rs
 //
-// Contract test: verifies that e2e fixture JSON files deserialize into
-// the actual Rust response types. If a fixture can't round-trip through
-// the Rust type, the fixture is stale or the type changed.
+// Snapshot test: parses each e2e fixture as serde_json::Value and snapshots it.
+// Any fixture change (field added, removed, renamed, retyped) breaks the snapshot
+// and requires explicit `cargo insta review` acceptance.
 //
-// Run with: INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_contract_test
+// This does NOT validate against Rust response types (they lack Deserialize).
+// Rust-type compatibility is proven by Task 8's real-server smoke tests.
+//
+// Run with: INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_structure_test
 
-use inspectah_web::handlers::{ViewResponse, ContextSection};
-use inspectah_web::fleet_handlers::FleetViewResponse;
-
-fn fixture_path(relative: &str) -> std::path::PathBuf {
+fn fixture_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("ui/e2e/fixtures")
-        .join(relative)
 }
 
-fn read_fixture(relative: &str) -> String {
-    let path = fixture_path(relative);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Cannot read fixture {}: {}", path.display(), e))
+fn snapshot_fixture(name: &str, relative_path: &str) {
+    let path = fixture_dir().join(relative_path);
+    let json_str = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read fixture {}: {}", path.display(), e));
+    let value: serde_json::Value = serde_json::from_str(&json_str)
+        .unwrap_or_else(|e| panic!("Fixture {} is not valid JSON: {}", relative_path, e));
+    insta::assert_json_snapshot!(name, value);
+}
+
+fn snapshot_fixture_if_exists(name: &str, relative_path: &str) {
+    let path = fixture_dir().join(relative_path);
+    if !path.exists() { return; }
+    snapshot_fixture(name, relative_path);
+}
+
+// --- Body fixtures (GET presets) ---
+
+#[test]
+fn fixture_single_host_health() {
+    snapshot_fixture("single_host_health", "single-host/health.json");
 }
 
 #[test]
-fn view_fixture_deserializes_into_view_response() {
-    let json = read_fixture("single-host/view.json");
-    let parsed: ViewResponse = serde_json::from_str(&json)
-        .expect("single-host/view.json must deserialize into ViewResponse");
-    let reserialized = serde_json::to_value(&parsed).unwrap();
-    insta::assert_json_snapshot!("view_response_roundtrip", reserialized);
+fn fixture_single_host_view() {
+    snapshot_fixture("single_host_view", "single-host/view.json");
 }
 
 #[test]
-fn sections_fixture_deserializes_into_context_sections() {
-    let json = read_fixture("single-host/sections.json");
-    let parsed: Vec<ContextSection> = serde_json::from_str(&json)
-        .expect("single-host/sections.json must deserialize into Vec<ContextSection>");
-    let reserialized = serde_json::to_value(&parsed).unwrap();
-    insta::assert_json_snapshot!("sections_roundtrip", reserialized);
+fn fixture_single_host_sections() {
+    snapshot_fixture("single_host_sections", "single-host/sections.json");
 }
 
 #[test]
-fn fleet_view_fixture_deserializes_into_fleet_view_response() {
-    let path = fixture_path("fleet/fleet-view.json");
-    if !path.exists() {
-        // Fleet fixtures are created in Phase 1b step 5; skip until then
-        eprintln!("Skipping: fleet fixture not yet created");
-        return;
-    }
-    let json = read_fixture("fleet/fleet-view.json");
-    let parsed: FleetViewResponse = serde_json::from_str(&json)
-        .expect("fleet/fleet-view.json must deserialize into FleetViewResponse");
-    let reserialized = serde_json::to_value(&parsed).unwrap();
-    insta::assert_json_snapshot!("fleet_view_response_roundtrip", reserialized);
+fn fixture_single_host_ops() {
+    snapshot_fixture("single_host_ops", "single-host/ops-empty.json");
 }
 
 #[test]
-fn sequence_fixtures_deserialize_into_view_response() {
-    for fixture in &[
-        "sequences/exclude-undo-redo/01-after-exclude.json",
-        "sequences/exclude-undo-redo/02-after-undo.json",
-        "sequences/exclude-undo-redo/03-after-redo.json",
-    ] {
-        let path = fixture_path(fixture);
-        if !path.exists() { continue; }
-        let json = read_fixture(fixture);
-        let _: ViewResponse = serde_json::from_str(&json)
-            .unwrap_or_else(|e| panic!("{fixture} must deserialize into ViewResponse: {e}"));
-    }
+fn fixture_single_host_changes() {
+    snapshot_fixture("single_host_changes", "single-host/changes-empty.json");
 }
 
 #[test]
-fn post_success_fixtures_deserialize_into_view_response() {
-    for fixture in &[
-        "post-responses/op/success.json",
-        "post-responses/undo/success.json",
-        "post-responses/redo/success.json",
-        "post-responses/user-strategy/success.json",
-        "post-responses/user-password/success.json",
-    ] {
-        let path = fixture_path(fixture);
-        if !path.exists() { continue; }
-        let json = read_fixture(fixture);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        // Strip _status wrapper before deserializing
-        let mut obj = parsed.as_object().unwrap().clone();
+fn fixture_single_host_viewed() {
+    snapshot_fixture("single_host_viewed", "single-host/viewed-empty.json");
+}
+
+#[test]
+fn fixture_single_host_user_preview() {
+    snapshot_fixture("single_host_user_preview", "single-host/user-preview.json");
+}
+
+// --- Fleet fixtures (created in Phase 1b, may not exist yet) ---
+
+#[test]
+fn fixture_fleet_view() {
+    snapshot_fixture_if_exists("fleet_view", "fleet/fleet-view.json");
+}
+
+// --- Sequence fixtures ---
+
+#[test]
+fn fixture_sequence_after_exclude() {
+    snapshot_fixture_if_exists("seq_after_exclude", "sequences/exclude-undo-redo/01-after-exclude.json");
+}
+
+#[test]
+fn fixture_sequence_after_undo() {
+    snapshot_fixture_if_exists("seq_after_undo", "sequences/exclude-undo-redo/02-after-undo.json");
+}
+
+#[test]
+fn fixture_sequence_after_redo() {
+    snapshot_fixture_if_exists("seq_after_redo", "sequences/exclude-undo-redo/03-after-redo.json");
+}
+
+// --- POST response wrappers (strip _status, snapshot body) ---
+
+fn snapshot_post_fixture(name: &str, relative_path: &str) {
+    let path = fixture_dir().join(relative_path);
+    if !path.exists() { return; }
+    let json_str = std::fs::read_to_string(&path).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    // Strip _status transport metadata before snapshotting the body
+    if let Some(obj) = value.as_object_mut() {
         obj.remove("_status");
-        let body = serde_json::Value::Object(obj);
-        let _: ViewResponse = serde_json::from_value(body)
-            .unwrap_or_else(|e| panic!("{fixture} body must deserialize into ViewResponse: {e}"));
     }
+    insta::assert_json_snapshot!(name, value);
+}
+
+#[test]
+fn fixture_post_op_success() {
+    snapshot_post_fixture("post_op_success", "post-responses/op/success.json");
+}
+
+#[test]
+fn fixture_post_undo_success() {
+    snapshot_post_fixture("post_undo_success", "post-responses/undo/success.json");
+}
+
+#[test]
+fn fixture_post_redo_success() {
+    snapshot_post_fixture("post_redo_success", "post-responses/redo/success.json");
 }
 ```
 
 - [ ] **Step 3: Run the test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_contract_test 2>&1 | tail -20`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_structure_test 2>&1 | tail -20`
 
-`INSPECTAH_SKIP_UI=1` is critical — `build.rs` runs `npm ci && npm run build` without it.
+`INSPECTAH_SKIP_UI=1` skips the UI build in `build.rs`.
 
-Expected: Fixtures created in Tasks 2 and 5 must round-trip through Rust types. If any fixture fails to deserialize, fix the fixture to match the actual type. Accept `insta` snapshots:
+Expected: First run creates new snapshots for each fixture. Accept them:
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && cargo insta review`
 
-Snapshots land at `inspectah-web/tests/snapshots/fixture_contract_test__*.snap`.
+Accept all snapshots. These become the baseline. Any future fixture change will break its snapshot and require explicit review.
+
+Snapshots land at `inspectah-web/tests/snapshots/fixture_structure_test__*.snap`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
-git add inspectah-web/Cargo.toml inspectah-web/tests/fixture_contract_test.rs inspectah-web/tests/snapshots/
-git commit -m "feat: add fixture contract test — deserialize e2e fixtures into Rust types + insta snapshot"
+git add inspectah-web/Cargo.toml inspectah-web/tests/fixture_structure_test.rs inspectah-web/tests/snapshots/
+git commit -m "feat: add fixture structure test — insta snapshots of e2e fixture JSON"
 ```
 
 ---
@@ -1209,14 +1245,18 @@ test.describe("Context sections", () => {
     });
   }
 
-  test("/ opens section search with input above content", async ({ page }) => {
-    // Section search renders inline above the decision/context list (data-testid="section-search")
+  test("/ opens inline section search above content list", async ({ page }) => {
+    // SectionSearch (data-testid="section-search") renders inline above the
+    // decision/context item list in the main content pane. It filters items
+    // within the currently active section — it does NOT filter sidebar sections.
     await page.locator(".inspectah-layout__main").click();
     await page.keyboard.press("/");
     const input = page.locator('[data-testid="section-search"] input');
     await expect(input).toBeVisible();
+    // Type a query — items in the content pane should filter
     await input.fill("net");
-    // Typing filters the items in the content pane, not the sidebar sections
+    // The sidebar sections remain unchanged (all still visible)
+    // Escape closes the inline search
     await page.keyboard.press("Escape");
     await expect(input).not.toBeVisible({ timeout: 2000 });
   });
@@ -1404,7 +1444,7 @@ git commit -m "feat(e2e): add containerfile.spec.ts with panel state, highlights
 **Files:**
 - Create: `inspectah-web/ui/e2e/repos.spec.ts`
 
-Selectors from components: `data-testid="repo-bar"` (RepoBar), `data-testid={`repo-group-wrapper-${section_id}`}` (RepoGroup), `data-testid="attention-summary"` (AttentionSummary), `data-testid="excluded-zone"` (ExcludedZone).
+Selectors from components: `data-testid="repo-bar"` (RepoBar), `data-testid={`repo-group-wrapper-${section_id}`}` (RepoGroup), `data-testid="excluded-zone"` (ExcludedZone). Note: `AttentionSummary` (`data-testid="attention-summary"`) renders inside `MainContent` for the active section, not as a standalone page-level surface. It is tested as part of triage.spec.ts where the full Packages content pane is rendered, not here in isolation.
 
 - [ ] **Step 1: Write repos.spec.ts**
 
@@ -1423,27 +1463,17 @@ test.describe("Repo groups", () => {
 
   test.afterEach(async ({ page }) => { await clearMocks(page); });
 
-  test("repo bar renders", async ({ page }) => {
+  test("repo bar renders above package list", async ({ page }) => {
     await expect(page.getByTestId("repo-bar")).toBeVisible();
   });
 
-  test("repo group wrappers render for each repo", async ({ page }) => {
+  test("repo group wrappers render for each repo in fixture", async ({ page }) => {
     const groups = page.locator("[data-testid^='repo-group-wrapper-']");
     const count = await groups.count();
-    // Fixture must have at least one repo
     expect(count).toBeGreaterThan(0);
   });
 
-  test("attention summary renders when items have attention", async ({ page }) => {
-    const summary = page.getByTestId("attention-summary");
-    // Visibility depends on fixture data — if packages have attention tags
-    const visible = await summary.isVisible().catch(() => false);
-    if (visible) {
-      await expect(summary).toBeVisible();
-    }
-  });
-
-  test("excluded zone renders after excluding a repo", async ({ page }) => {
+  test("excluded zone renders after excluding items", async ({ page }) => {
     await mockSequence(page, "/api/view", [
       "sequences/exclude-undo-redo/01-after-exclude.json",
     ], { triggerOn: ["/api/op"] });
@@ -1469,7 +1499,7 @@ test.describe("Repo groups", () => {
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx playwright test e2e/repos.spec.ts
 cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/e2e/repos.spec.ts
-git commit -m "feat(e2e): add repos.spec.ts for repo groups, bar, and attention summary"
+git commit -m "feat(e2e): add repos.spec.ts for repo groups, bar, and excluded zone"
 ```
 
 ### Task 15: Create users.spec.ts
@@ -1480,6 +1510,8 @@ git commit -m "feat(e2e): add repos.spec.ts for repo groups, bar, and attention 
 Selectors from `UserCard.tsx`: `data-testid={`user-card-${user.name}`}` (card wrapper), `input[type="checkbox"][aria-label="Include ${name}"]` (include toggle), `input[name="strategy-${name}"]` (skip/useradd radio), `aria-label="${expanded ? "Collapse" : "Expand"} ${name} details"` (expand button). From `UserArtifactPreview.tsx`: tab buttons "Kickstart" / "Blueprint", sensitive banner (Alert variant="info"/"warning").
 
 Note: users/groups fixtures are NOT schema-backed (`users_groups_decisions: Vec<serde_json::Value>`). Tests rely on structural fixture correctness only.
+
+**Implementation note:** The preview and password interaction flows below are based on source-reading of `UserCard.tsx`, `UserArtifactPreview.tsx`, and `UsersGroupsSection.tsx`. The exact flow (whether preview is inline or behind a modal, whether password requires expand → radio → fill → button click or a different sequence) **must be verified in a headed browser run** during implementation. Adjust selectors and click sequences to match the actual mounted behavior. The test intent (what to verify) is stable; the interaction path may need tuning.
 
 - [ ] **Step 1: Write users.spec.ts**
 
@@ -1675,6 +1707,14 @@ git commit -m "docs: add Playwright CI, visual regression, and multi-browser to 
 ---
 
 ## Revision history
+
+### Round 3 → Round 4
+
+1. **Task 7 rewritten as fixture structure snapshots:** Dropped the Rust-type deserialization approach — response DTOs are `Serialize`-only, adding `Deserialize` would cascade through ~50 types across 3 crates. Task 7 now snapshots fixture JSON as `serde_json::Value` with insta. This catches fixture drift (any change requires explicit review). Rust-type compatibility is proven by the real-server tier (Task 8), not Task 7. The overclaim about manifest-driven CI validation is removed — Task 7 provides the insta safety net only.
+2. **Task 11 section search clarified:** SectionSearch filters items within the active content pane, not sidebar sections. Description corrected.
+3. **Task 14 AttentionSummary removed:** `attention-summary` renders inside `MainContent` for the active section, not as a standalone surface on the packages page. Removed the test that claimed it as a separate repos-page surface. Moved coverage to triage.spec.ts where the full Packages content pane is rendered.
+4. **Task 15 implementation note added:** Explicit callout that the preview and password interaction flows must be verified in a headed browser during implementation. Test intent is stable; exact click sequences may need tuning.
+5. **Pushback:** The `repo-group-wrapper-*` testid is correct per `RepoGroup.tsx:56` — the reviewer's objection was about mounted-page coverage scope, not the selector itself. Fixed the scope (removed AttentionSummary), kept the testid.
 
 ### Round 2 → Round 3
 
