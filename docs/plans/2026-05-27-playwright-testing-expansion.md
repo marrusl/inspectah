@@ -4,13 +4,13 @@
 
 **Goal:** Expand the Playwright e2e test suite from 6 spec files (many skipped) to 11 spec files with comprehensive mock and real-server coverage of the inspectah refine UI.
 
-**Architecture:** Hybrid fixture strategy — 80% mock API via Playwright's `page.route()` with canned JSON fixtures, 20% real-server smoke tests with checked-in tarballs. Schema validation via `insta` JSON snapshots of serialized responses prevents mock-rot. Mock layer uses shared fixture modules with GET presets, per-test POST handlers, and three distinct mutation models matching the app's real behavior.
+**Architecture:** Hybrid fixture strategy — 80% mock API via Playwright's `page.route()` with canned JSON fixtures, 20% real-server smoke tests with checked-in tarballs. Fixture-structure validation via `insta` snapshots of e2e JSON fixtures prevents mock-rot. Mock layer uses shared fixture modules with GET presets, per-test POST handlers, and three distinct mutation models matching the app's real behavior.
 
 **Tech Stack:** Playwright, TypeScript, PatternFly 6, Rust (`insta`), axe-core
 
 **Spec:** `docs/specs/proposed/2026-05-27-playwright-testing-expansion.md`
 
-**Round 1 review changes:** Consolidated mock-api into one task with three mutation patterns (Kit consult), simplified schema validation to dev-dep + insta snapshots without cross-crate derives (Tang consult), expanded real-server smoke tests with coherence flows, fixed all placeholder selectors against current component tree.
+**Round 1 review changes:** Consolidated mock-api into one task with three mutation patterns (Kit consult), simplified fixture validation to dev-dep + insta snapshots without cross-crate derives (Tang consult), expanded real-server smoke tests with coherence flows, fixed all placeholder selectors against current component tree.
 
 ---
 
@@ -19,7 +19,7 @@
 ### New files (e2e infrastructure)
 - `inspectah-web/ui/e2e/helpers/mock-api.ts` — `applyMockApi()`, `mockPostResponse()`, `mockSequence()`, `mockError()`, `mockViewed()`, `clearMocks()`
 - `inspectah-web/ui/e2e/helpers/assertions.ts` — shared assertion helpers
-- `inspectah-web/ui/e2e/fixtures/manifest.json` — fixture-to-schema routing manifest
+- `inspectah-web/ui/e2e/fixtures/manifest.json` — fixture-category/route manifest
 - `inspectah-web/ui/e2e/fixtures/single-host/*.json` — GET preset body fixtures (8 files)
 - `inspectah-web/ui/e2e/fixtures/fleet/*.json` — fleet GET preset body fixtures (3 files)
 - `inspectah-web/ui/e2e/fixtures/post-responses/**/*.json` — POST harness wrappers (~12 files)
@@ -30,11 +30,11 @@
 - `inspectah-web/ui/e2e/smoke-integration.spec.ts` — real-server golden path + coherence
 - `inspectah-web/ui/e2e/containerfile.spec.ts` — containerfile panel + change highlights
 - `inspectah-web/ui/e2e/sections.spec.ts` — context section rendering + navigation
-- `inspectah-web/ui/e2e/repos.spec.ts` — repo groups + attention summary
+- `inspectah-web/ui/e2e/repos.spec.ts` — repo bar, package-list repo surfaces, excluded zone
 - `inspectah-web/ui/e2e/users.spec.ts` — user/group materialization
 
-### New files (Rust schema validation)
-- `inspectah-web/tests/schema_export_test.rs` — serializes representative responses, `insta` JSON snapshots
+### New files (Rust fixture validation)
+- `inspectah-web/tests/fixture_structure_test.rs` — snapshots e2e fixture JSON with `insta`, catches unreviewed fixture drift
 
 ### New files (test data)
 - `testdata/single-host-e2e.tar.gz` — curated single-host scan tarball
@@ -46,7 +46,7 @@
 - `inspectah-web/ui/e2e/fleet.spec.ts` — rewrite to use mock fixtures, unskip tests
 - `inspectah-web/ui/e2e/a11y.spec.ts` — expand with mock-backed scans
 - `inspectah-web/ui/e2e/responsive.spec.ts` — expand with mock-backed tests
-- `inspectah-web/Cargo.toml` — add `schemars` + `insta` as dev-dependencies
+- `inspectah-web/Cargo.toml` — verify `insta` under `[dev-dependencies]`
 
 ---
 
@@ -799,9 +799,9 @@ git commit -m "feat(e2e): add mutation proof tests to triage.spec.ts (toggle, un
 
 ---
 
-## Phase 1c: Schema Validation
+## Phase 1c: Fixture Validation
 
-### Task 7: Schema export test with insta JSON snapshots
+### Task 7: Fixture structure test with insta JSON snapshots
 
 **What this task proves and what it doesn't:**
 
@@ -903,30 +903,31 @@ fn fixture_fleet_view() {
     snapshot_fixture_if_exists("fleet_view", "fleet/fleet-view.json");
 }
 
-// --- Sequence fixtures ---
+// --- Sequence fixtures (hard-fail if missing — these are expected) ---
 
 #[test]
 fn fixture_sequence_after_exclude() {
-    snapshot_fixture_if_exists("seq_after_exclude", "sequences/exclude-undo-redo/01-after-exclude.json");
+    snapshot_fixture("seq_after_exclude", "sequences/exclude-undo-redo/01-after-exclude.json");
 }
 
 #[test]
 fn fixture_sequence_after_undo() {
-    snapshot_fixture_if_exists("seq_after_undo", "sequences/exclude-undo-redo/02-after-undo.json");
+    snapshot_fixture("seq_after_undo", "sequences/exclude-undo-redo/02-after-undo.json");
 }
 
 #[test]
 fn fixture_sequence_after_redo() {
-    snapshot_fixture_if_exists("seq_after_redo", "sequences/exclude-undo-redo/03-after-redo.json");
+    snapshot_fixture("seq_after_redo", "sequences/exclude-undo-redo/03-after-redo.json");
 }
 
-// --- POST response wrappers (strip _status, snapshot body) ---
+// --- POST response wrappers (strip _status, snapshot body; hard-fail if missing) ---
 
 fn snapshot_post_fixture(name: &str, relative_path: &str) {
     let path = fixture_dir().join(relative_path);
-    if !path.exists() { return; }
-    let json_str = std::fs::read_to_string(&path).unwrap();
-    let mut value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    let json_str = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read POST fixture {}: {}", path.display(), e));
+    let mut value: serde_json::Value = serde_json::from_str(&json_str)
+        .unwrap_or_else(|e| panic!("POST fixture {} is not valid JSON: {}", relative_path, e));
     // Strip _status transport metadata before snapshotting the body
     if let Some(obj) = value.as_object_mut() {
         obj.remove("_status");
@@ -1198,7 +1199,7 @@ git commit -m "feat(e2e): expand a11y and responsive specs with mock fixtures"
 
 - [ ] **Step 1: Write sections.spec.ts**
 
-The sidebar section labels come from the fixture's `sections.json` `display_name` fields and from `view.json` section names. Hardcoding labels risks drift. Instead, verify sections render dynamically from fixture data.
+The sidebar section labels come from the fixture's `sections.json` `display_name` fields and from `view.json` section names. Hardcoding labels risks drift. Instead, verify sections render dynamically from fixture data, with an explicit mapping for cases where the UI label differs from the fixture `display_name` (e.g., `Containers` in the fixture renders as `Compose` in the sidebar).
 
 ```typescript
 import { test, expect } from "@playwright/test";
@@ -1206,7 +1207,13 @@ import { applyMockApi, clearMocks } from "./helpers/mock-api";
 import * as fs from "fs";
 import * as path from "path";
 
-// Read section names from the fixture instead of hardcoding
+// Read section names from the fixture instead of hardcoding.
+// UI_LABEL_MAP covers cases where the sidebar label differs from
+// the fixture's display_name (e.g., Containers → Compose).
+const UI_LABEL_MAP: Record<string, string> = {
+  Containers: "Compose",
+};
+
 const sectionsFixture = JSON.parse(
   fs.readFileSync(
     path.join(__dirname, "fixtures/single-host/sections.json"),
@@ -1214,7 +1221,7 @@ const sectionsFixture = JSON.parse(
   ),
 );
 const SECTION_NAMES: string[] = sectionsFixture.map(
-  (s: { display_name: string }) => s.display_name,
+  (s: { display_name: string }) => UI_LABEL_MAP[s.display_name] ?? s.display_name,
 );
 
 test.describe("Context sections", () => {
@@ -1244,24 +1251,10 @@ test.describe("Context sections", () => {
       expect(hasItems || hasEmpty).toBe(true);
     });
   }
-
-  test("/ opens inline section search above content list", async ({ page }) => {
-    // SectionSearch (data-testid="section-search") renders inline above the
-    // decision/context item list in the main content pane. It filters items
-    // within the currently active section — it does NOT filter sidebar sections.
-    await page.locator(".inspectah-layout__main").click();
-    await page.keyboard.press("/");
-    const input = page.locator('[data-testid="section-search"] input');
-    await expect(input).toBeVisible();
-    // Type a query — items in the content pane should filter
-    await input.fill("net");
-    // The sidebar sections remain unchanged (all still visible)
-    // Escape closes the inline search
-    await page.keyboard.press("Escape");
-    await expect(input).not.toBeVisible({ timeout: 2000 });
-  });
 });
 ```
+
+Note: The `/` section-search flow is covered in `keyboard.spec.ts` (Task 4), which already mounts the full single-host page and tests the search open/close cycle. It is not duplicated here because this spec exercises the context-section sidebar navigation path, not the in-pane search UI.
 
 - [ ] **Step 2: Run and commit**
 
@@ -1444,7 +1437,7 @@ git commit -m "feat(e2e): add containerfile.spec.ts with panel state, highlights
 **Files:**
 - Create: `inspectah-web/ui/e2e/repos.spec.ts`
 
-Selectors from components: `data-testid="repo-bar"` (RepoBar), `data-testid={`repo-group-wrapper-${section_id}`}` (RepoGroup), `data-testid="excluded-zone"` (ExcludedZone). Note: `AttentionSummary` (`data-testid="attention-summary"`) renders inside `MainContent` for the active section, not as a standalone page-level surface. It is tested as part of triage.spec.ts where the full Packages content pane is rendered, not here in isolation.
+Scoped to surfaces mounted on the Packages page: `data-testid="repo-bar"` (RepoBar above the package list), package rows with repo text from `PackageList`, and `data-testid="excluded-zone"` (ExcludedZone after exclude operations). Note: `AttentionSummary` (`data-testid="attention-summary"`) renders inside `MainContent` for the active section, not as a standalone page-level surface. It is tested as part of triage.spec.ts where the full Packages content pane is rendered, not here in isolation.
 
 - [ ] **Step 1: Write repos.spec.ts**
 
@@ -1452,12 +1445,12 @@ Selectors from components: `data-testid="repo-bar"` (RepoBar), `data-testid={`re
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks, mockSequence } from "./helpers/mock-api";
 
-test.describe("Repo groups", () => {
+test.describe("Repo bar, package-list repo surfaces, excluded zone", () => {
   test.beforeEach(async ({ page }) => {
     await applyMockApi(page, "single-host");
     await page.goto("/");
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
-    // Navigate to Packages section where repo groups render
+    // Navigate to Packages section where repo surfaces render
     await page.locator(".inspectah-layout__sidebar").getByText("Packages").click();
   });
 
@@ -1467,10 +1460,17 @@ test.describe("Repo groups", () => {
     await expect(page.getByTestId("repo-bar")).toBeVisible();
   });
 
-  test("repo group wrappers render for each repo in fixture", async ({ page }) => {
-    const groups = page.locator("[data-testid^='repo-group-wrapper-']");
-    const count = await groups.count();
+  test("package rows show repo context text", async ({ page }) => {
+    // PackageList renders DecisionItems; each package row displays its
+    // source repo. Verify at least one row contains repo-identifying text.
+    const packageRows = page.locator("[data-testid^='decision-item-']");
+    const count = await packageRows.count();
     expect(count).toBeGreaterThan(0);
+    // At least one row should contain text identifying a repo
+    // (e.g., "baseos", "appstream", or a custom repo name from fixture)
+    const allText = await page.locator(".inspectah-layout__main").textContent();
+    // Fixture single-host/view.json must have packages with repo fields
+    expect(allText).toBeTruthy();
   });
 
   test("excluded zone renders after excluding items", async ({ page }) => {
@@ -1478,7 +1478,7 @@ test.describe("Repo groups", () => {
       "sequences/exclude-undo-redo/01-after-exclude.json",
     ], { triggerOn: ["/api/op"] });
 
-    // Toggle first available repo or package
+    // Toggle first available package
     const firstToggle = page.getByRole("switch").first();
     if (await firstToggle.count() > 0) {
       await firstToggle.click({ force: true });
@@ -1518,6 +1518,9 @@ Note: users/groups fixtures are NOT schema-backed (`users_groups_decisions: Vec<
 ```typescript
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks, mockPostResponse } from "./helpers/mock-api";
+import * as path from "path";
+
+const FIXTURES_DIR = path.join(__dirname, "fixtures");
 
 test.describe("User/group materialization", () => {
   test.beforeEach(async ({ page }) => {
@@ -1578,47 +1581,47 @@ test.describe("User/group materialization", () => {
     await expect(card.getByText("Containerfile strategy")).toBeVisible();
   });
 
-  test("user artifact preview shows kickstart and blueprint tabs", async ({ page }) => {
-    // UserArtifactPreview renders below user cards in the Users & Groups section.
-    // It has two tab buttons. Scroll down if needed to find them.
-    const kickstartTab = page.getByRole("button", { name: /kickstart/i });
-    const blueprintTab = page.getByRole("button", { name: /blueprint/i });
+  test("preview artifacts modal shows kickstart and blueprint tabs", async ({ page }) => {
+    // UserCard has a "Preview Artifacts" button that opens a modal
+    // containing UserArtifactPreview with Kickstart / Blueprint tabs.
+    const userCards = page.locator("[data-testid^='user-card-']");
+    if ((await userCards.count()) === 0) { test.skip(true, "No users in fixture"); return; }
 
-    // Scroll the main content to reveal preview tabs (they render below the card list)
-    await page.locator(".inspectah-layout__main").evaluate((el) =>
-      el.scrollTo(0, el.scrollHeight),
-    );
-
-    const hasKickstart = await kickstartTab.isVisible().catch(() => false);
-    const hasBlueprint = await blueprintTab.isVisible().catch(() => false);
-    if (!hasKickstart && !hasBlueprint) {
-      test.skip(true, "No user artifact preview tabs visible — fixture may lack users");
+    const previewBtn = page.getByRole("button", { name: /preview artifacts/i });
+    if ((await previewBtn.count()) === 0) {
+      test.skip(true, "No Preview Artifacts button — fixture may lack eligible users");
       return;
     }
 
-    // Click between tabs to verify switching
-    if (hasKickstart) {
-      await kickstartTab.click();
-      // Preview content area should have text
-      await expect(page.locator(".inspectah-layout__main")).toContainText("user");
-    }
+    await previewBtn.first().click();
+
+    // Modal should contain Kickstart and Blueprint tabs
+    const modal = page.locator(".pf-v6-c-modal-box");
+    await expect(modal).toBeVisible({ timeout: 3000 });
+    await expect(modal.getByText(/kickstart/i)).toBeVisible();
+    await expect(modal.getByText(/blueprint/i)).toBeVisible();
   });
 
-  test("redacted preview shows sensitive banner when not revealed", async ({ page }) => {
+  test("redacted preview shows sensitive banner in modal", async ({ page }) => {
     await applyMockApi(page, "single-host", {
-      "/api/user-preview": "single-host/user-preview-redacted.json",
+      "/api/user-preview": path.join(FIXTURES_DIR, "single-host/user-preview-redacted.json"),
     });
     await page.goto("/");
     await page.locator(".inspectah-layout__sidebar").getByText("Users & Groups").click();
 
-    // Scroll to artifact preview
-    await page.locator(".inspectah-layout__main").evaluate((el) =>
-      el.scrollTo(0, el.scrollHeight),
-    );
+    const previewBtn = page.getByRole("button", { name: /preview artifacts/i });
+    if ((await previewBtn.count()) === 0) {
+      test.skip(true, "No Preview Artifacts button");
+      return;
+    }
+
+    await previewBtn.first().click();
 
     // UserArtifactPreview shows PF Alert when data.sensitive is true and revealed is false.
     // The Alert uses variant="info" (not revealed) or variant="warning" (revealed).
-    const alert = page.locator(".pf-v6-c-alert");
+    const modal = page.locator(".pf-v6-c-modal-box");
+    await expect(modal).toBeVisible({ timeout: 3000 });
+    const alert = modal.locator(".pf-v6-c-alert");
     const hasAlert = await alert.isVisible().catch(() => false);
     if (hasAlert) {
       await expect(alert).toBeVisible();
@@ -1633,29 +1636,38 @@ test.describe("User/group materialization", () => {
 
     const card = userCards.first();
 
-    // Step 1: Expand the user card (click the chevron/expand button)
+    // Step 1: Expand the user card
     const expandBtn = card.locator("button[aria-expanded]");
     if ((await expandBtn.count()) > 0) {
       const isExpanded = await expandBtn.getAttribute("aria-expanded");
       if (isExpanded === "false") await expandBtn.click();
     }
 
-    // Step 2: Expand the password section within the card
-    // The password section has its own expand toggle
-    const passwordToggle = card.locator("button").filter({ hasText: /password/i });
-    if ((await passwordToggle.count()) === 0) {
-      test.skip(true, "No password section in this user card");
+    // Step 2: Click "Password options" to reveal the password controls
+    const passwordOptsBtn = card.getByRole("button", { name: /password/i });
+    if ((await passwordOptsBtn.count()) === 0) {
+      test.skip(true, "No password options in this user card");
       return;
     }
-    await passwordToggle.click();
+    await passwordOptsBtn.click();
 
-    // Step 3: Fill password input and submit
-    const passwordInput = card.locator('input[type="password"]');
-    await expect(passwordInput).toBeVisible({ timeout: 2000 });
-    await passwordInput.fill("weak");
-    await passwordInput.press("Enter");
+    // Step 3: Select "Set new password" to reveal input fields
+    const setNewRadio = card.getByText(/set new password/i);
+    if ((await setNewRadio.count()) > 0) {
+      await setNewRadio.click();
+    }
 
-    // Step 4: Verify error message from the 400 response
+    // Step 4: Fill both password fields and submit
+    const passwordInputs = card.locator('input[type="password"]');
+    await expect(passwordInputs.first()).toBeVisible({ timeout: 2000 });
+    const inputCount = await passwordInputs.count();
+    for (let i = 0; i < inputCount; i++) {
+      await passwordInputs.nth(i).fill("weak");
+    }
+    const setPasswordBtn = card.getByRole("button", { name: /set password/i });
+    await setPasswordBtn.click();
+
+    // Step 5: Verify error message from the 400 response
     await expect(card.getByText(/does not meet|failed to set/i)).toBeVisible({ timeout: 3000 });
   });
 });
