@@ -18,10 +18,6 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] **Sort toggle for Version Changes tab:** Add a sort control (alpha vs. status). Current sort is by direction (downgrades first, then upgrades). Add an alphabetical-by-name option. Default to status sort, let user toggle. Applies to both the reference section view and the package detail `VersionChangeEntry` list.
 
-## Fleet Triage: Non-Universal Variants
-
-- [x] **Non-universal items with variants don't require review:** Divergent items with prevalence < total demoted from `Investigate` (needs_review) to `Divergent` (informational). Only universal items with variant differences get review-level triage. *(DONE — 2026-05-26)*
-
 ## Port Fallback
 
 - [ ] **Auto-select alternate port when 8642 is in use:** `inspectah refine` should detect if port 8642 is occupied and automatically try the next port (8643, 8644, etc.). Print which port it bound to. Avoids the user having to manually kill stale processes.
@@ -69,6 +65,10 @@ Deferred non-blocking items from the spec/plan review rounds. Address when touch
 ---
 
 ## Completed
+
+### Fleet Triage: Non-Universal Variants (DONE — 2026-05-26)
+
+- [x] **Non-universal items with variants don't require review:** Divergent items with prevalence < total demoted from `Investigate` (needs_review) to `Divergent` (informational). Only universal items with variant differences get review-level triage.
 
 ### Naming Consistency (DONE — 2026-05-26)
 

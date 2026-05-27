@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-26)
+## Current Status (2026-05-27)
 
 | Phase | Status |
 |-------|--------|
@@ -31,6 +31,8 @@
 | Naming Consistency (REVIEW/REFERENCE) | DONE (2026-05-26) |
 | Containerfile Change Highlights | SHIPPED (2026-05-26) |
 | Fleet Phase 2b: Refine UI | DONE (shipped incrementally across 2a/2b) |
+| Playwright E2E Testing Expansion | SHIPPED (2026-05-27) |
+| Single-Host / Fleet UI Convergence | DONE (2026-05-27) |
 
 ## Roadmap to CLI Cutover
 
@@ -87,6 +89,18 @@ Post-cutover: TUI, build command
 ```
 
 ## Shipped Work
+
+### Playwright E2E Testing Expansion (SHIPPED — 2026-05-27)
+
+**Status:** Implemented. Spec at `docs/specs/proposed/2026-05-27-playwright-testing-expansion.md`. Plan at `docs/plans/2026-05-27-playwright-testing-expansion.md`.
+
+Expanded the Playwright e2e suite from 6 spec files (many skipped) to 11 with full surface area coverage. Hybrid fixture strategy: 80% mock API via `page.route()`, 20% real-server smoke tests with checked-in tarballs. Four sub-phases: mock infrastructure POC, remaining fixtures + mutation proof, fixture-structure validation (insta snapshots), real-server smoke tests + curated tarballs. Then Phase 2 (single-host core) and Phase 3 (recent features + fleet gaps).
+
+### Single-Host / Fleet UI Convergence (SHIPPED — 2026-05-27)
+
+**Status:** Visual alignment completed across all promoted sections. Remaining nits tracked in nit-list.md, addressed incrementally.
+
+Single-host and fleet modes achieved visual convergence. Shared component patterns applied: RepoBar, DecisionItem, ContextItem, nav labels, padding, repo sort, os_name deduplication. Bugs fixed in shared components benefit both modes.
 
 ### Fleet Phase 2a: Refine Engine (SHIPPED — 2026-05-21)
 
@@ -169,10 +183,6 @@ Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_sta
 
 **Design decision for Spec 2:** Variant filenames currently use 8-char SHA-256 prefix (human-browsable). If refine needs to machine-correlate variant files back to merge-time identity, extend to full hash or 16+ chars. Decide during brainstorm whether variant files need to be machine-addressable.
 
-### Playwright E2E Testing Expansion (HIGH — spec+plan approved, ready to implement)
-
-Expand the Playwright e2e suite from 6 spec files (many skipped) to 11 with full surface area coverage. Hybrid fixture strategy: 80% mock API via `page.route()`, 20% real-server smoke tests with checked-in tarballs. Four sub-phases: mock infrastructure POC, remaining fixtures + mutation proof, fixture-structure validation (insta snapshots), real-server smoke tests + curated tarballs. Then Phase 2 (single-host core) and Phase 3 (recent features + fleet gaps). Spec: `docs/specs/proposed/2026-05-27-playwright-testing-expansion.md`. Plan: `docs/plans/2026-05-27-playwright-testing-expansion.md`.
-
 ### Driftify E2E Fixture Coverage Audit (MEDIUM — after testing expansion)
 
 Review what driftify's kitchen-sink mode generates and verify it covers all inspectah sections: packages across repos/states, modified configs, services, users/groups, containers, sysctls, tuned profiles, SELinux, network, storage, scheduled tasks, kernel modules, non-RPM software. Gap analysis: which sections get empty fixtures because driftify doesn't touch them? Expand driftify's mutations to fill gaps so `single-host-e2e.tar.gz` exercises every triage path.
@@ -221,9 +231,6 @@ Config files truncate at 500 chars in a 200px inline box — insufficient for re
 
 Absorbed by Section Promotion & Triage Redesign. Triage bucket system (Site/Divergent/Partial) replaced attention-level labels. `AttentionGroup` → `TriageBucketGroup`, `attention.rs` → `classify.rs`. Some legacy `AttentionLevel` naming persists in `DecisionList.tsx` and `attentionUtils.ts` as internal plumbing — cosmetic, not user-facing.
 
-### Single-Host / Fleet UI Convergence (HIGH — needs spec)
-
-Single-host and fleet modes have divergent rendering paths: `MainContent` + `DecisionList` + section components (ServiceSection, ContainerSection, etc.) for single-host, `FleetApp` + `FleetItemRow` for fleet. Only packages achieved visual alignment. Every promoted section (services, containers, sysctls, tuned) added new single-host components that fleet doesn't share. Bugs fixed in one mode don't fix the other. The goal: shared components that render both modes, with fleet adding prevalence/variant overlays. Fix once, both modes benefit. Touches component architecture, not just styling.
 
 ### Fleet Divergence Review UX (MEDIUM — needs spec)
 
