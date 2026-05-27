@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-cli"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-collect"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "inspectah-core",
  "insta",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-core"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "chrono",
  "insta",
@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-pipeline"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "chrono",
  "flate2",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-refine"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "flate2",
  "inspectah-core",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-web"
-version = "0.8.1-alpha.3"
+version = "0.8.2-alpha.2"
 dependencies = [
  "axum",
  "http-body-util",

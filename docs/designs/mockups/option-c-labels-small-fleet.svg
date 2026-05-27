@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" font-family="-apple-system, 'RedHatText', 'Helvetica Neue', sans-serif">
+  <title>Option C: Compact Label Strip — Small Fleet (3 hosts)</title>
+
+  <!-- Background -->
+  <rect width="1200" height="700" fill="#f0f0f0"/>
+
+  <!-- ═══ StatsBar (sticky toolbar) ═══ -->
+  <rect x="0" y="0" width="1200" height="44" fill="#ffffff"/>
+  <line x1="0" y1="44" x2="1200" y2="44" stroke="#d2d2d2" stroke-width="1"/>
+
+  <text x="16" y="27" font-size="13" fill="#151515">
+    <tspan font-weight="700">3</tspan>
+    <tspan fill="#6a6e73"> hosts · </tspan>
+    <tspan font-weight="700">1,247</tspan>
+    <tspan fill="#6a6e73"> items · </tspan>
+  </text>
+  <rect x="184" y="14" rx="10" ry="10" width="96" height="20" fill="#e7f1e7"/>
+  <text x="232" y="28" font-size="11" fill="#1e4620" text-anchor="middle">All reviewed</text>
+
+  <rect x="1000" y="8" rx="4" ry="4" width="30" height="28" fill="none" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="1015" y="27" font-size="14" fill="#6a6e73" text-anchor="middle">&#8630;</text>
+  <rect x="1036" y="8" rx="4" ry="4" width="30" height="28" fill="none" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="1051" y="27" font-size="14" fill="#6a6e73" text-anchor="middle">&#8631;</text>
+  <rect x="1072" y="8" rx="4" ry="4" width="30" height="28" fill="none" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="1087" y="27" font-size="11" fill="#6a6e73" text-anchor="middle">&#8615;</text>
+  <rect x="1112" y="8" rx="4" ry="4" width="30" height="28" fill="none" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="1127" y="27" font-size="14" fill="#6a6e73" text-anchor="middle">&#9789;</text>
+
+  <!-- ═══ LABEL STRIP (the main feature) ═══ -->
+  <rect x="0" y="44" width="1200" height="34" fill="#fafafa"/>
+  <line x1="0" y1="78" x2="1200" y2="78" stroke="#d2d2d2" stroke-width="1"/>
+
+  <!-- "Hosts:" prefix -->
+  <text x="16" y="65" font-size="12" fill="#6a6e73" font-weight="600">Hosts:</text>
+
+  <!-- Label: web-01 -->
+  <rect x="62" y="51" rx="12" ry="12" width="66" height="22" fill="#f0f0f0" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="95" y="66" font-size="11" fill="#151515" text-anchor="middle" font-family="'RedHatMono', 'SF Mono', monospace">web-01</text>
+
+  <!-- Label: web-02 -->
+  <rect x="136" y="51" rx="12" ry="12" width="66" height="22" fill="#f0f0f0" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="169" y="66" font-size="11" fill="#151515" text-anchor="middle" font-family="'RedHatMono', 'SF Mono', monospace">web-02</text>
+
+  <!-- Label: web-03 -->
+  <rect x="210" y="51" rx="12" ry="12" width="66" height="22" fill="#f0f0f0" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="243" y="66" font-size="11" fill="#151515" text-anchor="middle" font-family="'RedHatMono', 'SF Mono', monospace">web-03</text>
+
+  <!-- Highlight box around the label strip -->
+  <rect x="0" y="44" width="1200" height="34" fill="none" stroke="#0066cc" stroke-width="2" stroke-dasharray="4,3" rx="0"/>
+
+  <!-- ═══ Sidebar (240px) ═══ -->
+  <rect x="0" y="78" width="240" height="622" fill="#ffffff"/>
+  <line x1="240" y1="78" x2="240" y2="700" stroke="#d2d2d2" stroke-width="1"/>
+
+  <text x="16" y="110" font-size="11" fill="#6a6e73" font-weight="600" letter-spacing="0.08em">REVIEW</text>
+  <rect x="0" y="118" width="240" height="32" fill="#e7f1fa"/>
+  <rect x="0" y="118" width="3" height="32" fill="#0066cc"/>
+  <text x="16" y="139" font-size="13" fill="#0066cc" font-weight="600">Packages</text>
+  <rect x="190" y="126" rx="10" ry="10" width="36" height="18" fill="#f0f0f0"/>
+  <text x="208" y="138" font-size="11" fill="#6a6e73" text-anchor="middle">42</text>
+
+  <text x="16" y="171" font-size="13" fill="#151515">Config Files</text>
+  <rect x="190" y="159" rx="10" ry="10" width="36" height="18" fill="#f0f0f0"/>
+  <text x="208" y="171" font-size="11" fill="#6a6e73" text-anchor="middle">18</text>
+
+  <text x="16" y="203" font-size="13" fill="#151515">Services</text>
+  <rect x="190" y="191" rx="10" ry="10" width="36" height="18" fill="#f0f0f0"/>
+  <text x="208" y="203" font-size="11" fill="#6a6e73" text-anchor="middle">7</text>
+
+  <text x="16" y="244" font-size="11" fill="#6a6e73" font-weight="600" letter-spacing="0.08em">REFERENCE</text>
+  <text x="16" y="271" font-size="13" fill="#151515">Containers</text>
+  <rect x="190" y="259" rx="10" ry="10" width="36" height="18" fill="#f0f0f0"/>
+  <text x="208" y="271" font-size="11" fill="#6a6e73" text-anchor="middle">5</text>
+
+  <text x="16" y="303" font-size="13" fill="#151515">Repositories</text>
+  <rect x="190" y="291" rx="10" ry="10" width="36" height="18" fill="#f0f0f0"/>
+  <text x="208" y="303" font-size="11" fill="#6a6e73" text-anchor="middle">12</text>
+
+  <!-- ═══ Main content area ═══ -->
+  <rect x="240" y="78" width="960" height="622" fill="#f0f0f0"/>
+
+  <!-- Decision list items -->
+  <rect x="256" y="94" width="928" height="48" fill="#ffffff"/>
+  <line x1="256" y1="142" x2="1184" y2="142" stroke="#d2d2d2" stroke-width="1"/>
+  <circle cx="278" cy="118" r="8" fill="none" stroke="#d2d2d2" stroke-width="1.5"/>
+  <text x="296" y="114" font-size="13" fill="#151515" font-weight="600">httpd</text>
+  <text x="296" y="130" font-size="11" fill="#6a6e73">2.4.57-11.el9 → included on all hosts</text>
+  <rect x="1088" y="106" rx="4" ry="4" width="80" height="24" fill="#e7f1e7"/>
+  <text x="1128" y="122" font-size="11" fill="#1e4620" text-anchor="middle">3/3 hosts</text>
+
+  <rect x="256" y="142" width="928" height="48" fill="#ffffff"/>
+  <line x1="256" y1="190" x2="1184" y2="190" stroke="#d2d2d2" stroke-width="1"/>
+  <circle cx="278" cy="166" r="8" fill="none" stroke="#d2d2d2" stroke-width="1.5"/>
+  <text x="296" y="162" font-size="13" fill="#151515" font-weight="600">mod_ssl</text>
+  <text x="296" y="178" font-size="11" fill="#6a6e73">1.1.1k-12.el9 → included on all hosts</text>
+  <rect x="1088" y="154" rx="4" ry="4" width="80" height="24" fill="#e7f1e7"/>
+  <text x="1128" y="170" font-size="11" fill="#1e4620" text-anchor="middle">3/3 hosts</text>
+
+  <rect x="256" y="190" width="928" height="48" fill="#ffffff"/>
+  <line x1="256" y1="238" x2="1184" y2="238" stroke="#d2d2d2" stroke-width="1"/>
+  <circle cx="278" cy="214" r="8" fill="none" stroke="#d2d2d2" stroke-width="1.5"/>
+  <text x="296" y="210" font-size="13" fill="#151515" font-weight="600">nginx</text>
+  <text x="296" y="226" font-size="11" fill="#6a6e73">1.24.0-4.el9 → divergent (2 variants)</text>
+  <rect x="1088" y="202" rx="4" ry="4" width="80" height="24" fill="#fef3cd"/>
+  <text x="1128" y="218" font-size="11" fill="#664d03" text-anchor="middle">2/3 hosts</text>
+
+  <rect x="256" y="238" width="928" height="48" fill="#ffffff"/>
+  <line x1="256" y1="286" x2="1184" y2="286" stroke="#d2d2d2" stroke-width="1"/>
+  <circle cx="278" cy="262" r="8" fill="none" stroke="#d2d2d2" stroke-width="1.5"/>
+  <text x="296" y="258" font-size="13" fill="#151515" font-weight="600">curl</text>
+  <text x="296" y="274" font-size="11" fill="#6a6e73">8.2.1-1.el9 → included on all hosts</text>
+  <rect x="1088" y="250" rx="4" ry="4" width="80" height="24" fill="#e7f1e7"/>
+  <text x="1128" y="266" font-size="11" fill="#1e4620" text-anchor="middle">3/3 hosts</text>
+
+  <!-- ═══ Annotation ═══ -->
+  <rect x="300" y="530" rx="4" ry="4" width="640" height="140" fill="#ffffff" stroke="#d2d2d2" stroke-width="1"/>
+  <text x="320" y="556" font-size="14" fill="#151515" font-weight="700">Option C: Compact Label Strip Below StatsBar</text>
+  <text x="320" y="576" font-size="12" fill="#6a6e73">Small fleet (3 hosts) — labels fit inline on a single row.</text>
+  <text x="320" y="596" font-size="12" fill="#6a6e73">Always visible, no click required. Clean PF Label components (isCompact, grey).</text>
+  <text x="320" y="616" font-size="12" fill="#6a6e73">Adds 34px of permanent vertical space below the StatsBar.</text>
+  <text x="320" y="636" font-size="12" fill="#6a6e73">For a small fleet this looks proportional and unobtrusive.</text>
+  <text x="320" y="656" font-size="12" fill="#0066cc">PF components: Label isCompact color="grey", Button variant="link"</text>
+</svg>
