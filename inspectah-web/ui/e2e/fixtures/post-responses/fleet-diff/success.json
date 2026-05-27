@@ -1,0 +1,17 @@
+{
+  "_status": 200,
+  "base_hash": "abc123",
+  "target_hash": "def456",
+  "base_hosts": ["host-01.example.com"],
+  "target_hosts": ["host-02.example.com"],
+  "hunks": [{
+    "base_range": { "start": 1, "count": 3 },
+    "target_range": { "start": 1, "count": 3 },
+    "changes": [
+      { "kind": "equal", "content": "FROM registry.example.com/rhel9:latest" },
+      { "kind": "delete", "content": "RUN dnf install -y httpd" },
+      { "kind": "insert", "content": "RUN dnf install -y nginx" }
+    ]
+  }],
+  "stats": { "total_changes": 2, "insertions": 1, "deletions": 1 }
+}

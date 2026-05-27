@@ -1,0 +1,32 @@
+{
+  "fixtures": {
+    "single-host/health.json": { "category": "body", "schema": "HealthResponse" },
+    "single-host/view.json": { "category": "body", "schema": "ViewResponse" },
+    "single-host/ops-empty.json": { "category": "body", "schema": "AnnotatedOps" },
+    "single-host/changes-empty.json": { "category": "body", "schema": "ChangesSummary" },
+    "single-host/viewed-empty.json": { "category": "body", "schema": "ViewedResponse" },
+    "single-host/sections.json": { "category": "body", "schema": "ContextSections" },
+    "single-host/user-preview.json": { "category": "body", "schema": "UserPreviewResponse" },
+    "single-host/user-preview-redacted.json": { "category": "body", "schema": "UserPreviewResponse" },
+    "fleet/health.json": { "category": "body", "schema": "HealthResponse" },
+    "fleet/fleet-view.json": { "category": "body", "schema": "FleetViewResponse" },
+    "fleet/sections.json": { "category": "body", "schema": "ContextSections" },
+    "post-responses/op/success.json": { "category": "wrapper", "schema": "ViewResponse" },
+    "post-responses/undo/success.json": { "category": "wrapper", "schema": "ViewResponse" },
+    "post-responses/undo/nothing-to-undo.json": { "category": "error-envelope" },
+    "post-responses/redo/success.json": { "category": "wrapper", "schema": "ViewResponse" },
+    "post-responses/tarball/stub.tar.gz": { "category": "excluded" },
+    "post-responses/tarball/stale.json": { "category": "error-envelope" },
+    "post-responses/tarball/sensitive-required.json": { "category": "wrapper", "schema": "TarballSensitivity" },
+    "post-responses/user-strategy/success.json": { "category": "wrapper", "schema": "ViewResponse" },
+    "post-responses/user-password/success.json": { "category": "wrapper", "schema": "ViewResponse" },
+    "post-responses/user-password/invalid.json": { "category": "error-envelope" },
+    "post-responses/viewed/success.json": { "category": "excluded" },
+    "post-responses/fleet-diff/success.json": { "category": "wrapper", "schema": "FleetDiffResponse" },
+    "sequences/exclude-undo-redo/01-after-exclude.json": { "category": "body", "schema": "ViewResponse" },
+    "sequences/exclude-undo-redo/02-after-undo.json": { "category": "body", "schema": "ViewResponse" },
+    "sequences/exclude-undo-redo/03-after-redo.json": { "category": "body", "schema": "ViewResponse" },
+    "errors/server-500.json": { "category": "error-envelope" },
+    "errors/malformed.txt": { "category": "excluded" }
+  }
+}

@@ -1,0 +1,287 @@
+{
+  "_status": 200,
+  "packages": [
+    {
+      "entry": {
+        "name": "bash",
+        "epoch": "0",
+        "version": "5.2.26",
+        "release": "3.el9",
+        "arch": "x86_64",
+        "state": "base_image_only",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-baseos-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "baseline" },
+        "primary_reason": "package_baseline_match",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "httpd",
+        "epoch": "0",
+        "version": "2.4.57",
+        "release": "11.el9_4.1",
+        "arch": "x86_64",
+        "state": "added",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-appstream-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "package_user_added",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "openssl",
+        "epoch": "1",
+        "version": "3.0.7",
+        "release": "28.el9_4",
+        "arch": "x86_64",
+        "state": "modified",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-baseos-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "package_version_changed",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "vim-enhanced",
+        "epoch": "2",
+        "version": "9.0.2153",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "added",
+        "include": false,
+        "source_repo": "rhel-9-for-x86_64-appstream-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "package_user_added",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "custom-agent",
+        "epoch": "0",
+        "version": "1.0.0",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "local_install",
+        "include": true,
+        "source_repo": "",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "package_local_install",
+        "annotations": [
+          {
+            "level": "needs_review",
+            "reason": "package_local_install",
+            "detail": "Package installed from local file, not from a repository"
+          }
+        ]
+      }
+    }
+  ],
+  "config_files": [
+    {
+      "entry": {
+        "path": "/etc/sysconfig/network",
+        "kind": "modified",
+        "category": "other",
+        "content": "NETWORKING=yes\nHOSTNAME=test-host-01.example.com\n",
+        "rpm_va_flags": "S.5....T.",
+        "package": "initscripts",
+        "diff_against_rpm": "--- /etc/sysconfig/network.rpmorig\n+++ /etc/sysconfig/network\n@@ -1 +1,2 @@\n NETWORKING=yes\n+HOSTNAME=test-host-01.example.com\n",
+        "include": true,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "config_modified",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "path": "/etc/chrony.conf",
+        "kind": "modified",
+        "category": "other",
+        "content": "# Use internal NTP servers\nserver ntp1.example.com iburst\nserver ntp2.example.com iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n",
+        "rpm_va_flags": "S.5....T.",
+        "package": "chrony",
+        "diff_against_rpm": null,
+        "include": true,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "config_modified",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "path": "/etc/sysctl.d/99-custom.conf",
+        "kind": "unowned",
+        "category": "sysctl",
+        "content": "# Custom sysctl overrides\nnet.core.somaxconn = 4096\nvm.swappiness = 10\n",
+        "rpm_va_flags": null,
+        "package": null,
+        "diff_against_rpm": null,
+        "include": false,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "config_unowned",
+        "annotations": [
+          {
+            "level": "needs_review",
+            "reason": "config_unowned",
+            "detail": "Configuration file not owned by any installed RPM"
+          }
+        ]
+      }
+    }
+  ],
+  "containerfile_preview": "FROM registry.redhat.io/rhel9/rhel-bootc:9.4\n\n# Packages\nRUN dnf install -y \\\n    httpd-2.4.57-11.el9_4.1.x86_64 \\\n    openssl-1:3.0.7-28.el9_4.x86_64 \\\n    custom-agent-1.0.0-1.el9.x86_64 \\\n    && dnf clean all\n\n# Config files\nCOPY etc/sysconfig/network /etc/sysconfig/network\nCOPY etc/chrony.conf /etc/chrony.conf\n\n# Users\nRUN useradd -u 1000 -g 1000 -s /bin/bash -d /home/testuser testuser\n",
+  "stats": {
+    "sections": [
+      { "kind": "packages", "total": 5, "included": 4, "excluded": 1 },
+      { "kind": "configs", "total": 3, "included": 2, "excluded": 1 },
+      { "kind": "services", "total": 2, "included": 1, "excluded": 1 },
+      { "kind": "users_groups", "total": 1, "included": 1, "excluded": 0 }
+    ],
+    "needs_review_count": 2,
+    "ops_applied": 1,
+    "can_undo": true,
+    "can_redo": false,
+    "baseline_available": true
+  },
+  "generation": 4,
+  "baseline_summary": {
+    "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.4",
+    "image_digest": "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "strategy": "auto",
+    "baseline_count": 342,
+    "user_added_count": 3,
+    "review_count": 2
+  },
+  "repo_groups": [
+    {
+      "section_id": "rhel-9-for-x86_64-baseos-rpms",
+      "provenance": "verified",
+      "is_distro": true,
+      "tier": "distro",
+      "package_count": 2,
+      "enabled": true
+    },
+    {
+      "section_id": "rhel-9-for-x86_64-appstream-rpms",
+      "provenance": "verified",
+      "is_distro": true,
+      "tier": "distro",
+      "package_count": 2,
+      "enabled": true
+    }
+  ],
+  "version_changes": [
+    {
+      "name": "openssl",
+      "arch": "x86_64",
+      "host_version": "3.0.7",
+      "base_version": "3.0.6",
+      "host_epoch": "1",
+      "base_epoch": "1",
+      "direction": "upgrade"
+    }
+  ],
+  "service_states": [
+    {
+      "unit": "httpd.service",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "service_non_default",
+        "annotations": []
+      },
+      "include": true,
+      "owning_package": "httpd"
+    },
+    {
+      "unit": "custom-agent.service",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "service_non_default",
+        "annotations": [
+          {
+            "level": "needs_review",
+            "reason": "service_non_default",
+            "detail": "Non-default service state"
+          }
+        ]
+      },
+      "include": false,
+      "owning_package": null
+    }
+  ],
+  "service_dropins": [],
+  "quadlets": [],
+  "flatpaks": [],
+  "sysctls": [
+    {
+      "key": "net.core.somaxconn",
+      "runtime": "4096",
+      "default": "4096",
+      "source": "/etc/sysctl.d/99-custom.conf",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "sysctl_file_backed_override",
+        "annotations": []
+      },
+      "include": true
+    }
+  ],
+  "tuned": [],
+  "users_groups_decisions": [
+    {
+      "name": "testuser",
+      "uid": 1000,
+      "gid": 1000,
+      "shell": "/bin/bash",
+      "home": "/home/testuser",
+      "include": true,
+      "classification": "interactive",
+      "containerfile_strategy": "useradd",
+      "password_choice": "none",
+      "has_sudo": true,
+      "has_subuid": false,
+      "ssh_key_count": 1,
+      "classification_rationale": "Interactive shell /bin/bash with home directory",
+      "supplementary_groups": ["wheel", "testuser"],
+      "password_status": "password_set"
+    }
+  ],
+  "session_is_sensitive": false
+}
