@@ -1,0 +1,8 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "_status": 500,
+  "error": "internal server error"
+}

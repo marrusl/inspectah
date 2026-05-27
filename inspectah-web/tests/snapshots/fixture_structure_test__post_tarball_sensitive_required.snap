@@ -1,0 +1,10 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "message": "Export contains sensitive data. Set X-Acknowledge-Sensitive header to proceed.",
+  "sensitive_files": [
+    "/etc/shadow"
+  ]
+}

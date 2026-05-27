@@ -1,0 +1,7 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "error": "stale generation: expected 2, got 1"
+}

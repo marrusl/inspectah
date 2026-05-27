@@ -1,0 +1,45 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "base_hash": "abc123",
+  "base_hosts": [
+    "host-01.example.com"
+  ],
+  "hunks": [
+    {
+      "base_range": {
+        "count": 3,
+        "start": 1
+      },
+      "changes": [
+        {
+          "content": "FROM registry.example.com/rhel9:latest",
+          "kind": "equal"
+        },
+        {
+          "content": "RUN dnf install -y httpd",
+          "kind": "delete"
+        },
+        {
+          "content": "RUN dnf install -y nginx",
+          "kind": "insert"
+        }
+      ],
+      "target_range": {
+        "count": 3,
+        "start": 1
+      }
+    }
+  ],
+  "stats": {
+    "deletions": 1,
+    "insertions": 1,
+    "total_changes": 2
+  },
+  "target_hash": "def456",
+  "target_hosts": [
+    "host-02.example.com"
+  ]
+}
