@@ -54,6 +54,78 @@ function buildPriorIdMap(priorLines: DiffLine[]): Map<string, string[]> {
   return map;
 }
 
+/** Matches section headers like `# === Packages (23) ===` or `# === Services ===`. */
+const SECTION_HEADER_RE = /^# === (.+?)(?:\s+\(\d+\))? ===$/;
+
+/**
+ * Extract the section name from a header line, ignoring any count.
+ * Returns null if the line is not a section header.
+ */
+export function parseSectionHeader(line: string): string | null {
+  const m = line.match(SECTION_HEADER_RE);
+  return m ? m[1] : null;
+}
+
+/**
+ * Suppress highlights on section headers whose only change is a count difference.
+ * A removed `# === Packages (23) ===` paired with an added `# === Packages (22) ===`
+ * means the user toggled a package, not the header — both lines become stable
+ * (keeping the added version's text, pruning the removing version).
+ *
+ * Genuinely new or removed headers (no matching pair) keep their highlight.
+ */
+function suppressHeaderCountChanges(lines: DiffLine[]): { lines: DiffLine[]; suppressed: number } {
+  // Collect removing and added headers by section name
+  const removingHeaders = new Map<string, number[]>(); // section name → indices
+  const addedHeaders = new Map<string, number[]>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const section = parseSectionHeader(lines[i].text);
+    if (!section) continue;
+    if (lines[i].state === "removing") {
+      const arr = removingHeaders.get(section) ?? [];
+      arr.push(i);
+      removingHeaders.set(section, arr);
+    } else if (lines[i].state === "added") {
+      const arr = addedHeaders.get(section) ?? [];
+      arr.push(i);
+      addedHeaders.set(section, arr);
+    }
+  }
+
+  // Match pairs: same section name with both a removing and an added header
+  const indicesToRemove = new Set<number>(); // removing lines to prune
+  const indicesToStabilize = new Set<number>(); // added lines to mark stable
+  let suppressed = 0;
+
+  for (const [section, removingIndices] of removingHeaders) {
+    const addedIndices = addedHeaders.get(section);
+    if (!addedIndices || addedIndices.length === 0) continue;
+
+    // Pair them up (one-to-one)
+    const pairs = Math.min(removingIndices.length, addedIndices.length);
+    for (let i = 0; i < pairs; i++) {
+      indicesToRemove.add(removingIndices[i]);
+      indicesToStabilize.add(addedIndices[i]);
+      suppressed += 2; // one removing + one added suppressed
+    }
+  }
+
+  if (suppressed === 0) return { lines, suppressed: 0 };
+
+  const result: DiffLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (indicesToRemove.has(i)) continue; // drop the old-count header
+    if (indicesToStabilize.has(i)) {
+      result.push({ ...lines[i], state: "stable" }); // keep new-count text, mark stable
+    } else {
+      result.push(lines[i]);
+    }
+  }
+
+  return { lines: result, suppressed };
+}
+
 export function computeDiff(
   prev: string | null,
   next: string | null,
@@ -77,7 +149,7 @@ export function computeDiff(
   const priorIdMap = priorLines ? buildPriorIdMap(priorLines) : new Map<string, string[]>();
 
   const changes = diffLines(prev, next);
-  const lines: DiffLine[] = [];
+  const rawLines: DiffLine[] = [];
   let addedCount = 0;
   let removedCount = 0;
 
@@ -89,13 +161,13 @@ export function computeDiff(
       for (const text of texts) {
         const queue = priorIdMap.get(text);
         const id = queue?.shift() ?? makeId();
-        lines.push({ id, text, state: "removing" });
+        rawLines.push({ id, text, state: "removing" });
         removedCount++;
       }
     } else if (change.added) {
       // Lines added: always fresh IDs
       for (const text of texts) {
-        lines.push({ id: makeId(), text, state: "added" });
+        rawLines.push({ id: makeId(), text, state: "added" });
         addedCount++;
       }
     } else {
@@ -103,9 +175,18 @@ export function computeDiff(
       for (const text of texts) {
         const queue = priorIdMap.get(text);
         const id = queue?.shift() ?? makeId();
-        lines.push({ id, text, state: "stable" });
+        rawLines.push({ id, text, state: "stable" });
       }
     }
+  }
+
+  // Suppress noise from section headers that only changed their count
+  const { lines, suppressed } = suppressHeaderCountChanges(rawLines);
+  if (suppressed > 0) {
+    // Each suppressed pair removes one "removing" and one "added" from counts
+    const pairs = suppressed / 2;
+    addedCount = Math.max(0, addedCount - pairs);
+    removedCount = Math.max(0, removedCount - pairs);
   }
 
   return {

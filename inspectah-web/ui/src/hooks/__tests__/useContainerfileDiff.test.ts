@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { computeDiff, _resetIdCounter } from "../useContainerfileDiff";
+import { computeDiff, parseSectionHeader, _resetIdCounter } from "../useContainerfileDiff";
 
 beforeEach(() => {
   _resetIdCounter();
@@ -196,5 +196,169 @@ describe("computeDiff", () => {
     // All IDs should be unique
     const ids = result.lines.map((l) => l.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("parseSectionHeader", () => {
+  it("parses header with count", () => {
+    expect(parseSectionHeader("# === Packages (23) ===")).toBe("Packages");
+  });
+
+  it("parses header without count", () => {
+    expect(parseSectionHeader("# === Services ===")).toBe("Services");
+  });
+
+  it("parses multi-word header", () => {
+    expect(parseSectionHeader("# === User Packages (5) ===")).toBe("User Packages");
+  });
+
+  it("returns null for non-header lines", () => {
+    expect(parseSectionHeader("RUN dnf install -y httpd")).toBeNull();
+    expect(parseSectionHeader("# just a comment")).toBeNull();
+    expect(parseSectionHeader("")).toBeNull();
+  });
+});
+
+describe("section header highlight suppression", () => {
+  it("suppresses highlights when header count changes but section exists in both", () => {
+    const prev = [
+      "FROM ubi9",
+      "# === Packages (3) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+      "RUN dnf install -y curl",
+    ].join("\n") + "\n";
+
+    const next = [
+      "FROM ubi9",
+      "# === Packages (2) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+    ].join("\n") + "\n";
+
+    const result = computeDiff(prev, next);
+
+    // The header should be stable (suppressed), not added/removing
+    const headerLine = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    expect(headerLine).toBeDefined();
+    expect(headerLine!.state).toBe("stable");
+    expect(headerLine!.text).toBe("# === Packages (2) ===");
+
+    // The old header should NOT appear as removing
+    const removingHeaders = result.lines.filter(
+      (l) => l.state === "removing" && l.text.startsWith("# === Packages"),
+    );
+    expect(removingHeaders).toHaveLength(0);
+
+    // curl line should still be removing
+    const curlLine = result.lines.find((l) => l.text.includes("curl"));
+    expect(curlLine).toBeDefined();
+    expect(curlLine!.state).toBe("removing");
+
+    // Counts should NOT include the suppressed header pair
+    expect(result.addedCount).toBe(0);
+    expect(result.removedCount).toBe(1); // just curl
+  });
+
+  it("highlights genuinely new section headers", () => {
+    const prev = [
+      "FROM ubi9",
+      "# === Packages (2) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+    ].join("\n") + "\n";
+
+    const next = [
+      "FROM ubi9",
+      "# === Packages (2) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+      "# === Services ===",
+      "RUN systemctl enable httpd",
+    ].join("\n") + "\n";
+
+    const result = computeDiff(prev, next);
+
+    // Packages header should remain stable
+    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    expect(pkgHeader).toBeDefined();
+    expect(pkgHeader!.state).toBe("stable");
+
+    // Services header is genuinely new — should be added
+    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    expect(svcHeader).toBeDefined();
+    expect(svcHeader!.state).toBe("added");
+
+    // The service line should also be added
+    const svcLine = result.lines.find((l) => l.text.includes("systemctl"));
+    expect(svcLine).toBeDefined();
+    expect(svcLine!.state).toBe("added");
+
+    expect(result.addedCount).toBe(2); // Services header + service line
+  });
+
+  it("highlights genuinely removed section headers", () => {
+    const prev = [
+      "FROM ubi9",
+      "# === Packages (1) ===",
+      "RUN dnf install -y httpd",
+      "# === Services ===",
+      "RUN systemctl enable httpd",
+    ].join("\n") + "\n";
+
+    const next = [
+      "FROM ubi9",
+      "# === Packages (1) ===",
+      "RUN dnf install -y httpd",
+    ].join("\n") + "\n";
+
+    const result = computeDiff(prev, next);
+
+    // Packages header should remain stable
+    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    expect(pkgHeader).toBeDefined();
+    expect(pkgHeader!.state).toBe("stable");
+
+    // Services header should be removing (genuinely gone)
+    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    expect(svcHeader).toBeDefined();
+    expect(svcHeader!.state).toBe("removing");
+
+    expect(result.removedCount).toBe(2); // Services header + service line
+  });
+
+  it("handles count change and new section simultaneously", () => {
+    const prev = [
+      "FROM ubi9",
+      "# === Packages (3) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+      "RUN dnf install -y curl",
+    ].join("\n") + "\n";
+
+    const next = [
+      "FROM ubi9",
+      "# === Packages (2) ===",
+      "RUN dnf install -y httpd",
+      "RUN dnf install -y nginx",
+      "# === Services ===",
+      "RUN systemctl enable httpd",
+    ].join("\n") + "\n";
+
+    const result = computeDiff(prev, next);
+
+    // Packages header: count change suppressed
+    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    expect(pkgHeader).toBeDefined();
+    expect(pkgHeader!.state).toBe("stable");
+
+    // Services header: genuinely new, should highlight
+    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    expect(svcHeader).toBeDefined();
+    expect(svcHeader!.state).toBe("added");
+
+    // curl removed, service line + header added
+    expect(result.removedCount).toBe(1);
+    expect(result.addedCount).toBe(2);
   });
 });
