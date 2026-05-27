@@ -8,9 +8,14 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://127.0.0.1:8642",
+    baseURL: "http://localhost:5174",
     screenshot: "only-on-failure",
     trace: "on-first-retry",
+  },
+  webServer: {
+    command: "npx vite --port 5174",
+    url: "http://localhost:5174",
+    reuseExistingServer: !process.env.CI,
   },
   projects: [
     {
