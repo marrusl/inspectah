@@ -234,9 +234,16 @@ export function ContainerfilePanel({
       const lineRect = firstChanged.getBoundingClientRect();
       if (lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom) return;
 
-      // Scroll with reduced-motion awareness
+      // Scroll to position the changed line at ~1/3 from top of the panel.
+      // scrollIntoView({ block: 'start' }) puts it at the top, then we
+      // nudge scrollTop backward by 1/3 of the container height.
       const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      firstChanged.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth" });
+      firstChanged.scrollIntoView({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "start",
+      });
+      const nudge = Math.round(panelBody.clientHeight / 3);
+      panelBody.scrollTop = Math.max(0, panelBody.scrollTop - nudge);
     }, 150);
 
     return () => {

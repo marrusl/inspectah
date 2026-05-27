@@ -586,7 +586,7 @@ describe("ContainerfilePanel scroll behavior", () => {
 
     act(() => { vi.advanceTimersByTime(200); });
 
-    expect(scrollMock).toHaveBeenCalledWith({ behavior: "auto" });
+    expect(scrollMock).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
   });
 
   it("debounces multiple rapid content changes", () => {

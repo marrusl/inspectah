@@ -240,7 +240,13 @@ export function useContainerfileDiff(
       prevContentRef.current = content;
       wasOpenRef.current = false;
     } else if (!isOpen) {
-      // Still collapsed, content changed: track but don't diff
+      // Still collapsed, content changed: track but don't diff.
+      // If lastOpenContent is still null (panel was never open), treat
+      // the first real content as the baseline — not a pending change.
+      if (lastOpenContentRef.current === null && content !== null) {
+        lastOpenContentRef.current = content;
+        modelRef.current = computeDiff(null, content);
+      }
       prevContentRef.current = content;
     } else if (justOpened) {
       // Panel re-expanded: diff current against last-open baseline
