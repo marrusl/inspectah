@@ -428,14 +428,15 @@ describe("ContainerfilePanel change highlights", () => {
 });
 
 describe("ContainerfilePanel scroll behavior", () => {
-  let scrollMock: ReturnType<typeof vi.fn>;
-  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  let scrollToMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     _resetIdCounter();
     vi.useFakeTimers();
-    scrollMock = vi.fn();
-    Element.prototype.scrollIntoView = scrollMock;
+    scrollToMock = vi.fn();
+
+    // Mock scrollTo on all elements (panel body calls it)
+    Element.prototype.scrollTo = scrollToMock;
 
     // Mock getBoundingClientRect to report the line as out of view
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
@@ -450,7 +451,7 @@ describe("ContainerfilePanel scroll behavior", () => {
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: (query: string) => ({
-        matches: query === "(prefers-reduced-motion: reduce)" ? false : false,
+        matches: false,
         media: query,
         onchange: null,
         addListener: () => {},
@@ -465,10 +466,9 @@ describe("ContainerfilePanel scroll behavior", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
-  it("calls scrollIntoView on the first added line", () => {
+  it("scrolls to the first changed line", () => {
     const { rerender } = render(
       <ContainerfilePanel
         content={"FROM quay.io/fedora/fedora-bootc:42\n"}
@@ -490,7 +490,7 @@ describe("ContainerfilePanel scroll behavior", () => {
     // Advance past the 150ms debounce
     act(() => { vi.advanceTimersByTime(200); });
 
-    expect(scrollMock).toHaveBeenCalled();
+    expect(scrollToMock).toHaveBeenCalled();
   });
 
   it("does not scroll when no changes are present", () => {
@@ -515,7 +515,7 @@ describe("ContainerfilePanel scroll behavior", () => {
 
     act(() => { vi.advanceTimersByTime(200); });
 
-    expect(scrollMock).not.toHaveBeenCalled();
+    expect(scrollToMock).not.toHaveBeenCalled();
   });
 
   it("skips scroll when first changed line is already visible", () => {
@@ -548,7 +548,7 @@ describe("ContainerfilePanel scroll behavior", () => {
 
     act(() => { vi.advanceTimersByTime(200); });
 
-    expect(scrollMock).not.toHaveBeenCalled();
+    expect(scrollToMock).not.toHaveBeenCalled();
   });
 
   it("uses behavior auto when prefers-reduced-motion is set", () => {
@@ -586,7 +586,9 @@ describe("ContainerfilePanel scroll behavior", () => {
 
     act(() => { vi.advanceTimersByTime(200); });
 
-    expect(scrollMock).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+    expect(scrollToMock).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "auto" }),
+    );
   });
 
   it("debounces multiple rapid content changes", () => {
@@ -626,7 +628,7 @@ describe("ContainerfilePanel scroll behavior", () => {
     act(() => { vi.advanceTimersByTime(200); });
 
     // scrollIntoView should only have been called once (the debounced one)
-    expect(scrollMock).toHaveBeenCalledTimes(1);
+    expect(scrollToMock).toHaveBeenCalledTimes(1);
   });
 });
 
