@@ -30,6 +30,7 @@
 | Section Promotion & Triage Redesign | DONE (2026-05-26) |
 | Naming Consistency (REVIEW/REFERENCE) | DONE (2026-05-26) |
 | Containerfile Change Highlights | SHIPPED (2026-05-26) |
+| Fleet Phase 2b: Refine UI | DONE (shipped incrementally across 2a/2b) |
 
 ## Roadmap to CLI Cutover
 
@@ -74,7 +75,9 @@
     ↓
 ✅ Containerfile Change Highlights (14 commits, 6 spec review rounds, 6 plan review rounds — 2026-05-26)
     ↓
-Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
+✅ Fleet Phase 2b: Refine UI (zones, badges, drawers, variant view, diff drawer, fleet banner — shipped incrementally)
+    ↓
+Config Content Editor (inline editing of config files in refine view — needs spec)
     ↓
 Fleet Spec 3: Architect (cross-role hierarchy, possibly multi-phase)
     ↓
