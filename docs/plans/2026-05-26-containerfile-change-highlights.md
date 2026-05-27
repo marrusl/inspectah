@@ -94,21 +94,21 @@ import { computeDiff } from "../useContainerfileDiff";
 
 describe("computeDiff", () => {
   it("returns all stable lines when strings are identical", () => {
-    const text = "FROM ubi9\nRUN dnf install -y httpd";
+    const text = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
     const result = computeDiff(text, text);
     expect(result.hasChanges).toBe(false);
     expect(result.addedCount).toBe(0);
     expect(result.removedCount).toBe(0);
     expect(result.lines.every((l) => l.state === "stable")).toBe(true);
     expect(result.lines.map((l) => l.text)).toEqual([
-      "FROM ubi9",
+      "FROM quay.io/fedora/fedora-bootc:42",
       "RUN dnf install -y httpd",
     ]);
   });
 
   it("marks added lines when new content has extra lines", () => {
-    const prev = "FROM ubi9\nRUN dnf install -y httpd";
-    const next = "FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80";
+    const prev = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
+    const next = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
     const result = computeDiff(prev, next);
     expect(result.hasChanges).toBe(true);
     expect(result.addedCount).toBe(1);
@@ -119,8 +119,8 @@ describe("computeDiff", () => {
   });
 
   it("marks removed lines when content has fewer lines", () => {
-    const prev = "FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80";
-    const next = "FROM ubi9\nRUN dnf install -y httpd";
+    const prev = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
+    const next = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
     const result = computeDiff(prev, next);
     expect(result.hasChanges).toBe(true);
     expect(result.addedCount).toBe(0);
@@ -131,8 +131,8 @@ describe("computeDiff", () => {
   });
 
   it("handles simultaneous adds and removes", () => {
-    const prev = "FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80";
-    const next = "FROM ubi9\nRUN dnf install -y nginx\nCOPY . /var/www";
+    const prev = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
+    const next = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y nginx\nCOPY . /var/www";
     const result = computeDiff(prev, next);
     expect(result.hasChanges).toBe(true);
     expect(result.addedCount).toBeGreaterThan(0);
@@ -151,11 +151,11 @@ describe("computeDiff", () => {
   });
 
   it("preserves IDs for unchanged lines across successive diffs", () => {
-    const v1 = "FROM ubi9\nRUN dnf install -y httpd";
-    const v2 = "FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80";
+    const v1 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
+    const v2 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
     const first = computeDiff(null, v1);
     const second = computeDiff(v1, v2, first.lines);
-    // "FROM ubi9" and "RUN dnf..." are unchanged — their IDs must survive
+    // "FROM quay.io/fedora/fedora-bootc:42" and "RUN dnf..." are unchanged — their IDs must survive
     const firstIds = first.lines.map((l) => l.id);
     const stableInSecond = second.lines.filter((l) => l.state === "stable");
     expect(stableInSecond[0].id).toBe(firstIds[0]);
@@ -163,7 +163,7 @@ describe("computeDiff", () => {
   });
 
   it("returns baseline (all stable) when prev is null", () => {
-    const result = computeDiff(null, "FROM ubi9\nRUN dnf install -y httpd");
+    const result = computeDiff(null, "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd");
     expect(result.hasChanges).toBe(false);
     expect(result.lines.every((l) => l.state === "stable")).toBe(true);
   });
@@ -175,9 +175,9 @@ describe("computeDiff", () => {
   });
 
   it("handles entire section appearing", () => {
-    const prev = "FROM ubi9\nRUN dnf install -y httpd";
+    const prev = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
     const next =
-      "FROM ubi9\nRUN dnf install -y httpd\n\n# === Services ===\nRUN systemctl enable httpd.service";
+      "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\n\n# === Services ===\nRUN systemctl enable httpd.service";
     const result = computeDiff(prev, next);
     const added = result.lines.filter((l) => l.state === "added");
     // The blank line, section header, and service line are all added
@@ -328,7 +328,7 @@ afterEach(() => {
 describe("useContainerfileDiff", () => {
   it("returns all stable lines on first non-null content", () => {
     const { result } = renderHook(() =>
-      useContainerfileDiff("FROM ubi9\nRUN dnf install -y httpd", true),
+      useContainerfileDiff("FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd", true),
     );
     expect(result.current.diffResult.hasChanges).toBe(false);
     expect(result.current.diffResult.lines).toHaveLength(2);
@@ -345,10 +345,10 @@ describe("useContainerfileDiff", () => {
   it("detects added lines on content change", () => {
     const { result, rerender } = renderHook(
       ({ content }) => useContainerfileDiff(content, true),
-      { initialProps: { content: "FROM ubi9" as string | null } },
+      { initialProps: { content: "FROM quay.io/fedora/fedora-bootc:42" as string | null } },
     );
 
-    rerender({ content: "FROM ubi9\nEXPOSE 80" });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80" });
     expect(result.current.diffResult.hasChanges).toBe(true);
     expect(result.current.diffResult.addedCount).toBe(1);
   });
@@ -356,13 +356,13 @@ describe("useContainerfileDiff", () => {
   it("does not diff when panel is collapsed — sets hasPendingChanges", () => {
     const { result, rerender } = renderHook(
       ({ content, isOpen }) => useContainerfileDiff(content, isOpen),
-      { initialProps: { content: "FROM ubi9" as string | null, isOpen: true } },
+      { initialProps: { content: "FROM quay.io/fedora/fedora-bootc:42" as string | null, isOpen: true } },
     );
 
     // Collapse the panel
-    rerender({ content: "FROM ubi9", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42", isOpen: false });
     // Change content while collapsed
-    rerender({ content: "FROM ubi9\nEXPOSE 80", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80", isOpen: false });
 
     expect(result.current.hasPendingChanges).toBe(true);
     // Lines should still reflect the last-seen open state
@@ -372,13 +372,13 @@ describe("useContainerfileDiff", () => {
   it("diffs against last-seen baseline on expand", () => {
     const { result, rerender } = renderHook(
       ({ content, isOpen }) => useContainerfileDiff(content, isOpen),
-      { initialProps: { content: "FROM ubi9" as string | null, isOpen: true } },
+      { initialProps: { content: "FROM quay.io/fedora/fedora-bootc:42" as string | null, isOpen: true } },
     );
 
     // Collapse, change content, re-expand
-    rerender({ content: "FROM ubi9", isOpen: false });
-    rerender({ content: "FROM ubi9\nEXPOSE 80", isOpen: false });
-    rerender({ content: "FROM ubi9\nEXPOSE 80", isOpen: true });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80", isOpen: true });
 
     expect(result.current.diffResult.hasChanges).toBe(true);
     expect(result.current.diffResult.addedCount).toBe(1);
@@ -388,15 +388,15 @@ describe("useContainerfileDiff", () => {
   it("clears hasPendingChanges when content reverts to baseline while collapsed", () => {
     const { result, rerender } = renderHook(
       ({ content, isOpen }) => useContainerfileDiff(content, isOpen),
-      { initialProps: { content: "FROM ubi9" as string | null, isOpen: true } },
+      { initialProps: { content: "FROM quay.io/fedora/fedora-bootc:42" as string | null, isOpen: true } },
     );
 
-    rerender({ content: "FROM ubi9", isOpen: false });
-    rerender({ content: "FROM ubi9\nEXPOSE 80", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80", isOpen: false });
     expect(result.current.hasPendingChanges).toBe(true);
 
     // Revert to baseline
-    rerender({ content: "FROM ubi9", isOpen: false });
+    rerender({ content: "FROM quay.io/fedora/fedora-bootc:42", isOpen: false });
     expect(result.current.hasPendingChanges).toBe(false);
   });
 });
@@ -666,7 +666,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("highlights added lines on content change", () => {
     const { rerender } = render(
       <ContainerfilePanel
-        content={"FROM ubi9\nRUN dnf install -y httpd"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -675,7 +675,7 @@ describe("ContainerfilePanel change highlights", () => {
 
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -690,7 +690,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("does not highlight on first render (baseline)", () => {
     render(
       <ContainerfilePanel
-        content={"FROM ubi9\nRUN dnf install -y httpd"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -706,7 +706,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("marks removed lines with departing class and aria-hidden", () => {
     const { rerender } = render(
       <ContainerfilePanel
-        content={"FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -715,7 +715,7 @@ describe("ContainerfilePanel change highlights", () => {
 
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9\nRUN dnf install -y httpd"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -731,7 +731,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("shows dot indicator when collapsed and content changes", () => {
     const { rerender } = render(
       <ContainerfilePanel
-        content={"FROM ubi9"}
+        content={"FROM quay.io/fedora/fedora-bootc:42"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -741,7 +741,7 @@ describe("ContainerfilePanel change highlights", () => {
     // Collapse
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9"}
+        content={"FROM quay.io/fedora/fedora-bootc:42"}
         isOpen={false}
         onToggle={vi.fn()}
         loading={false}
@@ -751,7 +751,7 @@ describe("ContainerfilePanel change highlights", () => {
     // Change content while collapsed
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9\nEXPOSE 80"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80"}
         isOpen={false}
         onToggle={vi.fn()}
         loading={false}
@@ -768,7 +768,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("announces diff summary via aria-live region", () => {
     const { rerender } = render(
       <ContainerfilePanel
-        content={"FROM ubi9"}
+        content={"FROM quay.io/fedora/fedora-bootc:42"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -777,7 +777,7 @@ describe("ContainerfilePanel change highlights", () => {
 
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9\nEXPOSE 80"}
+        content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -792,7 +792,7 @@ describe("ContainerfilePanel change highlights", () => {
   it("does not announce when diff is empty", () => {
     const { rerender } = render(
       <ContainerfilePanel
-        content={"FROM ubi9"}
+        content={"FROM quay.io/fedora/fedora-bootc:42"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -802,7 +802,7 @@ describe("ContainerfilePanel change highlights", () => {
     // Same content — no change
     rerender(
       <ContainerfilePanel
-        content={"FROM ubi9"}
+        content={"FROM quay.io/fedora/fedora-bootc:42"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
@@ -893,7 +893,7 @@ it("calls scrollIntoView on the first added line", () => {
 
   const { rerender } = render(
     <ContainerfilePanel
-      content={"FROM ubi9"}
+      content={"FROM quay.io/fedora/fedora-bootc:42"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
@@ -902,7 +902,7 @@ it("calls scrollIntoView on the first added line", () => {
 
   rerender(
     <ContainerfilePanel
-      content={"FROM ubi9\nEXPOSE 80"}
+      content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
@@ -924,7 +924,7 @@ it("does not scroll when changed line is already visible", () => {
 
   const { rerender } = render(
     <ContainerfilePanel
-      content={"FROM ubi9"}
+      content={"FROM quay.io/fedora/fedora-bootc:42"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
@@ -933,7 +933,7 @@ it("does not scroll when changed line is already visible", () => {
 
   rerender(
     <ContainerfilePanel
-      content={"FROM ubi9\nEXPOSE 80"}
+      content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
@@ -1015,7 +1015,7 @@ it("removes highlight class after 2s in reduced-motion mode", () => {
 
   const { rerender } = render(
     <ContainerfilePanel
-      content={"FROM ubi9"}
+      content={"FROM quay.io/fedora/fedora-bootc:42"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
@@ -1024,7 +1024,7 @@ it("removes highlight class after 2s in reduced-motion mode", () => {
 
   rerender(
     <ContainerfilePanel
-      content={"FROM ubi9\nEXPOSE 80"}
+      content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80"}
       isOpen={true}
       onToggle={vi.fn()}
       loading={false}
