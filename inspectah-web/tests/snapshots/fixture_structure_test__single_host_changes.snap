@@ -1,0 +1,13 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "configs_excluded": [],
+  "configs_included": [],
+  "is_dirty": false,
+  "packages_excluded": [],
+  "packages_included": [],
+  "repos_excluded": [],
+  "variants_changed": 0
+}

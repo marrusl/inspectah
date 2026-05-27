@@ -1,0 +1,113 @@
+---
+source: inspectah-web/tests/fixture_structure_test.rs
+expression: value
+---
+{
+  "fixtures": {
+    "errors/malformed.txt": {
+      "category": "excluded"
+    },
+    "errors/server-500.json": {
+      "category": "error-envelope"
+    },
+    "fleet/fleet-view.json": {
+      "category": "body",
+      "schema": "FleetViewResponse"
+    },
+    "fleet/health.json": {
+      "category": "body",
+      "schema": "HealthResponse"
+    },
+    "fleet/sections.json": {
+      "category": "body",
+      "schema": "ContextSections"
+    },
+    "post-responses/fleet-diff/success.json": {
+      "category": "wrapper",
+      "schema": "FleetDiffResponse"
+    },
+    "post-responses/op/success.json": {
+      "category": "wrapper",
+      "schema": "ViewResponse"
+    },
+    "post-responses/redo/success.json": {
+      "category": "wrapper",
+      "schema": "ViewResponse"
+    },
+    "post-responses/tarball/sensitive-required.json": {
+      "category": "wrapper",
+      "schema": "TarballSensitivity"
+    },
+    "post-responses/tarball/stale.json": {
+      "category": "error-envelope"
+    },
+    "post-responses/tarball/stub.tar.gz": {
+      "category": "excluded"
+    },
+    "post-responses/undo/nothing-to-undo.json": {
+      "category": "error-envelope"
+    },
+    "post-responses/undo/success.json": {
+      "category": "wrapper",
+      "schema": "ViewResponse"
+    },
+    "post-responses/user-password/invalid.json": {
+      "category": "error-envelope"
+    },
+    "post-responses/user-password/success.json": {
+      "category": "wrapper",
+      "schema": "ViewResponse"
+    },
+    "post-responses/user-strategy/success.json": {
+      "category": "wrapper",
+      "schema": "ViewResponse"
+    },
+    "post-responses/viewed/success.json": {
+      "category": "excluded"
+    },
+    "sequences/exclude-undo-redo/01-after-exclude.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
+    "sequences/exclude-undo-redo/02-after-undo.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
+    "sequences/exclude-undo-redo/03-after-redo.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
+    "single-host/changes-empty.json": {
+      "category": "body",
+      "schema": "ChangesSummary"
+    },
+    "single-host/health.json": {
+      "category": "body",
+      "schema": "HealthResponse"
+    },
+    "single-host/ops-empty.json": {
+      "category": "body",
+      "schema": "AnnotatedOps"
+    },
+    "single-host/sections.json": {
+      "category": "body",
+      "schema": "ContextSections"
+    },
+    "single-host/user-preview-redacted.json": {
+      "category": "body",
+      "schema": "UserPreviewResponse"
+    },
+    "single-host/user-preview.json": {
+      "category": "body",
+      "schema": "UserPreviewResponse"
+    },
+    "single-host/view.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
+    "single-host/viewed-empty.json": {
+      "category": "body",
+      "schema": "ViewedResponse"
+    }
+  }
+}
