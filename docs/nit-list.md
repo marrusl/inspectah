@@ -62,6 +62,10 @@ Deferred non-blocking items from the spec/plan review rounds. Address when touch
 
 - [ ] RepoBar `aria-live` badge should announce dismiss/restore changes via a dedicated live-region message tied to the event, not just the static badge text. Currently the badge updates its visible count correctly, but the announcement is passive (relies on text mutation). A dedicated `aria-live` message ("1 conflict dismissed", "All conflicts restored") would be more reliable for screen readers. Flagged by Fern in round-2 review as important but non-blocking.
 
+## Type `users_groups_decisions` (Playwright fixture validation prerequisite)
+
+- [ ] `users_groups_decisions` on `ViewResponse` is `Vec<serde_json::Value>` — an untyped escape hatch. This means the Playwright fixture-structure validation (insta snapshots) cannot catch drift in the users/groups decision payload. `users.spec.ts` tests rely on structural fixture correctness only. Typing this field as a proper DTO (e.g., `Vec<UserGroupDecision>`) is the prerequisite for full fixture-validation coverage of the users/groups surface. Flagged during Playwright testing expansion spec review (Tang, round 2).
+
 ---
 
 ## Completed

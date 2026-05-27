@@ -169,6 +169,22 @@ Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_sta
 
 **Design decision for Spec 2:** Variant filenames currently use 8-char SHA-256 prefix (human-browsable). If refine needs to machine-correlate variant files back to merge-time identity, extend to full hash or 16+ chars. Decide during brainstorm whether variant files need to be machine-addressable.
 
+### Playwright E2E Testing Expansion (HIGH — spec+plan approved, ready to implement)
+
+Expand the Playwright e2e suite from 6 spec files (many skipped) to 11 with full surface area coverage. Hybrid fixture strategy: 80% mock API via `page.route()`, 20% real-server smoke tests with checked-in tarballs. Four sub-phases: mock infrastructure POC, remaining fixtures + mutation proof, fixture-structure validation (insta snapshots), real-server smoke tests + curated tarballs. Then Phase 2 (single-host core) and Phase 3 (recent features + fleet gaps). Spec: `docs/specs/proposed/2026-05-27-playwright-testing-expansion.md`. Plan: `docs/plans/2026-05-27-playwright-testing-expansion.md`.
+
+### Playwright E2E: CI Automation (MEDIUM — after testing expansion)
+
+Add `webServer` config to `playwright.config.ts` to auto-start the refine server with checked-in tarballs. GitHub Actions integration. Makes `npx playwright test` run everything including real-server tests without manual server startup.
+
+### Playwright E2E: Visual Regression (MEDIUM — after CI automation)
+
+Playwright screenshot comparison for key views (single-host refine, fleet zones, containerfile panel, responsive breakpoints). Catches CSS regressions and theme rendering bugs that functional tests miss.
+
+### Playwright E2E: Multi-Browser (MEDIUM — after CI automation)
+
+Add Firefox project to `playwright.config.ts`. Firefox's Gecko engine handles CSS grid/flexbox and keyboard events differently from Chromium, especially relevant for PatternFly 6.
+
 ### Fleet Spec 3: Architect
 
 Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
