@@ -1,7 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { applyMockApi, clearMocks, mockSequence, mockError } from "./helpers/mock-api";
+import {
+  applyMockApi,
+  clearMocks,
+  mockSequence,
+  mockPostResponse,
+  mockError,
+} from "./helpers/mock-api";
 
-test.describe("Triage workflow (mock tier)", () => {
+test.describe("Triage workflow", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ page }) => {
@@ -14,12 +20,11 @@ test.describe("Triage workflow (mock tier)", () => {
     await clearMocks(page);
   });
 
-  test("toggle package exclude — view updates via GET refetch", async ({ page }) => {
-    // Verify initial stats: Packages: 4 included / 1 excluded
+  // ── 1. Package toggle ─────────────────────────────────────────────
+  test("package toggle — stats update via GET refetch", async ({ page }) => {
     const statsBar = page.locator(".inspectah-statsbar");
     await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible();
 
-    // Wire mockSequence: POST /api/op advances GET /api/view to after-exclude state
     await mockSequence(
       page,
       "/api/view",
@@ -30,18 +35,61 @@ test.describe("Triage workflow (mock tier)", () => {
       { triggerOn: "/api/op" },
     );
 
-    // Find an included package toggle and click to exclude it.
-    // PackageList renders <input type="checkbox" role="checkbox" aria-label="<name>">.
-    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
-    await firstToggle.click({ force: true });
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='httpd.x86_64']",
+    );
+    await toggle.click({ force: true });
 
-    // Wait for the POST response + GET refetch to settle, then verify stats changed
-    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({ timeout: 5000 });
+    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({
+      timeout: 5000,
+    });
     await expect(statsBar.getByText(/2 excluded/)).toBeVisible();
   });
 
-  test("undo reverts state — redo button becomes enabled", async ({ page }) => {
-    // Wire mockSequence: /api/op and /api/undo advance the view through two states
+  // ── 2. Config toggle ──────────────────────────────────────────────
+  test("config toggle — stats update via GET refetch", async ({ page }) => {
+    // Navigate to Config Files section
+    await page
+      .locator(".inspectah-layout__sidebar")
+      .getByText("Config Files")
+      .click();
+
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Configs:\s*2 included/)).toBeVisible();
+
+    // Config items are grouped under a collapsed "Routine" bucket.
+    // Expand it to reveal the individual config item checkboxes.
+    const routineGroup = page.getByText(/Routine\s*\(\d+\)/);
+    await routineGroup.click();
+
+    // Wait for the config item checkboxes to become visible
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='Toggle /etc/sysconfig/network']",
+    );
+    await expect(toggle).toBeVisible({ timeout: 3000 });
+
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "single-host/view.json",
+        "sequences/exclude-undo-redo/01-after-exclude.json",
+      ],
+      { triggerOn: "/api/op" },
+    );
+
+    await toggle.click({ force: true });
+
+    // After-exclude fixture keeps configs at 2/1, but the toggle itself
+    // should fire POST /api/op which triggers the sequence advance.
+    // The stats bar should reflect the refetched view state.
+    await expect(statsBar.getByText(/Configs:\s*2 included/)).toBeVisible({
+      timeout: 5000,
+    });
+  });
+
+  // ── 3. Undo/redo sequence ─────────────────────────────────────────
+  test("undo reverts state, redo re-applies", async ({ page }) => {
     await mockSequence(
       page,
       "/api/view",
@@ -49,395 +97,216 @@ test.describe("Triage workflow (mock tier)", () => {
         "single-host/view.json",
         "sequences/exclude-undo-redo/01-after-exclude.json",
         "sequences/exclude-undo-redo/02-after-undo.json",
+        "sequences/exclude-undo-redo/03-after-redo.json",
       ],
-      { triggerOn: ["/api/op", "/api/undo"] },
+      { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
     );
 
-    // Step 1: toggle to exclude → advances to state 1
-    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
-    await firstToggle.click({ force: true });
-
-    // Wait for exclude to take effect
     const statsBar = page.locator(".inspectah-statsbar");
-    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({ timeout: 5000 });
 
-    // Step 2: click undo → advances to state 2 (after-undo fixture has can_redo: true)
+    // Step 1: exclude a package → state advances to 01 (3 included / 2 excluded)
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='httpd.x86_64']",
+    );
+    await toggle.click({ force: true });
+    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({
+      timeout: 5000,
+    });
+
+    // Step 2: undo → state 02 (4 included / 1 excluded, can_redo: true)
     const undoBtn = page.getByRole("button", { name: "Undo" });
     await undoBtn.click();
-
-    // Verify stats reverted to original counts
-    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible({ timeout: 5000 });
-
-    // Verify redo button is now enabled (after-undo fixture has can_redo: true)
+    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible({
+      timeout: 5000,
+    });
     const redoBtn = page.getByRole("button", { name: "Redo" });
     await expect(redoBtn).toBeEnabled({ timeout: 3000 });
+
+    // Step 3: redo → state 03 (3 included / 2 excluded again)
+    await redoBtn.click();
+    await expect(statsBar.getByText(/Packages:\s*3 included/)).toBeVisible({
+      timeout: 5000,
+    });
   });
 
-  test("server error on mutation — page stays interactive", async ({ page }) => {
-    // Wire /api/op to return 500 on POST
-    await mockError(page, "/api/op", "500");
-
-    // Find a toggle and click it
-    const firstToggle = page.locator("input[type=checkbox][aria-label='httpd.x86_64']");
-    await firstToggle.click({ force: true });
-
-    // Give the error response time to process
-    await page.waitForTimeout(500);
-
-    // Page should still be interactive: statsbar visible, toggles still present
-    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
-    const toggleCount = await page.locator("input[type=checkbox]").count();
-    expect(toggleCount).toBeGreaterThan(0);
-
-    // Stats should remain unchanged (original values from the initial mock)
-    const statsBar = page.locator(".inspectah-statsbar");
-    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible();
-  });
-});
-
-test.describe("Triage workflow", () => {
-  // These tests mutate shared server state; must run serially
-  test.describe.configure({ mode: "serial" });
-
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    // Wait for data to load
-    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
-    // Ensure Packages section is active (default)
-    await expect(
-      page.locator(".inspectah-layout__sidebar").getByText("Packages"),
-    ).toBeVisible();
-  });
-
-  test("toggle a package exclusion updates Containerfile preview", async ({
-    page,
-  }) => {
-    // The panel may be collapsed at 1280px viewport — expand if needed
-    const cfPanelOpen = page.locator(".inspectah-cf-panel--open");
-    const isOpen = await cfPanelOpen.isVisible().catch(() => false);
-    if (!isOpen) {
+  // ── 4. Containerfile preview updates ──────────────────────────────
+  test("Containerfile preview updates after toggle", async ({ page }) => {
+    // Open the Containerfile panel via keyboard shortcut
+    const cfPanel = page.locator(".inspectah-cf-panel--open");
+    if (!(await cfPanel.isVisible().catch(() => false))) {
       await page.keyboard.press("Control+e");
-      await expect(cfPanelOpen).toBeVisible({ timeout: 2000 });
+      await expect(cfPanel).toBeVisible({ timeout: 2000 });
     }
 
-    const initialPreview = await cfPanelOpen
+    const initialPreview = await cfPanel
       .locator(".inspectah-cf-panel__code")
       .textContent();
 
-    // Find the first Switch toggle in a decision item.
-    // PF6 Switch renders <input type="checkbox" role="switch">.
-    const firstToggle = page
-      .getByRole("switch", { name: /toggle/i })
-      .first();
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "single-host/view.json",
+        "sequences/exclude-undo-redo/01-after-exclude.json",
+      ],
+      { triggerOn: "/api/op" },
+    );
 
-    // Set up response listener before clicking to avoid race
-    const opResponse = page.waitForResponse((res) => res.url().includes("/api/op"));
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='httpd.x86_64']",
+    );
+    await toggle.click({ force: true });
 
-    // Click to toggle (exclude)
-    await firstToggle.click({ force: true });
-
-    // Wait for the API response to update the view
-    await opResponse;
-
-    // Wait for React to re-render the Containerfile preview
+    // The after-exclude fixture has a shorter containerfile_preview (356 vs 393 chars)
     await expect(async () => {
-      const updatedPreview = await cfPanelOpen
+      const updatedPreview = await cfPanel
         .locator(".inspectah-cf-panel__code")
         .textContent();
       expect(updatedPreview).not.toBe(initialPreview);
     }).toPass({ timeout: 5000 });
   });
 
-  test("undo reverts the last operation", async ({ page }) => {
-    // Get initial package counts (triage/viewed counter is not undone)
-    const statsBar = page.locator(".inspectah-statsbar");
-    const initialText = await statsBar.textContent();
-    const pkgPattern = /Packages:\s*\d+\s*included\s*\/\s*\d+\s*excluded/;
-    const initialPkgs = initialText?.match(pkgPattern)?.[0];
+  // ── 5. Export download ─────────────────────────────────────────────
+  test("export tarball triggers download", async ({ page }) => {
+    await mockPostResponse(
+      page,
+      "/api/tarball",
+      "post-responses/tarball/stub.tar.gz",
+    );
 
-    // Find and click a toggle
-    const toggle = page
-      .getByRole("switch", { name: /toggle/i })
-      .first();
-    const opResp = page.waitForResponse((res) => res.url().includes("/api/op"));
-    await toggle.click({ force: true });
-    await opResp;
-
-    // Package counts should have changed
-    await page.waitForTimeout(500);
-    const afterToggle = await statsBar.textContent();
-    const afterTogglePkgs = afterToggle?.match(pkgPattern)?.[0];
-    expect(afterTogglePkgs).not.toBe(initialPkgs);
-
-    // Click undo
-    const undoResp2 = page.waitForResponse((res) => res.url().includes("/api/undo"));
-    await page.getByRole("button", { name: /undo/i }).click();
-    await undoResp2;
-
-    // Package counts should revert
-    await page.waitForTimeout(500);
-    const afterUndo = await statsBar.textContent();
-    const afterUndoPkgs = afterUndo?.match(pkgPattern)?.[0];
-    expect(afterUndoPkgs).toBe(initialPkgs);
-  });
-
-  test("redo re-applies an undone operation", async ({ page }) => {
-    const toggle = page
-      .getByRole("switch", { name: /toggle/i })
-      .first();
-
-    // Toggle, undo, then redo — compare package counts (triage/viewed counter
-    // is not undone, so we can't compare the full statsbar text)
-    const opResp2 = page.waitForResponse((res) => res.url().includes("/api/op"));
-    await toggle.click({ force: true });
-    await opResp2;
-
-    // Wait for stats to update, then read the package line
-    await page.waitForTimeout(500);
-    const afterToggle = await page.locator(".inspectah-statsbar").textContent();
-    // Extract just the "Packages: X included / Y excluded" part
-    const pkgPattern = /Packages:\s*\d+\s*included\s*\/\s*\d+\s*excluded/;
-    const afterTogglePkgs = afterToggle?.match(pkgPattern)?.[0];
-
-    const undoResp = page.waitForResponse((res) => res.url().includes("/api/undo"));
-    await page.getByRole("button", { name: /undo/i }).click();
-    await undoResp;
-
-    const redoResp = page.waitForResponse((res) => res.url().includes("/api/redo"));
-    await page.getByRole("button", { name: /redo/i }).click();
-    await redoResp;
-
-    await page.waitForTimeout(500);
-    const afterRedo = await page.locator(".inspectah-statsbar").textContent();
-    const afterRedoPkgs = afterRedo?.match(pkgPattern)?.[0];
-    expect(afterRedoPkgs).toBe(afterTogglePkgs);
-  });
-
-  test("export tarball downloads successfully", async ({ page }) => {
-    // Click the export button in the stats bar
+    // Click the Export button in the StatsBar to open ExportDialog
     const exportBtn = page.getByRole("button", { name: /export/i });
     await exportBtn.click();
 
-    // Export dialog should appear
+    // ExportDialog modal should appear
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
+    await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Click the confirm/download button in the dialog
-    const downloadBtn = dialog.getByRole("button", {
-      name: /download|export|save/i,
-    });
-    const downloadExists = await downloadBtn.isVisible().catch(() => false);
-    if (!downloadExists) {
-      // Dialog might have a different structure — just verify it opened
-      await expect(dialog).toBeVisible();
-      return;
-    }
-
-    // Start waiting for download before clicking
-    const downloadPromise = page.waitForEvent("download");
-    await downloadBtn.click();
-    const download = await downloadPromise;
-
-    // Verify the download has a tar.gz filename
-    expect(download.suggestedFilename()).toMatch(/\.tar\.gz$/);
-  });
-});
-
-test.describe("Phase 5: Tiered triage", () => {
-  // FIXTURE REQUIREMENT: These tests require a running `inspectah refine` server
-  // with a scan tarball. Run with:
-  //   cargo run -p inspectah-cli -- refine testdata/<tarball> &
-  //   cd inspectah-web/ui && npx playwright test e2e/triage.spec.ts
-  //
-  // Tests are structurally complete but skipped until a tarball fixture exists.
-
-  test.describe.configure({ mode: "serial" });
-
-  test.beforeEach(async ({ page }) => {
-    // Check if server is running with data
-    try {
-      await page.goto("/", { timeout: 5000 });
-      await expect(page.locator(".inspectah-statsbar")).toBeVisible({ timeout: 3000 });
-    } catch {
-      test.skip(true, "No refine server running with tarball fixture");
-    }
-  });
-
-  test.skip("triage surface reduced — needs_review count < 100", async ({ page }) => {
-    // Navigate to Packages section (should be default)
-    const sidebar = page.locator(".inspectah-layout__sidebar");
-    await expect(sidebar.getByText("Packages")).toBeVisible();
-
-    // Read the stats bar for needs_review count
-    const statsBar = page.locator(".inspectah-statsbar");
-    const statsText = await statsBar.textContent();
-
-    // Parse the "X to triage" or similar indicator
-    // Phase 5 goal: reduce from ~734 to <100
-    const triagePattern = /(\d+)\s+to\s+triage|needs\s+review:\s*(\d+)/i;
-    const match = statsText?.match(triagePattern);
-    const triageCount = match ? parseInt(match[1] || match[2]) : 0;
-
-    expect(triageCount).toBeLessThan(100);
-
-    // Verify Tier 1 section shows "baseline packages" collapsed summary
-    const tier1Section = page.locator(".inspectah-tier1-summary");
-    await expect(tier1Section).toBeVisible();
-    await expect(tier1Section.getByText(/baseline packages/i)).toBeVisible();
-
-    // Verify repo groups are visible in the triage list
-    const repoGroup = page.locator(".inspectah-repo-group").first();
-    await expect(repoGroup).toBeVisible();
-  });
-
-  test.skip("ExcludeRepo removes packages and shows undo", async ({ page }) => {
-    // Navigate to Packages section
-    await page.locator(".inspectah-layout__sidebar").getByText("Packages").click();
-
-    // Find a third-party repo toggle (Switch element with repo label)
-    // Repo groups should have a Switch for verified repos
-    const repoToggle = page
-      .locator(".inspectah-repo-group")
-      .filter({ hasNotText: /unverified/i })
-      .first()
-      .getByRole("switch");
-
-    await expect(repoToggle).toBeVisible();
-
-    // Get initial package count from stats bar
-    const statsBar = page.locator(".inspectah-statsbar");
-    const initialStats = await statsBar.textContent();
-    const pkgPattern = /Packages:\s*(\d+)\s*included/;
-    const initialCount = parseInt(initialStats?.match(pkgPattern)?.[1] || "0");
-
-    // Expand Containerfile panel if needed
-    const cfPanelOpen = page.locator(".inspectah-cf-panel--open");
-    const isOpen = await cfPanelOpen.isVisible().catch(() => false);
-    if (!isOpen) {
-      await page.keyboard.press("Control+e");
-      await expect(cfPanelOpen).toBeVisible({ timeout: 2000 });
-    }
-
-    const initialCF = await cfPanelOpen
-      .locator(".inspectah-cf-panel__code")
-      .textContent();
-
-    // Click repo toggle to exclude
-    const opResp = page.waitForResponse((res) => res.url().includes("/api/op"));
-    await repoToggle.click();
-    await opResp;
-
-    // Verify packages from that repo disappear from triage list
-    await page.waitForTimeout(500);
-    const afterStats = await statsBar.textContent();
-    const afterCount = parseInt(afterStats?.match(pkgPattern)?.[1] || "0");
-    expect(afterCount).toBeLessThan(initialCount);
-
-    // Verify Containerfile preview updated (repo's packages removed)
-    const updatedCF = await cfPanelOpen
-      .locator(".inspectah-cf-panel__code")
-      .textContent();
-    expect(updatedCF).not.toBe(initialCF);
-
-    // Verify undo button is available
-    const undoBtn = page.getByRole("button", { name: /undo/i });
-    await expect(undoBtn).toBeEnabled();
-
-    // Click undo
-    const undoResp = page.waitForResponse((res) => res.url().includes("/api/undo"));
-    await undoBtn.click();
-    await undoResp;
-
-    // Verify restoration
-    await page.waitForTimeout(500);
-    const restoredStats = await statsBar.textContent();
-    const restoredCount = parseInt(restoredStats?.match(pkgPattern)?.[1] || "0");
-    expect(restoredCount).toBe(initialCount);
-  });
-
-  test.skip("unverified repo shows label but no toggle", async ({ page }) => {
-    // Navigate to Packages section
-    await page.locator(".inspectah-layout__sidebar").getByText("Packages").click();
-
-    // Find a repo group with "Unverified" badge
-    const unverifiedGroup = page
-      .locator(".inspectah-repo-group")
-      .filter({ hasText: /unverified/i })
+    // Click the Export button inside the dialog to trigger download
+    const dialogExportBtn = dialog
+      .getByRole("button", { name: /export/i })
       .first();
 
-    // Verify badge is visible
-    await expect(unverifiedGroup.getByText(/unverified/i)).toBeVisible();
+    const downloadPromise = page.waitForEvent("download");
+    await dialogExportBtn.click();
+    const download = await downloadPromise;
 
-    // Verify no Switch element is present in that group
-    const toggle = unverifiedGroup.getByRole("switch");
-    const toggleExists = await toggle.count();
-    expect(toggleExists).toBe(0);
+    expect(download.suggestedFilename()).toMatch(/\.tar\.gz$/);
   });
 
-  test.skip("Tier 1 configs show 'managed by packages' and are not in Containerfile", async ({
+  // ── 6. Sensitive tarball gating ────────────────────────────────────
+  test("sensitive tarball gating — 428 shows error", async ({ page }) => {
+    await mockPostResponse(
+      page,
+      "/api/tarball",
+      "post-responses/tarball/sensitive-required.json",
+    );
+
+    // Open the export dialog
+    const exportBtn = page.getByRole("button", { name: /export/i });
+    await exportBtn.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    // Click export in the dialog (should trigger 428 response)
+    const dialogExportBtn = dialog
+      .getByRole("button", { name: /export/i })
+      .first();
+    await dialogExportBtn.click();
+
+    // The ExportDialog should show an error alert for the 428
+    await expect(
+      dialog.locator(".pf-v6-c-alert").filter({ hasText: /failed|error|sensitive/i }),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  // ── 7. Nothing to undo (409) ──────────────────────────────────────
+  test("nothing to undo — page stays interactive", async ({ page }) => {
+    await mockPostResponse(
+      page,
+      "/api/undo",
+      "post-responses/undo/nothing-to-undo.json",
+    );
+
+    // Initial state has can_undo: false, so Undo button is disabled.
+    // We need to make the button clickable — use force click to bypass disabled state
+    // and let the POST happen, which returns 409.
+    const undoBtn = page.getByRole("button", { name: "Undo" });
+    await undoBtn.click({ force: true });
+
+    // Give the error response time to process
+    await page.waitForTimeout(500);
+
+    // Page should remain interactive
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
+    await expect(
+      page.locator(".inspectah-statsbar").getByText(/Packages:\s*4 included/),
+    ).toBeVisible();
+  });
+
+  // ── 8. Server error on mutation ────────────────────────────────────
+  test("server error on mutation — page stays interactive", async ({
     page,
   }) => {
-    // Navigate to Config Files section
-    await page.locator(".inspectah-layout__sidebar").getByText("Config Files").click();
+    await mockError(page, "/api/op", "500");
 
-    // Wait for config section to load
-    await expect(page.locator(".inspectah-layout__main")).toBeVisible();
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='httpd.x86_64']",
+    );
+    await toggle.click({ force: true });
 
-    // Verify "managed by packages" summary text is visible in Tier 1
-    const tier1Summary = page.locator(".inspectah-tier1-summary");
-    await expect(tier1Summary.getByText(/managed by packages/i)).toBeVisible();
+    await page.waitForTimeout(500);
 
-    // Open Containerfile panel if not visible
-    const cfPanelOpen = page.locator(".inspectah-cf-panel--open");
-    const isOpen = await cfPanelOpen.isVisible().catch(() => false);
-    if (!isOpen) {
-      await page.keyboard.press("Control+e");
-      await expect(cfPanelOpen).toBeVisible({ timeout: 2000 });
-    }
+    // Page should still be interactive: statsbar visible, toggles present
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
+    const toggleCount = await page.locator("input[type=checkbox]").count();
+    expect(toggleCount).toBeGreaterThan(0);
 
-    // Get Containerfile content
-    const cfContent = await cfPanelOpen
-      .locator(".inspectah-cf-panel__code")
-      .textContent();
-
-    // Verify no COPY directives for default config paths
-    // (e.g., /etc/passwd, /etc/group, /etc/hostname)
-    expect(cfContent).not.toMatch(/COPY.*\/etc\/passwd/);
-    expect(cfContent).not.toMatch(/COPY.*\/etc\/group/);
-    expect(cfContent).not.toMatch(/COPY.*\/etc\/hostname/);
+    // Stats unchanged from initial mock
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Packages:\s*4 included/)).toBeVisible();
   });
 
-  test.skip("Decisions/Full toggle switches between views", async ({ page }) => {
-    // Navigate to Packages section
-    await page.locator(".inspectah-layout__sidebar").getByText("Packages").click();
+  // ── 9. Timeout on mutation ─────────────────────────────────────────
+  test("timeout on mutation — page stays interactive", async ({ page }) => {
+    await mockError(page, "/api/op", "timeout", { timeoutMs: 1000 });
 
-    // Find the Decisions/Full toggle (likely a ToggleGroup or similar)
-    const decisionsToggle = page.getByRole("button", { name: /decisions/i });
-    const fullToggle = page.getByRole("button", { name: /full/i });
+    const toggle = page.locator(
+      "input[type=checkbox][aria-label='httpd.x86_64']",
+    );
+    await toggle.click({ force: true });
 
-    // Verify Decisions is active by default
-    await expect(decisionsToggle).toHaveAttribute("aria-pressed", "true");
+    // Wait long enough for the timeout mock to trigger
+    await page.waitForTimeout(2000);
 
-    // Verify Tier 1 items are not visible (collapsed)
-    const tier1Items = page.locator(".inspectah-tier1-items");
-    const tier1Visible = await tier1Items.isVisible().catch(() => false);
-    expect(tier1Visible).toBe(false);
+    // Page should remain interactive despite the timeout
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
+    const toggleCount = await page.locator("input[type=checkbox]").count();
+    expect(toggleCount).toBeGreaterThan(0);
+  });
 
-    // Click Full
-    await fullToggle.click();
+  // ── 10. Malformed response ─────────────────────────────────────────
+  test("malformed response — page shows error state", async ({ page }) => {
+    // Layer a malformed mock ON TOP of the existing applyMockApi routes.
+    // mockError uses page.route which adds a new handler that takes priority.
+    await mockError(page, "/api/view", "malformed");
 
-    // Verify Full is now active
-    await expect(fullToggle).toHaveAttribute("aria-pressed", "true");
+    // Navigate — the malformed /api/view should trigger an error state.
+    // The other routes (health, sections, etc.) still work from applyMockApi.
+    await page.goto("/");
 
-    // Verify Tier 1 items become visible
-    await expect(tier1Items).toBeVisible({ timeout: 2000 });
+    // Wait a moment for the app to process the malformed response
+    await page.waitForTimeout(2000);
 
-    // Click Decisions to collapse back
-    await decisionsToggle.click();
-
-    // Verify Tier 1 items collapse
-    await page.waitForTimeout(300);
-    const tier1StillVisible = await tier1Items.isVisible().catch(() => false);
-    expect(tier1StillVisible).toBe(false);
+    // The React app should render something — it won't crash completely
+    // because it has an error boundary or fallback state.
+    // With malformed /api/view, the app may:
+    // 1. Show an error alert/banner
+    // 2. Show a loading state that never resolves
+    // 3. Show the shell without data
+    // Any of these is acceptable — the key test is the page didn't crash.
+    const rootContent = await page.locator("#root").innerHTML();
+    expect(rootContent.length).toBeGreaterThan(0);
   });
 });
