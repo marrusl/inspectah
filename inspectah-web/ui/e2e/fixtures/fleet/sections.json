@@ -1,0 +1,89 @@
+[
+  {
+    "id": "packages",
+    "display_name": "Packages",
+    "items": [
+      {
+        "id": "pkg:bash:x86_64",
+        "title": "bash",
+        "subtitle": "5.2.26-3.el9.x86_64 (3/3 hosts)",
+        "detail": "baseos",
+        "searchable_text": "bash 5.2.26-3.el9 x86_64 baseos"
+      },
+      {
+        "id": "pkg:openssl:x86_64",
+        "title": "openssl",
+        "subtitle": "1:3.0.7-28.el9_4.x86_64 (3/3 hosts)",
+        "detail": "baseos",
+        "searchable_text": "openssl 3.0.7-28.el9_4 x86_64 baseos"
+      },
+      {
+        "id": "pkg:httpd:x86_64",
+        "title": "httpd",
+        "subtitle": "2.4.57-11.el9_4.1.x86_64 (2/3 hosts)",
+        "detail": "appstream",
+        "searchable_text": "httpd 2.4.57-11.el9_4.1 x86_64 appstream"
+      },
+      {
+        "id": "pkg:vim-enhanced:x86_64",
+        "title": "vim-enhanced",
+        "subtitle": "2:9.0.2153-1.el9.x86_64 (1/3 hosts)",
+        "detail": "appstream",
+        "searchable_text": "vim-enhanced 9.0.2153-1.el9 x86_64 appstream"
+      }
+    ]
+  },
+  {
+    "id": "configs",
+    "display_name": "Config Files",
+    "items": [
+      {
+        "id": "cfg:/etc/sysconfig/network",
+        "title": "/etc/sysconfig/network",
+        "subtitle": "modified (3/3 hosts)",
+        "detail": null,
+        "searchable_text": "/etc/sysconfig/network modified"
+      },
+      {
+        "id": "cfg:/etc/chrony.conf",
+        "title": "/etc/chrony.conf",
+        "subtitle": "modified (2/3 hosts, 2 variants)",
+        "detail": null,
+        "searchable_text": "/etc/chrony.conf chrony modified variants"
+      }
+    ]
+  },
+  {
+    "id": "services",
+    "display_name": "Services",
+    "items": [
+      {
+        "id": "svc:httpd.service",
+        "title": "httpd.service",
+        "subtitle": "enabled (3/3 hosts)",
+        "detail": null,
+        "searchable_text": "httpd.service enabled"
+      }
+    ]
+  },
+  {
+    "id": "repos",
+    "display_name": "Repositories",
+    "items": [
+      {
+        "id": "repo:rhel-9-for-x86_64-baseos-rpms",
+        "title": "rhel-9-for-x86_64-baseos-rpms",
+        "subtitle": "2 packages, verified",
+        "detail": "distro",
+        "searchable_text": "rhel-9-for-x86_64-baseos-rpms baseos distro verified"
+      },
+      {
+        "id": "repo:rhel-9-for-x86_64-appstream-rpms",
+        "title": "rhel-9-for-x86_64-appstream-rpms",
+        "subtitle": "2 packages, verified",
+        "detail": "distro",
+        "searchable_text": "rhel-9-for-x86_64-appstream-rpms appstream distro verified"
+      }
+    ]
+  }
+]
