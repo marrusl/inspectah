@@ -29,6 +29,7 @@
 | **v0.8.2-alpha.1** | **TAGGED (2026-05-26)** |
 | Section Promotion & Triage Redesign | DONE (2026-05-26) |
 | Naming Consistency (REVIEW/REFERENCE) | DONE (2026-05-26) |
+| Containerfile Change Highlights | SHIPPED (2026-05-26) |
 
 ## Roadmap to CLI Cutover
 
@@ -70,6 +71,8 @@
 ✅ v0.8.2-alpha.1 (tagged 2026-05-26, 282 commits since alpha.4, binaries for darwin-arm64/linux-arm64/linux-amd64)
     ↓
 ✅ Section Promotion & Triage Redesign (4 phases, 40 commits, spec+plan — 2026-05-26)
+    ↓
+✅ Containerfile Change Highlights (14 commits, 6 spec review rounds, 6 plan review rounds — 2026-05-26)
     ↓
 Fleet Phase 2b: Refine UI (badges, drawers, zone headers — built against 2a's API)
     ↓

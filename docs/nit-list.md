@@ -46,9 +46,9 @@ Moved to Completed section.
 
 Moved to Completed section.
 
-## Containerfile Change Highlights — Review Followups
+## Containerfile Change Highlights — Review Followups (feature shipped 2026-05-26)
 
-Deferred non-blocking items from the spec/plan review rounds. Address when implementing or touching nearby code.
+Deferred non-blocking items from the spec/plan review rounds. Address when touching nearby code.
 
 - [ ] **Scroll test coverage:** Add assertions that `scrollIntoView` is not called when the changed line is already visible, rapid successive updates honor the ~150ms debounce, and multi-line diffs target the topmost changed line.
 - [ ] **Edge-case baseline tests:** Add tests for first non-null content while initially collapsed (no dot, no announcement) and resize-driven auto-collapse while highlights are active (baseline captured, highlights cancelled).
