@@ -155,11 +155,39 @@ describe("computeDiff", () => {
     const v2 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
     const first = computeDiff(null, v1);
     const second = computeDiff(v1, v2, first.lines);
-    // "FROM quay.io/fedora/fedora-bootc:42" and "RUN dnf..." are unchanged — their IDs must survive
+    // FROM and RUN lines are unchanged — their IDs must survive
     const firstIds = first.lines.map((l) => l.id);
     const stableInSecond = second.lines.filter((l) => l.state === "stable");
     expect(stableInSecond[0].id).toBe(firstIds[0]);
     expect(stableInSecond[1].id).toBe(firstIds[1]);
+  });
+
+  it("preserves IDs for unchanged duplicate lines across successive diffs", () => {
+    const v1 = "RUN echo a\nRUN echo a\nRUN echo b";
+    const v2 = "RUN echo a\nRUN echo a\nRUN echo b\nRUN echo c";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    // All three original lines are unchanged — IDs must match
+    const stableInSecond = second.lines.filter((l) => l.state === "stable");
+    expect(stableInSecond).toHaveLength(3);
+    expect(stableInSecond[0].id).toBe(first.lines[0].id);
+    expect(stableInSecond[1].id).toBe(first.lines[1].id);
+    expect(stableInSecond[2].id).toBe(first.lines[2].id);
+    // New line gets a fresh ID
+    const added = second.lines.filter((l) => l.state === "added");
+    expect(added).toHaveLength(1);
+    expect(first.lines.map((l) => l.id)).not.toContain(added[0].id);
+  });
+
+  it("preserves IDs across three successive diffs", () => {
+    const v1 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd";
+    const v2 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80";
+    const v3 = "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\nEXPOSE 80\nEXPOSE 443";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    const third = computeDiff(v2, v3, second.lines);
+    // FROM line ID stable across all three
+    expect(third.lines[0].id).toBe(first.lines[0].id);
   });
 
   it("returns baseline (all stable) when prev is null", () => {
@@ -415,7 +443,7 @@ Expected: FAIL — `useContainerfileDiff` does not exist yet.
 ```typescript
 // Add to inspectah-web/ui/src/hooks/useContainerfileDiff.ts
 
-import { useRef, useMemo, useCallback } from "react";
+import { useRef, useMemo, useCallback, useState } from "react";
 
 export interface UseContainerfileDiffReturn {
   diffResult: DiffResult;
@@ -442,6 +470,8 @@ export function useContainerfileDiff(
   const clearedIdsRef = useRef<Set<string>>(new Set());
   // Prior render model for ID preservation across diffs.
   const priorLinesRef = useRef<DiffLine[]>([]);
+  // Bumped by pruneRemovingLine/clearHighlight to trigger rerender.
+  const [revision, setRevision] = useState(0);
 
   // Establish baseline on first non-null content.
   if (content != null && !hasBaselineRef.current) {
@@ -503,7 +533,7 @@ export function useContainerfileDiff(
     prevContentRef.current = content;
     priorLinesRef.current = result.lines;
     return result;
-  }, [content, isOpen]);
+  }, [content, isOpen, revision]);
 
   const hasPendingChanges = useMemo(() => {
     if (isOpen || !hasBaselineRef.current) return false;
@@ -512,10 +542,12 @@ export function useContainerfileDiff(
 
   const pruneRemovingLine = useCallback((id: string) => {
     prunedIdsRef.current.add(id);
+    setRevision((r) => r + 1);
   }, []);
 
   const clearHighlight = useCallback((id: string) => {
     clearedIdsRef.current.add(id);
+    setRevision((r) => r + 1);
   }, []);
 
   return { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight };
@@ -829,7 +861,7 @@ Replace the line-rendering logic in `ContainerfilePanel.tsx`. Key changes:
 
 1. Import and call `useContainerfileDiff(content, isOpen)`.
 2. Replace the `lines` useMemo (raw string split) with the hook's `diffResult.lines`.
-3. Render each line as a `<div>` with the appropriate CSS class based on `state`.
+3. Render each line as a block-level `<span>` (via `inspectah-cf-panel__line` CSS class with `display: block`) with the appropriate highlight class based on `state`.
 4. Add `aria-hidden="true"` on removing lines.
 5. Add the dot indicator and dynamic `aria-label` on the collapsed tab.
 6. Add a hidden `aria-live="polite"` `<span>` for diff announcements.
