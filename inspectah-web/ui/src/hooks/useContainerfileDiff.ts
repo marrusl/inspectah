@@ -1,3 +1,4 @@
+import { useState, useRef, useCallback } from "react";
 import { diffLines } from "diff";
 
 export type LineState = "stable" | "added" | "removing";
@@ -112,5 +113,109 @@ export function computeDiff(
     addedCount,
     removedCount,
     hasChanges: addedCount > 0 || removedCount > 0,
+  };
+}
+
+export interface UseContainerfileDiffReturn {
+  diffResult: DiffResult;
+  hasPendingChanges: boolean;
+  pruneRemovingLine: (id: string) => void;
+  clearHighlight: (id: string) => void;
+}
+
+const EMPTY_DIFF: DiffResult = { lines: [], addedCount: 0, removedCount: 0, hasChanges: false };
+
+export function useContainerfileDiff(
+  content: string | null,
+  isOpen: boolean,
+): UseContainerfileDiffReturn {
+  // Re-render trigger for mutation callbacks. Value is irrelevant.
+  const [, forceRender] = useState(0);
+
+  // The render model lives in a ref so it can be read and written
+  // synchronously during the render phase AND from callbacks.
+  const modelRef = useRef<DiffResult>(EMPTY_DIFF);
+  const prevContentRef = useRef<string | null | undefined>(undefined);
+  const lastOpenContentRef = useRef<string | null>(null);
+  const wasOpenRef = useRef(isOpen);
+
+  // Determine what changed since last render
+  const contentChanged = content !== prevContentRef.current;
+  const justOpened = isOpen && !wasOpenRef.current;
+  const justClosed = !isOpen && wasOpenRef.current;
+
+  if (contentChanged || justOpened || justClosed) {
+    const isFirstContent = prevContentRef.current === undefined;
+
+    if (isFirstContent) {
+      // Baseline establishment: first non-null content, all stable
+      modelRef.current = computeDiff(null, content);
+      prevContentRef.current = content;
+      lastOpenContentRef.current = content;
+      wasOpenRef.current = isOpen;
+    } else if (justClosed) {
+      // Panel collapsed: snapshot baseline, don't re-diff
+      lastOpenContentRef.current = prevContentRef.current as string | null;
+      prevContentRef.current = content;
+      wasOpenRef.current = false;
+    } else if (!isOpen) {
+      // Still collapsed, content changed: track but don't diff
+      prevContentRef.current = content;
+    } else if (justOpened) {
+      // Panel re-expanded: diff current against last-open baseline
+      modelRef.current = computeDiff(
+        lastOpenContentRef.current,
+        content,
+        modelRef.current.lines,
+      );
+      prevContentRef.current = content;
+      lastOpenContentRef.current = content;
+      wasOpenRef.current = true;
+    } else {
+      // Panel open, content changed: normal diff
+      modelRef.current = computeDiff(
+        prevContentRef.current as string | null,
+        content,
+        modelRef.current.lines,
+      );
+      prevContentRef.current = content;
+    }
+  }
+
+  const hasPendingChanges = !isOpen && content !== lastOpenContentRef.current;
+
+  const pruneRemovingLine = useCallback((id: string) => {
+    const prev = modelRef.current;
+    const filtered = prev.lines.filter((l) => l.id !== id);
+    const newRemovedCount = Math.max(0, prev.removedCount - 1);
+    modelRef.current = {
+      lines: filtered,
+      addedCount: prev.addedCount,
+      removedCount: newRemovedCount,
+      hasChanges: prev.addedCount > 0 || newRemovedCount > 0,
+    };
+    forceRender((n) => n + 1);
+  }, []);
+
+  const clearHighlight = useCallback((id: string) => {
+    const prev = modelRef.current;
+    const updated = prev.lines.map((l) =>
+      l.id === id ? { ...l, state: "stable" as const } : l,
+    );
+    const newAddedCount = Math.max(0, prev.addedCount - 1);
+    modelRef.current = {
+      lines: updated,
+      addedCount: newAddedCount,
+      removedCount: prev.removedCount,
+      hasChanges: newAddedCount > 0 || prev.removedCount > 0,
+    };
+    forceRender((n) => n + 1);
+  }, []);
+
+  return {
+    diffResult: modelRef.current,
+    hasPendingChanges,
+    pruneRemovingLine,
+    clearHighlight,
   };
 }
