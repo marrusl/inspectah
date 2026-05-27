@@ -92,22 +92,19 @@ Fixtures are classified into four categories with different validation rules:
 
 The CI validation script uses these categories to route each fixture to the right validation rule. The routing logic lives in a manifest file (`e2e/fixtures/manifest.json`) that maps each fixture path to its category and target schema, rather than relying on directory convention alone.
 
-### Schema validation (mock-rot prevention)
+### Fixture-structure validation (mock-rot prevention)
 
-Two layers:
+**Approach:** A Rust integration test (`inspectah-web/tests/fixture_structure_test.rs`) parses each e2e fixture JSON file as `serde_json::Value` and snapshots it with `insta`. Any fixture change (field added, removed, renamed, retyped) breaks the snapshot and requires explicit `cargo insta review` acceptance. This catches unreviewed fixture drift.
 
-1. **`insta` snapshots (primary, fast):** A Rust integration test derives `schemars::JsonSchema` on each API response type, generates JSON Schema, and snapshots it with `insta`. Any Rust struct change fails `cargo test` immediately. Phase 1c covers the full transitive type closure (~50 types) required by the exported response schemas.
+**What this validates and what it doesn't:**
+- **Validates:** Fixture JSON is structurally intentional — every change is explicitly reviewed via insta snapshot acceptance. Catches accidental edits, stale fixtures from copy-paste, and forgotten updates.
+- **Does not validate:** Fixtures against Rust response types. The response DTOs (`ViewResponse`, `FleetViewResponse`, etc.) derive `Serialize` only — adding `Deserialize` would require transitive derives across ~50 types in 3 crates. Rust-type compatibility is proven by the real-server smoke tests (Phase 1d), where the actual server serializes responses and Playwright asserts against them.
 
-2. **CI fixture validation (backstop):** The same test writes schema files to `e2e/schemas/`. A CI step reads `e2e/fixtures/manifest.json`, strips `_status` from harness wrappers, validates body fixtures and stripped wrappers against their target schemas, validates error envelopes against the generic envelope schema, and skips excluded fixtures. Catches stale frontend fixtures when Rust developers update `insta` snapshots but fixture files aren't updated.
+**No `schemars` dependency.** The earlier plan to derive `JsonSchema` across the type graph was dropped during plan review (rounds 3-5). The fixture-structure snapshot approach provides equivalent drift detection with zero cross-crate changes. Only `insta` (already a workspace dev-dependency) is needed.
 
-**`schemars` notes (from Tang):**
-- `#[serde(skip_serializing_if)]` — handled correctly, fields marked optional in schema.
-- `#[serde(flatten)]` on `ViewResponse` — `schemars` inlines flattened properties. Verify output manually once; `insta` catches future drift.
-- `serde_json::Value` fields — produce unconstrained `any` schema. See "Schema validation limits" below.
+**`manifest.json`** documents fixture categories (body, harness wrapper, error envelope, excluded) for future CI validation tooling. Phase 1c does not implement manifest-driven validation — it provides the insta snapshot safety net only.
 
-**Phase 1c scope — full transitive type closure:** Exporting schemas for `ViewResponse` and `FleetViewResponse` forces the compiler to derive `JsonSchema` on their full transitive type graph: `RefinedView`, `RepoGroupInfo`, `BaselineSummary`, `ItemId`, `PrevalenceZone`, fleet section/item DTOs, and all nested types. This is ~50 types across `inspectah-web/src/handlers.rs`, `inspectah-web/src/fleet_handlers.rs`, and `inspectah-refine/src/types.rs`. The work is mechanical (adding derive attributes) but the surface is larger than the handler layer alone. Phase 1c is sized at 2-3 days to reflect this.
-
-**Schema validation limits — `users_groups_decisions`:** The `users_groups_decisions` field on `ViewResponse` is typed as `Vec<serde_json::Value>`, which produces an unconstrained `any` schema. This means schema validation cannot catch drift in the users/groups decision payload. The `users.spec.ts` tests in Phase 3 are **not schema-backed** — they rely on structural fixture correctness only. Full schema coverage for users/groups requires typing `users_groups_decisions` as a proper DTO, which is tracked as a separate backlog item (prerequisite for schema-backed users/groups drift protection).
+**Users/groups limitation:** The `users_groups_decisions` field on `ViewResponse` is typed as `Vec<serde_json::Value>`. The `users.spec.ts` tests in Phase 3 are **not schema-backed** — they rely on structural fixture correctness only. Typing this field as a proper DTO is tracked as a separate backlog item.
 
 ### Fixture file structure
 
@@ -374,13 +371,12 @@ Redo is skipped — it's the mirror of undo and the mock tests cover it.
 - Error fixtures (500, malformed)
 - `e2e/fixtures/manifest.json` mapping fixtures to categories and schemas
 
-**Phase 1c — Schema validation (~2-3 days):**
-- Add `schemars` to workspace deps
-- Derive `JsonSchema` on the full transitive type closure required by `ViewResponse` and `FleetViewResponse` (~50 types across `handlers.rs`, `fleet_handlers.rs`, and `inspectah-refine/src/types.rs`)
-- `inspectah-web/tests/schema_export_test.rs` with `insta` snapshots
-- Schema files written to `e2e/schemas/`
-- CI validation script that reads `manifest.json` and validates fixtures
-- **Note:** `users_groups_decisions: Vec<serde_json::Value>` produces an unconstrained schema — users/groups fixtures are structural-only until this field is typed
+**Phase 1c — Fixture-structure validation (~1 day):**
+- Verify `insta` is a dev-dependency of `inspectah-web`
+- `inspectah-web/tests/fixture_structure_test.rs` — parses each fixture as `serde_json::Value`, snapshots with `insta`
+- Run with `INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_structure_test`
+- No `schemars`, no cross-crate derives, no CI validation script — insta snapshots are the safety net
+- **Note:** `users_groups_decisions: Vec<serde_json::Value>` means users/groups fixtures are structural-only until typed
 
 **Phase 1d — Real-server smoke tests (~1 day):**
 - Curate and check in 2 tarballs to `testdata/`
@@ -470,55 +466,13 @@ These will be added to `docs/ROADMAP.md` under Upcoming Work:
 
 ## 4. Rust-Side Requirements
 
-### `schemars` integration
+### Fixture-structure test
 
-Add `schemars = { version = "0.8", features = ["derive"] }` to workspace dependencies. Derive `JsonSchema` alongside `Serialize` on all types in the transitive closure of the exported response schemas:
+Verify `insta` is a dev-dependency of `inspectah-web` (it is already a workspace dependency). No other Cargo.toml changes needed. No `schemars` dependency.
 
-```rust
-#[derive(Serialize, Clone, Debug, schemars::JsonSchema)]
-pub struct ViewResponse { ... }
-```
+The test at `inspectah-web/tests/fixture_structure_test.rs` parses each fixture as `serde_json::Value` and snapshots it. Uses `CARGO_MANIFEST_DIR` for reliable path resolution. Run with `INSPECTAH_SKIP_UI=1` to skip the UI build in `build.rs`.
 
-**Phase 1c scope — full transitive closure (~50 types):**
-- `inspectah-web/src/handlers.rs` — `ViewResponse`, `HealthResponse`, `ContextSection`, `ContextItem`, `AnnotatedOp`, `ChangesSummary`, `RepoGroupInfo`, `BaselineSummary`, `UserArtifactPreview`, etc.
-- `inspectah-web/src/fleet_handlers.rs` — `FleetViewResponse`, `FleetDiffResponse`, `FleetSection`, `FleetItem`, `FleetZones`, `FleetZoneGroup`, `ActionableVariantItem`, etc.
-- `inspectah-refine/src/types.rs` — `RefinedView`, `RefinedPackage`, `RefinedConfig`, `ItemId`, `Triage`, `TriageBucket`, `TriageReason`, `TriageTag`, `ContentHash`, `FleetContext`, etc. (transitively required by the above)
-- `inspectah-core/src/types/` — `PrevalenceZone`, `FleetPrevalence`, `VariantSelection`, and other core types referenced by the refine/web layers
-
-**Schema gap:** `users_groups_decisions: Vec<serde_json::Value>` on `ViewResponse` produces an unconstrained `any` schema. Users/groups fixture validation is structural only until this field is typed. Typing it is a separate backlog item.
-
-### Schema export test
-
-```rust
-// inspectah-web/tests/schema_export_test.rs
-
-use schemars::schema_for;
-
-#[test]
-fn export_api_schemas() {
-    let schemas: Vec<(&str, schemars::schema::RootSchema)> = vec![
-        ("ViewResponse", schema_for!(ViewResponse)),
-        ("FleetViewResponse", schema_for!(FleetViewResponse)),
-        ("FleetDiffResponse", schema_for!(FleetDiffResponse)),
-        ("ErrorEnvelope", schema_for!(ErrorEnvelope)),
-        // ... other response types
-    ];
-
-    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("ui/e2e/schemas");
-    std::fs::create_dir_all(&out_dir).unwrap();
-
-    for (name, schema) in &schemas {
-        let json = serde_json::to_string_pretty(schema).unwrap();
-        // insta snapshot — catches drift in cargo test
-        insta::assert_snapshot!(format!("schema_{name}"), json);
-        // Write to disk for CI fixture validation
-        std::fs::write(out_dir.join(format!("{name}.schema.json")), &json).unwrap();
-    }
-}
-```
-
-**Path note (from Tang):** Uses `CARGO_MANIFEST_DIR` for reliable path resolution regardless of where `cargo test` is run from.
+Snapshots land at `inspectah-web/tests/snapshots/fixture_structure_test__*.snap`. See the implementation plan for the full test code.
 
 ### Curated test tarballs
 
@@ -530,6 +484,17 @@ Two tarballs checked into `testdata/`:
 ---
 
 ## Revision history
+
+### Round 2 → Round 3
+
+### Round 3 → Round 4 (post-plan-approval alignment)
+
+Aligned spec with the approved implementation plan's final Task 7 approach:
+
+1. **Replaced schemars/JsonSchema approach with fixture-structure snapshots.** Response DTOs are `Serialize`-only; adding `Deserialize` would cascade through ~50 types across 3 crates. Fixture-structure validation via insta snapshots of `serde_json::Value` provides equivalent drift detection with zero cross-crate changes.
+2. **Removed `schemars` dependency references.** No `schemars` in workspace deps, no `JsonSchema` derives, no schema export to `e2e/schemas/`. Only `insta` (already a workspace dev-dep).
+3. **Removed CI fixture validation layer.** The manifest documents fixture categories for future tooling but Phase 1c does not implement manifest-driven validation. Insta snapshots are the safety net; real-server smoke tests prove Rust-type compatibility.
+4. **Phase 1c re-estimated to ~1 day** (down from 2-3 days) since no cross-crate derive work is needed.
 
 ### Round 2 → Round 3
 
