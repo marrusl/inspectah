@@ -1,10 +1,11 @@
 # Playwright Testing Expansion for inspectah Refine
 
-**Status:** Proposed (round 2)
+**Status:** Proposed (round 3)
 **Date:** 2026-05-27
 **Scope:** Full surface area — single-host refine, fleet, recent features
 **Reviewed by:** Thorn (code quality), Tang (Rust contract alignment), Kit (implementation practicality)
-**Round 1 verdict:** Request changes — core direction approved, fixture taxonomy / mock state model / phase scoping need revision
+**Round 1 verdict:** Request changes — fixture taxonomy / mock state model / phase scoping
+**Round 2 verdict:** Request changes — Thorn approves, Kit approves, Tang: schema scope + users/groups `Value` typing
 
 ## Summary
 
@@ -102,8 +103,11 @@ Two layers:
 **`schemars` notes (from Tang):**
 - `#[serde(skip_serializing_if)]` — handled correctly, fields marked optional in schema.
 - `#[serde(flatten)]` on `ViewResponse` — `schemars` inlines flattened properties. Verify output manually once; `insta` catches future drift.
-- `serde_json::Value` fields — produce unconstrained `any` schema, correct but not useful for validation. Acceptable.
-- **Phase 1c scope:** ~20 handler/fleet DTO types only. The 30 internal refine types require transitive derives and are deferred to keep Phase 1c honest.
+- `serde_json::Value` fields — produce unconstrained `any` schema. See "Schema validation limits" below.
+
+**Phase 1c scope — full transitive type closure:** Exporting schemas for `ViewResponse` and `FleetViewResponse` forces the compiler to derive `JsonSchema` on their full transitive type graph: `RefinedView`, `RepoGroupInfo`, `BaselineSummary`, `ItemId`, `PrevalenceZone`, fleet section/item DTOs, and all nested types. This is ~50 types across `inspectah-web/src/handlers.rs`, `inspectah-web/src/fleet_handlers.rs`, and `inspectah-refine/src/types.rs`. The work is mechanical (adding derive attributes) but the surface is larger than the handler layer alone. Phase 1c is sized at 2-3 days to reflect this.
+
+**Schema validation limits — `users_groups_decisions`:** The `users_groups_decisions` field on `ViewResponse` is typed as `Vec<serde_json::Value>`, which produces an unconstrained `any` schema. This means schema validation cannot catch drift in the users/groups decision payload. The `users.spec.ts` tests in Phase 3 are **not schema-backed** — they rely on structural fixture correctness only. Full schema coverage for users/groups requires typing `users_groups_decisions` as a proper DTO, which is tracked as a separate backlog item (prerequisite for schema-backed users/groups drift protection).
 
 ### Fixture file structure
 
@@ -370,12 +374,13 @@ Redo is skipped — it's the mirror of undo and the mock tests cover it.
 - Error fixtures (500, malformed)
 - `e2e/fixtures/manifest.json` mapping fixtures to categories and schemas
 
-**Phase 1c — Schema validation (~1-2 days):**
+**Phase 1c — Schema validation (~2-3 days):**
 - Add `schemars` to workspace deps
-- Derive `JsonSchema` on ~20 handler/fleet DTO types
+- Derive `JsonSchema` on the full transitive type closure required by `ViewResponse` and `FleetViewResponse` (~50 types across `handlers.rs`, `fleet_handlers.rs`, and `inspectah-refine/src/types.rs`)
 - `inspectah-web/tests/schema_export_test.rs` with `insta` snapshots
 - Schema files written to `e2e/schemas/`
 - CI validation script that reads `manifest.json` and validates fixtures
+- **Note:** `users_groups_decisions: Vec<serde_json::Value>` produces an unconstrained schema — users/groups fixtures are structural-only until this field is typed
 
 **Phase 1d — Real-server smoke tests (~1 day):**
 - Curate and check in 2 tarballs to `testdata/`
@@ -396,6 +401,62 @@ Redo is skipped — it's the mirror of undo and the mock tests cover it.
 - New `repos.spec.ts`: repo groups, repo bar, repo exclude/include, repo conflict popover, attention summary
 - New `users.spec.ts`: strategy picker, password entry, user preview with redaction pair
 
+### Negative-path matrix
+
+User-visible error branches and the spec file that owns each:
+
+| Error condition | Status | Spec file | Phase |
+|---|---|---|---|
+| Server unreachable (initial load) | — | `smoke.spec.ts` (existing — EmptyState "Failed to load") | 1d |
+| Server error on mutation | 500 | `triage.spec.ts` | 2 |
+| Network timeout on mutation | — | `triage.spec.ts` | 2 |
+| Malformed response | — | `triage.spec.ts` | 2 |
+| Nothing to undo | 409 | `triage.spec.ts` | 2 |
+| Nothing to redo | 409 | `triage.spec.ts` | 2 |
+| Stale generation on tarball export | 409 | `triage.spec.ts` | 2 |
+| Sensitive tarball gating | 428 | `triage.spec.ts` | 2 |
+| Invalid user password | 400 | `users.spec.ts` | 3 |
+
+### Route-to-surface source-of-truth table
+
+Maps each API route to the UI surface(s) that consume it:
+
+| Route | UI consumer | Data displayed |
+|---|---|---|
+| `/api/health` | StatsBar hostname, fleet detection | Hostname label, fleet/single-host mode switch |
+| `/api/view` | DecisionList, StatsBar counts, ContainerfilePanel, ExportDialog, sidebar badges | Package/config items, include/exclude state, generation, containerfile preview, undo/redo availability |
+| `/api/ops` | (not directly rendered in current UI) | Operation history — consumed by real-server coherence tests only |
+| `/api/changes` | (not directly rendered in current UI) | Changes summary — consumed by real-server coherence tests only |
+| `/api/user-preview` | UserPreviewPanel | Kickstart/blueprint preview, redaction when sensitive |
+| `/api/viewed` (GET) | Sidebar badge counts, triage progress | Which items the user has already reviewed |
+| `/api/viewed` (POST) | (side effect) | Marks an item as viewed |
+| `/api/fleet/view` | FleetSection, ZoneGroup, FleetBanner, FleetItemRow, FleetSidebar | Fleet items by zone, variant counts, ack progress, consensus data |
+| `/api/snapshot/sections` | Sidebar context section list, MainContent section rendering | Section names, item counts, context items |
+| `/api/op` | (triggers view refresh) | Mutation — include/exclude/config/user decisions |
+| `/api/undo` / `/api/redo` | (triggers view refresh) | State rollback/replay |
+| `/api/user-strategy` | (triggers view refresh) | Set user skip/useradd strategy |
+| `/api/user-password` | (triggers view refresh) | Set user password |
+| `/api/tarball` | ExportDialog download | Binary tarball download |
+| `/api/fleet/diff` | DiffDrawer | Per-host config diff for fleet variant comparison |
+
+### Fixture refresh workflow
+
+When a Rust API response type changes:
+
+1. `cargo test` fails — `insta` snapshot for the affected schema no longer matches
+2. Developer runs `cargo insta review` to accept the new schema snapshot
+3. `insta` acceptance writes updated schema to `e2e/schemas/`
+4. CI validation step fails — existing fixtures don't match the new schema
+5. Developer updates affected fixtures in `e2e/fixtures/` to match the new response shape
+6. Developer updates `e2e/fixtures/manifest.json` if new fixtures were added or categories changed
+7. `npx playwright test` confirms the mock tests still pass with updated fixtures
+
+When adding a new API route:
+1. Add fixture files to the appropriate preset directory and `post-responses/`
+2. Add entries to `manifest.json` with category and target schema
+3. Add the route to the lookup table in `mock-api.ts`
+4. Write tests in the appropriate spec file
+
 ### What's out of scope (future roadmap items)
 
 These will be added to `docs/ROADMAP.md` under Upcoming Work:
@@ -411,14 +472,20 @@ These will be added to `docs/ROADMAP.md` under Upcoming Work:
 
 ### `schemars` integration
 
-Add `schemars = { version = "0.8", features = ["derive"] }` to workspace dependencies. Derive `JsonSchema` alongside `Serialize` on all handler and fleet DTO types (~20 types in Phase 1c):
+Add `schemars = { version = "0.8", features = ["derive"] }` to workspace dependencies. Derive `JsonSchema` alongside `Serialize` on all types in the transitive closure of the exported response schemas:
 
 ```rust
 #[derive(Serialize, Clone, Debug, schemars::JsonSchema)]
 pub struct ViewResponse { ... }
 ```
 
-**Phase 1c scope:** Handler DTOs in `inspectah-web/src/handlers.rs` and `inspectah-web/src/fleet_handlers.rs`. Internal refine types in `inspectah-refine/src/types.rs` (~30 types) require transitive derives and are deferred to keep Phase 1c honest.
+**Phase 1c scope — full transitive closure (~50 types):**
+- `inspectah-web/src/handlers.rs` — `ViewResponse`, `HealthResponse`, `ContextSection`, `ContextItem`, `AnnotatedOp`, `ChangesSummary`, `RepoGroupInfo`, `BaselineSummary`, `UserArtifactPreview`, etc.
+- `inspectah-web/src/fleet_handlers.rs` — `FleetViewResponse`, `FleetDiffResponse`, `FleetSection`, `FleetItem`, `FleetZones`, `FleetZoneGroup`, `ActionableVariantItem`, etc.
+- `inspectah-refine/src/types.rs` — `RefinedView`, `RefinedPackage`, `RefinedConfig`, `ItemId`, `Triage`, `TriageBucket`, `TriageReason`, `TriageTag`, `ContentHash`, `FleetContext`, etc. (transitively required by the above)
+- `inspectah-core/src/types/` — `PrevalenceZone`, `FleetPrevalence`, `VariantSelection`, and other core types referenced by the refine/web layers
+
+**Schema gap:** `users_groups_decisions: Vec<serde_json::Value>` on `ViewResponse` produces an unconstrained `any` schema. Users/groups fixture validation is structural only until this field is typed. Typing it is a separate backlog item.
 
 ### Schema export test
 
@@ -463,6 +530,16 @@ Two tarballs checked into `testdata/`:
 ---
 
 ## Revision history
+
+### Round 2 → Round 3
+
+Revisions addressing Tang's two remaining blockers plus non-blocking follow-ups from Thorn and Kit:
+
+1. **Schema scope honesty (Tang blocker 1):** Phase 1c now states the full transitive type closure (~50 types across handlers, fleet_handlers, refine types, and core types). Estimate raised from 1-2 days to 2-3 days. The "~20 handler types, defer ~30 refine types" framing is removed — the compiler forces the transitive work when exporting top-level response schemas.
+2. **Users/groups schema gap (Tang blocker 2):** `users_groups_decisions: Vec<serde_json::Value>` explicitly carved out of schema-backed validation claims. `users.spec.ts` tests are structural-only. Typing this field is tracked as a separate backlog item.
+3. **Negative-path matrix (Thorn follow-up):** Added table mapping each user-visible error branch to the spec file that owns it.
+4. **Route-to-surface table (Kit follow-up):** Added table mapping each API route to the UI surface(s) that consume it and what data they display.
+5. **Fixture refresh workflow (Kit follow-up):** Added step-by-step workflow for when Rust types change and when new routes are added.
 
 ### Round 1 → Round 2
 
