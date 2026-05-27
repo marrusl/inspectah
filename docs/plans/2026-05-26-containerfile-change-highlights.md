@@ -295,18 +295,22 @@ export function computeDiff(
     return { lines, addedCount: 0, removedCount: 0, hasChanges: false };
   }
 
-  // Build a queue of prior surviving-line IDs to reuse for unchanged lines.
-  // Include both stable and added lines — an added line that persists into
-  // the next diff should keep its ID when it settles to stable.
-  // Removing lines are excluded — they are departing and their IDs should
-  // not be reused for new stable lines.
-  const priorSurvivingIds: string[] = [];
+  // Build a per-text occurrence map from prior surviving lines.
+  // Each text key maps to a FIFO queue of IDs, preserving order for
+  // duplicate lines. This lets unchanged lines reclaim their exact
+  // prior ID even when other lines with the same text were removed.
+  const priorIdsByText = new Map<string, string[]>();
   if (priorLines) {
     for (const pl of priorLines) {
-      if (pl.state !== "removing") priorSurvivingIds.push(pl.id);
+      if (pl.state === "removing") continue;
+      const queue = priorIdsByText.get(pl.text);
+      if (queue) {
+        queue.push(pl.id);
+      } else {
+        priorIdsByText.set(pl.text, [pl.id]);
+      }
     }
   }
-  let priorIdx = 0;
 
   const changes = diffLines(prev, next);
   const lines: DiffLine[] = [];
@@ -329,10 +333,11 @@ export function computeDiff(
         lines.push({ id: makeId(), text, state: "removing" });
         removedCount++;
       } else {
-        // Reuse prior ID for unchanged lines when available.
-        const id = priorIdx < priorSurvivingIds.length
-          ? priorSurvivingIds[priorIdx++]
-          : makeId();
+        // Reuse prior ID for unchanged lines by matching on text.
+        // shift() from the FIFO queue so duplicate lines consume
+        // their IDs in original order.
+        const queue = priorIdsByText.get(text);
+        const id = queue?.length ? queue.shift()! : makeId();
         lines.push({ id, text, state: "stable" });
       }
     }
