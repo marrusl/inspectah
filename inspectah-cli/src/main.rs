@@ -1,14 +1,18 @@
 mod commands;
 mod progress;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 /// inspectah — inspect and prepare RHEL systems for image-mode migration.
 #[derive(Parser)]
 #[command(name = "inspectah", version, about)]
 struct Cli {
+    /// Print full CLI reference in markdown format
+    #[arg(long, hide = true)]
+    markdown_help: bool,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -26,7 +30,17 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
+    if cli.markdown_help {
+        clap_markdown::print_help_markdown::<Cli>();
+        return;
+    }
+
+    let Some(command) = cli.command else {
+        Cli::command().print_help().ok();
+        std::process::exit(2);
+    };
+
+    match command {
         Commands::Scan(args) => match commands::scan::run_scan(&args) {
             Ok(outcome) => {
                 let code = outcome.exit_code();
