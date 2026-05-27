@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContainerfilePanel } from "../ContainerfilePanel";
+import { _resetIdCounter } from "../../hooks/useContainerfileDiff";
 
 describe("ContainerfilePanel", () => {
   it("renders content as text (no dangerouslySetInnerHTML)", () => {
@@ -236,5 +237,167 @@ describe("ContainerfilePanel", () => {
         dispatchEvent: () => false,
       }),
     });
+  });
+});
+
+describe("ContainerfilePanel change highlights", () => {
+  beforeEach(() => {
+    _resetIdCounter();
+  });
+
+  it("highlights added lines on content change", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Update with an added line
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const codeEl = screen.getByRole("complementary").querySelector("code");
+    const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
+    expect(addedLines.length).toBe(1);
+    expect(addedLines[0].textContent).toContain("EXPOSE");
+  });
+
+  it("does not highlight on first render (baseline)", () => {
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const codeEl = screen.getByRole("complementary").querySelector("code");
+    const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
+    const removingLines = codeEl!.querySelectorAll(".inspectah-cf-line--removing");
+    expect(addedLines.length).toBe(0);
+    expect(removingLines.length).toBe(0);
+  });
+
+  it("marks removed lines with departing class and aria-hidden", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Remove the EXPOSE line
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const codeEl = screen.getByRole("complementary").querySelector("code");
+    const removingLines = codeEl!.querySelectorAll(".inspectah-cf-line--removing");
+    expect(removingLines.length).toBe(1);
+    expect(removingLines[0].textContent).toContain("EXPOSE");
+    expect(removingLines[0].getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("shows dot indicator when collapsed and content changes", () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={onToggle}
+        loading={false}
+      />,
+    );
+
+    // Collapse the panel
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={false}
+        onToggle={onToggle}
+        loading={false}
+      />,
+    );
+
+    // Change content while collapsed
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\n"}
+        isOpen={false}
+        onToggle={onToggle}
+        loading={false}
+      />,
+    );
+
+    const tab = screen.getByRole("button", { name: /expand containerfile panel/i });
+    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(true);
+    expect(tab.getAttribute("aria-label")).toContain("pending changes");
+  });
+
+  it("announces diff summary via aria-live region", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Add a line
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN dnf install -y httpd\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const liveRegion = screen.getByRole("complementary").querySelector("[aria-live='polite']");
+    expect(liveRegion).toBeTruthy();
+    expect(liveRegion!.textContent).toContain("1 line added");
+  });
+
+  it("does not announce when diff is empty", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Rerender with same content
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const liveRegion = screen.getByRole("complementary").querySelector("[aria-live='polite']");
+    expect(liveRegion).toBeTruthy();
+    expect(liveRegion!.textContent).toBe("");
   });
 });
