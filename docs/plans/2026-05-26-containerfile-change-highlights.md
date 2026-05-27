@@ -295,12 +295,15 @@ export function computeDiff(
     return { lines, addedCount: 0, removedCount: 0, hasChanges: false };
   }
 
-  // Build a queue of prior stable-line IDs to reuse for unchanged lines.
-  // This preserves React key identity across successive diffs.
-  const priorStableIds: string[] = [];
+  // Build a queue of prior surviving-line IDs to reuse for unchanged lines.
+  // Include both stable and added lines — an added line that persists into
+  // the next diff should keep its ID when it settles to stable.
+  // Removing lines are excluded — they are departing and their IDs should
+  // not be reused for new stable lines.
+  const priorSurvivingIds: string[] = [];
   if (priorLines) {
     for (const pl of priorLines) {
-      if (pl.state === "stable") priorStableIds.push(pl.id);
+      if (pl.state !== "removing") priorSurvivingIds.push(pl.id);
     }
   }
   let priorIdx = 0;
@@ -327,8 +330,8 @@ export function computeDiff(
         removedCount++;
       } else {
         // Reuse prior ID for unchanged lines when available.
-        const id = priorIdx < priorStableIds.length
-          ? priorStableIds[priorIdx++]
+        const id = priorIdx < priorSurvivingIds.length
+          ? priorSurvivingIds[priorIdx++]
           : makeId();
         lines.push({ id, text, state: "stable" });
       }
