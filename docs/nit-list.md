@@ -46,6 +46,14 @@ Moved to Completed section.
 
 Moved to Completed section.
 
+## Containerfile Change Highlights — Review Followups
+
+Deferred non-blocking items from the spec/plan review rounds. Address when implementing or touching nearby code.
+
+- [ ] **Scroll test coverage:** Add assertions that `scrollIntoView` is not called when the changed line is already visible, rapid successive updates honor the ~150ms debounce, and multi-line diffs target the topmost changed line.
+- [ ] **Edge-case baseline tests:** Add tests for first non-null content while initially collapsed (no dot, no announcement) and resize-driven auto-collapse while highlights are active (baseline captured, highlights cancelled).
+- [ ] **Collapsed pending-change auto-clear:** The dot indicator and `"pending changes"` aria-label should clear automatically if changes while collapsed cancel back to the `last seen` baseline before re-expand. The hook's `hasPendingChanges` already compares against `lastOpenContentRef`, so the behavior may already work — needs a test to prove it.
+
 ## RepoBar Click-to-Filter (v2 backlog)
 
 - [ ] Repo names in the REPOSITORIES bar should be clickable. Clicking a repo name filters the package list to show only that repo's packages (or scrolls + highlights, lighter option). Render names as `<button>`, `cursor: pointer`, hover color shift to brand color, `aria-label="Jump to baseos packages (61)"`. Fern recommends scroll+highlight using existing `.inspectah-highlight` animation; Ember recommends filter-on-click as more useful for triage. Either way, distro repos gain their first interactive purpose beyond the "always included" label.
