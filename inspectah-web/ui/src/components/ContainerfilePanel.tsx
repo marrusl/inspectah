@@ -162,11 +162,13 @@ export function ContainerfilePanel({
         const glowTimer = setTimeout(() => {
           const el = document.querySelector(`[data-line-id="${dl.id}"]`) as HTMLElement | null;
           if (el) {
-            // Set explicit max-height before collapsing
+            // Set explicit max-height from measured height
             el.style.maxHeight = `${el.scrollHeight}px`;
-            // Force reflow so the browser registers the initial max-height
+            // Force reflow so the browser registers the starting max-height
             void el.offsetHeight;
+            // Collapse: transition max-height to 0 via inline style + opacity via class
             el.classList.add("inspectah-cf-line--collapsing");
+            el.style.maxHeight = "0px";
           }
 
           // Phase 2: prune after collapse transition (500ms) or fallback (1.5s)
