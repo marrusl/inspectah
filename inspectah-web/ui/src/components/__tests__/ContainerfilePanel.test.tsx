@@ -629,3 +629,112 @@ describe("ContainerfilePanel scroll behavior", () => {
     expect(scrollMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ContainerfilePanel reduced motion support", () => {
+  beforeEach(() => {
+    _resetIdCounter();
+  });
+
+  afterEach(() => {
+    // Restore default matchMedia
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: () => ({
+        matches: false, media: "", onchange: null,
+        addListener: () => {}, removeListener: () => {},
+        addEventListener: () => {}, removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  });
+
+  it("removes highlight class after 2s in reduced-motion mode", () => {
+    // Mock prefers-reduced-motion
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+
+    vi.useFakeTimers();
+
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    rerender(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Highlight should be present
+    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(1);
+
+    // After 2s, highlight class should be removed
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(0);
+
+    vi.useRealTimers();
+  });
+
+  it("prunes removing lines immediately in reduced-motion mode", () => {
+    // Mock prefers-reduced-motion
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+
+    vi.useFakeTimers();
+
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Remove EXPOSE line
+    rerender(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // In reduced-motion mode, the line is pruned immediately by the effect
+    // so it never appears in the DOM with the removing class
+    expect(document.querySelectorAll(".inspectah-cf-line--removing").length).toBe(0);
+
+    vi.useRealTimers();
+  });
+});
