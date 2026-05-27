@@ -190,6 +190,42 @@ describe("computeDiff", () => {
     expect(third.lines[0].id).toBe(first.lines[0].id);
   });
 
+  it("preserves surviving duplicate ID when one duplicate is removed", () => {
+    const v1 = "RUN echo a\nRUN echo a\nRUN echo b";
+    const v2 = "RUN echo a\nRUN echo b";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    // The surviving "RUN echo a" keeps the first occurrence's ID
+    const survivingA = second.lines.find(
+      (l) => l.text === "RUN echo a" && l.state === "stable",
+    );
+    expect(survivingA).toBeTruthy();
+    expect(survivingA!.id).toBe(first.lines[0].id);
+    // "RUN echo b" keeps its ID
+    const survivingB = second.lines.find(
+      (l) => l.text === "RUN echo b" && l.state === "stable",
+    );
+    expect(survivingB!.id).toBe(first.lines[2].id);
+  });
+
+  it("settles added lines to stable with preserved ID on next diff", () => {
+    const v1 = "FROM quay.io/fedora/fedora-bootc:42";
+    const v2 = "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80";
+    const v3 = "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80\nEXPOSE 443";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    // EXPOSE 80 is "added" in second
+    const addedLine = second.lines.find((l) => l.state === "added");
+    expect(addedLine!.text).toBe("EXPOSE 80");
+    const addedId = addedLine!.id;
+    // In third diff, EXPOSE 80 is now unchanged — it should keep its ID
+    // and settle to "stable"
+    const third = computeDiff(v2, v3, second.lines);
+    const settledLine = third.lines.find((l) => l.text === "EXPOSE 80");
+    expect(settledLine!.state).toBe("stable");
+    expect(settledLine!.id).toBe(addedId);
+  });
+
   it("returns baseline (all stable) when prev is null", () => {
     const result = computeDiff(null, "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd");
     expect(result.hasChanges).toBe(false);
@@ -443,7 +479,7 @@ Expected: FAIL — `useContainerfileDiff` does not exist yet.
 ```typescript
 // Add to inspectah-web/ui/src/hooks/useContainerfileDiff.ts
 
-import { useRef, useMemo, useCallback, useState } from "react";
+import { useRef, useCallback, useState } from "react";
 
 export interface UseContainerfileDiffReturn {
   diffResult: DiffResult;
@@ -458,99 +494,91 @@ export function useContainerfileDiff(
   content: string | null,
   isOpen: boolean,
 ): UseContainerfileDiffReturn {
-  // Track the baseline: the content as it was when the panel was last open.
-  const baselineRef = useRef<string | null>(null);
-  // Track whether we've ever seen a non-null value.
+  // The render model is the source of truth. It lives in state so that
+  // surgical mutations (prune, clear) trigger rerenders without recomputing
+  // the diff from raw strings.
+  const [renderModel, setRenderModel] = useState<DiffResult>({
+    lines: [], addedCount: 0, removedCount: 0, hasChanges: false,
+  });
+
   const hasBaselineRef = useRef(false);
-  // Track the last open-state content for collapsed-change detection.
   const lastOpenContentRef = useRef<string | null>(null);
-  // IDs of lines manually pruned after animation.
-  const prunedIdsRef = useRef<Set<string>>(new Set());
-  // IDs of added lines whose highlight has been cleared (reduced-motion path).
-  const clearedIdsRef = useRef<Set<string>>(new Set());
-  // Prior render model for ID preservation across diffs.
-  const priorLinesRef = useRef<DiffLine[]>([]);
-  // Bumped by pruneRemovingLine/clearHighlight to trigger rerender.
-  const [revision, setRevision] = useState(0);
-
-  // Establish baseline on first non-null content.
-  if (content != null && !hasBaselineRef.current) {
-    hasBaselineRef.current = true;
-    baselineRef.current = content;
-    lastOpenContentRef.current = content;
-  }
-
-  // When the panel transitions from open to collapsed, snapshot the baseline.
-  const wasOpenRef = useRef(isOpen);
-  if (wasOpenRef.current && !isOpen) {
-    lastOpenContentRef.current = content;
-    prunedIdsRef.current.clear();
-  }
-  // When the panel transitions from collapsed to open, use the snapshot
-  // as the diff baseline (handled by using lastOpenContentRef below).
-  if (!wasOpenRef.current && isOpen) {
-    baselineRef.current = lastOpenContentRef.current;
-    prunedIdsRef.current.clear();
-  }
-  wasOpenRef.current = isOpen;
-
-  // When open, track the previous content for diffs.
   const prevContentRef = useRef<string | null>(null);
+  const wasOpenRef = useRef(isOpen);
 
-  const diffResult = useMemo(() => {
-    if (!hasBaselineRef.current) {
-      return { lines: [], addedCount: 0, removedCount: 0, hasChanges: false };
-    }
+  // Recompute the diff model only when content or isOpen actually changes.
+  // This replaces the old useMemo — the key difference is that callbacks
+  // below mutate renderModel directly without re-diffing.
+  const prevContentForDiff = useRef<string | null>(null);
+  const prevIsOpenForDiff = useRef(isOpen);
 
-    if (!isOpen) {
-      // While collapsed, return stable lines from the last-open snapshot.
-      // No diff — changes are tracked via hasPendingChanges.
-      const result = computeDiff(null, lastOpenContentRef.current, priorLinesRef.current);
-      priorLinesRef.current = result.lines;
-      return result;
-    }
+  if (content !== prevContentForDiff.current || isOpen !== prevIsOpenForDiff.current) {
+    prevContentForDiff.current = content;
+    prevIsOpenForDiff.current = isOpen;
 
-    // On the first open render after mount or re-expand, diff against baseline.
-    const prev = prevContentRef.current ?? baselineRef.current;
-    const result = computeDiff(prev, content, priorLinesRef.current);
+    // Baseline establishment: first non-null content.
+    if (content != null && !hasBaselineRef.current) {
+      hasBaselineRef.current = true;
+      lastOpenContentRef.current = content;
+      prevContentRef.current = content;
+      const baseline = computeDiff(null, content);
+      setRenderModel(baseline);
+    } else if (hasBaselineRef.current) {
+      // Panel open→collapsed: snapshot baseline.
+      if (wasOpenRef.current && !isOpen) {
+        lastOpenContentRef.current = content;
+      }
 
-    // Filter out previously pruned removing lines.
-    if (prunedIdsRef.current.size > 0) {
-      result.lines = result.lines.filter(
-        (l) => !(l.state === "removing" && prunedIdsRef.current.has(l.id)),
-      );
-    }
+      // Panel collapsed→open: diff against last-seen baseline.
+      if (!wasOpenRef.current && isOpen) {
+        const result = computeDiff(
+          lastOpenContentRef.current, content, renderModel.lines,
+        );
+        prevContentRef.current = content;
+        setRenderModel(result);
+      }
 
-    // Downgrade cleared added lines to stable (reduced-motion path).
-    if (clearedIdsRef.current.size > 0) {
-      for (const line of result.lines) {
-        if (line.state === "added" && clearedIdsRef.current.has(line.id)) {
-          line.state = "stable";
-        }
+      // Panel open, content changed: diff against previous content.
+      if (isOpen && content !== prevContentRef.current) {
+        const result = computeDiff(
+          prevContentRef.current, content, renderModel.lines,
+        );
+        prevContentRef.current = content;
+        setRenderModel(result);
       }
     }
 
-    prevContentRef.current = content;
-    priorLinesRef.current = result.lines;
-    return result;
-  }, [content, isOpen, revision]);
+    wasOpenRef.current = isOpen;
+  }
 
-  const hasPendingChanges = useMemo(() => {
-    if (isOpen || !hasBaselineRef.current) return false;
-    return content !== lastOpenContentRef.current;
-  }, [content, isOpen]);
+  const hasPendingChanges =
+    !isOpen && hasBaselineRef.current && content !== lastOpenContentRef.current;
 
+  // Surgical mutation: remove a departing line from the render model.
+  // Does NOT recompute the diff — just filters the current model.
   const pruneRemovingLine = useCallback((id: string) => {
-    prunedIdsRef.current.add(id);
-    setRevision((r) => r + 1);
+    setRenderModel((prev) => ({
+      ...prev,
+      lines: prev.lines.filter((l) => l.id !== id),
+      removedCount: Math.max(0, prev.removedCount - 1),
+      hasChanges: prev.addedCount + Math.max(0, prev.removedCount - 1) > 0,
+    }));
   }, []);
 
+  // Surgical mutation: downgrade an added line to stable.
+  // Does NOT recompute the diff — just changes the state field.
   const clearHighlight = useCallback((id: string) => {
-    clearedIdsRef.current.add(id);
-    setRevision((r) => r + 1);
+    setRenderModel((prev) => ({
+      ...prev,
+      lines: prev.lines.map((l) =>
+        l.id === id && l.state === "added" ? { ...l, state: "stable" as const } : l,
+      ),
+      addedCount: Math.max(0, prev.addedCount - 1),
+      hasChanges: Math.max(0, prev.addedCount - 1) + prev.removedCount > 0,
+    }));
   }, []);
 
-  return { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight };
+  return { diffResult: renderModel, hasPendingChanges, pruneRemovingLine, clearHighlight };
 }
 ```
 
@@ -864,7 +892,7 @@ Replace the line-rendering logic in `ContainerfilePanel.tsx`. Key changes:
 3. Render each line as a block-level `<span>` (via `inspectah-cf-panel__line` CSS class with `display: block`) with the appropriate highlight class based on `state`.
 4. Add `aria-hidden="true"` on removing lines.
 5. Add the dot indicator and dynamic `aria-label` on the collapsed tab.
-6. Add a hidden `aria-live="polite"` `<span>` for diff announcements.
+6. Add a visually hidden `aria-live="polite"` `<span>` for diff announcements (use `sr-only` / `clip-rect` pattern — not `display: none` or `hidden`, which suppress announcements).
 7. Wire up the removal collapse animation: after the glow phase (0.3s timeout), add the `--collapsing` class, then on `transitionend` (or 1.5s fallback timeout) call `pruneRemovingLine(id)`.
 
 The `tokenizeLine` function stays — it is applied to each `DiffLine.text` the same way it was applied to each raw string line.
