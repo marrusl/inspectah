@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
 import { AngleDoubleRightIcon } from "@patternfly/react-icons";
+import { useContainerfileDiff } from "../hooks/useContainerfileDiff";
 
 export interface ContainerfilePanelProps {
   content: string | null;
@@ -121,25 +122,94 @@ export function ContainerfilePanel({
     [DOCKERFILE_KEYWORDS],
   );
 
-  const lines = useMemo(() => {
-    if (content == null) return [];
-    const raw = content.split("\n");
-    if (!sessionIsSensitive || hashesRevealed) return raw;
-    // Redact crypt(3) hashes in the preview
-    return raw.map((line) => {
-      if (!CRYPT_HASH_RE.test(line)) return line;
-      // Reset regex lastIndex since it's global
+  const { diffResult, hasPendingChanges, pruneRemovingLine } = useContainerfileDiff(content, isOpen);
+
+  /** Apply crypt(3) hash redaction to a line's text when sensitive. */
+  const redactLine = useCallback(
+    (text: string): string => {
+      if (!sessionIsSensitive || hashesRevealed) return text;
+      if (!CRYPT_HASH_RE.test(text)) return text;
       CRYPT_HASH_RE.lastIndex = 0;
-      return line.replace(CRYPT_HASH_RE, (match) => {
+      return text.replace(CRYPT_HASH_RE, (match) => {
         const prefix = match.match(/^(\$[^$]+\$)/);
         return prefix ? `${prefix[1]}<REDACTED>` : "$<REDACTED>";
       });
-    });
-  }, [content, sessionIsSensitive, hashesRevealed]);
+    },
+    [sessionIsSensitive, hashesRevealed],
+  );
 
-  const lineCount = lines.filter((l) => l.length > 0).length;
+  // Removal animation lifecycle: glow -> collapse -> prune
+  const removingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const removing = diffResult.lines.filter((l) => l.state === "removing");
+    for (const dl of removing) {
+      // Skip if already tracked
+      if (removingTimers.current.has(dl.id)) continue;
+
+      // Phase 1: glow for 300ms, then collapse
+      const glowTimer = setTimeout(() => {
+        const el = document.querySelector(`[data-line-id="${dl.id}"]`) as HTMLElement | null;
+        if (el) {
+          // Set explicit max-height before collapsing
+          el.style.maxHeight = `${el.scrollHeight}px`;
+          // Force reflow so the browser registers the initial max-height
+          void el.offsetHeight;
+          el.classList.add("inspectah-cf-line--collapsing");
+        }
+
+        // Phase 2: prune after collapse transition (500ms) or fallback (1.5s)
+        let pruned = false;
+        const prune = () => {
+          if (pruned) return;
+          pruned = true;
+          removingTimers.current.delete(dl.id);
+          pruneRemovingLine(dl.id);
+        };
+
+        if (el) {
+          el.addEventListener("transitionend", prune, { once: true });
+        }
+
+        // Fallback timeout in case transitionend doesn't fire
+        const fallback = setTimeout(prune, 1500);
+        removingTimers.current.set(dl.id, fallback);
+      }, 300);
+
+      removingTimers.current.set(dl.id, glowTimer);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      for (const timer of removingTimers.current.values()) {
+        clearTimeout(timer);
+      }
+    };
+  }, [diffResult, pruneRemovingLine]);
+
+  const lineCount = diffResult.lines.filter(
+    (l) => l.state !== "removing" && l.text.length > 0,
+  ).length;
+
+  /** Build the aria-live summary text. */
+  const diffSummary = useMemo(() => {
+    if (!diffResult.hasChanges) return "";
+    const parts: string[] = [];
+    if (diffResult.addedCount > 0) {
+      parts.push(`${diffResult.addedCount} line${diffResult.addedCount === 1 ? "" : "s"} added`);
+    }
+    if (diffResult.removedCount > 0) {
+      parts.push(`${diffResult.removedCount} line${diffResult.removedCount === 1 ? "" : "s"} removed`);
+    }
+    return `Containerfile updated: ${parts.join(", ")}`;
+  }, [diffResult.hasChanges, diffResult.addedCount, diffResult.removedCount]);
 
   if (!isOpen) {
+    const tabClass = hasPendingChanges
+      ? "inspectah-cf-panel__tab inspectah-cf-panel__tab--has-changes"
+      : "inspectah-cf-panel__tab";
+    const tabLabel = hasPendingChanges
+      ? "Expand Containerfile panel, pending changes"
+      : "Expand Containerfile panel";
     return (
       <div
         className="inspectah-cf-panel inspectah-cf-panel--collapsed"
@@ -147,9 +217,9 @@ export function ContainerfilePanel({
         aria-label="Containerfile preview"
       >
         <button
-          className="inspectah-cf-panel__tab"
+          className={tabClass}
           onClick={onToggle}
-          aria-label="Expand Containerfile panel"
+          aria-label={tabLabel}
           title="Ctrl+E"
         >
           <span className="inspectah-cf-panel__tab-label">Containerfile</span>
@@ -192,27 +262,47 @@ export function ContainerfilePanel({
             <Skeleton width="60%" />
           </>
         ) : (
-          <pre className="inspectah-cf-panel__code">
-            <code className="inspectah-cf-panel__dockerfile">
-              {lines.map((line, i) => (
-                <span key={i} className="inspectah-cf-panel__line">
-                  {tokenizeLine(line).map((tok, j) =>
-                    tok.isKeyword ? (
-                      <span
-                        key={j}
-                        className="inspectah-cf-panel__keyword"
-                      >
-                        {tok.text}
-                      </span>
-                    ) : (
-                      <span key={j}>{tok.text}</span>
-                    ),
-                  )}
-                  {"\n"}
-                </span>
-              ))}
-            </code>
-          </pre>
+          <>
+            <pre className="inspectah-cf-panel__code">
+              <code className="inspectah-cf-panel__dockerfile">
+                {diffResult.lines.map((dl) => {
+                  const displayText = redactLine(dl.text);
+                  const lineClasses = [
+                    "inspectah-cf-panel__line",
+                    dl.state === "added" ? "inspectah-cf-line--added" : "",
+                    dl.state === "removing" ? "inspectah-cf-line--removing" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+
+                  return (
+                    <span
+                      key={dl.id}
+                      className={lineClasses}
+                      {...(dl.state === "removing" ? { "aria-hidden": "true", "data-line-id": dl.id } : {})}
+                    >
+                      {tokenizeLine(displayText).map((tok, j) =>
+                        tok.isKeyword ? (
+                          <span
+                            key={j}
+                            className="inspectah-cf-panel__keyword"
+                          >
+                            {tok.text}
+                          </span>
+                        ) : (
+                          <span key={j}>{tok.text}</span>
+                        ),
+                      )}
+                      {"\n"}
+                    </span>
+                  );
+                })}
+              </code>
+            </pre>
+            <span className="inspectah-sr-only" aria-live="polite">
+              {diffSummary}
+            </span>
+          </>
         )}
       </div>
       <div className="inspectah-cf-panel__footer">
