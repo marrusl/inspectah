@@ -115,14 +115,16 @@ async fn refine_server_lifecycle() {
     assert_eq!(view["generation"], 0);
     assert_eq!(pkg_stat(&view, "total"), 1);
 
-    // 3. Apply an operation (exclude httpd)
+    // 3. Apply an operation (include httpd — normalization sets it to
+    //    exclude by default because there's no baseline, so including
+    //    it is a real state change that bumps generation)
     let resp = client
         .post(format!("{base}/api/op"))
         .json(&serde_json::json!({
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Package", "key": {"name": "httpd", "arch": "x86_64"}},
-                "include": false
+                "include": true
             }
         }))
         .send()
@@ -131,7 +133,7 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 1);
-    assert_eq!(pkg_stat(&view, "excluded"), 1);
+    assert_eq!(pkg_stat(&view, "included"), 1);
 
     // 4. Undo (requires JSON body)
     let resp = client
@@ -143,7 +145,7 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 2);
-    assert_eq!(pkg_stat(&view, "excluded"), 0);
+    assert_eq!(pkg_stat(&view, "included"), 0);
 
     // 5. Redo (requires JSON body)
     let resp = client
