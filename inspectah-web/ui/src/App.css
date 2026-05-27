@@ -724,10 +724,9 @@ html, body, #root {
   }
 }
 
-/* Removal collapse */
+/* Removal collapse — max-height is set via inline style (scrollHeight → 0) */
 .inspectah-cf-line--collapsing {
   transition: max-height 0.5s ease-out, opacity 0.3s ease-out;
-  max-height: 0 !important;
   opacity: 0;
 }
 
