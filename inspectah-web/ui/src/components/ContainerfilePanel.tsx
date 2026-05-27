@@ -125,6 +125,7 @@ export function ContainerfilePanel({
   );
 
   const { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight } = useContainerfileDiff(content, isOpen);
+  const [highlightsActive, setHighlightsActive] = useState(false);
 
   /** Apply crypt(3) hash redaction to a line's text when sensitive. */
   const redactLine = useCallback(
@@ -145,6 +146,7 @@ export function ContainerfilePanel({
   const removingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const addedTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   useEffect(() => {
+    if (!highlightsActive) return;
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const removing = diffResult.lines.filter((l) => l.state === "removing");
@@ -213,28 +215,38 @@ export function ContainerfilePanel({
         clearTimeout(timer);
       }
     };
-  }, [diffResult, pruneRemovingLine, clearHighlight]);
+  }, [diffResult, highlightsActive, pruneRemovingLine, clearHighlight]);
 
-  // Auto-scroll to first changed line after diff updates
+  // Auto-scroll to first changed line, then activate highlights
   useEffect(() => {
+    setHighlightsActive(false);
+
     if (!diffResult.hasChanges) return;
 
-    // Debounce: clear previous scroll timeout
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
     scrollTimeoutRef.current = setTimeout(() => {
       const panelBody = panelBodyRef.current;
-      if (!panelBody) return;
+      if (!panelBody) {
+        setHighlightsActive(true);
+        return;
+      }
 
       const firstChanged = panelBody.querySelector("[data-line-id]");
-      if (!firstChanged) return;
+      if (!firstChanged) {
+        setHighlightsActive(true);
+        return;
+      }
 
-      // Check if already visible within the panel body
       const bodyRect = panelBody.getBoundingClientRect();
       const lineRect = firstChanged.getBoundingClientRect();
-      if (lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom) return;
+      const alreadyVisible = lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom;
 
-      // Single scrollTo targeting ~1/3 from top of the panel.
+      if (alreadyVisible) {
+        setHighlightsActive(true);
+        return;
+      }
+
       const el = firstChanged as HTMLElement;
       const targetTop = el.offsetTop - Math.round(panelBody.clientHeight / 3);
       const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -242,6 +254,10 @@ export function ContainerfilePanel({
         top: Math.max(0, targetTop),
         behavior: prefersReducedMotion ? "auto" : "smooth",
       });
+
+      // Activate highlights after scroll has time to arrive
+      const scrollDelay = prefersReducedMotion ? 50 : 350;
+      setTimeout(() => setHighlightsActive(true), scrollDelay);
     }, 150);
 
     return () => {
@@ -332,8 +348,8 @@ export function ContainerfilePanel({
                   const displayText = redactLine(dl.text);
                   const lineClasses = [
                     "inspectah-cf-panel__line",
-                    dl.state === "added" ? "inspectah-cf-line--added" : "",
-                    dl.state === "removing" ? "inspectah-cf-line--removing" : "",
+                    highlightsActive && dl.state === "added" ? "inspectah-cf-line--added" : "",
+                    highlightsActive && dl.state === "removing" ? "inspectah-cf-line--removing" : "",
                   ]
                     .filter(Boolean)
                     .join(" ");

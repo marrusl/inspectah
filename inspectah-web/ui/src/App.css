@@ -685,13 +685,14 @@ html, body, #root {
 /* Block display for line spans */
 .inspectah-cf-panel__line {
   display: block;
+  border-left: 3px solid transparent;
+  padding-left: 8px;
 }
 
 /* Addition highlight (green fade) */
 .inspectah-cf-line--added {
   background: var(--cf-add-bg);
-  border-left: 3px solid var(--cf-add-border);
-  padding-left: 8px;
+  border-left-color: var(--cf-add-border);
   animation: cf-highlight-fade 1.5s ease-out 0.5s forwards;
 }
 
@@ -709,8 +710,7 @@ html, body, #root {
 /* Removal glow (amber) */
 .inspectah-cf-line--removing {
   background: var(--cf-remove-bg);
-  border-left: 3px solid var(--cf-remove-border);
-  padding-left: 8px;
+  border-left-color: var(--cf-remove-border);
   overflow: hidden;
   animation: cf-removal-glow 0.3s ease-out forwards;
 }

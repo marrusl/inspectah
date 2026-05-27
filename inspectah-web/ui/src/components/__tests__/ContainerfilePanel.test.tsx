@@ -243,6 +243,11 @@ describe("ContainerfilePanel", () => {
 describe("ContainerfilePanel change highlights", () => {
   beforeEach(() => {
     _resetIdCounter();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("highlights added lines on content change", () => {
@@ -264,6 +269,9 @@ describe("ContainerfilePanel change highlights", () => {
         loading={false}
       />,
     );
+
+    // Advance past scroll debounce + highlight activation
+    act(() => { vi.advanceTimersByTime(200); });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
@@ -307,6 +315,8 @@ describe("ContainerfilePanel change highlights", () => {
         loading={false}
       />,
     );
+
+    act(() => { vi.advanceTimersByTime(200); });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const removingLines = codeEl!.querySelectorAll(".inspectah-cf-line--removing");
@@ -419,6 +429,8 @@ describe("ContainerfilePanel change highlights", () => {
         loading={false}
       />,
     );
+
+    act(() => { vi.advanceTimersByTime(200); });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLine = codeEl!.querySelector(".inspectah-cf-line--added");
@@ -686,10 +698,13 @@ describe("ContainerfilePanel reduced motion support", () => {
       />,
     );
 
+    // Advance past scroll debounce (150ms) + reduced-motion activation (50ms)
+    act(() => { vi.advanceTimersByTime(250); });
+
     // Highlight should be present
     expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(1);
 
-    // After 2s, highlight class should be removed
+    // After 2s more, highlight class should be removed
     act(() => { vi.advanceTimersByTime(2000); });
     expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(0);
 
