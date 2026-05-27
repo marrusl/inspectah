@@ -96,7 +96,7 @@ The CI validation script uses these categories to route each fixture to the righ
 
 Two layers:
 
-1. **`insta` snapshots (primary, fast):** A Rust integration test derives `schemars::JsonSchema` on each API response type, generates JSON Schema, and snapshots it with `insta`. Any Rust struct change fails `cargo test` immediately. Phase 1c covers the ~20 handler/fleet DTO types. Internal refine types (~30 additional) deferred to later when fixtures need their schemas.
+1. **`insta` snapshots (primary, fast):** A Rust integration test derives `schemars::JsonSchema` on each API response type, generates JSON Schema, and snapshots it with `insta`. Any Rust struct change fails `cargo test` immediately. Phase 1c covers the full transitive type closure (~50 types) required by the exported response schemas.
 
 2. **CI fixture validation (backstop):** The same test writes schema files to `e2e/schemas/`. A CI step reads `e2e/fixtures/manifest.json`, strips `_status` from harness wrappers, validates body fixtures and stripped wrappers against their target schemas, validates error envelopes against the generic envelope schema, and skips excluded fixtures. Catches stale frontend fixtures when Rust developers update `insta` snapshots but fixture files aren't updated.
 
