@@ -124,7 +124,7 @@ export function ContainerfilePanel({
     [DOCKERFILE_KEYWORDS],
   );
 
-  const { diffResult, hasPendingChanges, pruneRemovingLine } = useContainerfileDiff(content, isOpen);
+  const { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight } = useContainerfileDiff(content, isOpen);
 
   /** Apply crypt(3) hash redaction to a line's text when sensitive. */
   const redactLine = useCallback(
@@ -141,43 +141,67 @@ export function ContainerfilePanel({
   );
 
   // Removal animation lifecycle: glow -> collapse -> prune
+  // + reduced motion support: immediate prune for removing, 2s clear for added
   const removingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const addedTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   useEffect(() => {
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
     const removing = diffResult.lines.filter((l) => l.state === "removing");
     for (const dl of removing) {
       // Skip if already tracked
       if (removingTimers.current.has(dl.id)) continue;
 
-      // Phase 1: glow for 300ms, then collapse
-      const glowTimer = setTimeout(() => {
-        const el = document.querySelector(`[data-line-id="${dl.id}"]`) as HTMLElement | null;
-        if (el) {
-          // Set explicit max-height before collapsing
-          el.style.maxHeight = `${el.scrollHeight}px`;
-          // Force reflow so the browser registers the initial max-height
-          void el.offsetHeight;
-          el.classList.add("inspectah-cf-line--collapsing");
-        }
+      if (prefersReducedMotion) {
+        // Reduced motion: prune immediately
+        pruneRemovingLine(dl.id);
+      } else {
+        // Phase 1: glow for 300ms, then collapse
+        const glowTimer = setTimeout(() => {
+          const el = document.querySelector(`[data-line-id="${dl.id}"]`) as HTMLElement | null;
+          if (el) {
+            // Set explicit max-height before collapsing
+            el.style.maxHeight = `${el.scrollHeight}px`;
+            // Force reflow so the browser registers the initial max-height
+            void el.offsetHeight;
+            el.classList.add("inspectah-cf-line--collapsing");
+          }
 
-        // Phase 2: prune after collapse transition (500ms) or fallback (1.5s)
-        let pruned = false;
-        const prune = () => {
-          if (pruned) return;
-          pruned = true;
-          removingTimers.current.delete(dl.id);
-          pruneRemovingLine(dl.id);
-        };
+          // Phase 2: prune after collapse transition (500ms) or fallback (1.5s)
+          let pruned = false;
+          const prune = () => {
+            if (pruned) return;
+            pruned = true;
+            removingTimers.current.delete(dl.id);
+            pruneRemovingLine(dl.id);
+          };
 
-        if (el) {
-          el.addEventListener("transitionend", prune, { once: true });
-        }
+          if (el) {
+            el.addEventListener("transitionend", prune, { once: true });
+          }
 
-        // Fallback timeout in case transitionend doesn't fire
-        const fallback = setTimeout(prune, 1500);
-        removingTimers.current.set(dl.id, fallback);
-      }, 300);
+          // Fallback timeout in case transitionend doesn't fire
+          const fallback = setTimeout(prune, 1500);
+          removingTimers.current.set(dl.id, fallback);
+        }, 300);
 
-      removingTimers.current.set(dl.id, glowTimer);
+        removingTimers.current.set(dl.id, glowTimer);
+      }
+    }
+
+    const added = diffResult.lines.filter((l) => l.state === "added");
+    for (const dl of added) {
+      // Skip if already tracked
+      if (addedTimers.current.has(dl.id)) continue;
+
+      if (prefersReducedMotion) {
+        // Reduced motion: clear highlight after 2s
+        const timer = setTimeout(() => {
+          addedTimers.current.delete(dl.id);
+          clearHighlight(dl.id);
+        }, 2000);
+        addedTimers.current.set(dl.id, timer);
+      }
     }
 
     // Cleanup on unmount
@@ -185,8 +209,11 @@ export function ContainerfilePanel({
       for (const timer of removingTimers.current.values()) {
         clearTimeout(timer);
       }
+      for (const timer of addedTimers.current.values()) {
+        clearTimeout(timer);
+      }
     };
-  }, [diffResult, pruneRemovingLine]);
+  }, [diffResult, pruneRemovingLine, clearHighlight]);
 
   // Auto-scroll to first changed line after diff updates
   useEffect(() => {
