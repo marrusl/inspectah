@@ -38,12 +38,8 @@ test.describe("Smoke tests", () => {
     await expect(statsBar.getByRole("button", { name: /redo/i })).toBeVisible();
   });
 
-  test("health endpoint returns valid data", async ({ page }) => {
-    const response = await page.request.get("/api/health");
-    expect(response.ok()).toBeTruthy();
-    const body = await response.json();
-    expect(body.status).toBe("ok");
-    expect(body.host).toBeDefined();
-    expect(body.host.hostname).toBeTruthy();
+  test("hostname renders in sidebar header", async ({ page }) => {
+    const header = page.locator(".inspectah-layout__sidebar");
+    await expect(header.getByText("test-host-01")).toBeVisible();
   });
 });
