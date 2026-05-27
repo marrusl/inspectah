@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContainerfilePanel } from "../ContainerfilePanel";
 import { _resetIdCounter } from "../../hooks/useContainerfileDiff";
@@ -399,5 +399,233 @@ describe("ContainerfilePanel change highlights", () => {
     const liveRegion = screen.getByRole("complementary").querySelector("[aria-live='polite']");
     expect(liveRegion).toBeTruthy();
     expect(liveRegion!.textContent).toBe("");
+  });
+
+  it("adds data-line-id to added lines", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const codeEl = screen.getByRole("complementary").querySelector("code");
+    const addedLine = codeEl!.querySelector(".inspectah-cf-line--added");
+    expect(addedLine).toBeTruthy();
+    expect(addedLine!.getAttribute("data-line-id")).toBeTruthy();
+  });
+});
+
+describe("ContainerfilePanel scroll behavior", () => {
+  let scrollMock: ReturnType<typeof vi.fn>;
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+  beforeEach(() => {
+    _resetIdCounter();
+    vi.useFakeTimers();
+    scrollMock = vi.fn();
+    Element.prototype.scrollIntoView = scrollMock;
+
+    // Mock getBoundingClientRect to report the line as out of view
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList?.contains("inspectah-cf-panel__body")) {
+        return { top: 0, bottom: 300, left: 0, right: 400, width: 400, height: 300 } as DOMRect;
+      }
+      // Changed lines are below the visible area
+      return { top: 400, bottom: 420, left: 0, right: 400, width: 400, height: 20 } as DOMRect;
+    });
+
+    // Default: no reduced motion preference
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)" ? false : false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  it("calls scrollIntoView on the first added line", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    rerender(
+      <ContainerfilePanel
+        content={"FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Advance past the 150ms debounce
+    act(() => { vi.advanceTimersByTime(200); });
+
+    expect(scrollMock).toHaveBeenCalled();
+  });
+
+  it("does not scroll when no changes are present", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Same content
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    act(() => { vi.advanceTimersByTime(200); });
+
+    expect(scrollMock).not.toHaveBeenCalled();
+  });
+
+  it("skips scroll when first changed line is already visible", () => {
+    // Override getBoundingClientRect so the changed line is within the panel body
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList?.contains("inspectah-cf-panel__body")) {
+        return { top: 0, bottom: 500, left: 0, right: 400, width: 400, height: 500 } as DOMRect;
+      }
+      // Changed line is inside the visible area
+      return { top: 100, bottom: 120, left: 0, right: 400, width: 400, height: 20 } as DOMRect;
+    });
+
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    act(() => { vi.advanceTimersByTime(200); });
+
+    expect(scrollMock).not.toHaveBeenCalled();
+  });
+
+  it("uses behavior auto when prefers-reduced-motion is set", () => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)" ? true : false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nEXPOSE 80\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    act(() => { vi.advanceTimersByTime(200); });
+
+    expect(scrollMock).toHaveBeenCalledWith({ behavior: "auto" });
+  });
+
+  it("debounces multiple rapid content changes", () => {
+    const { rerender } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // First change
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN echo one\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Advance only 50ms (less than 150ms debounce)
+    act(() => { vi.advanceTimersByTime(50); });
+
+    // Second change before debounce fires
+    rerender(
+      <ContainerfilePanel
+        content={"FROM ubi9\nRUN echo one\nRUN echo two\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    // Now advance past the debounce
+    act(() => { vi.advanceTimersByTime(200); });
+
+    // scrollIntoView should only have been called once (the debounced one)
+    expect(scrollMock).toHaveBeenCalledTimes(1);
   });
 });

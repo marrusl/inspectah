@@ -31,6 +31,8 @@ export function ContainerfilePanel({
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(DEFAULT_WIDTH);
+  const panelBodyRef = useRef<HTMLDivElement>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Resize drag handlers
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -186,6 +188,35 @@ export function ContainerfilePanel({
     };
   }, [diffResult, pruneRemovingLine]);
 
+  // Auto-scroll to first changed line after diff updates
+  useEffect(() => {
+    if (!diffResult.hasChanges) return;
+
+    // Debounce: clear previous scroll timeout
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+
+    scrollTimeoutRef.current = setTimeout(() => {
+      const panelBody = panelBodyRef.current;
+      if (!panelBody) return;
+
+      const firstChanged = panelBody.querySelector("[data-line-id]");
+      if (!firstChanged) return;
+
+      // Check if already visible within the panel body
+      const bodyRect = panelBody.getBoundingClientRect();
+      const lineRect = firstChanged.getBoundingClientRect();
+      if (lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom) return;
+
+      // Scroll with reduced-motion awareness
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      firstChanged.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth" });
+    }, 150);
+
+    return () => {
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    };
+  }, [diffResult]);
+
   const lineCount = diffResult.lines.filter(
     (l) => l.state !== "removing" && l.text.length > 0,
   ).length;
@@ -253,7 +284,7 @@ export function ContainerfilePanel({
           size="sm"
         />
       </div>
-      <div className="inspectah-cf-panel__body" tabIndex={0} aria-label="Containerfile preview content">
+      <div ref={panelBodyRef} className="inspectah-cf-panel__body" tabIndex={0} aria-label="Containerfile preview content">
         {loading ? (
           <>
             <Skeleton width="90%" />
@@ -275,11 +306,13 @@ export function ContainerfilePanel({
                     .filter(Boolean)
                     .join(" ");
 
+                  const isChanged = dl.state === "added" || dl.state === "removing";
                   return (
                     <span
                       key={dl.id}
                       className={lineClasses}
-                      {...(dl.state === "removing" ? { "aria-hidden": "true", "data-line-id": dl.id } : {})}
+                      {...(isChanged ? { "data-line-id": dl.id } : {})}
+                      {...(dl.state === "removing" ? { "aria-hidden": "true" } : {})}
                     >
                       {tokenizeLine(displayText).map((tok, j) =>
                         tok.isKeyword ? (
