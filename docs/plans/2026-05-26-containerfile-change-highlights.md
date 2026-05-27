@@ -208,6 +208,26 @@ describe("computeDiff", () => {
     expect(survivingB!.id).toBe(first.lines[2].id);
   });
 
+  it("preserves correct ID for non-adjacent surviving duplicate", () => {
+    // a, b, a → b, a: first "a" removed, second "a" survives
+    const v1 = "RUN echo a\nRUN echo b\nRUN echo a";
+    const v2 = "RUN echo b\nRUN echo a";
+    const first = computeDiff(null, v1);
+    const second = computeDiff(v1, v2, first.lines);
+    // The surviving "a" should have the SECOND occurrence's ID (index 2),
+    // not the first (index 0) which was removed
+    const survivingA = second.lines.find(
+      (l) => l.text === "RUN echo a" && l.state === "stable",
+    );
+    expect(survivingA).toBeTruthy();
+    expect(survivingA!.id).toBe(first.lines[2].id);
+    // "b" keeps its ID
+    const survivingB = second.lines.find(
+      (l) => l.text === "RUN echo b" && l.state === "stable",
+    );
+    expect(survivingB!.id).toBe(first.lines[1].id);
+  });
+
   it("settles added lines to stable with preserved ID on next diff", () => {
     const v1 = "FROM quay.io/fedora/fedora-bootc:42";
     const v2 = "FROM quay.io/fedora/fedora-bootc:42\nEXPOSE 80";
@@ -330,6 +350,10 @@ export function computeDiff(
         lines.push({ id: makeId(), text, state: "added" });
         addedCount++;
       } else if (change.removed) {
+        // Consume the prior ID slot for this text so later surviving
+        // duplicates don't inherit the removed line's ID.
+        const queue = priorIdsByText.get(text);
+        if (queue?.length) queue.shift();
         lines.push({ id: makeId(), text, state: "removing" });
         removedCount++;
       } else {
