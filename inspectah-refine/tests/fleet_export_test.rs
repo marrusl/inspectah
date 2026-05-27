@@ -134,7 +134,7 @@ fn single_host_export_has_no_fleet_dir() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     assert!(
@@ -149,7 +149,7 @@ fn fleet_export_creates_variant_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
 
@@ -190,7 +190,7 @@ fn fleet_variant_content_is_materialized() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
 
@@ -227,7 +227,7 @@ fn fleet_variant_file_uses_hash_prefix() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
 
@@ -258,7 +258,7 @@ fn fleet_export_selected_not_in_variants() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
@@ -400,7 +400,7 @@ fn export_includes_dropin_alternative_variants() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
@@ -434,7 +434,7 @@ fn export_includes_quadlet_alternative_variants() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
@@ -470,7 +470,7 @@ fn export_variant_paths_use_directory_hierarchy() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
@@ -510,7 +510,7 @@ fn export_dropin_variant_paths_use_directory_hierarchy() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
@@ -533,7 +533,7 @@ fn export_quadlet_variant_paths_use_directory_hierarchy() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    render_refine_export(&snap, &tarball_path).unwrap();
+    render_refine_export(&snap, &tarball_path, None).unwrap();
 
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
