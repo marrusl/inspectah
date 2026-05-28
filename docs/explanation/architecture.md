@@ -199,8 +199,7 @@ Refine's modules:
 ## inspectah-web: serving the interface
 
 Web is the HTTP layer. It embeds the HTML/CSS/JavaScript assets, defines the
-API routes, and serves the interactive UIs for refine, fleet, and architect
-workflows.
+API routes, and serves the interactive UIs for refine and fleet workflows.
 
 **Why web is separate from refine.** Refine is the engine -- it manages state
 and orchestrates re-rendering. Web is the transport -- it maps HTTP requests
@@ -210,8 +209,8 @@ any web server involvement.
 
 Web's modules:
 
-- **handlers.rs** -- Route handlers for the single-host refine and architect
-  UIs: serving reports, processing toggle changes, and triggering re-renders.
+- **handlers.rs** -- Route handlers for the single-host refine UI: serving
+  reports, processing toggle changes, and triggering re-renders.
 - **fleet_handlers.rs** -- Route handlers for fleet-specific operations:
   fleet report serving and fleet refine interactions.
 - **assets.rs** -- Embedded static assets (HTML templates, CSS, JavaScript)
@@ -226,8 +225,8 @@ every other crate and wires them together. Argument parsing, subcommand
 dispatch, and progress display -- the user-facing surface area lives here.
 
 **Why CLI is a thin shell.** The binary itself should do as little as possible.
-It parses arguments, selects the right workflow (scan, refine, fleet, architect,
-build), and hands off to the appropriate crate. This keeps the logic testable
+It parses arguments, selects the right workflow (scan, refine, fleet, or
+version), and hands off to the appropriate crate. This keeps the logic testable
 at the library level rather than requiring end-to-end CLI invocations to
 exercise it.
 

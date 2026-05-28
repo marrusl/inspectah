@@ -65,9 +65,9 @@ in most places and is just missing from a few. An item present on 2 of 10
 hosts is more likely a role-specific addition or a leftover from manual
 configuration.
 
-Zone classification activates automatically when a fleet has three or more
-hosts. Below that threshold, there is not enough data to draw meaningful
-prevalence conclusions.
+Zone classification activates automatically when a fleet has two or more
+hosts. The merge code does not enforce a minimum host count -- any multi-host
+fleet gets prevalence zones.
 
 ## Fleet buckets: consensus meets triage
 
@@ -173,8 +173,8 @@ It surfaces the items and lets the operator decide.
 
 When inspectah analyzes a single host, there is no fleet consensus to compute.
 Every item is trivially "unanimous" and the single-host triage model
-(Baseline / Site / Investigate) applies directly. Fleet consensus activates at
-three or more hosts, where prevalence patterns become meaningful.
+(Baseline / Site / Investigate) applies directly. Fleet consensus activates
+with two or more hosts, where prevalence patterns become meaningful.
 
 ## How it connects to triage
 

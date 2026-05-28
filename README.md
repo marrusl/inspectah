@@ -92,9 +92,7 @@ hostname-20260527-143000.tar.gz
     ├── env-files/                  # .env files (conditional)
     ├── quadlet/                    # Container workload units (conditional)
     ├── inspectah-users.toml        # User/group config for bootc-image-builder (conditional)
-    ├── inspectah-users.ks          # User/group kickstart fragment (conditional)
-    ├── entitlement/                # RHEL subscription certs (conditional)
-    └── rhsm/                       # Subscription manager config (conditional)
+    └── inspectah-users.ks          # User/group kickstart fragment (conditional)
 ```
 
 Use `--inspect-only` to write a JSON snapshot without the full tarball.
