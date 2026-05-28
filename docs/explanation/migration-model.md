@@ -8,7 +8,7 @@ nav_order: 2
 
 This page explains why inspectah exists, what problem it solves, and where it
 fits in a package-mode to image-mode migration. If you already understand image
-mode and just want to run the tool, see the [Quick Start](../tutorials/quick-start.md).
+mode and just want to run the tool, see the [Getting Started](../getting-started.md) guide.
 
 ## Package mode and image mode
 

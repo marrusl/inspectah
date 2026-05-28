@@ -103,7 +103,7 @@ sudo inspectah scan --inspect-only 2>/dev/null | \
 ## Skip baseline in CI
 
 If your pipeline only needs a host inventory without package classification,
-skip the container image pull:
+skip baseline extraction:
 
 ```bash
 sudo inspectah scan --no-baseline --progress flat -o ./scan-output.tar.gz
