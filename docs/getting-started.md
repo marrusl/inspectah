@@ -53,6 +53,44 @@ inspectah version
 
 You should see the version number, git commit, and build date.
 
+## How inspectah works
+
+Before diving into the commands, here is a visual overview of what
+inspectah does when you scan a host:
+
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-conceptual-pipeline"
+          src="diagrams/conceptual-pipeline.html"
+          title="Conceptual Pipeline — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-conceptual-pipeline"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-conceptual-pipeline');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open Conceptual Pipeline in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The inspectah pipeline: from host inspection through baseline subtraction to migration artifacts. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ## Scan your first host
 
 Run inspectah as root on the system you want to migrate:
@@ -145,6 +183,39 @@ ssh -L 8642:localhost:8642 user@remote-host
 ```
 
 Then open `http://127.0.0.1:8642` in your local browser.
+
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-user-flow"
+          src="diagrams/user-flow.html"
+          title="User Flow — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-user-flow"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-user-flow');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open User Flow in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The end-to-end user workflow: scan, refine, fleet aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
 
 ## Understand triage classifications
 

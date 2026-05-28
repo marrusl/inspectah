@@ -64,6 +64,39 @@ way.
 When you run `inspectah scan` on a host, the tool walks through a structured
 pipeline:
 
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-conceptual-pipeline"
+          src="../diagrams/conceptual-pipeline.html"
+          title="Conceptual Pipeline — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-conceptual-pipeline"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-conceptual-pipeline');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open Conceptual Pipeline in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The full inspectah pipeline: inspect the host, subtract the baseline, classify items, and render migration artifacts. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ### Inspect
 
 A set of inspectors examines different aspects of the host: packages, services,

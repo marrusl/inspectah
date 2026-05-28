@@ -11,6 +11,39 @@ snapshots into a unified cross-host view. This lets you see which packages,
 configs, and services are common across your fleet versus unique to specific
 hosts.
 
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-fleet-topology"
+          src="../diagrams/fleet-topology.html"
+          title="Fleet Topology — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-fleet-topology"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-fleet-topology');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open Fleet Topology in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>How fleet aggregation combines individual host scans into a unified cross-host view with prevalence zones. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ## Prerequisites
 
 - Two or more scan output tarballs (`.tar.gz`) from `inspectah scan` runs on
