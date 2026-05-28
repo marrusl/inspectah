@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>inspectah - Triage Decision Tree</title>
+  <style>
+    /* Diagram-specific overrides layered on top of shared theme */
+    .layer-label {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .layer-divider {
+      stroke-dasharray: 6,4;
+      opacity: 0.3;
+    }
+    .branch-line {
+      stroke-width: 1.5;
+      fill: none;
+    }
+    .expand-children {
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .expand-children li {
+      list-style: none;
+      padding: 2px 0;
+    }
+    .expand-children li::before {
+      content: '\25B8 ';
+      opacity: 0.5;
+    }
+    .expand-children code {
+      font-family: var(--diagram-font-mono);
+      font-size: 11px;
+      background: rgba(96,165,250,0.1);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .host-box {
+      rx: 3;
+      ry: 3;
+    }
+    .host-icon-label {
+      font-size: 8px;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border: 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-dot { display: none !important; }
+      .glow-pulse { animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+<script type="module">
+import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
+import { createDiagramShell } from './shared/embed.js';
+import { colors, textDim, text as textColor, surface, border, bg } from './shared/theme.js';
+import { setupTooltip, toggleExpand, centerView } from './shared/interactions.js';
+import { setupKeyboardNav, checkReducedMotion } from './shared/accessibility.js';
+
+// ─── Data: Single-host triage classifications ───────────────────────
+const singleHostRoot = {
+  id: 'found-item',
+  label: 'Found Item',
+  sublabel: 'Detected on host',
+  color: 'teal',
+  tooltip: 'An item detected during host inspection that needs classification.',
+};
+
+const singleHostBranches = [
+  {
+    id: 'sh-baseline',
+    label: 'Baseline',
+    sublabel: 'No action needed',
+    color: 'green',
+    tooltip: 'Item exists in the base image. No migration action required.',
+    criteria: 'Package or config file matches the target base image manifest.',
+    example: 'bash-5.1.8 found on host, also present in rhel9 base image.',
+    action: 'Excluded from Containerfile — already in base layer.',
+  },
+  {
+    id: 'sh-site',
+    label: 'Site',
+    sublabel: 'User-added',
+    color: 'amber',
+    tooltip: 'Item was added by the user/admin. Include in migration Containerfile.',
+    criteria: 'Package installed or config modified beyond base image defaults.',
+    example: 'httpd-2.4.57 installed by admin, not in base image.',
+    action: 'RUN dnf install httpd  or  COPY ./config/httpd.conf /etc/httpd/',
+  },
+  {
+    id: 'sh-investigate',
+    label: 'Investigate',
+    sublabel: 'Human review',
+    color: 'red',
+    tooltip: 'Origin unclear. Requires manual review before migration decision.',
+    criteria: 'No baseline data available, or item does not match known patterns.',
+    example: 'Custom binary /usr/local/bin/myapp — no RPM origin, no baseline.',
+    action: 'Flagged in audit-report.md for operator review.',
+  },
+];
+
+// ─── Data: Fleet consensus classifications ──────────────────────────
+const fleetBranches = [
+  {
+    id: 'fl-universal',
+    label: 'Universal',
+    sublabel: 'All hosts agree',
+    color: 'green',
+    tooltip: 'Found on every host in the fleet. Version differences are normal.',
+    definition: 'Item is present on 100% of scanned hosts.',
+    example: 'httpd installed on all 12 hosts (versions may differ: 2.4.57, 2.4.58).',
+    hostPattern: 'all-present', // all 3 boxes filled
+  },
+  {
+    id: 'fl-partial',
+    label: 'Partial',
+    sublabel: 'Some hosts only',
+    color: 'blue',
+    tooltip: 'Present on some hosts, completely absent on others.',
+    definition: 'Item exists on a subset of hosts, missing from the rest.',
+    example: 'postgresql installed on 4 of 12 hosts — DB servers only.',
+    hostPattern: 'some-present', // 2 of 3 boxes filled, 1 empty
+  },
+  {
+    id: 'fl-divergent',
+    label: 'Divergent',
+    sublabel: 'Config differs',
+    color: 'orange',
+    tooltip: 'Same item on all hosts but with different configuration content.',
+    definition: 'Item is universally present but config values differ across hosts.',
+    example: '/etc/httpd/conf/httpd.conf exists everywhere but ServerName differs.',
+    hostPattern: 'all-different', // all 3 boxes filled with different content markers
+  },
+  {
+    id: 'fl-investigate',
+    label: 'Investigate',
+    sublabel: 'Unclear pattern',
+    color: 'red',
+    tooltip: 'Fleet pattern unclear. Requires manual review.',
+    definition: 'Cannot be categorized — insufficient data or ambiguous pattern.',
+    example: 'Orphan RPM with no repo origin on a single host.',
+    hostPattern: 'unclear',
+  },
+];
+
+// ─── Shell setup ────────────────────────────────────────────────────
+const { svg, g, width, height, zoom } = createDiagramShell({
+  title: 'inspectah',
+  subtitle: 'Triage Decision Tree',
+  backUrl: '../reference/triage-classification.html',
+  legendItems: [
+    { color: colors.green.stroke,  label: 'Baseline / Universal' },
+    { color: colors.amber.stroke,  label: 'Site / Partial' },
+    { color: colors.orange.stroke, label: 'Divergent' },
+    { color: colors.red.stroke,    label: 'Investigate' },
+    { color: colors.blue.stroke,   label: 'Partial (fleet)' },
+    { color: colors.teal.stroke,   label: 'Input / Root' },
+  ],
+});
+
+const reducedMotion = checkReducedMotion();
+const tooltip = setupTooltip(document.body);
+const expanded = new Map();
+
+// SVG desc for overall accessibility
+svg.append('title').text('Triage Decision Tree');
+svg.append('desc').text(
+  'Two-layer diagram showing how inspectah classifies found items. ' +
+  'Top layer: single-host triage into Baseline, Site, or Investigate. ' +
+  'Bottom layer: fleet consensus into Universal, Partial, Divergent, or Investigate.'
+);
+
+// ─── Layout constants ───────────────────────────────────────────────
+const nodeW = 180;
+const nodeH = 64;
+const rootNodeW = 200;
+const rootNodeH = 72;
+const gapX = 80;
+const gapY = 90;
+const layerGap = 180;
+
+// Single-host layer
+const shRowY = 100;
+const shRootX = width / 2 - rootNodeW / 2;
+const shRootY = shRowY;
+const shBranchY = shRootY + rootNodeH + gapY;
+const shTotalW = singleHostBranches.length * (nodeW + gapX) - gapX;
+const shStartX = width / 2 - shTotalW / 2;
+
+singleHostBranches.forEach((b, i) => {
+  b.x = shStartX + i * (nodeW + gapX);
+  b.y = shBranchY;
+});
+
+// Fleet layer
+const fleetLabelY = shBranchY + nodeH + layerGap;
+const flRootY = fleetLabelY + 30;
+const flBranchY = flRootY + rootNodeH + gapY;
+const flTotalW = fleetBranches.length * (nodeW + gapX) - gapX;
+const flStartX = width / 2 - flTotalW / 2;
+
+const fleetRoot = {
+  id: 'fleet-item',
+  label: 'Fleet Analysis',
+  sublabel: 'Cross-host consensus',
+  color: 'teal',
+  tooltip: 'Aggregate view comparing items across all scanned hosts.',
+  x: width / 2 - rootNodeW / 2,
+  y: flRootY,
+};
+
+fleetBranches.forEach((b, i) => {
+  b.x = flStartX + i * (nodeW + gapX);
+  b.y = flBranchY;
+});
+
+// ─── Layer divider ──────────────────────────────────────────────────
+const dividerY = shBranchY + nodeH + layerGap / 2 - 10;
+
+g.append('line')
+  .attr('class', 'layer-divider')
+  .attr('x1', width * 0.1)
+  .attr('y1', dividerY)
+  .attr('x2', width * 0.9)
+  .attr('y2', dividerY)
+  .attr('stroke', border);
+
+// Layer labels
+g.append('text')
+  .attr('class', 'layer-label')
+  .attr('x', width / 2)
+  .attr('y', shRootY - 30)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .text('Single-Host Classification');
+
+g.append('text')
+  .attr('class', 'layer-label')
+  .attr('x', width / 2)
+  .attr('y', flRootY - 30)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .text('Fleet Consensus');
+
+// ─── Draw branch connector lines ───────────────────────────────────
+const connectors = g.append('g').attr('class', 'connectors');
+
+// Single-host root to branches
+const shRootCenterX = shRootX + rootNodeW / 2;
+const shRootBottom = shRootY + rootNodeH;
+
+singleHostBranches.forEach(b => {
+  const targetCenterX = b.x + nodeW / 2;
+  const path = d3.path();
+  path.moveTo(shRootCenterX, shRootBottom);
+  path.bezierCurveTo(
+    shRootCenterX, shRootBottom + gapY * 0.4,
+    targetCenterX, b.y - gapY * 0.4,
+    targetCenterX, b.y
+  );
+  connectors.append('path')
+    .attr('class', 'branch-line')
+    .attr('d', path.toString())
+    .attr('stroke', colors[b.color].stroke)
+    .attr('opacity', 0.5)
+    .attr('marker-end', 'url(#arrow-default)');
+});
+
+// Fleet root to branches
+const flRootCenterX = fleetRoot.x + rootNodeW / 2;
+const flRootBottom = fleetRoot.y + rootNodeH;
+
+fleetBranches.forEach(b => {
+  const targetCenterX = b.x + nodeW / 2;
+  const path = d3.path();
+  path.moveTo(flRootCenterX, flRootBottom);
+  path.bezierCurveTo(
+    flRootCenterX, flRootBottom + gapY * 0.4,
+    targetCenterX, b.y - gapY * 0.4,
+    targetCenterX, b.y
+  );
+  connectors.append('path')
+    .attr('class', 'branch-line')
+    .attr('d', path.toString())
+    .attr('stroke', colors[b.color].stroke)
+    .attr('opacity', 0.5)
+    .attr('marker-end', 'url(#arrow-default)');
+});
+
+// ─── Helper: draw a single node ────────────────────────────────────
+function drawNode(parent, data, w, h) {
+  const node = parent.append('g')
+    .datum(data)
+    .attr('class', 'node')
+    .attr('transform', `translate(${data.x}, ${data.y})`)
+    .attr('tabindex', '-1')
+    .attr('role', 'button')
+    .attr('aria-expanded', 'false')
+    .attr('aria-label', `${data.label}: ${data.sublabel}. Click to expand details.`);
+
+  node.append('rect')
+    .attr('width', w)
+    .attr('height', h)
+    .attr('rx', 10)
+    .attr('ry', 10)
+    .attr('fill', colors[data.color].fill)
+    .attr('stroke', colors[data.color].stroke)
+    .attr('stroke-width', 1.5);
+
+  node.append('title').text(data.label);
+  node.append('desc').text(data.tooltip);
+
+  node.append('text')
+    .attr('class', 'node-label')
+    .attr('x', w / 2)
+    .attr('y', h * 0.4)
+    .attr('text-anchor', 'middle')
+    .attr('fill', colors[data.color].text)
+    .text(data.label);
+
+  node.append('text')
+    .attr('class', 'node-sublabel')
+    .attr('x', w / 2)
+    .attr('y', h * 0.4 + 18)
+    .attr('text-anchor', 'middle')
+    .text(data.sublabel);
+
+  return node;
+}
+
+// ─── Draw root nodes ────────────────────────────────────────────────
+const nodeGroup = g.append('g').attr('class', 'nodes');
+
+const shRoot = drawNode(nodeGroup, {
+  ...singleHostRoot,
+  x: shRootX,
+  y: shRootY,
+}, rootNodeW, rootNodeH);
+
+const flRoot = drawNode(nodeGroup, fleetRoot, rootNodeW, rootNodeH);
+
+// ─── Draw single-host branch nodes ─────────────────────────────────
+const shNodes = singleHostBranches.map(b => drawNode(nodeGroup, b, nodeW, nodeH));
+
+// ─── Draw fleet branch nodes with host-pattern icons ────────────────
+const flNodes = fleetBranches.map(b => {
+  const node = drawNode(nodeGroup, b, nodeW, nodeH);
+
+  // Draw host-pattern icon inside the node (bottom area)
+  const iconG = node.append('g')
+    .attr('transform', `translate(${nodeW / 2 - 27}, ${nodeH - 22})`)
+    .attr('aria-hidden', 'true');
+
+  const boxW = 14;
+  const boxH = 12;
+  const boxGap = 4;
+
+  if (b.hostPattern === 'all-present') {
+    // Universal: 3 filled boxes, all same color
+    for (let i = 0; i < 3; i++) {
+      iconG.append('rect')
+        .attr('class', 'host-box')
+        .attr('x', i * (boxW + boxGap))
+        .attr('y', 0)
+        .attr('width', boxW)
+        .attr('height', boxH)
+        .attr('fill', colors.green.stroke)
+        .attr('opacity', 0.6);
+      iconG.append('text')
+        .attr('class', 'host-icon-label')
+        .attr('x', i * (boxW + boxGap) + boxW / 2)
+        .attr('y', boxH - 2)
+        .attr('fill', bg)
+        .attr('font-weight', '700')
+        .text('=');
+    }
+  } else if (b.hostPattern === 'some-present') {
+    // Partial: 2 filled, 1 empty (dashed outline)
+    for (let i = 0; i < 3; i++) {
+      if (i < 2) {
+        iconG.append('rect')
+          .attr('class', 'host-box')
+          .attr('x', i * (boxW + boxGap))
+          .attr('y', 0)
+          .attr('width', boxW)
+          .attr('height', boxH)
+          .attr('fill', colors.blue.stroke)
+          .attr('opacity', 0.6);
+        iconG.append('text')
+          .attr('class', 'host-icon-label')
+          .attr('x', i * (boxW + boxGap) + boxW / 2)
+          .attr('y', boxH - 2)
+          .attr('fill', bg)
+          .attr('font-weight', '700')
+          .text('✓');
+      } else {
+        iconG.append('rect')
+          .attr('class', 'host-box')
+          .attr('x', i * (boxW + boxGap))
+          .attr('y', 0)
+          .attr('width', boxW)
+          .attr('height', boxH)
+          .attr('fill', 'none')
+          .attr('stroke', colors.blue.stroke)
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', '2,2')
+          .attr('opacity', 0.5);
+        iconG.append('text')
+          .attr('class', 'host-icon-label')
+          .attr('x', i * (boxW + boxGap) + boxW / 2)
+          .attr('y', boxH - 2)
+          .attr('fill', textDim)
+          .text('✕');
+      }
+    }
+  } else if (b.hostPattern === 'all-different') {
+    // Divergent: 3 filled boxes, each with a different content marker
+    const markers = ['A', 'B', 'C'];
+    const divergentColors = [
+      colors.orange.stroke,
+      colors.amber.stroke,
+      colors.red.stroke,
+    ];
+    for (let i = 0; i < 3; i++) {
+      iconG.append('rect')
+        .attr('class', 'host-box')
+        .attr('x', i * (boxW + boxGap))
+        .attr('y', 0)
+        .attr('width', boxW)
+        .attr('height', boxH)
+        .attr('fill', divergentColors[i])
+        .attr('opacity', 0.5);
+      iconG.append('text')
+        .attr('class', 'host-icon-label')
+        .attr('x', i * (boxW + boxGap) + boxW / 2)
+        .attr('y', boxH - 2)
+        .attr('fill', bg)
+        .attr('font-weight', '700')
+        .text(markers[i]);
+    }
+  } else {
+    // Investigate: 3 boxes with question marks
+    for (let i = 0; i < 3; i++) {
+      iconG.append('rect')
+        .attr('class', 'host-box')
+        .attr('x', i * (boxW + boxGap))
+        .attr('y', 0)
+        .attr('width', boxW)
+        .attr('height', boxH)
+        .attr('fill', colors.red.fill)
+        .attr('stroke', colors.red.stroke)
+        .attr('stroke-width', 0.5)
+        .attr('opacity', 0.6);
+      iconG.append('text')
+        .attr('class', 'host-icon-label')
+        .attr('x', i * (boxW + boxGap) + boxW / 2)
+        .attr('y', boxH - 2)
+        .attr('fill', colors.red.text)
+        .attr('font-weight', '700')
+        .text('?');
+    }
+  }
+
+  return node;
+});
+
+// ─── Expand indicator hints ─────────────────────────────────────────
+const allBranchNodes = [...shNodes, ...flNodes];
+allBranchNodes.forEach(node => {
+  const d = node.datum();
+  node.append('text')
+    .attr('x', nodeW / 2)
+    .attr('y', nodeH - 4)
+    .attr('text-anchor', 'middle')
+    .attr('fill', textDim)
+    .attr('font-size', '9px')
+    .attr('class', 'expand-hint')
+    .text('click to expand');
+});
+
+// ─── Expand/collapse panels ────────────────────────────────────────
+const panelGroup = g.append('g').attr('class', 'expand-panels');
+
+// Hidden live region for screen readers
+const liveRegion = document.createElement('div');
+liveRegion.setAttribute('role', 'status');
+liveRegion.setAttribute('aria-live', 'polite');
+liveRegion.className = 'sr-only';
+document.body.appendChild(liveRegion);
+
+// Tooltip descriptions via aria-describedby
+const tooltipDescContainer = document.createElement('div');
+tooltipDescContainer.className = 'sr-only';
+document.body.appendChild(tooltipDescContainer);
+
+const allData = [
+  { ...singleHostRoot, x: shRootX, y: shRootY },
+  ...singleHostBranches,
+  fleetRoot,
+  ...fleetBranches,
+];
+allData.forEach(d => {
+  const descEl = document.createElement('span');
+  descEl.id = `desc-${d.id}`;
+  descEl.textContent = d.tooltip;
+  tooltipDescContainer.appendChild(descEl);
+});
+
+// Apply aria-describedby to all nodes
+nodeGroup.selectAll('.node')
+  .attr('aria-describedby', d => `desc-${d.id}`);
+
+function renderExpand(nodeId, isExpanded) {
+  // Find data for this node
+  const data = singleHostBranches.find(b => b.id === nodeId)
+    || fleetBranches.find(b => b.id === nodeId);
+  if (!data) return;
+
+  const isSingleHost = singleHostBranches.some(b => b.id === nodeId);
+
+  // Update ARIA
+  nodeGroup.selectAll('.node')
+    .filter(d => d.id === nodeId)
+    .attr('aria-expanded', String(isExpanded));
+
+  // Remove existing panel
+  panelGroup.selectAll(`.panel-${nodeId}`).remove();
+
+  if (!isExpanded) {
+    liveRegion.textContent = `${data.label} collapsed.`;
+    return;
+  }
+
+  // Build panel content
+  const lines = [];
+  if (isSingleHost) {
+    lines.push({ key: 'Criteria', value: data.criteria });
+    lines.push({ key: 'Example', value: data.example });
+    lines.push({ key: 'Containerfile', value: data.action });
+  } else {
+    lines.push({ key: 'Definition', value: data.definition });
+    lines.push({ key: 'Example', value: data.example });
+  }
+
+  liveRegion.textContent = `${data.label} expanded. ${lines.length} details.`;
+
+  const panelW = 260;
+  const lineH = 40;
+  const headerH = 32;
+  const padV = 12;
+  const panelH = headerH + lines.length * lineH + padV * 2;
+  const panelX = data.x + (nodeW - panelW) / 2;
+  const panelY = data.y + nodeH + 16;
+
+  const panel = panelGroup.append('g')
+    .attr('class', `panel-${nodeId}`)
+    .attr('transform', `translate(${panelX}, ${panelY})`);
+
+  // Connector line from node to panel
+  panel.append('line')
+    .attr('x1', panelW / 2)
+    .attr('y1', -16)
+    .attr('x2', panelW / 2)
+    .attr('y2', 0)
+    .attr('stroke', colors[data.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
+
+  // Panel background
+  panel.append('rect')
+    .attr('width', panelW)
+    .attr('height', panelH)
+    .attr('rx', 8)
+    .attr('ry', 8)
+    .attr('fill', surface)
+    .attr('stroke', colors[data.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Header
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', 22)
+    .attr('fill', colors[data.color].text)
+    .attr('font-size', '12px')
+    .attr('font-weight', '600')
+    .text(data.label)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Divider
+  panel.append('line')
+    .attr('x1', 10)
+    .attr('y1', headerH)
+    .attr('x2', panelW - 10)
+    .attr('y2', headerH)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  // Detail items
+  lines.forEach((line, idx) => {
+    const itemY = headerH + padV + idx * lineH;
+    const itemG = panel.append('g')
+      .attr('transform', `translate(14, ${itemY})`);
+
+    // Key label
+    itemG.append('text')
+      .attr('x', 0)
+      .attr('y', 12)
+      .attr('fill', colors[data.color].text)
+      .attr('font-size', '10px')
+      .attr('font-weight', '600')
+      .text(line.key)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 1);
+
+    // Value — wrap long text with foreignObject
+    const fo = panel.append('foreignObject')
+      .attr('x', 14)
+      .attr('y', itemY + 14)
+      .attr('width', panelW - 28)
+      .attr('height', lineH - 16);
+
+    const div = fo.append('xhtml:div')
+      .style('color', textColor)
+      .style('font-size', '11px')
+      .style('font-family', 'var(--diagram-font)')
+      .style('line-height', '1.3')
+      .style('overflow', 'hidden')
+      .text(line.value);
+
+    fo.attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 1);
+  });
+}
+
+// ─── Click interaction ──────────────────────────────────────────────
+allBranchNodes.forEach(node => {
+  node.on('click', (event, d) => {
+    toggleExpand(d.id, expanded, renderExpand);
+  });
+});
+
+// ─── Hover tooltips on all nodes ────────────────────────────────────
+nodeGroup.selectAll('.node')
+  .on('mouseenter', (event, d) => {
+    const expandState = expanded.get(d.id) ? ' (expanded)' : '';
+    const clickHint = singleHostBranches.some(b => b.id === d.id)
+      || fleetBranches.some(b => b.id === d.id)
+      ? ' (click to expand)' : '';
+    tooltip.show(`<strong>${d.label}</strong><br>${d.tooltip}${expandState || clickHint}`, event);
+  })
+  .on('mousemove', (event) => tooltip.move(event))
+  .on('mouseleave', () => tooltip.hide());
+
+// ─── Keyboard navigation ───────────────────────────────────────────
+// Collect all nodes in visual order for keyboard nav
+const allNodeElements = nodeGroup.selectAll('.node');
+
+// Set first node as tabbable entry point
+allNodeElements.each(function(d, i) {
+  d3.select(this).attr('tabindex', i === 0 ? '0' : '-1');
+});
+
+setupKeyboardNav(allNodeElements, {
+  onActivate: (el, data) => {
+    if (data && data.id) {
+      // Only branch nodes expand
+      const isBranch = singleHostBranches.some(b => b.id === data.id)
+        || fleetBranches.some(b => b.id === data.id);
+      if (isBranch) {
+        toggleExpand(data.id, expanded, renderExpand);
+      }
+    }
+  },
+  onEscape: () => {
+    let hadExpanded = false;
+    for (const [nodeId, isExp] of expanded.entries()) {
+      if (isExp) {
+        hadExpanded = true;
+        expanded.set(nodeId, false);
+        renderExpand(nodeId, false);
+      }
+    }
+    if (!hadExpanded && document.fullscreenElement) {
+      document.exitFullscreen();
+    }
+  },
+  nodeSelector: '.node',
+});
+
+// ─── Initial centering ─────────────────────────────────────────────
+requestAnimationFrame(() => {
+  const contentTop = shRootY - 60;
+  const contentBottom = flBranchY + nodeH + 200;
+  const contentLeft = Math.min(shStartX, flStartX) - 40;
+  const contentRight = Math.max(
+    shStartX + shTotalW,
+    flStartX + flTotalW
+  ) + 40;
+
+  centerView(svg, zoom, {
+    x: contentLeft,
+    y: contentTop,
+    width: contentRight - contentLeft,
+    height: contentBottom - contentTop,
+  }, { padding: 60 });
+});
+
+</script>
+</body>
+</html>
