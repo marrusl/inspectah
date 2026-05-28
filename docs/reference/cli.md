@@ -8,7 +8,7 @@ nav_order: 1
 
 ## inspectah
 
-Inspect and prepare RHEL systems for image-mode migration.
+Inspect and prepare RPM-based Linux systems for bootc image-mode migration.
 
 ```
 inspectah [COMMAND]
@@ -87,7 +87,7 @@ sudo inspectah scan --inspect-only -o /tmp/snapshot/
 Scan against a specific base image:
 
 ```bash
-sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
+sudo inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream9
 ```
 
 Scan with sensitive data preserved (requires acknowledgment):
@@ -269,7 +269,7 @@ inspectah fleet aggregate --manifest fleet.toml
 Override the baseline image during aggregation:
 
 ```bash
-inspectah fleet aggregate --baseline registry.redhat.io/rhel9/rhel-bootc:9.6 /srv/snapshots/
+inspectah fleet aggregate --baseline quay.io/centos-bootc/centos-bootc:stream9 /srv/snapshots/
 ```
 
 Write fleet JSON to stdout:

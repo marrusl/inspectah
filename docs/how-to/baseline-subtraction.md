@@ -31,6 +31,13 @@ When auto-detection picks the wrong image, or you want to compare against a
 different target, use `--base-image`:
 
 ```bash
+# Fedora example
+sudo inspectah scan --base-image quay.io/fedora/fedora-bootc:41
+
+# CentOS Stream example
+sudo inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream9
+
+# RHEL example (requires registry.redhat.io authentication)
 sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 
@@ -39,8 +46,9 @@ directly. The image must be pullable from the host where you run the scan.
 
 ### Cross-distro conversion
 
-The `--base-image` flag also enables cross-distro comparison. If you are
-migrating a CentOS Stream host to RHEL, point at the RHEL base image:
+The `--base-image` flag also enables cross-distro comparison. For example,
+if you are migrating a CentOS Stream host to RHEL, point at the RHEL base
+image:
 
 ```bash
 sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6

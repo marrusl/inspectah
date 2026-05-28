@@ -11,19 +11,21 @@ the refine UI to triage findings. Total time: about 10 minutes.
 
 ## Prerequisites
 
-- A **RHEL, CentOS Stream, or Fedora** host (the system you want to migrate)
+- A **Fedora, CentOS Stream, or RHEL** host (the system you want to migrate)
 - **Podman** installed (`dnf install podman`)
 - **Root access** on the target host (inspectah reads system configuration)
-- **Registry authentication** for RHEL hosts — inspectah pulls the matching
-  base image to classify findings:
+
+**For RHEL users:** inspectah pulls the matching base image to classify
+findings. RHEL base images require registry authentication:
 
 ```bash
 podman login registry.redhat.io
 ```
 
-If you skip registry auth, inspectah will fail to pull the baseline image.
-You can work around this with `--no-baseline`, but classification quality
-degrades significantly.
+Fedora and CentOS Stream base images are available from public registries
+and do not require authentication. If you skip registry auth on RHEL,
+inspectah will fail to pull the baseline image. You can work around this
+with `--no-baseline`, but classification quality degrades significantly.
 
 ## Install inspectah
 

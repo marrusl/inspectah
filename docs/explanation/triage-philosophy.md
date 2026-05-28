@@ -6,7 +6,7 @@ nav_order: 3
 
 # Triage Philosophy
 
-A typical RHEL host has hundreds of installed packages, thousands of
+A typical RPM-based Linux host has hundreds of installed packages, thousands of
 configuration files, dozens of running services, kernel parameters, container
 workloads, and more. Migrating that host to image mode means deciding what
 belongs in the target container image, what stays as runtime configuration, and

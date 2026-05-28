@@ -1,6 +1,6 @@
 # inspectah
 
-Scans a running RHEL, CentOS Stream, or Fedora system and generates
+Scans a running Fedora, CentOS Stream, or RHEL system and generates
 everything needed to rebuild it as a
 [bootc](https://containers.github.io/bootc/) image: a Containerfile,
 config file tree, audit report, and deployment fragments. Run it on one

@@ -40,7 +40,7 @@ for the full command reference.
 |:-----|:------------|
 | `--inspect-only` | Write JSON snapshot only, skip tarball generation. |
 | `-o, --output <PATH>` | Output file path (tarball) or directory (with `--inspect-only`). |
-| `--base-image <IMAGE>` | Target base image for baseline comparison (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`). |
+| `--base-image <IMAGE>` | Target base image for baseline comparison (e.g., `quay.io/centos-bootc/centos-bootc:stream9`). |
 | `--no-baseline` | Skip baseline extraction. Produces degraded classification (no added/removed distinction). |
 | `--preserve-password-hashes` | Retain password hashes for users with `password_set` status. |
 | `--preserve-ssh-keys` | Retain full SSH `authorized_keys` content per user. |

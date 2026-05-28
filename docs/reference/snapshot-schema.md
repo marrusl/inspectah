@@ -7,7 +7,8 @@ nav_order: 3
 # Snapshot Schema
 
 The `InspectionSnapshot` is the core data structure produced by `inspectah scan`.
-It captures the full state of a RHEL system relevant to image-mode migration.
+It captures the full state of an RPM-based Linux system relevant to bootc
+image-mode migration.
 
 **Schema version:** 17
 {: .label .label-blue }

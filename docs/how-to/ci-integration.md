@@ -120,6 +120,13 @@ In CI, the auto-detection chain may not resolve correctly (for example,
 the runner may not have `bootc` installed). Specify the image explicitly:
 
 ```bash
+# CentOS Stream example (public registry, no auth needed)
+sudo inspectah scan \
+  --base-image quay.io/centos-bootc/centos-bootc:stream9 \
+  --progress flat \
+  -o ./scan-output.tar.gz
+
+# RHEL example (requires registry.redhat.io authentication)
 sudo inspectah scan \
   --base-image registry.redhat.io/rhel9/rhel-bootc:9.6 \
   --progress flat \
@@ -145,7 +152,7 @@ jobs:
       - name: Run scan
         run: |
           sudo inspectah scan \
-            --base-image registry.redhat.io/rhel9/rhel-bootc:9.6 \
+            --base-image quay.io/centos-bootc/centos-bootc:stream9 \
             --progress flat \
             -o ./scan-output.tar.gz
 
@@ -166,7 +173,7 @@ scan:
     - tar xzf inspectah-x86_64-unknown-linux-gnu.tar.gz
     - sudo mv inspectah /usr/local/bin/
     - sudo inspectah scan
-        --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
+        --base-image quay.io/centos-bootc/centos-bootc:stream9
         --progress flat
         -o ./scan-output.tar.gz
   artifacts:
@@ -181,7 +188,7 @@ scan:
   non-TTY environments. Being explicit avoids surprises if the CI runner
   allocates a pseudo-TTY.
 
-- **Pin the base image tag** (e.g., `rhel-bootc:9.6` not `rhel-bootc:latest`)
+- **Pin the base image tag** (e.g., `centos-bootc:stream9` not `centos-bootc:latest`)
   for reproducible comparisons across pipeline runs.
 
 - **Use `--inspect-only`** when you only need the JSON data and want to

@@ -13,7 +13,7 @@ suite, and submit changes.
 
 - **Rust toolchain** (stable, 2024 edition) -- install via [rustup](https://rustup.rs/)
 - **Git**
-- A RHEL or Fedora system (or VM/container) for integration testing
+- A Fedora, CentOS Stream, or RHEL system (or VM/container) for integration testing
 
 ## Clone and build
 
