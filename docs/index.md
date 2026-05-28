@@ -20,6 +20,7 @@ inspectah refine <snapshot.tar.gz>
 
 See [Getting Started](tutorials/) for a full walkthrough.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-user-flow"
           src="diagrams/user-flow.html"
@@ -52,6 +53,7 @@ See [Getting Started](tutorials/) for a full walkthrough.
   </div>
   <p><em>The end-to-end inspectah workflow: scan hosts, refine findings, aggregate fleets, and build images. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ## CLI reference
 

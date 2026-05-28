@@ -32,6 +32,7 @@ RPM-shipped default is Baseline. A service running in the same state as the
 base image is Baseline. The baseline is always the starting point: subtract
 what is already handled, then focus on the remainder.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-triage-decision-tree"
           src="../diagrams/triage-decision-tree.html"
@@ -64,6 +65,7 @@ what is already handled, then focus on the remainder.
   </div>
   <p><em>The classification decision tree: how inspectah routes each item to Baseline, Site, or Investigate based on available evidence. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ## The three buckets
 

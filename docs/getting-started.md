@@ -58,6 +58,7 @@ You should see the version number, git commit, and build date.
 Before diving into the commands, here is a visual overview of what
 inspectah does when you scan a host:
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-conceptual-pipeline"
           src="diagrams/conceptual-pipeline.html"
@@ -90,6 +91,7 @@ inspectah does when you scan a host:
   </div>
   <p><em>The inspectah pipeline: from host inspection through baseline subtraction to migration artifacts. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ## Scan your first host
 
@@ -184,6 +186,7 @@ ssh -L 8642:localhost:8642 user@remote-host
 
 Then open `http://127.0.0.1:8642` in your local browser.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-user-flow"
           src="diagrams/user-flow.html"
@@ -216,6 +219,7 @@ Then open `http://127.0.0.1:8642` in your local browser.
   </div>
   <p><em>The end-to-end user workflow: scan, refine, fleet aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ## Understand triage classifications
 

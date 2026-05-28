@@ -88,6 +88,7 @@ item routes to the Investigate bucket, just as a suspicious single-host item
 would. A Universal item routes to Baseline -- already accounted for, no action
 needed.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-fleet-topology"
           src="../diagrams/fleet-topology.html"
@@ -103,6 +104,7 @@ needed.
   </div>
   <p><em>The fleet topology diagram shows how individual host scans combine through aggregation into fleet-level analysis.</em></p>
 </div>
+{% endraw %}
 
 ## Config differences are the real signal
 
