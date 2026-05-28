@@ -15,9 +15,23 @@ It captures the full state of a RHEL system relevant to image-mode migration.
 **Source:** `inspectah-core/src/snapshot.rs`
 {: .text-grey-dk-000 }
 
-<div id="diagram-data-flow-snapshot">
-{% include_relative ../diagrams/data-flow.html %}
+{% raw %}
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-data-flow-snapshot"
+          src="../diagrams/data-flow.html"
+          title="Data Flow — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-data-flow-snapshot"
+            onclick="(function(btn){var iframe=document.getElementById('diagram-data-flow-snapshot');if(iframe.requestFullscreen){iframe.requestFullscreen();iframe._triggerBtn=btn;document.addEventListener('fullscreenchange',function handler(){if(!document.fullscreenElement){document.removeEventListener('fullscreenchange',handler);if(iframe._triggerBtn){iframe._triggerBtn.focus();iframe._triggerBtn=null;}}});}else{window.open(iframe.src,'_blank');}})(this)"
+            aria-label="Open data flow diagram in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The data flow diagram traces snapshot data from host filesystems through inspectors, redaction, and rendering.</em></p>
 </div>
+{% endraw %}
 
 ## Top-level fields
 
