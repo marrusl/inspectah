@@ -14,6 +14,39 @@ Containerfile and signals how much human attention it needs.
 Classification works differently depending on whether you scanned a single
 host or merged multiple hosts into a fleet snapshot.
 
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-triage-decision-tree"
+          src="../diagrams/triage-decision-tree.html"
+          title="Triage Decision Tree — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-triage-decision-tree"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-triage-decision-tree');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open Triage Decision Tree in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>How inspectah classifies each item into Baseline, Site, or Investigate — and how fleet prevalence layers on top. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ---
 
 ## Single-host classifications

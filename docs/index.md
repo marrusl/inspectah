@@ -20,6 +20,39 @@ inspectah refine <snapshot.tar.gz>
 
 See [Getting Started](tutorials/) for a full walkthrough.
 
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-user-flow"
+          src="diagrams/user-flow.html"
+          title="User Flow — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-user-flow"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-user-flow');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open User Flow in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The end-to-end inspectah workflow: scan hosts, refine findings, aggregate fleets, and build images. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ## CLI reference
 
 The current CLI surface:

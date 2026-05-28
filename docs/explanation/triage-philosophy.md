@@ -32,6 +32,39 @@ RPM-shipped default is Baseline. A service running in the same state as the
 base image is Baseline. The baseline is always the starting point: subtract
 what is already handled, then focus on the remainder.
 
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-triage-decision-tree"
+          src="../diagrams/triage-decision-tree.html"
+          title="Triage Decision Tree — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-triage-decision-tree"
+            onclick="(function(btn){
+      var iframe = document.getElementById('diagram-triage-decision-tree');
+      if (iframe.requestFullscreen) {
+        iframe.requestFullscreen();
+        iframe._triggerBtn = btn;
+        document.addEventListener('fullscreenchange', function handler() {
+          if (!document.fullscreenElement) {
+            document.removeEventListener('fullscreenchange', handler);
+            if (iframe._triggerBtn) {
+              iframe._triggerBtn.focus();
+              iframe._triggerBtn = null;
+            }
+          }
+        });
+      } else {
+        window.open(iframe.src, '_blank');
+      }
+    })(this)"
+            aria-label="Open Triage Decision Tree in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The classification decision tree: how inspectah routes each item to Baseline, Site, or Investigate based on available evidence. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+</div>
+
 ## The three buckets
 
 Every item inspectah classifies lands in one of three buckets:
