@@ -30,6 +30,8 @@ sudo dnf copr enable marrusl/inspectah
 sudo dnf install inspectah
 ```
 
+Requires podman >= 4.4 (installed as a dependency if not present).
+
 ### From source
 
 ```bash
