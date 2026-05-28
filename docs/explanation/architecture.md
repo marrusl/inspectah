@@ -11,6 +11,7 @@ deliberate: each crate owns one concern, and the boundaries between them
 reflect real architectural decisions about what should depend on what. This
 document explains both the structure and the reasoning behind it.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-software-architecture"
           src="../diagrams/software-architecture.html"
@@ -26,6 +27,7 @@ document explains both the structure and the reasoning behind it.
   </div>
   <p><em>The software architecture diagram shows how inspectah's six crates relate to each other and where the dependency boundaries fall.</em></p>
 </div>
+{% endraw %}
 
 ## The workspace at a glance
 
@@ -246,6 +248,7 @@ CLI's modules:
 The data flow through inspectah follows a clear pipeline pattern. Understanding
 this flow is key to understanding where to make changes when contributing.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-data-flow"
           src="../diagrams/data-flow.html"
@@ -261,6 +264,7 @@ this flow is key to understanding where to make changes when contributing.
   </div>
   <p><em>The data flow diagram traces a scan from host inspection through baseline subtraction, redaction, and rendering to the final output artifacts.</em></p>
 </div>
+{% endraw %}
 
 ### The scan path
 

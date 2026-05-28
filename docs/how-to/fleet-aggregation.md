@@ -11,6 +11,7 @@ snapshots into a unified cross-host view. This lets you see which packages,
 configs, and services are common across your fleet versus unique to specific
 hosts.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-fleet-topology"
           src="../diagrams/fleet-topology.html"
@@ -43,6 +44,7 @@ hosts.
   </div>
   <p><em>How fleet aggregation combines individual host scans into a unified cross-host view with prevalence zones. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ## Prerequisites
 

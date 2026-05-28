@@ -64,6 +64,7 @@ way.
 When you run `inspectah scan` on a host, the tool walks through a structured
 pipeline:
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-conceptual-pipeline"
           src="../diagrams/conceptual-pipeline.html"
@@ -96,6 +97,7 @@ pipeline:
   </div>
   <p><em>The full inspectah pipeline: inspect the host, subtract the baseline, classify items, and render migration artifacts. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ### Inspect
 

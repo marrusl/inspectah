@@ -14,6 +14,7 @@ Containerfile and signals how much human attention it needs.
 Classification works differently depending on whether you scanned a single
 host or merged multiple hosts into a fleet snapshot.
 
+{% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-triage-decision-tree"
           src="../diagrams/triage-decision-tree.html"
@@ -46,6 +47,7 @@ host or merged multiple hosts into a fleet snapshot.
   </div>
   <p><em>How inspectah classifies each item into Baseline, Site, or Investigate — and how fleet prevalence layers on top. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
+{% endraw %}
 
 ---
 
