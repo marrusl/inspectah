@@ -183,10 +183,10 @@ of detail a migration engineer needs to resolve.
 Triage classifies. It does not prescribe.
 
 Inspectah does not tell you *how* to handle a Site package or an Investigate
-config file. It does not generate a Containerfile. It does not decide whether a
-package should be layered into the image at build time or installed at runtime.
-Those are migration decisions that depend on your architecture, your compliance
-requirements, and your operational model.
+config file. While it generates a Containerfile as a starting point, it does
+not decide whether a package should be layered into the image at build time or
+installed at runtime. Those are migration decisions that depend on your
+architecture, your compliance requirements, and your operational model.
 
 The classification system gives you a prioritized, organized view of what
 exists on your hosts. The migration decisions remain yours.
