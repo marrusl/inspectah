@@ -3,7 +3,7 @@ description: Migration analysis tool for package-mode to image-mode RHEL
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 
 url: ""
-baseurl: ""
+baseurl: "/inspectah"
 
 permalink: pretty
 
