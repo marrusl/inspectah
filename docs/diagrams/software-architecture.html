@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>inspectah - Software Architecture</title>
+  <style>
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .dep-arrow {
+      transition: stroke var(--diagram-transition, 200ms) ease,
+                  stroke-width var(--diagram-transition, 200ms) ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dep-arrow { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+<script type="module">
+import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
+import { createDiagramShell } from './shared/embed.js';
+import { colors, textDim, text as textColor, surface, border } from './shared/theme.js';
+import { setupTooltip, toggleExpand, centerView } from './shared/interactions.js';
+import { setupKeyboardNav, checkReducedMotion } from './shared/accessibility.js';
+
+// ─── Crate data (derived from Cargo.toml + src/) ──────────────────
+
+const crates = [
+  // ── Entry points (green) ──
+  {
+    id: 'cli',
+    label: 'inspectah-cli',
+    sublabel: 'CLI entry point',
+    tier: 'entry',
+    color: 'green',
+    deps: ['core', 'collect', 'pipeline', 'web', 'refine'],
+    tooltip: 'Binary crate. Parses CLI arguments, orchestrates scan/fleet/refine commands, manages progress display, and launches the web server.',
+    modules: [
+      {
+        name: 'commands/',
+        desc: 'CLI subcommands',
+        children: [
+          { text: 'scan', detail: 'Single-host scan command — runs inspectors, renders output' },
+          { text: 'fleet', detail: 'Fleet aggregation command — combines multiple host snapshots' },
+          { text: 'refine', detail: 'Interactive triage command — launches web UI for review' },
+          { text: 'version', detail: 'Version and build info display' },
+          { text: 'pull_progress', detail: 'Progress reporting during snapshot pull' },
+        ],
+      },
+      {
+        name: 'progress/',
+        desc: 'Terminal output formatting',
+        children: [
+          { text: 'rich', detail: 'Animated spinner + progress bars for interactive terminals' },
+          { text: 'plain', detail: 'Simple line-by-line output for non-interactive / CI' },
+          { text: 'flat', detail: 'Minimal flat output for piping' },
+          { text: 'display', detail: 'Display trait implementation and terminal detection' },
+        ],
+      },
+    ],
+    contract: 'main() — binary entry point, clap argument parsing, command dispatch',
+  },
+  {
+    id: 'web',
+    label: 'inspectah-web',
+    sublabel: 'Web UI server',
+    tier: 'entry',
+    color: 'green',
+    deps: ['core', 'pipeline', 'refine'],
+    tooltip: 'Embedded web server (axum) serving the React triage UI. Handles API routes for snapshot data, fleet state, and refine operations.',
+    modules: [
+      {
+        name: 'handlers',
+        desc: 'Single-host API routes',
+        children: [
+          { text: 'handlers.rs', detail: 'REST endpoints for snapshot sections, triage state, report rendering' },
+        ],
+      },
+      {
+        name: 'fleet_handlers',
+        desc: 'Fleet API routes',
+        children: [
+          { text: 'fleet_handlers.rs', detail: 'Fleet consensus endpoints, variant operations, fleet-level triage' },
+        ],
+      },
+      {
+        name: 'assets',
+        desc: 'Static file serving',
+        children: [
+          { text: 'assets.rs', detail: 'rust-embed integration — serves compiled React UI from the binary' },
+        ],
+      },
+      {
+        name: 'error',
+        desc: 'Error handling',
+        children: [
+          { text: 'error.rs', detail: 'Unified error type mapping to HTTP status codes' },
+        ],
+      },
+    ],
+    contract: 'build_router() — constructs axum Router with all API and static routes',
+  },
+
+  // ── Orchestration (teal) ──
+  {
+    id: 'pipeline',
+    label: 'inspectah-pipeline',
+    sublabel: 'Orchestration + rendering',
+    tier: 'orchestration',
+    color: 'teal',
+    deps: ['core', 'collect'],
+    tooltip: 'Coordinates the scan pipeline: runs inspectors, applies redaction, validates results, and renders output artifacts (Containerfile, kickstart, reports).',
+    modules: [
+      {
+        name: 'orchestrate',
+        desc: 'Pipeline coordination',
+        children: [
+          { text: 'orchestrate.rs', detail: 'Runs inspectors in order, assembles the full Snapshot, handles failure policy' },
+        ],
+      },
+      {
+        name: 'collect',
+        desc: 'Inspector dispatch',
+        children: [
+          { text: 'collect.rs', detail: 'Maps inspector names to implementations, parallel execution support' },
+        ],
+      },
+      {
+        name: 'validate',
+        desc: 'Result validation',
+        children: [
+          { text: 'validate.rs', detail: 'Post-scan validation: checks completeness, flags warnings, verifies section integrity' },
+        ],
+      },
+      {
+        name: 'redaction/',
+        desc: 'Secret scrubbing',
+        children: [
+          { text: 'engine', detail: 'Core redaction engine — applies patterns to all string fields' },
+          { text: 'patterns', detail: 'Built-in regex patterns for passwords, keys, tokens, connection strings' },
+        ],
+      },
+      {
+        name: 'render/',
+        desc: 'Output artifact generation',
+        children: [
+          { text: 'containerfile', detail: 'Generates Containerfile from triage decisions' },
+          { text: 'kickstart', detail: 'Generates kickstart file for traditional installs' },
+          { text: 'report', detail: 'Human-readable migration report' },
+          { text: 'audit', detail: 'Audit trail of all changes and decisions' },
+          { text: 'secrets', detail: 'Redacted secrets summary for review' },
+          { text: 'tarball', detail: 'Snapshot archive (.tar.gz) packaging' },
+          { text: 'users', detail: 'User/group materialization for Containerfile' },
+          { text: 'services', detail: 'Service intent rendering (systemd units)' },
+          { text: 'safety', detail: 'Safety checks and destructive-action warnings' },
+          { text: 'configtree', detail: 'Config file tree visualization' },
+          { text: 'baseline_fmt', detail: 'Baseline comparison formatting' },
+          { text: 'readme', detail: 'Auto-generated README for output directory' },
+        ],
+      },
+    ],
+    contract: 'Pipeline — orchestrate inspectors, validate, redact, render artifacts',
+  },
+  {
+    id: 'refine',
+    label: 'inspectah-refine',
+    sublabel: 'Triage + fleet logic',
+    tier: 'orchestration',
+    color: 'teal',
+    deps: ['core', 'pipeline'],
+    tooltip: 'Interactive triage engine: classifies items, tracks decisions, manages fleet consensus, and persists session state across iterations.',
+    modules: [
+      {
+        name: 'classify',
+        desc: 'Triage classification',
+        children: [
+          { text: 'classify.rs', detail: 'Automatic classification of snapshot items into triage categories (include/exclude/review)' },
+        ],
+      },
+      {
+        name: 'session',
+        desc: 'Session persistence',
+        children: [
+          { text: 'session.rs', detail: 'Manages triage session state — load, save, merge decisions across runs' },
+        ],
+      },
+      {
+        name: 'fleet/',
+        desc: 'Fleet consensus engine',
+        children: [
+          { text: 'classify', detail: 'Fleet-level classification: consensus vs. host-specific items' },
+          { text: 'diff', detail: 'Cross-host diff computation — identifies divergent state' },
+          { text: 'variant_ops', detail: 'Variant management — create, merge, split fleet variants' },
+        ],
+      },
+      {
+        name: 'normalize',
+        desc: 'Data normalization',
+        children: [
+          { text: 'normalize.rs', detail: 'Normalizes snapshot data for consistent comparison (paths, versions, names)' },
+        ],
+      },
+      {
+        name: 'autosave',
+        desc: 'Auto-save logic',
+        children: [
+          { text: 'autosave.rs', detail: 'Periodic auto-save of session state during interactive triage' },
+        ],
+      },
+      {
+        name: 'tarball + repo_index',
+        desc: 'Archive & index',
+        children: [
+          { text: 'tarball.rs', detail: 'Read/write snapshot tarballs for refine sessions' },
+          { text: 'repo_index.rs', detail: 'Repository-level index for multi-snapshot management' },
+          { text: 'baseline_summary.rs', detail: 'Baseline comparison summary generation' },
+        ],
+      },
+    ],
+    contract: 'RefineSession — load snapshot, classify, track decisions, persist state',
+  },
+
+  // ── Collection (blue) ──
+  {
+    id: 'collect',
+    label: 'inspectah-collect',
+    sublabel: 'System inspectors',
+    tier: 'collection',
+    color: 'blue',
+    deps: ['core'],
+    tooltip: 'Host data collection layer. Each inspector gathers one aspect of the running system (RPMs, configs, services, etc.) via shell commands or FFI.',
+    modules: [
+      {
+        name: 'inspectors/',
+        desc: 'System data collectors',
+        children: [
+          { text: 'rpm/', detail: 'RPM package inventory — parser, classifier, modules, repos, source repos' },
+          { text: 'config/', detail: 'Modified config files — rpm -Va, directory walk, classification' },
+          { text: 'services', detail: 'systemd unit enumeration — enabled, running, custom units' },
+          { text: 'containers', detail: 'Podman/Docker container inventory' },
+          { text: 'network', detail: 'Network interfaces, firewall rules, DNS config' },
+          { text: 'storage', detail: 'Block devices, mounts, LVM layout' },
+          { text: 'users', detail: 'Local users and groups beyond system defaults' },
+          { text: 'selinux', detail: 'SELinux mode, policy, custom modules' },
+          { text: 'kernelboot', detail: 'Kernel parameters, boot configuration' },
+          { text: 'nonrpm', detail: 'Non-RPM software (pip, npm, go, standalone)' },
+          { text: 'scheduled', detail: 'Cron jobs and systemd timers' },
+        ],
+      },
+      {
+        name: 'executor/',
+        desc: 'Command execution abstraction',
+        children: [
+          { text: 'real', detail: 'Real executor — runs shell commands on the live system' },
+          { text: 'mock', detail: 'Mock executor — deterministic test doubles with fixture data' },
+        ],
+      },
+      {
+        name: 'ffi/',
+        desc: 'Foreign function interface',
+        children: [
+          { text: 'rpm', detail: 'Optional FFI binding to librpm for direct RPM database queries' },
+        ],
+      },
+      {
+        name: 'baseline',
+        desc: 'Baseline comparison',
+        children: [
+          { text: 'baseline.rs', detail: 'Compare current system state against a known baseline snapshot' },
+        ],
+      },
+    ],
+    contract: 'Inspector trait — each inspector implements collect() to produce a snapshot section',
+  },
+
+  // ── Foundation (purple) ──
+  {
+    id: 'core',
+    label: 'inspectah-core',
+    sublabel: 'Types + traits',
+    tier: 'foundation',
+    color: 'purple',
+    deps: [],
+    tooltip: 'Foundation crate. Defines all shared types (Snapshot, RPM, Config, etc.), core traits (Inspector, Executor, Renderer), and fleet data structures. Zero business logic.',
+    modules: [
+      {
+        name: 'types/',
+        desc: 'Data model',
+        children: [
+          { text: 'rpm', detail: 'RPM package types — name, version, epoch, release, arch, source' },
+          { text: 'config', detail: 'Config file types — path, owner, permissions, diff status' },
+          { text: 'services', detail: 'Systemd service types — unit name, state, enabled, custom' },
+          { text: 'containers', detail: 'Container types — image, name, state, engine' },
+          { text: 'fleet', detail: 'Fleet types — consensus items, variant definitions' },
+          { text: 'users', detail: 'User/group types — uid, gid, shell, home, groups' },
+          { text: 'selinux', detail: 'SELinux types — mode, policy version, custom modules' },
+          { text: 'repo', detail: 'Repository definitions — id, name, baseurl, enabled, gpgcheck' },
+          { text: 'system / os', detail: 'System info — hostname, OS version, kernel, arch' },
+          { text: 'redaction', detail: 'Redaction markers and scrubbed-field tracking' },
+          { text: 'warnings / preflight', detail: 'Warning types, preflight check results' },
+          { text: 'progress', detail: 'Progress reporting types for UI feedback' },
+        ],
+      },
+      {
+        name: 'traits/',
+        desc: 'Core abstractions',
+        children: [
+          { text: 'inspector', detail: 'Inspector trait — collect() returns a snapshot section' },
+          { text: 'executor', detail: 'Executor trait — run_command() abstraction for testability' },
+          { text: 'renderer', detail: 'Renderer trait — render() produces output artifact from snapshot' },
+          { text: 'detector', detail: 'Detector trait — probes system for feature presence' },
+          { text: 'progress', detail: 'Progress trait — report scan/render progress to caller' },
+        ],
+      },
+      {
+        name: 'fleet/',
+        desc: 'Fleet data structures',
+        children: [
+          { text: 'manifest', detail: 'Fleet manifest — list of hosts, scan metadata, merge config' },
+          { text: 'merge', detail: 'Fleet merge logic — combine per-host snapshots into consensus' },
+          { text: 'validate', detail: 'Fleet validation — check consistency across hosts' },
+        ],
+      },
+      {
+        name: 'snapshot + pipeline + baseline',
+        desc: 'Core data containers',
+        children: [
+          { text: 'snapshot.rs', detail: 'Snapshot struct — the complete system state captured by inspectors' },
+          { text: 'pipeline.rs', detail: 'Pipeline configuration types — options, failure policy' },
+          { text: 'baseline.rs', detail: 'Baseline types — known-good state for comparison' },
+        ],
+      },
+    ],
+    contract: 'Inspector / Executor / Renderer traits — contracts between all crates',
+  },
+];
+
+// Build lookup
+const crateMap = Object.fromEntries(crates.map(c => [c.id, c]));
+
+// ─── Shell setup ────────────────────────────────────────────────────
+const { svg, g, width, height, zoom } = createDiagramShell({
+  title: 'inspectah',
+  subtitle: 'Software Architecture',
+  backUrl: '../explanation/architecture.html',
+  legendItems: [
+    { color: colors.green.stroke,  label: 'Entry Points' },
+    { color: colors.teal.stroke,   label: 'Orchestration' },
+    { color: colors.blue.stroke,   label: 'Collection' },
+    { color: colors.purple.stroke, label: 'Foundation' },
+  ],
+});
+
+const reducedMotion = checkReducedMotion();
+const tooltip = setupTooltip(document.body);
+const expandedCrates = new Map();   // crate-level expansion
+const expandedModules = new Map();  // module-level expansion
+
+// ─── Layout constants ──────────────────────────────────────────────
+const nodeW = 190;
+const nodeH = 64;
+const tierGap = 120;
+const nodeGap = 60;
+
+// Tier definitions and positioning
+const tiers = [
+  { id: 'entry',         label: 'ENTRY POINTS',   crateIds: ['cli', 'web'] },
+  { id: 'orchestration', label: 'ORCHESTRATION',   crateIds: ['pipeline', 'refine'] },
+  { id: 'collection',    label: 'COLLECTION',      crateIds: ['collect'] },
+  { id: 'foundation',    label: 'FOUNDATION',      crateIds: ['core'] },
+];
+
+const startY = 60;
+
+tiers.forEach((tier, tierIdx) => {
+  const y = startY + tierIdx * (nodeH + tierGap);
+  const totalW = tier.crateIds.length * (nodeW + nodeGap) - nodeGap;
+  const startX = (width - totalW) / 2;
+
+  tier.crateIds.forEach((crateId, i) => {
+    const crate = crateMap[crateId];
+    crate.x = startX + i * (nodeW + nodeGap);
+    crate.y = y;
+  });
+
+  tier.y = y;
+  tier.labelX = Math.min(...tier.crateIds.map(id => crateMap[id].x)) - 70;
+});
+
+// ─── Draw dependency arrows ────────────────────────────────────────
+const arrowLayer = g.append('g').attr('class', 'dep-arrows');
+
+const depEdges = [];
+crates.forEach(crate => {
+  crate.deps.forEach(depId => {
+    depEdges.push({ from: crate.id, to: depId });
+  });
+});
+
+function drawArrows() {
+  arrowLayer.selectAll('.dep-arrow').remove();
+
+  depEdges.forEach(edge => {
+    const from = crateMap[edge.from];
+    const to = crateMap[edge.to];
+
+    // Route from bottom of source to top of target
+    const x1 = from.x + nodeW / 2;
+    const y1 = from.y + nodeH;
+    const x2 = to.x + nodeW / 2;
+    const y2 = to.y;
+
+    // Curved path for visual clarity
+    const midY = (y1 + y2) / 2;
+
+    arrowLayer.append('path')
+      .attr('class', 'dep-arrow')
+      .attr('d', `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`)
+      .attr('data-from', edge.from)
+      .attr('data-to', edge.to)
+      .attr('fill', 'none')
+      .attr('stroke', border)
+      .attr('stroke-width', 1.5)
+      .attr('marker-end', 'url(#arrow-default)')
+      .append('title')
+        .text(`${from.label} depends on ${to.label}`);
+  });
+}
+
+drawArrows();
+
+// ─── Tier labels ──────────────────────────────────────────────────
+const labelLayer = g.append('g').attr('class', 'tier-labels');
+
+tiers.forEach(tier => {
+  labelLayer.append('text')
+    .attr('x', tier.labelX)
+    .attr('y', tier.y + nodeH / 2 + 4)
+    .attr('text-anchor', 'end')
+    .attr('fill', textDim)
+    .attr('font-size', '11px')
+    .attr('font-weight', 600)
+    .text(tier.label);
+});
+
+// ─── Draw crate nodes ─────────────────────────────────────────────
+const nodeLayer = g.append('g').attr('class', 'crate-nodes');
+const panelLayer = g.append('g').attr('class', 'expand-panels');
+
+// Screen reader live region
+const liveRegion = document.createElement('div');
+liveRegion.setAttribute('role', 'status');
+liveRegion.setAttribute('aria-live', 'polite');
+liveRegion.className = 'sr-only';
+document.body.appendChild(liveRegion);
+
+// Tooltip desc container
+const tooltipDescContainer = document.createElement('div');
+tooltipDescContainer.className = 'sr-only';
+document.body.appendChild(tooltipDescContainer);
+
+crates.forEach(c => {
+  const descEl = document.createElement('span');
+  descEl.id = `desc-${c.id}`;
+  descEl.textContent = c.tooltip;
+  tooltipDescContainer.appendChild(descEl);
+});
+
+const crateNodes = nodeLayer.selectAll('.node')
+  .data(crates)
+  .join('g')
+    .attr('class', 'node')
+    .attr('transform', d => `translate(${d.x}, ${d.y})`)
+    .attr('tabindex', (d, i) => i === 0 ? '0' : '-1')
+    .attr('role', 'button')
+    .attr('aria-expanded', 'false')
+    .attr('aria-label', d => `${d.label}: ${d.sublabel}. ${d.modules.length} modules. Click to expand.`)
+    .attr('aria-describedby', d => `desc-${d.id}`);
+
+// Background rect
+crateNodes.append('rect')
+  .attr('width', nodeW)
+  .attr('height', nodeH)
+  .attr('rx', 10)
+  .attr('ry', 10)
+  .attr('fill', d => colors[d.color].fill)
+  .attr('stroke', d => colors[d.color].stroke)
+  .attr('stroke-width', 1.5);
+
+// Glow on foundation crate
+crateNodes.filter(d => d.id === 'core')
+  .select('rect')
+  .attr('filter', 'url(#glow)');
+
+// SVG accessibility
+crateNodes.append('title').text(d => d.label);
+crateNodes.append('desc').text(d => d.tooltip);
+
+// Crate name
+crateNodes.append('text')
+  .attr('class', 'node-label')
+  .attr('x', nodeW / 2)
+  .attr('y', 24)
+  .attr('text-anchor', 'middle')
+  .attr('fill', d => colors[d.color].text)
+  .attr('font-size', '13px')
+  .attr('font-weight', 600)
+  .text(d => d.label);
+
+// Sublabel
+crateNodes.append('text')
+  .attr('class', 'node-sublabel')
+  .attr('x', nodeW / 2)
+  .attr('y', 42)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .attr('font-size', '11px')
+  .text(d => d.sublabel);
+
+// Module count hint
+crateNodes.append('text')
+  .attr('x', nodeW / 2)
+  .attr('y', nodeH - 3)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .attr('font-size', '9px')
+  .text(d => `${d.modules.length} modules`);
+
+// ─── Hover: highlight dependency edges ────────────────────────────
+crateNodes
+  .on('mouseenter', function(event, d) {
+    // Highlight edges involving this crate
+    arrowLayer.selectAll('.dep-arrow')
+      .attr('stroke', function() {
+        const from = this.getAttribute('data-from');
+        const to = this.getAttribute('data-to');
+        if (from === d.id) return colors[d.color].stroke;
+        if (to === d.id) return colors[d.color].stroke;
+        return border;
+      })
+      .attr('stroke-width', function() {
+        const from = this.getAttribute('data-from');
+        const to = this.getAttribute('data-to');
+        return (from === d.id || to === d.id) ? 2.5 : 1;
+      })
+      .attr('opacity', function() {
+        const from = this.getAttribute('data-from');
+        const to = this.getAttribute('data-to');
+        return (from === d.id || to === d.id) ? 1 : 0.3;
+      });
+
+    // Tooltip
+    let msg = `<strong>${d.label}</strong><br>${d.tooltip}`;
+    const isExp = expandedCrates.get(d.id);
+    msg += isExp ? '<br><em>(expanded)</em>' : '<br><em>(click to expand)</em>';
+    tooltip.show(msg, event);
+  })
+  .on('mousemove', (event) => tooltip.move(event))
+  .on('mouseleave', () => {
+    // Reset edges
+    arrowLayer.selectAll('.dep-arrow')
+      .attr('stroke', border)
+      .attr('stroke-width', 1.5)
+      .attr('opacity', 1);
+    tooltip.hide();
+  });
+
+// ─── Expand/collapse: crate → modules ─────────────────────────────
+
+function renderCrateExpand(crateId, isExpanded) {
+  const crate = crateMap[crateId];
+  if (!crate) return;
+
+  // Update ARIA
+  crateNodes.filter(d => d.id === crateId)
+    .attr('aria-expanded', isExpanded ? 'true' : 'false');
+
+  liveRegion.textContent = isExpanded
+    ? `${crate.label} expanded. ${crate.modules.length} modules shown.`
+    : `${crate.label} collapsed.`;
+
+  // Clear module expansion state for this crate
+  crate.modules.forEach(m => expandedModules.delete(`${crateId}::${m.name}`));
+
+  // Remove panel
+  panelLayer.selectAll(`.panel-crate-${crateId}`).remove();
+  if (!isExpanded) return;
+
+  // Module list panel
+  const panelW = 240;
+  const moduleLineH = 28;
+  const headerH = 36;
+  const padV = 12;
+  const contractH = 40;
+  const panelH = headerH + crate.modules.length * moduleLineH + contractH + padV * 2;
+
+  // Position panel to the right or below depending on space
+  const panelX = crate.x + (nodeW - panelW) / 2;
+  const panelY = crate.y + nodeH + 16;
+
+  const panel = panelLayer.append('g')
+    .attr('class', `panel-crate-${crateId}`)
+    .attr('transform', `translate(${panelX}, ${panelY})`);
+
+  // Connector line
+  panel.append('line')
+    .attr('x1', panelW / 2)
+    .attr('y1', -16)
+    .attr('x2', panelW / 2)
+    .attr('y2', 0)
+    .attr('stroke', colors[crate.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
+
+  // Panel bg
+  panel.append('rect')
+    .attr('width', panelW)
+    .attr('height', panelH)
+    .attr('rx', 8)
+    .attr('fill', surface)
+    .attr('stroke', colors[crate.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Header
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', 24)
+    .attr('fill', colors[crate.color].text)
+    .attr('font-size', '13px')
+    .attr('font-weight', 600)
+    .text('Modules')
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Divider
+  panel.append('line')
+    .attr('x1', 10)
+    .attr('y1', headerH)
+    .attr('x2', panelW - 10)
+    .attr('y2', headerH)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  // Module entries
+  crate.modules.forEach((mod, idx) => {
+    const itemY = headerH + padV + idx * moduleLineH;
+    const moduleKey = `${crateId}::${mod.name}`;
+
+    const itemG = panel.append('g')
+      .attr('class', `module-item module-${crateId}-${idx}`)
+      .attr('transform', `translate(14, ${itemY})`)
+      .attr('tabindex', '0')
+      .attr('role', 'button')
+      .attr('aria-label', `${mod.name} — ${mod.desc}. ${mod.children.length} items. Click to expand.`)
+      .attr('aria-expanded', 'false')
+      .style('cursor', 'pointer');
+
+    // Expand arrow
+    itemG.append('text')
+      .attr('class', 'expand-arrow')
+      .attr('x', 0)
+      .attr('y', 12)
+      .attr('fill', colors[crate.color].stroke)
+      .attr('font-size', '10px')
+      .text('▶');
+
+    // Module name
+    itemG.append('text')
+      .attr('x', 14)
+      .attr('y', 12)
+      .attr('fill', textColor)
+      .attr('font-size', '12px')
+      .attr('font-weight', 500)
+      .text(mod.name)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 1);
+
+    // Module description (dimmed)
+    itemG.append('text')
+      .attr('x', panelW - 30)
+      .attr('y', 12)
+      .attr('text-anchor', 'end')
+      .attr('fill', textDim)
+      .attr('font-size', '10px')
+      .text(mod.desc)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 0.7);
+
+    // Click to expand module → contract level
+    itemG.on('click', (event) => {
+      event.stopPropagation();
+      const wasExpanded = expandedModules.get(moduleKey) || false;
+
+      // Collapse all other modules in this crate
+      crate.modules.forEach((m, mi) => {
+        const k = `${crateId}::${m.name}`;
+        if (k !== moduleKey && expandedModules.get(k)) {
+          expandedModules.set(k, false);
+          panelLayer.selectAll(`.panel-module-${crateId}-${mi}`).remove();
+          panel.selectAll(`.module-${crateId}-${mi} .expand-arrow`).text('▶');
+          panel.selectAll(`.module-${crateId}-${mi}`).attr('aria-expanded', 'false');
+        }
+      });
+
+      expandedModules.set(moduleKey, !wasExpanded);
+      panelLayer.selectAll(`.panel-module-${crateId}-${idx}`).remove();
+      itemG.select('.expand-arrow').text(!wasExpanded ? '▼' : '▶');
+      itemG.attr('aria-expanded', (!wasExpanded) ? 'true' : 'false');
+
+      liveRegion.textContent = !wasExpanded
+        ? `${mod.name} expanded. ${mod.children.length} items.`
+        : `${mod.name} collapsed.`;
+
+      if (!wasExpanded) {
+        renderModuleExpand(crateId, crate, mod, idx, panelX, panelY + itemY + moduleLineH);
+      }
+    });
+
+    // Keyboard support
+    itemG.on('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        itemG.dispatch('click');
+      }
+    });
+
+    // Hover tooltip for module
+    itemG
+      .on('mouseenter', (event) => {
+        tooltip.show(`<strong>${mod.name}</strong><br>${mod.desc}<br><em>${mod.children.length} items — click to expand</em>`, event);
+      })
+      .on('mousemove', (event) => tooltip.move(event))
+      .on('mouseleave', () => tooltip.hide());
+  });
+
+  // Contract line at bottom
+  const contractY = headerH + padV + crate.modules.length * moduleLineH + 8;
+
+  panel.append('line')
+    .attr('x1', 10)
+    .attr('y1', contractY)
+    .attr('x2', panelW - 10)
+    .attr('y2', contractY)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', contractY + 18)
+    .attr('fill', colors[crate.color].text)
+    .attr('font-size', '10px')
+    .attr('font-weight', 600)
+    .text('Contract');
+
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', contractY + 32)
+    .attr('fill', textDim)
+    .attr('font-size', '10px')
+    .text(crate.contract);
+}
+
+// ─── Expand module → contract/children detail ─────────────────────
+
+function renderModuleExpand(crateId, crate, mod, modIdx, baseX, baseY) {
+  const childPanelW = 260;
+  const childLineH = 20;
+  const childHeaderH = 28;
+  const childPadV = 10;
+  const childPanelH = childHeaderH + mod.children.length * childLineH + childPadV * 2;
+
+  // Position to the right of the module panel
+  const childX = baseX + 250;
+  const childY = baseY - childHeaderH;
+
+  const childPanel = panelLayer.append('g')
+    .attr('class', `panel-module-${crateId}-${modIdx}`)
+    .attr('transform', `translate(${childX}, ${childY})`);
+
+  // Connector
+  childPanel.append('line')
+    .attr('x1', -10)
+    .attr('y1', childHeaderH)
+    .attr('x2', 0)
+    .attr('y2', childHeaderH)
+    .attr('stroke', colors[crate.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
+
+  // Background
+  childPanel.append('rect')
+    .attr('width', childPanelW)
+    .attr('height', childPanelH)
+    .attr('rx', 6)
+    .attr('fill', surface)
+    .attr('stroke', colors[crate.color].stroke)
+    .attr('stroke-width', 0.5)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 150)
+    .attr('opacity', 1);
+
+  // Header
+  childPanel.append('text')
+    .attr('x', 12)
+    .attr('y', 19)
+    .attr('fill', colors[crate.color].text)
+    .attr('font-size', '11px')
+    .attr('font-weight', 600)
+    .text(mod.name);
+
+  // Divider
+  childPanel.append('line')
+    .attr('x1', 8)
+    .attr('y1', childHeaderH)
+    .attr('x2', childPanelW - 8)
+    .attr('y2', childHeaderH)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  // Children
+  mod.children.forEach((child, ci) => {
+    const cy = childHeaderH + childPadV + ci * childLineH;
+
+    const row = childPanel.append('g')
+      .attr('transform', `translate(12, ${cy})`);
+
+    row.append('circle')
+      .attr('cx', 4)
+      .attr('cy', 5)
+      .attr('r', 2)
+      .attr('fill', colors[crate.color].stroke)
+      .attr('opacity', 0.6);
+
+    row.append('text')
+      .attr('x', 14)
+      .attr('y', 9)
+      .attr('fill', textColor)
+      .attr('font-size', '11px')
+      .text(child.text)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : ci * 20)
+      .duration(reducedMotion ? 0 : 100)
+      .attr('opacity', 1);
+
+    row
+      .on('mouseenter', (event) => {
+        tooltip.show(`<strong>${child.text}</strong><br>${child.detail}`, event);
+      })
+      .on('mousemove', (event) => tooltip.move(event))
+      .on('mouseleave', () => tooltip.hide());
+  });
+}
+
+// ─── Click on crate nodes ─────────────────────────────────────────
+crateNodes.on('click', (event, d) => {
+  if (!d) return;
+  // Collapse all other crates first
+  crates.forEach(c => {
+    if (c.id !== d.id && expandedCrates.get(c.id)) {
+      expandedCrates.set(c.id, false);
+      renderCrateExpand(c.id, false);
+    }
+  });
+  toggleExpand(d.id, expandedCrates, renderCrateExpand);
+});
+
+// ─── Keyboard navigation ──────────────────────────────────────────
+setupKeyboardNav(crateNodes, {
+  onActivate: (el, data) => {
+    if (data && data.id) {
+      crates.forEach(c => {
+        if (c.id !== data.id && expandedCrates.get(c.id)) {
+          expandedCrates.set(c.id, false);
+          renderCrateExpand(c.id, false);
+        }
+      });
+      toggleExpand(data.id, expandedCrates, renderCrateExpand);
+    }
+  },
+  onEscape: () => {
+    // First close module panels, then crate panels
+    let hadModule = false;
+    for (const [key, isExp] of expandedModules.entries()) {
+      if (isExp) {
+        hadModule = true;
+        expandedModules.set(key, false);
+      }
+    }
+    if (hadModule) {
+      panelLayer.selectAll('[class^="panel-module-"]').remove();
+      panelLayer.selectAll('.expand-arrow').text('▶');
+      panelLayer.selectAll('.module-item').attr('aria-expanded', 'false');
+      liveRegion.textContent = 'All module details collapsed.';
+      return;
+    }
+
+    let hadCrate = false;
+    for (const [crateId, isExp] of expandedCrates.entries()) {
+      if (isExp) {
+        hadCrate = true;
+        expandedCrates.set(crateId, false);
+        renderCrateExpand(crateId, false);
+      }
+    }
+    if (hadCrate) {
+      liveRegion.textContent = 'All crate details collapsed.';
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen();
+    }
+  },
+  nodeSelector: '.node',
+});
+
+// ─── Initial centering ────────────────────────────────────────────
+requestAnimationFrame(() => {
+  const allX = crates.map(c => c.x);
+  const allY = crates.map(c => c.y);
+  const boundsX = Math.min(...allX) - 80;
+  const boundsY = Math.min(...allY) - 30;
+  const boundsW = Math.max(...allX.map((x, i) => x + nodeW)) - boundsX + 80;
+  const boundsH = Math.max(...allY.map((y, i) => y + nodeH)) - boundsY + 30;
+
+  centerView(svg, zoom, {
+    x: boundsX,
+    y: boundsY,
+    width: boundsW,
+    height: boundsH,
+  }, { padding: 60 });
+});
+
+</script>
+</body>
+</html>
