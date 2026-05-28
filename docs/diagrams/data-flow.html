@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>inspectah - Data Flow</title>
+  <style>
+    /* Diagram-specific overrides layered on top of shared theme */
+    .flow-dot {
+      pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-dot { display: none !important; }
+      .glow-pulse { animation: none !important; }
+    }
+    .expand-children {
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .expand-children li {
+      list-style: none;
+      padding: 2px 0;
+    }
+    .expand-children li::before {
+      content: '\25B8 ';
+      opacity: 0.5;
+    }
+    .expand-children code {
+      font-family: var(--diagram-font-mono);
+      font-size: 11px;
+      background: rgba(96,165,250,0.1);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .command-badge {
+      font-size: 9px;
+      font-family: var(--diagram-font-mono);
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+<script type="module">
+import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
+import { createDiagramShell } from './shared/embed.js';
+import { colors, textDim, text as textColor, surface, border } from './shared/theme.js';
+import { setupTooltip, toggleExpand, centerView } from './shared/interactions.js';
+import { setupKeyboardNav, checkReducedMotion } from './shared/accessibility.js';
+
+// ─── Data flow stages derived from source ───────────────────────────
+// Source: inspectah-collect/src/inspectors/, inspectah-core/src/snapshot.rs,
+//         inspectah-pipeline/src/redaction/, inspectah-pipeline/src/render/
+const stages = [
+  {
+    id: 'host',
+    label: 'Host Filesystems',
+    sublabel: 'System Data Sources',
+    color: 'green',
+    tooltip: 'Filesystem paths and system databases read during inspection.',
+    children: [
+      { text: 'RPM database', detail: 'rpm -qa, rpm -Va, dnf history — installed packages, verification, change history' },
+      { text: '/etc config tree', detail: 'Modified RPM-owned files, unowned files, orphaned configs (max 256 KiB each)' },
+      { text: '/etc/yum.repos.d/', detail: 'Repository definitions and GPG keys for package sources' },
+      { text: 'systemd unit files', detail: 'Service state, enablement, drop-in overrides from /etc/systemd and /usr/lib/systemd' },
+      { text: '/etc/fstab + mounts', detail: 'Storage mounts, LVM, filesystem layout' },
+      { text: 'Kernel & boot params', detail: '/proc/cmdline, lsmod, sysctl overrides, GRUB config, tuned profile' },
+      { text: 'Network configuration', detail: 'Interfaces, routes, firewall rules, NetworkManager connections' },
+      { text: 'Container runtime', detail: 'Podman/Docker containers, images, quadlet files, compose stacks' },
+      { text: 'Cron & timers', detail: '/var/spool/cron, /etc/cron.d, at jobs, systemd timers' },
+      { text: 'SELinux state', detail: 'Policy, booleans, custom file contexts, port labels' },
+      { text: 'Non-RPM software', detail: 'pip/npm/gem packages, Python venvs, .env files, git repos' },
+      { text: '/etc/passwd + shadow', detail: 'Local users, groups, SSH keys, sudoers rules, shadow entries' },
+    ],
+  },
+  {
+    id: 'inspectors',
+    label: 'Inspectors',
+    sublabel: '11 Registered',
+    color: 'teal',
+    tooltip: 'Each inspector reads a specific system domain and produces a typed section.',
+    children: [
+      { text: 'RpmInspector', detail: 'Reads RPM DB, repo files, GPG keys, module streams, version locks → RpmSection' },
+      { text: 'ConfigInspector', detail: 'Walks /etc, cross-references rpm -Va, classifies files → ConfigSection' },
+      { text: 'ServiceInspector', detail: 'Lists systemd units, reads drop-ins, detects enablement → ServiceSection' },
+      { text: 'NetworkInspector', detail: 'Reads interfaces, routes, firewall, NM connections → NetworkSection' },
+      { text: 'StorageInspector', detail: 'Parses fstab, findmnt, LVM layout → StorageSection' },
+      { text: 'KernelBootInspector', detail: 'Reads cmdline, lsmod, sysctl, tuned, boot snippets → KernelBootSection' },
+      { text: 'ContainerInspector', detail: 'Scans Podman state, quadlet dirs, compose files → ContainerSection' },
+      { text: 'ScheduledTaskInspector', detail: 'Reads crontabs, at queue, systemd timers → ScheduledTaskSection' },
+      { text: 'SelinuxInspector', detail: 'Reads policy, booleans, custom contexts → SelinuxSection' },
+      { text: 'NonRpmInspector', detail: 'Scans pip/npm/gem, venvs, .env files, git repos → NonRpmSoftwareSection' },
+      { text: 'UserInspector', detail: 'Reads passwd/shadow, groups, SSH keys, sudoers → UserGroupSection' },
+    ],
+  },
+  {
+    id: 'snapshot',
+    label: 'InspectionSnapshot',
+    sublabel: 'Schema v17',
+    color: 'blue',
+    glow: true,
+    tooltip: 'Structured JSON aggregating all inspector outputs into a single document.',
+    children: [
+      { text: 'schema_version: 17', detail: 'Versioned format for forward/backward compatibility' },
+      { text: 'rpm: RpmSection', detail: 'Packages, repos, GPG keys, module streams, version locks' },
+      { text: 'config: ConfigSection', detail: 'Modified and unowned config file contents' },
+      { text: 'services: ServiceSection', detail: 'systemd unit inventory with state and actions' },
+      { text: 'network: NetworkSection', detail: 'Interface and route configuration' },
+      { text: 'storage: StorageSection', detail: 'Mount points, fstab, LVM definitions' },
+      { text: 'kernel_boot: KernelBootSection', detail: 'Boot params, modules, sysctl, tuned' },
+      { text: 'containers: ContainerSection', detail: 'Container and image runtime state' },
+      { text: 'scheduled_tasks: ScheduledTaskSection', detail: 'Cron jobs, at jobs, systemd timers' },
+      { text: 'selinux: SelinuxSection', detail: 'Policy mode, booleans, file contexts' },
+      { text: 'non_rpm_software: NonRpmSoftwareSection', detail: 'pip/npm/gem packages, env files, git repos' },
+      { text: 'users_groups: UserGroupSection', detail: 'Users, groups, SSH keys, sudoers, shadow' },
+      { text: 'redaction_hints: Vec', detail: 'Inspector-emitted flags for content requiring review' },
+      { text: 'warnings + completeness', detail: 'Data quality signals and section availability' },
+    ],
+  },
+  {
+    id: 'redaction',
+    label: 'Sensitive Data Handling',
+    sublabel: 'Redaction Engine',
+    color: 'red',
+    glow: true,
+    tooltip: 'Scans snapshot content in-place, replacing secrets with REDACTED_ tokens.',
+    children: [
+      { text: 'Regex pattern scan', detail: 'Private keys, API tokens, access keys, encryption keys, signing keys' },
+      { text: 'Proxy credential masking', detail: 'URLs with embedded user:pass in proxy settings' },
+      { text: 'Password key-value pairs', detail: 'proxy_password, token_username in config files' },
+      { text: 'Shadow hash redaction', detail: 'Password hashes in /etc/shadow replaced with tokens' },
+      { text: 'Mount option scrubbing', detail: 'Credentials embedded in fstab mount options' },
+      { text: 'SSH key handling', detail: 'Stripped unless operator sets preserved_ssh_keys' },
+      { text: 'Inspector hint resolution', detail: 'Hints converted to findings; honesty rule checks post-redaction content' },
+      { text: 'Allowlist filtering', detail: 'PAM files and known false positives suppressed' },
+      { text: 'Redaction state tracking', detail: 'FullyRedacted vs PartiallyRedacted with unresolved count' },
+    ],
+  },
+  {
+    id: 'renderers',
+    label: 'Renderers',
+    sublabel: '8 Output Artifacts',
+    color: 'purple',
+    tooltip: 'Transform the redacted snapshot into migration deliverables.',
+    children: [
+      { text: 'render_containerfile()', detail: 'Containerfile — image build definition with COPY lines from config tree' },
+      { text: 'render_report()', detail: 'report.html — minimal PatternFly HTML report' },
+      { text: 'render_audit()', detail: 'audit-report.md — findings and recommendations' },
+      { text: 'render_secrets_review()', detail: 'secrets-review.md — redacted items requiring manual handling' },
+      { text: 'render_readme()', detail: 'README.md — summary with build commands and artifact table' },
+      { text: 'render_kickstart()', detail: 'kickstart-suggestion.ks — deploy-time settings' },
+      { text: 'write_config_tree()', detail: 'config/ tree — config files materialized for COPY into image' },
+      { text: 'snapshot JSON', detail: 'inspection-snapshot.json — the raw snapshot data for tooling' },
+      { text: 'render_service_intent()', detail: 'Service intent plan — quadlet/systemd migration mapping' },
+      { text: 'Users: kickstart + TOML + Containerfile', detail: 'inspectah-users.ks, blueprint TOML, Containerfile user lines' },
+    ],
+  },
+  {
+    id: 'tarball',
+    label: 'Tarball Output',
+    sublabel: '{hostname}-{timestamp}.tar.gz',
+    color: 'orange',
+    tooltip: 'All artifacts packaged into a compressed archive.',
+    children: [
+      { text: 'Containerfile', detail: 'Always written — image build definition' },
+      { text: 'report.html', detail: 'Always written — PatternFly visual report' },
+      { text: 'audit-report.md', detail: 'Always written — markdown findings' },
+      { text: 'secrets-review.md', detail: 'Always written — redaction details' },
+      { text: 'README.md', detail: 'Always written — summary and build commands' },
+      { text: 'kickstart-suggestion.ks', detail: 'Always written — deploy-time settings' },
+      { text: 'inspection-snapshot.json', detail: 'Always written — raw snapshot data' },
+      { text: 'config/ tree', detail: 'Always written — materialized config files' },
+      { text: 'schema/snapshot.schema.json', detail: 'Always written — JSON schema placeholder' },
+      { text: 'inspectah-users.ks', detail: 'Conditional — only if users/groups present' },
+      { text: 'inspectah-users.toml', detail: 'Conditional — only if users/groups present' },
+      { text: 'users/home/*/ssh/', detail: 'Conditional — only if SSH keys preserved' },
+      { text: 'env-files/', detail: 'Conditional — only if .env files detected' },
+    ],
+  },
+];
+
+// ─── Command badge data ─────────────────────────────────────────────
+// Distinguish which commands produce which artifact scope
+const commandBadges = {
+  host: null,
+  inspectors: null,
+  snapshot: null,
+  redaction: null,
+  renderers: [
+    { cmd: 'scan', note: 'Full artifact set' },
+    { cmd: 'refine', note: 'Re-renders subset' },
+  ],
+  tarball: [
+    { cmd: 'scan', note: 'Complete tarball' },
+    { cmd: 'fleet', note: 'Aggregates multiple tarballs' },
+  ],
+};
+
+// ─── Shell setup ─────────────────────────────────────────────────────
+const { svg, g, width, height, zoom } = createDiagramShell({
+  title: 'Data Flow',
+  backUrl: '../reference/output-artifacts.html',
+  legendItems: [
+    { color: colors.green.stroke,  label: 'Host Data' },
+    { color: colors.teal.stroke,   label: 'Inspectors' },
+    { color: colors.blue.stroke,   label: 'Snapshot' },
+    { color: colors.red.stroke,    label: 'Redaction' },
+    { color: colors.purple.stroke, label: 'Renderers' },
+    { color: colors.orange.stroke, label: 'Output' },
+  ],
+});
+
+const reducedMotion = checkReducedMotion();
+const tooltip = setupTooltip(document.body);
+const expanded = new Map();
+
+// ─── Layout constants ────────────────────────────────────────────────
+const nodeW = 190;
+const nodeH = 68;
+const gap = 54;
+const totalW = stages.length * (nodeW + gap) - gap;
+const startX = (width - totalW) / 2;
+const baseY = height / 2 - nodeH / 2;
+
+// Compute node positions
+stages.forEach((s, i) => {
+  s.x = startX + i * (nodeW + gap);
+  s.y = baseY;
+});
+
+// ─── Draw connector lines ───────────────────────────────────────────
+const connectors = g.append('g').attr('class', 'connectors');
+
+for (let i = 0; i < stages.length - 1; i++) {
+  const from = stages[i];
+  const to = stages[i + 1];
+  connectors.append('line')
+    .attr('class', 'link')
+    .attr('x1', from.x + nodeW)
+    .attr('y1', from.y + nodeH / 2)
+    .attr('x2', to.x)
+    .attr('y2', to.y + nodeH / 2)
+    .attr('stroke', border)
+    .attr('stroke-width', 1.5)
+    .attr('marker-end', 'url(#arrow-default)');
+}
+
+// ─── Animated flow dots ─────────────────────────────────────────────
+if (!reducedMotion) {
+  const dotLayer = g.append('g').attr('class', 'flow-dots');
+  for (let i = 0; i < stages.length - 1; i++) {
+    const from = stages[i];
+    const to = stages[i + 1];
+    const x1 = from.x + nodeW;
+    const y1 = from.y + nodeH / 2;
+    const x2 = to.x;
+    const y2 = to.y + nodeH / 2;
+
+    const dot = dotLayer.append('circle')
+      .attr('class', 'flow-dot')
+      .attr('r', 3)
+      .attr('fill', colors.blue.stroke)
+      .attr('opacity', 0.7);
+
+    function animateDot() {
+      dot
+        .attr('cx', x1)
+        .attr('cy', y1)
+        .attr('opacity', 0)
+        .transition()
+        .delay(i * 400)
+        .duration(0)
+        .attr('opacity', 0.7)
+        .transition()
+        .duration(1200)
+        .ease(d3.easeLinear)
+        .attr('cx', x2)
+        .attr('cy', y2)
+        .transition()
+        .duration(200)
+        .attr('opacity', 0)
+        .on('end', animateDot);
+    }
+    animateDot();
+  }
+}
+
+// ─── Draw nodes ─────────────────────────────────────────────────────
+const nodeGroup = g.append('g').attr('class', 'nodes');
+
+const nodes = nodeGroup.selectAll('.node')
+  .data(stages)
+  .join('g')
+    .attr('class', 'node')
+    .attr('transform', d => `translate(${d.x}, ${d.y})`)
+    .attr('tabindex', (d, i) => i === 0 ? '0' : '-1')
+    .attr('role', 'button')
+    .attr('aria-expanded', 'false')
+    .attr('aria-label', d => `${d.label}: ${d.sublabel}. Click to expand details.`);
+
+// Background rect
+nodes.append('rect')
+  .attr('width', nodeW)
+  .attr('height', nodeH)
+  .attr('rx', 10)
+  .attr('ry', 10)
+  .attr('fill', d => colors[d.color].fill)
+  .attr('stroke', d => colors[d.color].stroke)
+  .attr('stroke-width', 1.5);
+
+// Title and desc for SVG accessibility
+nodes.append('title')
+  .text(d => d.label);
+
+nodes.append('desc')
+  .text(d => d.tooltip);
+
+// Glow pulse for special nodes
+if (!reducedMotion) {
+  nodes.filter(d => d.glow)
+    .select('rect')
+    .style('animation', 'glow-pulse 3s ease-in-out infinite');
+
+  const glowStyle = document.createElement('style');
+  glowStyle.textContent = `
+    @keyframes glow-pulse {
+      0%, 100% { filter: none; }
+      50% { filter: drop-shadow(0 0 6px rgba(96,165,250,0.4)); }
+    }
+  `;
+  document.head.appendChild(glowStyle);
+}
+
+// Label text
+nodes.append('text')
+  .attr('class', 'node-label')
+  .attr('x', nodeW / 2)
+  .attr('y', 26)
+  .attr('text-anchor', 'middle')
+  .attr('fill', d => colors[d.color].text)
+  .text(d => d.label);
+
+// Sublabel text
+nodes.append('text')
+  .attr('class', 'node-sublabel')
+  .attr('x', nodeW / 2)
+  .attr('y', 44)
+  .attr('text-anchor', 'middle')
+  .text(d => d.sublabel);
+
+// Command badges (scan/refine/fleet distinctions)
+nodes.each(function(d) {
+  const badges = commandBadges[d.id];
+  if (!badges) return;
+  const group = d3.select(this);
+  badges.forEach((b, idx) => {
+    group.append('text')
+      .attr('class', 'command-badge')
+      .attr('x', nodeW / 2)
+      .attr('y', nodeH + 12 + idx * 11)
+      .attr('text-anchor', 'middle')
+      .attr('fill', textDim)
+      .text(`${b.cmd}: ${b.note}`);
+  });
+});
+
+// Expand indicator
+nodes.append('text')
+  .attr('x', nodeW / 2)
+  .attr('y', nodeH - 4)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .attr('font-size', '9px')
+  .attr('class', 'expand-hint')
+  .text(d => d.children ? `${d.children.length} details` : '');
+
+// ─── Expand/collapse panels ────────────────────────────────────────
+const panelGroup = g.append('g').attr('class', 'expand-panels');
+
+// Hidden live region for screen readers
+const liveRegion = document.createElement('div');
+liveRegion.setAttribute('role', 'status');
+liveRegion.setAttribute('aria-live', 'polite');
+liveRegion.className = 'sr-only';
+document.body.appendChild(liveRegion);
+
+// Tooltip descriptions via aria-describedby
+const tooltipDescContainer = document.createElement('div');
+tooltipDescContainer.className = 'sr-only';
+document.body.appendChild(tooltipDescContainer);
+
+stages.forEach(s => {
+  const descEl = document.createElement('span');
+  descEl.id = `desc-${s.id}`;
+  descEl.textContent = s.tooltip;
+  tooltipDescContainer.appendChild(descEl);
+});
+
+nodes.attr('aria-describedby', d => `desc-${d.id}`);
+
+function renderExpand(nodeId, isExpanded) {
+  const stage = stages.find(s => s.id === nodeId);
+  if (!stage || !stage.children) return;
+
+  // Update ARIA
+  nodes.filter(d => d.id === nodeId)
+    .attr('aria-expanded', String(isExpanded));
+
+  // Remove existing panel for this node
+  panelGroup.selectAll(`.panel-${nodeId}`).remove();
+
+  if (!isExpanded) {
+    liveRegion.textContent = `${stage.label} collapsed.`;
+    return;
+  }
+
+  liveRegion.textContent = `${stage.label} expanded. ${stage.children.length} items.`;
+
+  const panelW = 240;
+  const lineH = 22;
+  const headerH = 32;
+  const padV = 12;
+  const panelH = headerH + stage.children.length * lineH + padV * 2;
+  const panelX = stage.x + (nodeW - panelW) / 2;
+  const panelY = stage.y + nodeH + 16;
+
+  const panel = panelGroup.append('g')
+    .attr('class', `panel-${nodeId}`)
+    .attr('transform', `translate(${panelX}, ${panelY})`);
+
+  // Connector line from node to panel
+  panel.append('line')
+    .attr('x1', panelW / 2)
+    .attr('y1', -16)
+    .attr('x2', panelW / 2)
+    .attr('y2', 0)
+    .attr('stroke', colors[stage.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
+
+  // Panel background
+  panel.append('rect')
+    .attr('width', panelW)
+    .attr('height', panelH)
+    .attr('rx', 8)
+    .attr('ry', 8)
+    .attr('fill', surface)
+    .attr('stroke', colors[stage.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Header
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', 22)
+    .attr('fill', colors[stage.color].text)
+    .attr('font-size', '12px')
+    .attr('font-weight', '600')
+    .text(stage.label)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Divider
+  panel.append('line')
+    .attr('x1', 10)
+    .attr('y1', headerH)
+    .attr('x2', panelW - 10)
+    .attr('y2', headerH)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  // Children items
+  stage.children.forEach((child, idx) => {
+    const itemY = headerH + padV + idx * lineH;
+    const itemG = panel.append('g')
+      .attr('transform', `translate(14, ${itemY})`);
+
+    // Dot
+    itemG.append('circle')
+      .attr('cx', 4)
+      .attr('cy', 5)
+      .attr('r', 2.5)
+      .attr('fill', colors[stage.color].stroke)
+      .attr('opacity', 0.6);
+
+    // Label
+    itemG.append('text')
+      .attr('x', 14)
+      .attr('y', 9)
+      .attr('fill', textColor)
+      .attr('font-size', '11px')
+      .text(child.text)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 1);
+
+    // Tooltip on hover for detail
+    itemG
+      .on('mouseenter', (event) => {
+        tooltip.show(`<strong>${child.text}</strong><br>${child.detail}`, event);
+      })
+      .on('mousemove', (event) => tooltip.move(event))
+      .on('mouseleave', () => tooltip.hide());
+  });
+}
+
+// ─── Click interaction ──────────────────────────────────────────────
+nodes.on('click', (event, d) => {
+  toggleExpand(d.id, expanded, renderExpand);
+});
+
+// ─── Hover tooltips on main nodes ───────────────────────────────────
+nodes
+  .on('mouseenter', (event, d) => {
+    const expandState = expanded.get(d.id) ? ' (expanded)' : ' (click to expand)';
+    tooltip.show(`<strong>${d.label}</strong><br>${d.tooltip}${expandState}`, event);
+  })
+  .on('mousemove', (event) => tooltip.move(event))
+  .on('mouseleave', () => tooltip.hide());
+
+// ─── Keyboard navigation ───────────────────────────────────────────
+setupKeyboardNav(nodes, {
+  onActivate: (el, data) => {
+    if (data && data.id) {
+      toggleExpand(data.id, expanded, renderExpand);
+    }
+  },
+  onEscape: () => {
+    // Collapse all expanded panels
+    let hadExpanded = false;
+    for (const [nodeId, isExp] of expanded.entries()) {
+      if (isExp) {
+        hadExpanded = true;
+        expanded.set(nodeId, false);
+        renderExpand(nodeId, false);
+      }
+    }
+    // If nothing was expanded, exit fullscreen
+    if (!hadExpanded && document.fullscreenElement) {
+      document.exitFullscreen();
+    }
+  },
+  nodeSelector: '.node',
+});
+
+// ─── Initial centering ──────────────────────────────────────────────
+requestAnimationFrame(() => {
+  centerView(svg, zoom, {
+    x: startX - 40,
+    y: baseY - 80,
+    width: totalW + 80,
+    height: nodeH + 300,
+  }, { padding: 60 });
+});
+
+</script>
+</body>
+</html>
