@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>inspectah - Conceptual Pipeline</title>
+  <style>
+    /* Diagram-specific overrides layered on top of shared theme */
+    .flow-dot {
+      pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-dot { display: none !important; }
+      .glow-pulse { animation: none !important; }
+    }
+    .expand-children {
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .expand-children li {
+      list-style: none;
+      padding: 2px 0;
+    }
+    .expand-children li::before {
+      content: '\25B8 ';
+      opacity: 0.5;
+    }
+    .expand-children code {
+      font-family: var(--diagram-font-mono);
+      font-size: 11px;
+      background: rgba(96,165,250,0.1);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+<script type="module">
+import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
+import { createDiagramShell } from './shared/embed.js';
+import { colors, textDim, text as textColor, surface, border } from './shared/theme.js';
+import { setupTooltip, toggleExpand, centerView } from './shared/interactions.js';
+import { setupKeyboardNav, checkReducedMotion } from './shared/accessibility.js';
+
+// ─── Pipeline data derived from source ───────────────────────────────
+const stages = [
+  {
+    id: 'host',
+    label: 'Host Input',
+    sublabel: 'RHEL / CentOS / Fedora',
+    color: 'green',
+    tooltip: 'The package-mode Linux host to be inspected.',
+    children: [
+      { text: 'RHEL 7, 8, 9', detail: 'Red Hat Enterprise Linux' },
+      { text: 'CentOS Stream 8, 9', detail: 'CentOS Stream' },
+      { text: 'Fedora 38+', detail: 'Fedora Workstation / Server' },
+    ],
+  },
+  {
+    id: 'preflight',
+    label: 'Preflight',
+    sublabel: 'Environment Checks',
+    color: 'teal',
+    tooltip: 'Validates that the scan environment meets requirements.',
+    children: [
+      { text: 'Root privileges', detail: 'inspectah scan requires root' },
+      { text: 'Podman availability', detail: 'Container runtime for baseline extraction' },
+      { text: 'Registry access', detail: 'Pull target base image for comparison' },
+    ],
+  },
+  {
+    id: 'inspectors',
+    label: 'Inspectors',
+    sublabel: '11 Registered',
+    color: 'teal',
+    tooltip: 'Parallel data collectors that scan each system domain.',
+    children: [
+      { text: 'RPM', detail: 'Installed packages and repositories' },
+      { text: 'Services', detail: 'systemd unit state and enablement' },
+      { text: 'Storage', detail: 'Mount points, fstab, LVM' },
+      { text: 'Kernel & Boot', detail: 'Kernel params, modules, GRUB config' },
+      { text: 'Config', detail: 'Modified config files under /etc' },
+      { text: 'Network', detail: 'Interfaces, routes, firewall rules' },
+      { text: 'Containers', detail: 'Running containers and images' },
+      { text: 'Scheduled Tasks', detail: 'Cron jobs and systemd timers' },
+      { text: 'SELinux', detail: 'Policy, booleans, file contexts' },
+      { text: 'Non-RPM Software', detail: 'Binaries not from RPM packages' },
+      { text: 'Users & Groups', detail: 'Local accounts, groups, SSH keys' },
+    ],
+  },
+  {
+    id: 'snapshot',
+    label: 'Snapshot',
+    sublabel: 'InspectionSnapshot',
+    color: 'blue',
+    glow: true,
+    tooltip: 'Structured JSON capturing the full host state.',
+    children: [
+      { text: 'Schema v1', detail: 'Versioned JSON format' },
+      { text: 'rpm', detail: 'Package list with state classification' },
+      { text: 'services', detail: 'Unit inventory and actions' },
+      { text: 'config', detail: 'File contents and change detection' },
+      { text: 'network', detail: 'Interface and route configuration' },
+      { text: 'storage', detail: 'Mount and volume definitions' },
+      { text: 'kernel_boot', detail: 'Boot parameters and modules' },
+      { text: 'containers', detail: 'Container runtime state' },
+      { text: 'scheduled_tasks', detail: 'Cron and timer definitions' },
+      { text: 'selinux', detail: 'Policy and boolean state' },
+      { text: 'non_rpm_software', detail: 'Unpackaged binaries' },
+      { text: 'users_groups', detail: 'Account and group data' },
+    ],
+  },
+  {
+    id: 'redaction',
+    label: 'Sensitive Data Handling',
+    sublabel: 'Redaction Engine',
+    color: 'red',
+    glow: true,
+    tooltip: 'Scans snapshot for credentials, tokens, and secrets.',
+    children: [
+      { text: 'Pattern matching', detail: 'Regex-based credential detection' },
+      { text: 'Proxy credential masking', detail: 'URLs with embedded passwords' },
+      { text: 'Token detection', detail: 'GitHub PATs, GitLab tokens' },
+      { text: 'Password key-value pairs', detail: 'DNF/Yum proxy_password lines' },
+      { text: 'Allowlist filtering', detail: 'Skip known false positives (e.g. PAM)' },
+      { text: 'Operator review', detail: 'Flagged items for manual verification' },
+      { text: 'secrets-review.md', detail: 'Detailed redaction report output' },
+    ],
+  },
+  {
+    id: 'renderers',
+    label: 'Renderers',
+    sublabel: '8 Output Artifacts',
+    color: 'blue',
+    tooltip: 'Generate all migration deliverables from the snapshot.',
+    children: [
+      { text: 'Containerfile', detail: 'Image build definition' },
+      { text: 'report.html', detail: 'PatternFly HTML report' },
+      { text: 'audit-report.md', detail: 'Findings and recommendations' },
+      { text: 'secrets-review.md', detail: 'Redaction details' },
+      { text: 'README.md', detail: 'Summary with build commands' },
+      { text: 'kickstart-suggestion.ks', detail: 'Deploy-time settings' },
+      { text: 'inspection-snapshot.json', detail: 'Raw snapshot data' },
+      { text: 'config/ tree', detail: 'Config files to COPY into image' },
+    ],
+  },
+  {
+    id: 'tarball',
+    label: 'Tarball',
+    sublabel: 'Output Artifact',
+    color: 'orange',
+    tooltip: 'Compressed archive bundling all rendered outputs.',
+    children: [
+      { text: '.tar.gz archive', detail: 'All artifacts in one file' },
+      { text: 'Self-contained', detail: 'Ready to share or version-control' },
+      { text: 'Reproducible', detail: 'Re-scan produces comparable output' },
+    ],
+  },
+];
+
+// ─── Shell setup ─────────────────────────────────────────────────────
+const { svg, g, width, height, zoom } = createDiagramShell({
+  title: 'Conceptual Pipeline',
+  backUrl: '../getting-started.html',
+  legendItems: [
+    { color: colors.green.stroke,  label: 'Host Input' },
+    { color: colors.teal.stroke,   label: 'Checks & Collection' },
+    { color: colors.blue.stroke,   label: 'Processing' },
+    { color: colors.red.stroke,    label: 'Sensitive Data Handling' },
+    { color: colors.orange.stroke, label: 'Output' },
+  ],
+});
+
+const reducedMotion = checkReducedMotion();
+const tooltip = setupTooltip(document.body);
+const expanded = new Map();
+
+// ─── Layout constants ────────────────────────────────────────────────
+const nodeW = 180;
+const nodeH = 64;
+const gap = 60;
+const totalW = stages.length * (nodeW + gap) - gap;
+const startX = (width - totalW) / 2;
+const baseY = height / 2 - nodeH / 2;
+
+// Compute node positions
+stages.forEach((s, i) => {
+  s.x = startX + i * (nodeW + gap);
+  s.y = baseY;
+});
+
+// ─── Draw connector lines ───────────────────────────────────────────
+const connectors = g.append('g').attr('class', 'connectors');
+
+for (let i = 0; i < stages.length - 1; i++) {
+  const from = stages[i];
+  const to = stages[i + 1];
+  connectors.append('line')
+    .attr('class', 'link')
+    .attr('x1', from.x + nodeW)
+    .attr('y1', from.y + nodeH / 2)
+    .attr('x2', to.x)
+    .attr('y2', to.y + nodeH / 2)
+    .attr('stroke', border)
+    .attr('stroke-width', 1.5)
+    .attr('marker-end', 'url(#arrow-default)');
+}
+
+// ─── Animated flow dots ─────────────────────────────────────────────
+if (!reducedMotion) {
+  const dotLayer = g.append('g').attr('class', 'flow-dots');
+  for (let i = 0; i < stages.length - 1; i++) {
+    const from = stages[i];
+    const to = stages[i + 1];
+    const x1 = from.x + nodeW;
+    const y1 = from.y + nodeH / 2;
+    const x2 = to.x;
+    const y2 = to.y + nodeH / 2;
+
+    const dot = dotLayer.append('circle')
+      .attr('class', 'flow-dot')
+      .attr('r', 3)
+      .attr('fill', colors.blue.stroke)
+      .attr('opacity', 0.7);
+
+    function animateDot() {
+      dot
+        .attr('cx', x1)
+        .attr('cy', y1)
+        .attr('opacity', 0)
+        .transition()
+        .delay(i * 400)
+        .duration(0)
+        .attr('opacity', 0.7)
+        .transition()
+        .duration(1200)
+        .ease(d3.easeLinear)
+        .attr('cx', x2)
+        .attr('cy', y2)
+        .transition()
+        .duration(200)
+        .attr('opacity', 0)
+        .on('end', animateDot);
+    }
+    animateDot();
+  }
+}
+
+// ─── Draw nodes ─────────────────────────────────────────────────────
+const nodeGroup = g.append('g').attr('class', 'nodes');
+
+const nodes = nodeGroup.selectAll('.node')
+  .data(stages)
+  .join('g')
+    .attr('class', 'node')
+    .attr('transform', d => `translate(${d.x}, ${d.y})`)
+    .attr('tabindex', (d, i) => i === 0 ? '0' : '-1')
+    .attr('role', 'button')
+    .attr('aria-expanded', 'false')
+    .attr('aria-label', d => `${d.label}: ${d.sublabel}. Click to expand details.`);
+
+// Background rect
+nodes.append('rect')
+  .attr('width', nodeW)
+  .attr('height', nodeH)
+  .attr('rx', 10)
+  .attr('ry', 10)
+  .attr('fill', d => colors[d.color].fill)
+  .attr('stroke', d => colors[d.color].stroke)
+  .attr('stroke-width', 1.5);
+
+// Title and desc for SVG accessibility
+nodes.append('title')
+  .text(d => d.label);
+
+nodes.append('desc')
+  .text(d => d.tooltip);
+
+// Glow pulse for special nodes
+if (!reducedMotion) {
+  nodes.filter(d => d.glow)
+    .select('rect')
+    .style('animation', 'glow-pulse 3s ease-in-out infinite');
+
+  // Add glow keyframes
+  const glowStyle = document.createElement('style');
+  glowStyle.textContent = `
+    @keyframes glow-pulse {
+      0%, 100% { filter: none; }
+      50% { filter: drop-shadow(0 0 6px rgba(96,165,250,0.4)); }
+    }
+  `;
+  document.head.appendChild(glowStyle);
+}
+
+// Label text
+nodes.append('text')
+  .attr('class', 'node-label')
+  .attr('x', nodeW / 2)
+  .attr('y', 26)
+  .attr('text-anchor', 'middle')
+  .attr('fill', d => colors[d.color].text)
+  .text(d => d.label);
+
+// Sublabel text
+nodes.append('text')
+  .attr('class', 'node-sublabel')
+  .attr('x', nodeW / 2)
+  .attr('y', 44)
+  .attr('text-anchor', 'middle')
+  .text(d => d.sublabel);
+
+// Expand indicator
+nodes.append('text')
+  .attr('x', nodeW / 2)
+  .attr('y', nodeH - 4)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .attr('font-size', '9px')
+  .attr('class', 'expand-hint')
+  .text(d => d.children ? `${d.children.length} details` : '');
+
+// ─── Expand/collapse panels ────────────────────────────────────────
+const panelGroup = g.append('g').attr('class', 'expand-panels');
+
+// Hidden live region for screen readers
+const liveRegion = document.createElement('div');
+liveRegion.setAttribute('role', 'status');
+liveRegion.setAttribute('aria-live', 'polite');
+liveRegion.className = 'sr-only';
+document.body.appendChild(liveRegion);
+
+// Tooltip descriptions via aria-describedby
+const tooltipDescContainer = document.createElement('div');
+tooltipDescContainer.className = 'sr-only';
+document.body.appendChild(tooltipDescContainer);
+
+stages.forEach(s => {
+  const descEl = document.createElement('span');
+  descEl.id = `desc-${s.id}`;
+  descEl.textContent = s.tooltip;
+  tooltipDescContainer.appendChild(descEl);
+});
+
+nodes.attr('aria-describedby', d => `desc-${d.id}`);
+
+function renderExpand(nodeId, isExpanded) {
+  const stage = stages.find(s => s.id === nodeId);
+  if (!stage || !stage.children) return;
+
+  // Update ARIA
+  nodes.filter(d => d.id === nodeId)
+    .attr('aria-expanded', String(isExpanded));
+
+  // Remove existing panel for this node
+  panelGroup.selectAll(`.panel-${nodeId}`).remove();
+
+  if (!isExpanded) {
+    liveRegion.textContent = `${stage.label} collapsed.`;
+    return;
+  }
+
+  liveRegion.textContent = `${stage.label} expanded. ${stage.children.length} items.`;
+
+  const panelW = 220;
+  const lineH = 22;
+  const headerH = 32;
+  const padV = 12;
+  const panelH = headerH + stage.children.length * lineH + padV * 2;
+  const panelX = stage.x + (nodeW - panelW) / 2;
+  const panelY = stage.y + nodeH + 16;
+
+  const panel = panelGroup.append('g')
+    .attr('class', `panel-${nodeId}`)
+    .attr('transform', `translate(${panelX}, ${panelY})`);
+
+  // Connector line from node to panel
+  panel.append('line')
+    .attr('x1', panelW / 2)
+    .attr('y1', -16)
+    .attr('x2', panelW / 2)
+    .attr('y2', 0)
+    .attr('stroke', colors[stage.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
+
+  // Panel background
+  panel.append('rect')
+    .attr('width', panelW)
+    .attr('height', panelH)
+    .attr('rx', 8)
+    .attr('ry', 8)
+    .attr('fill', surface)
+    .attr('stroke', colors[stage.color].stroke)
+    .attr('stroke-width', 1)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Header
+  panel.append('text')
+    .attr('x', 14)
+    .attr('y', 22)
+    .attr('fill', colors[stage.color].text)
+    .attr('font-size', '12px')
+    .attr('font-weight', '600')
+    .text(stage.label)
+    .attr('opacity', 0)
+    .transition()
+    .duration(reducedMotion ? 0 : 200)
+    .attr('opacity', 1);
+
+  // Divider
+  panel.append('line')
+    .attr('x1', 10)
+    .attr('y1', headerH)
+    .attr('x2', panelW - 10)
+    .attr('y2', headerH)
+    .attr('stroke', border)
+    .attr('stroke-width', 0.5);
+
+  // Children items
+  stage.children.forEach((child, idx) => {
+    const itemY = headerH + padV + idx * lineH;
+    const itemG = panel.append('g')
+      .attr('transform', `translate(14, ${itemY})`);
+
+    // Dot
+    itemG.append('circle')
+      .attr('cx', 4)
+      .attr('cy', 5)
+      .attr('r', 2.5)
+      .attr('fill', colors[stage.color].stroke)
+      .attr('opacity', 0.6);
+
+    // Label
+    itemG.append('text')
+      .attr('x', 14)
+      .attr('y', 9)
+      .attr('fill', textColor)
+      .attr('font-size', '11px')
+      .text(child.text)
+      .attr('opacity', 0)
+      .transition()
+      .delay(reducedMotion ? 0 : idx * 30)
+      .duration(reducedMotion ? 0 : 150)
+      .attr('opacity', 1);
+
+    // Tooltip on hover for detail
+    itemG
+      .on('mouseenter', (event) => {
+        tooltip.show(`<strong>${child.text}</strong><br>${child.detail}`, event);
+      })
+      .on('mousemove', (event) => tooltip.move(event))
+      .on('mouseleave', () => tooltip.hide());
+  });
+}
+
+// ─── Click interaction ──────────────────────────────────────────────
+nodes.on('click', (event, d) => {
+  toggleExpand(d.id, expanded, renderExpand);
+});
+
+// ─── Hover tooltips on main nodes ───────────────────────────────────
+nodes
+  .on('mouseenter', (event, d) => {
+    const expandState = expanded.get(d.id) ? ' (expanded)' : ' (click to expand)';
+    tooltip.show(`<strong>${d.label}</strong><br>${d.tooltip}${expandState}`, event);
+  })
+  .on('mousemove', (event) => tooltip.move(event))
+  .on('mouseleave', () => tooltip.hide());
+
+// ─── Keyboard navigation ───────────────────────────────────────────
+setupKeyboardNav(nodes, {
+  onActivate: (el, data) => {
+    if (data && data.id) {
+      toggleExpand(data.id, expanded, renderExpand);
+    }
+  },
+  onEscape: () => {
+    // Collapse all expanded panels
+    let hadExpanded = false;
+    for (const [nodeId, isExp] of expanded.entries()) {
+      if (isExp) {
+        hadExpanded = true;
+        expanded.set(nodeId, false);
+        renderExpand(nodeId, false);
+      }
+    }
+    // If nothing was expanded, exit fullscreen
+    if (!hadExpanded && document.fullscreenElement) {
+      document.exitFullscreen();
+    }
+  },
+  nodeSelector: '.node',
+});
+
+// ─── Initial centering ──────────────────────────────────────────────
+requestAnimationFrame(() => {
+  centerView(svg, zoom, {
+    x: startX - 40,
+    y: baseY - 80,
+    width: totalW + 80,
+    height: nodeH + 300,
+  }, { padding: 60 });
+});
+
+</script>
+</body>
+</html>
