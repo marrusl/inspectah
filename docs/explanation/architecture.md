@@ -1,197 +1,332 @@
+---
+title: Architecture
+parent: Explanation
+nav_order: 1
+---
+
 # Architecture
 
-This document covers inspectah internals: inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../reference/design.md).
+Inspectah is structured as a Rust workspace of six crates. This separation is
+deliberate: each crate owns one concern, and the boundaries between them
+reflect real architectural decisions about what should depend on what. This
+document explains both the structure and the reasoning behind it.
 
-## Overview
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-software-architecture"
+          src="../diagrams/software-architecture.html"
+          title="Software Architecture — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-software-architecture"
+            onclick="(function(btn){var iframe=document.getElementById('diagram-software-architecture');if(iframe.requestFullscreen){iframe.requestFullscreen();iframe._triggerBtn=btn;document.addEventListener('fullscreenchange',function handler(){if(!document.fullscreenElement){document.removeEventListener('fullscreenchange',handler);if(iframe._triggerBtn){iframe._triggerBtn.focus();iframe._triggerBtn=null;}}});}else{window.open(iframe.src,'_blank');}})(this)"
+            aria-label="Open software architecture diagram in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The software architecture diagram shows how inspectah's six crates relate to each other and where the dependency boundaries fall.</em></p>
+</div>
 
-inspectah is a native Rust CLI built as a Cargo workspace with six crates:
+## The workspace at a glance
 
-- **inspectah-cli** — the user-facing binary (`inspectah`). Handles argument parsing (clap), host inspection orchestration, and subcommand dispatch. Distributed via COPR RPM and Homebrew.
-- **inspectah-core** — schema types, snapshot model, and shared domain logic.
-- **inspectah-collect** — inspectors that run against a host root and produce structured data.
-- **inspectah-pipeline** — orchestrates inspectors, baseline resolution, and renderers.
-- **inspectah-web** — HTML report renderer and interactive refine/architect/fleet web UIs.
-- **inspectah-refine** — refine engine for interactive editing and re-rendering.
+The six crates form a layered dependency graph:
 
-Key abstractions:
+| Crate | Purpose | Depends on |
+|-------|---------|------------|
+| **inspectah-core** | Schema types, traits, snapshot model | Nothing (leaf crate) |
+| **inspectah-collect** | Host inspection, data gathering | core |
+| **inspectah-pipeline** | Orchestration, rendering, output generation | core, collect |
+| **inspectah-refine** | Interactive editing and re-rendering engine | core, pipeline |
+| **inspectah-web** | HTTP server, HTML reports, interactive UIs | core |
+| **inspectah-cli** | Binary entry point, argument parsing, subcommands | all of the above |
 
-- **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
-- **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
+Dependencies flow in one direction: from the CLI inward toward core. No crate
+depends on a crate above it in this table. This layering is what makes the
+system testable -- you can unit-test core types without a host, test collectors
+with a mock executor, and test renderers against fixture snapshots without
+running a real scan.
 
-A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
+## inspectah-core: the shared language
 
-Five subcommands complete the workflow:
+Core is the leaf crate. It defines the data types that every other crate
+speaks: the snapshot schema, fleet models, baseline definitions, and the trait
+interfaces that collectors and renderers implement.
 
-- **`inspectah scan`** inspects a host and produces migration artifacts (Containerfile, reports, snapshot).
-- **`inspectah refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
-- **`inspectah fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
-- **`inspectah architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition.
-- **`inspectah build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling. This subcommand runs directly on the host (not inside the container) since it wraps `podman build`.
+**Why it exists separately.** If type definitions lived alongside the code that
+uses them, you would get circular dependencies the moment two crates needed to
+share a type. Core breaks that cycle by owning the vocabulary. A collector
+produces `types::RpmPackage` values. A renderer consumes them. Neither needs
+to know about the other -- they both speak core.
 
-## Refine UI Internals
+Core contains several important modules:
 
-Every inspected item (packages, config files, services, repos, etc.) has an include/exclude checkbox. Users and groups have per-row strategy dropdowns (`sysusers`, `useradd`, `blueprint`, `kickstart`) with apply-all buttons for batch changes. The sticky footer toolbar reflects three states: **dirty** (changes pending, Re-render button highlighted), **clean + helper** (no pending changes, tarball download available), and **standalone** (report opened without the refine server — checkboxes hidden, toolbar collapsed). Clicking Re-render sends the modified snapshot to the server, which runs a fresh render and replaces the page with the updated report. The Download Tarball button packages the current output state for transfer.
+- **types/** -- One module per domain: `rpm`, `config`, `services`, `network`,
+  `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
+  `nonrpm`, `fleet`, and supporting types like `warnings`, `redaction`,
+  `completeness`, and `preflight`. Each defines the serializable structs that
+  flow through the entire pipeline.
+- **traits/** -- The `Inspector`, `Renderer`, `Detector`, `Executor`, and
+  `Progress` traits that define the contracts between crates. Collectors
+  implement `Inspector`. Output generators implement `Renderer`. The executor
+  abstraction enables testing without a real host.
+- **snapshot.rs** -- The top-level `Snapshot` struct that aggregates all
+  inspection results into a single serializable document.
+- **baseline.rs** -- Baseline resolution logic: given a target image, determine
+  which packages, services, and configs are defaults versus operator-added.
+- **fleet/** -- Fleet merge, manifest, and validation logic for combining
+  multiple host snapshots into aggregate fleet data.
+- **pipeline.rs** -- Pipeline configuration types shared between the
+  orchestrator and its consumers.
 
-## Build Cert Handling
+## inspectah-collect: talking to the host
 
-For RHEL base images (`registry.redhat.io`), `inspectah build` searches for subscription certificates in this order: bundled in the inspectah output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `--entitlements-dir`. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured. Use `--no-entitlements` to skip detection entirely.
+Collect is the crate that actually touches the system. It runs commands,
+reads files, queries package databases, and produces structured data. Every
+piece of host interaction lives here and nowhere else.
 
-## Fleet Report Features
+**Why collection is isolated.** Inspecting a host involves calling `rpm -qa`,
+reading `/proc/sys`, parsing firewall rules, walking `/etc` -- operations that
+are messy, platform-specific, and sometimes require elevated privileges. By
+quarantining all of this in one crate, the rest of the system stays pure: it
+operates on well-typed Rust structs rather than raw command output and file
+contents.
 
-The fleet HTML report includes fleet-specific UI: a summary banner, prevalence color bars on every item (showing how many hosts have it), click-to-toggle fraction/percentage display, host list popovers with a split Copy button (one-per-line, comma-separated, or space-separated formats), and grouped content variants for config files with differences across hosts.
+The key abstraction is the **Executor** trait. Collect defines two
+implementations: `RealExecutor`, which runs commands on an actual host (or a
+chroot), and `MockExecutor`, which returns canned output for testing. Every
+inspector accepts an executor, which means every inspector is testable without
+root access or a real system.
 
-## Inspectors
+Collect's inspectors mirror the domain types in core:
 
-Each inspector examines one aspect of the host and contributes a section to the inspection snapshot.
+- **rpm/** -- Package inventory, leaf/auto classification, version drift
+  detection, repo tracking, GPG key resolution, modified config detection via
+  `rpm -Va`, and unowned file scanning.
+- **config/** -- Configuration file discovery via filesystem walk, RPM
+  ownership classification, content diffing against package defaults, and
+  semantic category assignment.
+- **services.rs** -- Systemd unit enumeration, preset comparison, and
+  enablement state detection.
+- **network.rs** -- Firewall rules, hostname, DNS configuration, network
+  connection profiles, and proxy settings.
+- **kernelboot.rs** -- Kernel parameters, loaded modules, sysctl values with
+  source attribution, locale, and timezone detection.
+- **containers.rs**, **storage.rs**, **scheduled.rs**, **selinux.rs**,
+  **nonrpm.rs**, **users.rs** -- Domain-specific inspectors for containers,
+  storage mounts, cron/timers, SELinux policy, non-RPM software, and user
+  accounts.
+- **baseline.rs** -- Baseline image querying: runs `podman run` against the
+  target image to extract its package list, service presets, and config
+  defaults for subtraction.
+- **ffi/** -- Optional RPM FFI bindings for direct librpm access (behind the
+  `ffi-rpm` feature flag), avoiding the overhead of shelling out to `rpm`.
 
-### RPM / Packages
+## inspectah-pipeline: from data to artifacts
 
-- Full package inventory via `rpm -qa` with epoch/version/release/arch
-- Baseline from the target **bootc base image** — queries the image directly via `podman run` to get its package list, then diffs against installed packages to identify what the operator added
-- **Version drift detection**: compares package versions between host and base image. Downgrades (host has newer version that would be reverted) are flagged as warnings; upgrades (base image is newer) are noted as informational. Gracefully skipped when using names-only baseline files.
-- Leaf/auto classification: `dnf repoquery --userinstalled` identifies packages the operator explicitly installed vs those pulled in as dependencies. Only leaf packages appear in the Containerfile's `dnf install` line. Falls back to dependency graph analysis (`dnf repoquery --recursive` or `rpm -qR`) when `--userinstalled` is unavailable. This is more accurate than pure graph-based classification — it correctly handles packages like `git` that the operator installed but which other added packages also depend on.
-- Source repo tracking per package via `dnf repoquery --installed`, with repo-grouped display in the HTML report and audit report
-- GPG key handling: parses `gpgkey=file:///...` from repo files (including INI-style continuation lines), resolves `$releasever` and `$basearch` variables, and COPYs key files into the image before `dnf install`
-- Modified config detection via `rpm -Va` with verification flags
-- Unowned file detection using bulk `rpm -qla` set subtraction (fast, avoids per-file lookups)
-- `dnf history` analysis for packages that were installed then removed (orphaned configs)
-- Repo file capture from `/etc/yum.repos.d/` and `/etc/dnf/`
-- Optional line-by-line diffs against RPM defaults (`--config-diffs`) with syntax-highlighted rendering in the HTML report
+Pipeline is the orchestration layer. It takes the raw data from collect,
+applies baseline subtraction, runs redaction, validates the results, and
+produces output artifacts. It is the crate that answers "given an inspection,
+what should the output look like?"
 
-### Services
+**Why pipeline sits between collect and the output.** Collection gathers
+everything. But not everything belongs in the output -- base image defaults
+should be subtracted, secrets should be redacted, and the remaining data needs
+to be formatted into specific artifact types. Pipeline owns all of that
+transformation logic.
 
-- Enabled/disabled/masked unit state from `systemctl list-unit-files` with filesystem-based fallback
-- Diff against **base image** systemd preset defaults (queried from the target bootc image)
-- State change actions generated for the Containerfile (`systemctl enable`/`disable`)
+Pipeline's modules:
 
-### Configuration Files
+- **orchestrate.rs** -- The top-level scan orchestrator. Runs inspectors in
+  sequence, feeds results through baseline subtraction, and dispatches to
+  renderers. This is where the scan workflow is defined.
+- **collect.rs** -- Adapter between the orchestrator and the collect crate's
+  inspectors.
+- **validate.rs** -- Post-collection validation: preflight checks, consistency
+  assertions, and completeness verification.
+- **redaction/** -- Secret detection and redaction engine. Pattern-based
+  scanning with configurable rules ensures credentials, API keys, and other
+  sensitive values never appear in output artifacts.
+- **render/** -- Output renderers, each implementing the `Renderer` trait:
+  - `containerfile.rs` -- Generates a Containerfile with correctly ordered
+    `RUN`, `COPY`, and `RUN dnf install` directives.
+  - `report.rs` -- HTML report with tabbed sections, interactive checkboxes,
+    and embedded JavaScript for the refine UI.
+  - `audit.rs` -- Machine-readable audit log of all inspection findings.
+  - `kickstart.rs` -- Kickstart file generation for hosts that use that
+    provisioning model.
+  - `tarball.rs` -- Packages all output artifacts into a downloadable archive.
+  - `users.rs` -- User and group materialization with strategy-aware rendering.
+  - `secrets.rs` -- Secrets scan summary renderer.
+  - `safety.rs` -- Safety net warnings for items that need manual review.
+  - Supporting modules: `baseline_fmt.rs`, `configtree.rs`,
+    `service_intent.rs`, `readme.rs`.
 
-- RPM-owned modified files (from `rpm -Va`)
-- Unowned files in `/etc` (hand-placed configs) with extensible exclusion list for system-generated artifacts
-- Orphaned configs from removed packages
-- Sensitive content detection and automatic redaction
-- Semantic categories assigned by path (tmpfiles, environment, audit, library_path, journal, logrotate, automount, sysctl) — displayed as a sortable "Category" column in the HTML report
-- Optional `--config-diffs`: retrieves RPM defaults from local cache or downloads from repos, generates unified diffs
+## inspectah-refine: interactive editing
 
-### Network
+Refine manages the interactive session state. When a user runs
+`inspectah refine`, the tool serves a web UI where they can toggle items in
+and out, change user migration strategies, and re-render the Containerfile
+live. Refine is the engine behind that interactivity.
 
-- NetworkManager connection profiles classified as **static** (bake into image) or **DHCP** (kickstart at deploy)
-- Firewalld zone parsing: services, ports, and rich rules from zone XML
-- Firewalld direct rules from `direct.xml`
-- `resolv.conf` provenance detection: systemd-resolved, NetworkManager-managed, or hand-edited
-- `ip route` and `ip rule` capture with default rule filtering
-- `/etc/hosts` additions and proxy settings
-- Containerfile COPYs zone XML files; `firewall-offline-cmd` equivalents are documented in the audit report
-- Static route file detection with FIXME guidance in both Containerfile and kickstart (translate to NM connection properties)
-- Proxy env vars and `/etc/hosts` additions rendered in both Containerfile and kickstart
+**Why refine is a separate crate from pipeline.** Pipeline renders once: data
+in, artifacts out. Refine manages a stateful session: the user changes a
+toggle, the snapshot is mutated, and the pipeline re-renders with the new
+state. This session management, change tracking, and normalization logic does
+not belong in the render path -- it sits on top of it.
 
-### Storage
+Refine's modules:
 
-- `/etc/fstab` parsing with **migration recommendations** per mount point (image-embedded, PVC/volume, external storage, swap, tmpfs)
-- LVM layout detection
+- **session.rs** -- Manages the mutable snapshot state, tracks user edits,
+  and coordinates re-rendering through pipeline.
+- **classify.rs** -- Triage classification: determines whether each item is
+  Baseline (from the base image), Site (operator-added), or Investigate
+  (needs attention).
+- **normalize.rs** -- Snapshot normalization: ensures consistent ordering and
+  deduplication before rendering.
+- **autosave.rs** -- Periodic state persistence so edits survive browser
+  refreshes.
+- **baseline_summary.rs** -- Generates human-readable summaries of what
+  baseline subtraction removed.
+- **repo_index.rs** -- Repository indexing for the unified repo management
+  view.
+- **tarball.rs** -- Packages the current refine session state for export.
+- **types.rs** -- Refine-specific request/response types for the web API.
+- **fleet/** -- Fleet-specific refine logic: classification across hosts,
+  variant diffing, and variant operations for the fleet refine UI.
 
-### Scheduled Tasks
+## inspectah-web: serving the interface
 
-- Cron jobs from `/etc/cron.d`, `/etc/crontab`, periodic dirs, and user spool
-- Automatic cron-to-systemd timer conversion with **actual command extraction** into `ExecStart`
-- Existing systemd timer scanning from `/etc/systemd/system` (local) and `/usr/lib/systemd/system` (vendor) with `OnCalendar` and `ExecStart` extraction
-- `at` job parsing: extracts actual command, user, and working directory from spool files
-- Display filtering: vendor systemd timers (shipped with the base image) are hidden from reports since they require no operator action. RPM-owned cron jobs are similarly excluded.
+Web is the HTTP layer. It embeds the HTML/CSS/JavaScript assets, defines the
+API routes, and serves the interactive UIs for refine, fleet, and architect
+workflows.
 
-### Containers
+**Why web is separate from refine.** Refine is the engine -- it manages state
+and orchestrates re-rendering. Web is the transport -- it maps HTTP requests
+to refine operations and serves the resulting HTML. This separation means
+the refine engine could, in principle, be driven by a TUI or a CLI without
+any web server involvement.
 
-- Quadlet `.container` unit discovery with `Image=` reference extraction
-- Compose file discovery with per-service `image:` field parsing (no PyYAML dependency)
-- Optional live container enumeration via `podman ps` + `podman inspect` (`--query-podman`): captures mounts, network settings, ports, and environment variables
+Web's modules:
 
-### Non-RPM Software
+- **handlers.rs** -- Route handlers for the single-host refine and architect
+  UIs: serving reports, processing toggle changes, and triggering re-renders.
+- **fleet_handlers.rs** -- Route handlers for fleet-specific operations:
+  fleet report serving and fleet refine interactions.
+- **assets.rs** -- Embedded static assets (HTML templates, CSS, JavaScript)
+  compiled into the binary at build time.
+- **error.rs** -- HTTP error types and response formatting.
+- **lib.rs** -- Server construction and route registration using Axum.
 
-- **readelf-based binary classification**: detects Go (`.note.go.buildid`), Rust (`.rustc`), and C/C++ binaries with static/dynamic linking and shared library enumeration
-- **pip C extension detection**: identifies packages with `.so` files via RECORD inspection; triggers multi-stage Containerfile build
-- **Python venv detection**: discovers venvs via `pyvenv.cfg`, flags `--system-site-packages`, scans dist-info and `pip list --path` for package inventories
-- **pip dist-info scanning**: system-level pip packages with name and version
-- **npm/yarn/gem lockfile detection**: captures lockfiles for reproducible installs
-- **Git repository detection**: captures remote URL, branch, and commit hash for directories under `/opt` and `/usr/local`
-- Optional deep binary strings scan for version extraction (`--deep-binary-scan`) with extended patterns for Go, Rust, OpenSSL, Java, Node, Python, and build metadata
+## inspectah-cli: the entry point
 
-### Kernel & Boot
+CLI is the top-level crate that produces the `inspectah` binary. It depends on
+every other crate and wires them together. Argument parsing, subcommand
+dispatch, and progress display -- the user-facing surface area lives here.
 
-- `/proc/cmdline` and GRUB defaults
-- `lsmod` parsing with module classification: default (from `modules-load.d`), configured, dependency, or non-default
-- Runtime sysctl values from `/proc/sys` diffed against shipped defaults in `/usr/lib/sysctl.d` with source attribution
-- `modules-load.d`, `modprobe.d`, and `dracut.conf.d` config capture and COPY into image
-- Locale, timezone, and alternatives detection via file-based methods (container-compatible): rendered in the Kernel/Boot tab as a system properties description list and alternatives table
+**Why CLI is a thin shell.** The binary itself should do as little as possible.
+It parses arguments, selects the right workflow (scan, refine, fleet, architect,
+build), and hands off to the appropriate crate. This keeps the logic testable
+at the library level rather than requiring end-to-end CLI invocations to
+exercise it.
 
-### SELinux
+CLI's modules:
 
-- Mode detection (enforcing/permissive/disabled)
-- Custom module discovery via `semodule -l` cross-referenced with priority-400 module store
-- Non-default boolean identification via `semanage boolean -l` current vs. default comparison
-- Audit rules and `fcontext` capture
+- **main.rs** -- Entry point, clap argument definitions, and subcommand
+  routing.
+- **commands/** -- One module per subcommand: `scan.rs`, `refine.rs`,
+  `fleet.rs`, `version.rs`, and `pull_progress.rs` (image pull progress
+  tracking for baseline resolution).
+- **progress/** -- Terminal progress display with multiple backends: `rich.rs`
+  (animated spinners and progress bars), `plain.rs` (line-by-line output for
+  non-TTY environments), `flat.rs` (minimal output), and `display.rs`
+  (display trait abstractions).
 
-### Users & Groups
+## Data flow: from scan to artifact
 
-- Non-system users and groups (1000 <= UID/GID < 60000)
-- Raw `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/gshadow` entry capture
-- Strategy-aware provisioning: each user is assigned one of four strategies based on account type — `sysusers` (service accounts, created at boot via systemd-sysusers), `useradd` (ambiguous accounts, explicit `RUN useradd` in Containerfile), `kickstart` (human users, deferred to deploy time), or `blueprint` (bootc-image-builder TOML). Override with `--user-strategy` to apply a single strategy to all users.
-- `/etc/subuid` and `/etc/subgid` for rootless container mappings
-- SSH authorized key references (paths only, not key material — never baked into image)
-- Sudoers rules capture with FIXME guidance in Containerfile
-- Home directory detection
+The data flow through inspectah follows a clear pipeline pattern. Understanding
+this flow is key to understanding where to make changes when contributing.
 
-## Containerfile Layer Ordering
+<div class="diagram-embed" style="margin: 2em 0;">
+  <iframe id="diagram-data-flow"
+          src="../diagrams/data-flow.html"
+          title="Data Flow — interactive preview"
+          width="100%" height="450" frameborder="0"
+          loading="lazy" tabindex="0"></iframe>
+  <div style="margin-top: 0.5em;">
+    <button id="btn-diagram-data-flow"
+            onclick="(function(btn){var iframe=document.getElementById('diagram-data-flow');if(iframe.requestFullscreen){iframe.requestFullscreen();iframe._triggerBtn=btn;document.addEventListener('fullscreenchange',function handler(){if(!document.fullscreenElement){document.removeEventListener('fullscreenchange',handler);if(iframe._triggerBtn){iframe._triggerBtn.focus();iframe._triggerBtn=null;}}});}else{window.open(iframe.src,'_blank');}})(this)"
+            aria-label="Open data flow diagram in fullscreen">
+      Open interactive diagram
+    </button>
+  </div>
+  <p><em>The data flow diagram traces a scan from host inspection through baseline subtraction, redaction, and rendering to the final output artifacts.</em></p>
+</div>
 
-The generated Containerfile follows a deliberate layer order optimized for build cache efficiency — layers that change least frequently come first:
+### The scan path
 
-1. **Build stage** (conditional) — multi-stage build for pip packages with C extensions: installs build deps, compiles wheels
-2. **Base image** — auto-detected from `/etc/os-release`, mapped to the corresponding bootc base image
-3. **Repo files** — GPG key files COPYed first (for signature verification), then custom yum/dnf repositories
-4. **Packages** — `dnf install` for leaf packages added beyond the base image (auto-dependencies omitted, resolved by dnf)
-5. **Services** — `systemctl enable/disable` based on base image preset diff
-6. **Firewall** — zone XML files and direct rules via `COPY`; `firewall-offline-cmd` equivalents documented in the audit report
-7. **Scheduled tasks** — timer units (local + cron-converted with actual commands), at job FIXMEs
-8. **Config files** — all captured configs via `COPY config/` with optional diff summaries
-9. **Non-RPM software** — tool package prerequisites installed first (e.g. `nodejs`/`python3-pip`) when needed but not already in the package set; then provenance-aware directives: `pip install` for pip, multi-stage for C extensions, `npm ci` for npm, FIXME for Go/Rust binaries, `git clone` comments for git repos
-10. **Container workloads** — quadlet units
-11. **Users & groups** — strategy-aware provisioning: `sysusers` for service accounts, `useradd` for ambiguous, `kickstart` for human users, `blueprint` for bootc-image-builder TOML
-12. **Kernel** — sysctl overrides, kargs.d TOML drop-in, module configs, tuned profiles
-13. **SELinux** — booleans, custom modules, port labels, fcontext rules
-14. **Network** — static connection profiles, `/etc/hosts` additions, proxy env vars, static route guidance
-15. **tmpfiles.d** — transient file/directory setup
-16. **bootc container lint** — validates the generated image is bootc-compatible
+1. **CLI parses arguments** and determines the scan configuration: target
+   image, output directory, which inspectors to run, and redaction settings.
+2. **Pipeline orchestrates collection.** The orchestrator in pipeline calls
+   each inspector in collect, passing the configured executor and host root
+   path. Inspectors run independently and produce typed results.
+3. **Baseline resolution.** If a target image is specified, pipeline runs
+   baseline collection against the image (via `podman run`) to get the
+   image's package list, service presets, and config defaults.
+4. **Baseline subtraction.** The orchestrator subtracts baseline data from
+   the host inspection results. Packages present in both host and image are
+   removed. Services matching image presets are removed. Config files
+   identical to image defaults are removed.
+5. **Redaction.** The redaction engine scans all remaining data for secrets
+   and sensitive values, replacing them with redaction markers.
+6. **Snapshot assembly.** The remaining data is assembled into a `Snapshot`
+   -- the canonical intermediate representation that all downstream consumers
+   operate on.
+7. **Rendering.** Pipeline dispatches the snapshot to each configured
+   renderer: Containerfile, HTML report, audit log, kickstart, and tarball.
+   Each renderer produces its output independently.
+8. **Output.** Artifacts are written to the output directory.
 
-## Baseline Generation
+### The refine path
 
-The tool generates a package baseline by querying the target **bootc base image** directly. It detects the host OS from `/etc/os-release`, maps it to the corresponding base image, and runs `podman run --rm <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete package list. The diff against host packages produces exactly the `dnf install` list the Containerfile needs.
+After a scan, `inspectah refine` serves the HTML report through the web
+server. The user interacts with the report -- toggling packages, changing
+strategies, and excluding config files. Each change flows through the refine
+session, which mutates the snapshot and triggers a re-render through
+pipeline. The updated HTML replaces the page.
 
-**Supported OS to base image mappings:**
+### The fleet path
 
-| Source Host | Target Base Image | Notes |
-|-------------|-------------------|-------|
-| RHEL 9.x | `registry.redhat.io/rhel9/rhel-bootc:{version}` | Version clamped to 9.6 minimum (first bootc release) |
-| RHEL 10.x | `registry.redhat.io/rhel10/rhel-bootc:{version}` | |
-| CentOS Stream 9 | `quay.io/centos-bootc/centos-bootc:stream9` | |
-| CentOS Stream 10 | `quay.io/centos-bootc/centos-bootc:stream10` | |
-| Fedora | `quay.io/fedora/fedora-bootc:{major}` | Version clamped to 41 minimum |
+Fleet analysis aggregates multiple host snapshots. The merge logic in core
+combines them into a fleet-aggregate snapshot with prevalence counts. Fleet
+classification in refine assigns each item to a prevalence zone (Consensus,
+NearConsensus, Divergent). The fleet-specific renderers and handlers in
+pipeline and web produce the fleet report and fleet refine UI.
 
-**Source/target version separation:** The source host (what you're inspecting) and the target image (your Containerfile's FROM line) can differ. A RHEL 9.4 host auto-targets `rhel-bootc:9.6` (the minimum bootc release). Override with `--target-version 9.8` or `--target-image` for full control. Cross-major-version migrations (e.g. RHEL 9 to 10) produce a prominent warning since package names, services, and config formats may differ.
+## Design principles
 
-**RHEL registry authentication:** RHEL base images on `registry.redhat.io` require authentication. The tool checks for credentials before attempting to pull and will exit with instructions if credentials are missing. Run `sudo podman login registry.redhat.io` on the host before running inspectah, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
+Several principles guided the architecture:
 
-When running inside a container, the tool uses `nsenter` to execute `podman` in the host's namespaces. This requires `sudo`, `--pid=host`, and `--privileged` on the outer container. Before attempting `nsenter`, the tool runs a fast probe to detect rootless containers and missing capabilities, and provides specific guidance if the probe fails.
+**Baseline subtraction over exhaustive listing.** Rather than dumping
+everything on a host, inspectah subtracts what already exists in the target
+image. The output shows only what the operator needs to act on. This is the
+single most important design decision in the tool.
 
-**Fallback behavior:**
+**Inspectors are independent.** Each inspector runs against the host root
+and produces its own typed output without depending on other inspectors'
+results. This means inspectors can be added, removed, or modified without
+cascading changes.
 
-- **Base image queryable** — accurate package diff, only truly operator-added packages appear in the Containerfile
-- **Base image not available** (not pulled, auth failure, or `--skip-preflight` used without proper flags) — enters "all-packages mode" where every installed package is treated as operator-added (no baseline subtraction), with a clear warning in the reports
-- **Air-gapped environments** — use `--baseline-packages FILE` to provide a newline-separated list of package names, bypassing the podman query
+**The snapshot is the contract.** The `Snapshot` struct in core is the
+interface between collection and rendering. Anything upstream of the
+snapshot is about gathering data. Anything downstream is about presenting
+it. This boundary makes it possible to test renderers with fixture
+snapshots and collectors with mock executors.
 
-The resolved baseline (including the base image package list) is cached in the inspection snapshot, so `--from-snapshot` re-renders work without network access or podman.
+**Stateless rendering, stateful refine.** Renderers are pure functions:
+snapshot in, artifact out. The refine engine adds statefulness on top,
+managing user edits as a layer over the snapshot. This keeps the rendering
+path simple and predictable.
 
-## Building from Source
-
-```bash
-cargo build --release -p inspectah-cli
-```
-
-The binary is at `target/release/inspectah`. Install it to your PATH or use the COPR RPM / Homebrew formula.
+**Secrets never reach output.** The redaction engine runs before rendering,
+ensuring that no renderer ever sees sensitive values. This is a defense-in-depth
+measure -- individual renderers do not need to worry about secret handling.
