@@ -19,7 +19,7 @@ into a fleet view. It is consumed by `inspectah fleet aggregate`.
 # Edit label and baseline as needed. Sources are relative to this file.
 
 label = "web-servers"
-baseline = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+baseline = "quay.io/centos-bootc/centos-bootc:stream9"
 
 sources = [
   "scans/host-a.tar.gz",
@@ -28,12 +28,20 @@ sources = [
 ]
 ```
 
+The `baseline` value depends on your distro. Common base images:
+
+| Distro | Base image |
+|:-------|:-----------|
+| Fedora | `quay.io/fedora/fedora-bootc:41` |
+| CentOS Stream 9 | `quay.io/centos-bootc/centos-bootc:stream9` |
+| RHEL 9 | `registry.redhat.io/rhel9/rhel-bootc:9.6` |
+
 ## Fields
 
 | Field | Type | Required | Description |
 |:------|:-----|:---------|:------------|
 | `label` | string | No | Human-readable name for the fleet (e.g., `"web-servers"`, `"db-tier"`). Used in output filenames and fleet metadata. |
-| `baseline` | string | No | Target base image reference for cross-distro comparison (e.g., `"registry.redhat.io/rhel9/rhel-bootc:9.6"`). Overridable via `--baseline` CLI flag. |
+| `baseline` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--baseline` CLI flag. |
 | `sources` | array of strings | **Yes** | Paths to host snapshot tarballs. Relative paths are resolved relative to the manifest file's parent directory. |
 
 ## Path resolution

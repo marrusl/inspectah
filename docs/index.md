@@ -6,7 +6,7 @@ nav_order: 1
 
 # inspectah
 
-inspectah scans package-mode RHEL, CentOS Stream, and Fedora hosts and generates the artifacts you need to migrate them to image mode -- Containerfiles, package lists, config trees, and systemd service maps. It analyzes what is installed beyond the base image so you know exactly what to carry forward.
+inspectah scans package-mode Fedora, CentOS Stream, and RHEL hosts and generates the artifacts you need to migrate them to bootc image mode -- Containerfiles, package lists, config trees, and systemd service maps. It analyzes what is installed beyond the base image so you know exactly what to carry forward.
 
 ## Quick start
 

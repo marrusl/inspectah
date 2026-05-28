@@ -14,7 +14,7 @@ the patterns that define your fleet from the one-off differences that do not.
 
 ## Why consensus matters
 
-Most enterprise RHEL environments are not snowflakes. Hosts are deployed from
+Most enterprise Linux environments are not snowflakes. Hosts are deployed from
 the same base image, configured by the same automation, and expected to run
 the same workloads. When you are planning a migration to image mode, the
 question is not "what does host-47 look like?" but "what do all my hosts look

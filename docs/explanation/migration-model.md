@@ -12,9 +12,9 @@ mode and just want to run the tool, see the [Getting Started](../getting-started
 
 ## Package mode and image mode
 
-Traditional RHEL systems run in **package mode**. The operating system is
-installed once, then maintained over time with `dnf install`, `dnf update`, and
-manual configuration changes applied directly to the running host. Each host
+Traditional RPM-based Linux systems run in **package mode**. The operating system
+is installed once, then maintained over time with `dnf install`, `dnf update`,
+and manual configuration changes applied directly to the running host. Each host
 accumulates its own history of packages, config edits, enabled services, and
 one-off fixes. Over months and years, hosts that started identical drift apart.
 Two "identical" web servers may have different package versions, different
@@ -108,7 +108,7 @@ non-RPM software. Each inspector produces structured data about what it finds.
 
 ### Baseline subtraction
 
-The raw inventory isn't useful on its own — a RHEL 9 host has hundreds of
+The raw inventory isn't useful on its own — a typical host has hundreds of
 packages, dozens of enabled services, and piles of config files that ship with
 the base OS. You don't need to migrate those; they're already in the base image.
 
@@ -117,7 +117,7 @@ inspectah queries the target bootc base image (detected from the host's
 that exist in the base image are removed from the list. Services whose
 enable/disable state matches the base image presets are filtered out. The
 result is a focused view of what the *operator* added or changed — not what
-RHEL ships by default.
+the base OS ships by default.
 
 This baseline subtraction is fundamental to the tool's value. Without it, the
 generated Containerfile would redundantly reinstall hundreds of packages that

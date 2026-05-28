@@ -7,15 +7,15 @@ nav_order: 1
 # Your First Migration
 
 This tutorial walks you through a complete migration analysis from start
-to finish. You will scan a running RHEL 9 web server, understand what
-inspectah found, refine the results in the triage UI, export a curated
-artifact set, and build a bootc container image. Total time: about 20
-minutes.
+to finish. You will scan a running web server, understand what inspectah
+found, refine the results in the triage UI, export a curated artifact set,
+and build a bootc container image. Total time: about 20 minutes.
 
 ## The scenario
 
-You have a RHEL 9.4 host running Apache (`httpd`) as a web server. Over
-time the system accumulated the usual operational reality:
+You have a CentOS Stream 9 host running Apache (`httpd`) as a web server.
+(The same workflow applies to Fedora and RHEL hosts.) Over time the system
+accumulated the usual operational reality:
 
 - Apache with a custom virtual host configuration in `/etc/httpd/conf.d/`
 - A TLS certificate and key in `/etc/pki/tls/`
@@ -29,8 +29,8 @@ declaratively, version its configuration in Git, and deploy updates
 with `bootc upgrade` instead of `dnf update`.
 
 inspectah will figure out what on this host actually matters — what the
-base RHEL image already provides, what you intentionally added, and what
-is just noise.
+base image already provides, what you intentionally added, and what is
+just noise.
 
 ## Prerequisites
 
@@ -40,15 +40,16 @@ Before you start, make sure you have:
   for installation options (RPM or from source)
 - **Root access** on the host you want to scan
 - **Podman installed** (`dnf install podman`) — needed for the build step
-- **Registry authentication** — inspectah pulls a RHEL base image for
-  baseline subtraction:
+
+**For RHEL users:** inspectah pulls a base image for baseline subtraction.
+RHEL base images require registry authentication:
 
 ```bash
 podman login registry.redhat.io
 ```
 
-If you skip registry auth, inspectah cannot pull the baseline image and
-classification quality degrades significantly.
+Fedora and CentOS Stream base images are on public registries and do not
+require authentication.
 
 ## Step 1: Scan the host
 
@@ -58,13 +59,13 @@ SSH into your web server and run inspectah as root:
 sudo inspectah scan
 ```
 
-inspectah detects the OS (RHEL 9.4), pulls the matching base image from
-`registry.redhat.io`, and runs its inspection pipeline. You will see
-progress output as each inspector runs:
+inspectah detects the OS (CentOS Stream 9), pulls the matching base image,
+and runs its inspection pipeline. You will see progress output as each
+inspector runs:
 
 ```
-Detecting OS... RHEL 9.4 (x86_64)
-Resolving base image... registry.redhat.io/rhel9/rhel-bootc:9.4
+Detecting OS... CentOS Stream 9 (x86_64)
+Resolving base image... quay.io/centos-bootc/centos-bootc:stream9
 Pulling base image... done (12.4s)
 Running inspectors...
   packages        847 found, 812 baseline, 35 site
@@ -130,8 +131,9 @@ Open `audit-report.md` to understand what inspectah found. The report
 groups findings by section. Here is what you would see for our web
 server:
 
-**Packages** — 847 RPMs installed. 812 match the RHEL 9.4 base image
-and are classified as **baseline** (already provided, no action needed).
+**Packages** — 847 RPMs installed. 812 match the CentOS Stream 9 base
+image and are classified as **baseline** (already provided, no action
+needed).
 35 are classified as **site** (you installed them). These include
 `httpd`, `mod_ssl`, `certbot`, `jq`, `tmux`, and `strace`.
 
@@ -256,7 +258,7 @@ cat Containerfile
 You will see something like:
 
 ```dockerfile
-FROM registry.redhat.io/rhel9/rhel-bootc:9.4
+FROM quay.io/centos-bootc/centos-bootc:stream9
 
 # Site packages
 RUN dnf install -y \
@@ -280,15 +282,16 @@ Build the image:
 podman build -t my-webserver .
 ```
 
-This requires valid RHEL entitlement certificates for the `dnf install`
+For CentOS Stream and Fedora images, this works directly. **For RHEL
+images**, you need valid entitlement certificates for the `dnf install`
 step. See [How to Build a bootc Image](../how-to/build-bootc-image.md)
-for full details on entitlement handling, multi-stage builds, and
+for full details on RHEL entitlement handling, multi-stage builds, and
 pushing to a registry.
 
 ## What you accomplished
 
-You started with a running RHEL 9 host and ended with a buildable
-Containerfile that captures only what matters — the packages, configs,
+You started with a running host and ended with a buildable Containerfile
+that captures only what matters — the packages, configs,
 and services that define your workload. Everything the base image
 already provides was subtracted automatically. Everything incidental
 was excluded by your triage decisions.

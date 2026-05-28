@@ -89,7 +89,7 @@ The generated manifest looks like this:
 
 ```toml
 label = "web-servers"
-baseline = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+baseline = "quay.io/centos-bootc/centos-bootc:stream9"
 sources = [
   "scans/host-a.tar.gz",
   "scans/host-b.tar.gz",
@@ -97,15 +97,17 @@ sources = [
 ]
 ```
 
+The `baseline` is auto-detected from the scan metadata and will reflect
+whatever distro your hosts are running (Fedora, CentOS Stream, or RHEL).
+
 | Field | Required | Description |
 |-------|----------|-------------|
 | `sources` | Yes | List of tarball paths (relative to the manifest file or absolute) |
 | `label` | No | A human-readable name for this fleet group |
 | `baseline` | No | Target base image reference; auto-detected from scan data when omitted |
 
-The `baseline` is auto-detected from the scan metadata. When hosts target
-different images, `fleet init` selects the most common image. You can edit
-the manifest to change this or any other field.
+When hosts target different images, `fleet init` selects the most common
+image. You can edit the manifest to change this or any other field.
 
 To regenerate a manifest after adding new tarballs:
 
@@ -164,6 +166,10 @@ If you want to compare against a different base image than what the hosts
 were scanned with:
 
 ```bash
+# Example with CentOS Stream baseline
+inspectah fleet aggregate --manifest fleet.toml --baseline quay.io/centos-bootc/centos-bootc:stream9
+
+# Example with RHEL baseline
 inspectah fleet aggregate --manifest fleet.toml --baseline registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 
