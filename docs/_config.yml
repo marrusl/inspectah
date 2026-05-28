@@ -1,3 +1,28 @@
-exclude:
-  - diagrams
-  - plans/2026-03-29-architect.md
+title: inspectah
+description: Migration analysis tool for package-mode to image-mode RHEL
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+
+url: ""
+baseurl: ""
+
+permalink: pretty
+
+search_enabled: true
+search:
+  heading_level: 3
+
+color_scheme: dark
+
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/mrussell/inspectah"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "tree"
+
+aux_links:
+  "GitHub":
+    - "https://github.com/mrussell/inspectah"
+
+plugins:
+  - jekyll-remote-theme
