@@ -16,6 +16,9 @@ thiserror.workspace = true
 libc = "0.2"
 regex = "1"
 wait-timeout = "0.2"
+x509-parser = "0.16"
+base64 = "0.22"
+time = { version = "0.3", features = ["parsing", "formatting"] }
 
 [build-dependencies]
 pkg-config = "0.3"

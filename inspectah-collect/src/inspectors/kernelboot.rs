@@ -137,8 +137,7 @@ impl Inspector for KernelbootInspector {
                 .map_or_else(|_| Vec::new(), |v| v.clone()),
             loaded_modules,
             non_default_modules: Vec::new(),
-            tuned_include: !tuned_active.is_empty()
-                && !is_stock_tuned_profile(&tuned_active),
+            tuned_include: !tuned_active.is_empty() && !is_stock_tuned_profile(&tuned_active),
             tuned_active,
             tuned_custom_profiles: Vec::new(),
             locale,
