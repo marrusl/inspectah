@@ -119,7 +119,7 @@ hosts have this item) on top of the single-host classification.
 | Bucket | Meaning | Prevalence | Default action |
 |---|---|---|---|
 | **Universal** | Present on all hosts. Part of the common baseline. | count = total | Excluded from Containerfile |
-| **Partial** | Present on some hosts, absent on others. Role-specific. | count >= half of total | Included in Containerfile |
+| **Partial** | Present on some hosts, absent on others. Role-specific. | count >= half of total | Excluded from Containerfile |
 | **Divergent** | Present on fewer than half the hosts. Unusual or role-specific. | count < half of total | Excluded from Containerfile |
 | **Investigate** | Divergent-zone item that appears on all hosts but with unclear provenance. Needs review. | count = total, but zone is Divergent | Included in Containerfile (flagged) |
 
@@ -165,15 +165,16 @@ items that vary across hosts, but they mean different things:
 | **What varies** | **Presence** -- the item exists on some hosts but not others | **Presence** -- the item exists on fewer than half the hosts |
 | **Prevalence** | At least half the fleet has it | Fewer than half the fleet has it |
 | **Typical cause** | Role-based deployment (web servers vs. database servers) | One-off installation, test host, or legacy outlier |
-| **Default action** | Included in Containerfile | Excluded from Containerfile |
+| **Default action** | Excluded from Containerfile | Excluded from Containerfile |
 
 ### Examples
 
 **Partial -- httpd on web servers:**
 You have 10 hosts. 6 are web servers with `httpd` installed, 4 are database
 servers without it. httpd appears on 6/10 hosts (NearConsensus zone), so it
-gets the **Partial** bucket. It is included in the Containerfile because it
-represents a legitimate role-based package.
+gets the **Partial** bucket. It is excluded from the Containerfile by default
+(not universal), but you can manually include it if this represents a
+legitimate role-based package that should be in the target image.
 
 **Divergent -- debugging tool on one host:**
 You have 10 hosts. 1 host has `strace` installed for a debugging session that
@@ -223,7 +224,7 @@ triage bucket:
 | Site | Yes | User customization to reproduce |
 | Investigate | Yes | Included to be safe; user reviews and removes if unneeded |
 | Universal | No | Fleet consensus -- already in the common baseline |
-| Partial | Yes | Role-specific customization |
+| Partial | No | Not universal across fleet |
 | Divergent | No | Below fleet consensus threshold |
 
 In fleet mode, items that are not present on all hosts (`count < total`) are

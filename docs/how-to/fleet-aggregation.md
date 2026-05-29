@@ -62,9 +62,9 @@ the resulting tarballs in a single directory on your workstation.
 sudo inspectah scan -o /tmp/scan-output.tar.gz
 
 # Copy tarballs to your workstation
-scp host-a:/tmp/scan-output.tar.gz ./scans/host-a.tar.gz
-scp host-b:/tmp/scan-output.tar.gz ./scans/host-b.tar.gz
-scp host-c:/tmp/scan-output.tar.gz ./scans/host-c.tar.gz
+scp host-a:/tmp/scan-output.tar.gz scans/host-a.tar.gz
+scp host-b:/tmp/scan-output.tar.gz scans/host-b.tar.gz
+scp host-c:/tmp/scan-output.tar.gz scans/host-c.tar.gz
 ```
 
 Tarball filenames do not affect analysis. Use whatever naming convention
@@ -76,13 +76,13 @@ The manifest is a TOML file that lists which tarballs belong to the fleet.
 Generate one from a directory of tarballs:
 
 ```bash
-inspectah fleet init ./scans/
+inspectah fleet init scans/
 ```
 
 This creates `fleet.toml` in your current directory. To write it elsewhere:
 
 ```bash
-inspectah fleet init --output ./fleet-prod.toml ./scans/
+inspectah fleet init --output fleet-prod.toml scans/
 ```
 
 The generated manifest looks like this:
@@ -131,13 +131,13 @@ timestamp, e.g., `fleet-20250527-143022.tar.gz`).
 You can skip the manifest and pass tarballs directly:
 
 ```bash
-inspectah fleet aggregate ./scans/host-a.tar.gz ./scans/host-b.tar.gz
+inspectah fleet aggregate scans/host-a.tar.gz scans/host-b.tar.gz
 ```
 
 Or point at a directory:
 
 ```bash
-inspectah fleet aggregate ./scans/
+inspectah fleet aggregate scans/
 ```
 
 ### Output options
@@ -145,13 +145,13 @@ inspectah fleet aggregate ./scans/
 Write the fleet tarball to a specific location:
 
 ```bash
-inspectah fleet aggregate --manifest fleet.toml --output-file ./fleet-prod.tar.gz
+inspectah fleet aggregate --manifest fleet.toml --output-file fleet-prod.tar.gz
 ```
 
 Or specify an output directory:
 
 ```bash
-inspectah fleet aggregate --manifest fleet.toml --output-dir ./output/
+inspectah fleet aggregate --manifest fleet.toml --output-dir output/
 ```
 
 To get JSON output instead of a tarball (useful for scripting):
@@ -192,7 +192,7 @@ inspectah fleet aggregate --manifest fleet.toml --strict
 Open the fleet tarball in the refine UI to get the cross-host view:
 
 ```bash
-inspectah refine ./fleet-20250527-143022.tar.gz
+inspectah refine fleet-20250527-143022.tar.gz
 ```
 
 The fleet view adds consensus information to each finding, showing how many
