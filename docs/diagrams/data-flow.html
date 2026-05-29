@@ -60,7 +60,8 @@ import { setupKeyboardNav, checkReducedMotion } from './shared/accessibility.js'
 
 // ─── Data flow stages derived from source ───────────────────────────
 // Source: inspectah-collect/src/inspectors/, inspectah-core/src/snapshot.rs,
-//         inspectah-pipeline/src/redaction/, inspectah-pipeline/src/render/
+//         inspectah-pipeline/src/redaction/, inspectah-pipeline/src/render/,
+//         inspectah-pipeline/src/build/
 const stages = [
   {
     id: 'host',
@@ -81,12 +82,13 @@ const stages = [
       { text: 'SELinux state', detail: 'Policy, booleans, custom file contexts, port labels' },
       { text: 'Non-RPM software', detail: 'pip/npm/gem packages, Python venvs, .env files, git repos' },
       { text: '/etc/passwd + shadow', detail: 'Local users, groups, SSH keys, sudoers rules, shadow entries' },
+      { text: 'RHSM subscription certs', detail: '/etc/pki/entitlement, /etc/rhsm, /etc/pki/consumer — collected with --preserve-subscription' },
     ],
   },
   {
     id: 'inspectors',
     label: 'Inspectors',
-    sublabel: '11 Registered',
+    sublabel: '12 Registered',
     color: 'teal',
     tooltip: 'Each inspector reads a specific system domain and produces a typed section.',
     children: [
@@ -101,17 +103,18 @@ const stages = [
       { text: 'SelinuxInspector', detail: 'Reads policy, booleans, custom contexts → SelinuxSection' },
       { text: 'NonRpmInspector', detail: 'Scans pip/npm/gem, venvs, .env files, git repos → NonRpmSoftwareSection' },
       { text: 'UserInspector', detail: 'Reads passwd/shadow, groups, SSH keys, sudoers → UserGroupSection' },
+      { text: 'SubscriptionInspector', detail: 'Collects RHSM entitlement certs, CA certs, rhsm.conf, redhat.repo → SubscriptionSection (--preserve-subscription)' },
     ],
   },
   {
     id: 'snapshot',
     label: 'InspectionSnapshot',
-    sublabel: 'Schema v17',
+    sublabel: 'Schema v18',
     color: 'blue',
     glow: true,
     tooltip: 'Structured JSON aggregating all inspector outputs into a single document.',
     children: [
-      { text: 'schema_version: 17', detail: 'Versioned format for forward/backward compatibility' },
+      { text: 'schema_version: 18', detail: 'Versioned format for forward/backward compatibility' },
       { text: 'rpm: RpmSection', detail: 'Packages, repos, GPG keys, module streams, version locks' },
       { text: 'config: ConfigSection', detail: 'Modified and unowned config file contents' },
       { text: 'services: ServiceSection', detail: 'systemd unit inventory with state and actions' },
@@ -123,6 +126,7 @@ const stages = [
       { text: 'selinux: SelinuxSection', detail: 'Policy mode, booleans, file contexts' },
       { text: 'non_rpm_software: NonRpmSoftwareSection', detail: 'pip/npm/gem packages, env files, git repos' },
       { text: 'users_groups: UserGroupSection', detail: 'Users, groups, SSH keys, sudoers, shadow' },
+      { text: 'subscription: SubscriptionSection', detail: 'RHSM entitlement certs, CA certs, rhsm.conf, redhat.repo (--preserve-subscription)' },
       { text: 'redaction_hints: Vec', detail: 'Inspector-emitted flags for content requiring review' },
       { text: 'warnings + completeness', detail: 'Data quality signals and section availability' },
     ],
@@ -149,7 +153,7 @@ const stages = [
   {
     id: 'renderers',
     label: 'Renderers',
-    sublabel: '8 Output Artifacts',
+    sublabel: '9 Output Artifacts',
     color: 'purple',
     tooltip: 'Transform the redacted snapshot into migration deliverables.',
     children: [
@@ -185,6 +189,25 @@ const stages = [
       { text: 'inspectah-users.toml', detail: 'Conditional — only if users/groups present' },
       { text: 'users/home/*/ssh/', detail: 'Conditional — only if SSH keys preserved' },
       { text: 'env-files/', detail: 'Conditional — only if .env files detected' },
+      { text: 'subscription/', detail: 'Conditional — RHSM certs/keys for build-time mounting (--preserve-subscription)' },
+    ],
+  },
+  {
+    id: 'build',
+    label: 'Build',
+    sublabel: 'inspectah build',
+    color: 'rose',
+    glow: true,
+    tooltip: 'Extracts tarball, validates contents, plans subscription mounts, and executes podman build. Automates what was previously a manual multi-step process.',
+    children: [
+      { text: 'Extract tarball', detail: 'TarballExtractor — safe archive extraction with hardlink/symlink validation' },
+      { text: 'Validate contents', detail: 'Checks for Containerfile, snapshot JSON, and structural integrity' },
+      { text: 'RHEL pass-through detection', detail: 'Detects ambient subscription via /usr/share/rhel/secrets on RHEL hosts' },
+      { text: 'Subscription mount planning', detail: 'Plans -v bind mounts for entitlement certs from tarball or ambient bundle' },
+      { text: 'Bundle completeness preflight', detail: 'Validates serial-matched cert+key pairs, CA certs, rhsm.conf, redhat.repo' },
+      { text: 'Cert expiry checking', detail: 'Warns if entitlement certificates are expired or near expiry' },
+      { text: 'Podman command construction', detail: 'Builds podman build command with -v mounts, --tag, and user args' },
+      { text: 'Execute or dry-run', detail: 'Runs podman build or emits the command for manual execution (--dry-run)' },
     ],
   },
 ];
@@ -204,6 +227,9 @@ const commandBadges = {
     { cmd: 'scan', note: 'Complete tarball' },
     { cmd: 'fleet', note: 'Aggregates multiple tarballs' },
   ],
+  build: [
+    { cmd: 'build', note: 'Automates podman build' },
+  ],
 };
 
 // ─── Shell setup ─────────────────────────────────────────────────────
@@ -217,6 +243,7 @@ const { svg, g, width, height, zoom } = createDiagramShell({
     { color: colors.red.stroke,    label: 'Redaction' },
     { color: colors.purple.stroke, label: 'Renderers' },
     { color: colors.orange.stroke, label: 'Output' },
+    { color: colors.rose.stroke,   label: 'Build' },
   ],
 });
 
