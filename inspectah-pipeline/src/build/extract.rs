@@ -384,15 +384,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tarball_path = tmp.path().join("abs.tar.gz");
 
-        let mut builder = tar::Builder::new(Vec::new());
-        // First component will be stripped, leaving an absolute path.
+        // Construct a tarball with a path-traversal entry that attempts
+        // to reach an absolute filesystem location via `../`.
+        // The raw header approach bypasses the tar crate's path validation.
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Regular);
-        // Use a raw header so the second component starts with /
-        header.set_path("prefix//etc/shadow").unwrap();
         header.set_size(4);
         header.set_mode(0o644);
+        // After prefix stripping (skip first component), this becomes
+        // "../../etc/shadow" which triggers the path traversal guard.
+        let evil_path = b"prefix/../../etc/shadow";
+        let name_field = &mut header.as_gnu_mut().unwrap().name;
+        name_field[..evil_path.len()].copy_from_slice(evil_path);
         header.set_cksum();
+
+        let mut builder = tar::Builder::new(Vec::new());
         builder.append(&header, b"bad!" as &[u8]).unwrap();
         let tar_bytes = builder.into_inner().unwrap();
 
@@ -402,19 +408,12 @@ mod tests {
 
         let extractor = TarballExtractor::new(tmp.path().join("out"));
         let result = extractor.extract(&tarball_path);
-        // The path "prefix//etc/shadow" after stripping first component becomes
-        // "/etc/shadow" which triggers absolute path rejection.
-        // Or it normalizes to "etc/shadow" -- depends on Path::components().
-        // Either way the extraction should not write to /etc/shadow.
-        // If it normalizes away the leading slash, that's acceptable too.
-        if let Err(e) = &result {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("absolute path") || msg.contains("path traversal"),
-                "unexpected error: {msg}"
-            );
-        }
-        // Verify /etc/shadow was not modified.
+        assert!(result.is_err(), "path reaching absolute location must be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("path traversal"),
+            "expected path traversal error, got: {err}"
+        );
     }
 
     #[test]

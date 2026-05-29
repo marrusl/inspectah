@@ -191,16 +191,11 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
         }
     };
 
-    let use_subscription_mounts = match &ambient {
-        AmbientSubscription::Available => false, // RHEL pass-through handles it
-        AmbientSubscription::IncompleteBundle { reason } => {
-            warnings.push(BuildWarning::AmbientBundleIncomplete {
-                reason: reason.clone(),
-            });
-            has_subscription // fall back to tarball certs (already validated above)
-        }
-        AmbientSubscription::NotAvailable => has_subscription,
-    };
+    let use_subscription_mounts = should_use_subscription_mounts(
+        &ambient,
+        has_subscription,
+        &mut warnings,
+    );
 
     // Check cert expiry at build time (only for tarball-sourced certs).
     if has_subscription && ambient != AmbientSubscription::Available {
@@ -287,6 +282,28 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
         ))
     } else {
         Ok((BuildOutcome::PodmanFailed { exit_code }, warnings))
+    }
+}
+
+/// Decide whether to add `-v` subscription mounts to the podman command.
+///
+/// Returns `false` when ambient subscription is available (RHEL pass-through
+/// handles it -- no tarball mounts needed). Returns `has_subscription` for
+/// non-RHEL or incomplete-ambient scenarios.
+fn should_use_subscription_mounts(
+    ambient: &AmbientSubscription,
+    has_subscription: bool,
+    warnings: &mut Vec<BuildWarning>,
+) -> bool {
+    match ambient {
+        AmbientSubscription::Available => false, // RHEL pass-through handles it
+        AmbientSubscription::IncompleteBundle { reason } => {
+            warnings.push(BuildWarning::AmbientBundleIncomplete {
+                reason: reason.clone(),
+            });
+            has_subscription // fall back to tarball certs (already validated above)
+        }
+        AmbientSubscription::NotAvailable => has_subscription,
     }
 }
 
@@ -942,5 +959,77 @@ mod tests {
 
         // Cleanup.
         std::fs::remove_dir_all(&pid_dir).ok();
+    }
+
+    #[test]
+    fn test_ambient_available_suppresses_subscription_mounts() {
+        let mut warnings = Vec::new();
+        // When ambient is Available, mounts should be suppressed even if
+        // tarball has subscription data.
+        let result = should_use_subscription_mounts(
+            &AmbientSubscription::Available,
+            true, // has_subscription = true (tarball has certs)
+            &mut warnings,
+        );
+        assert!(!result, "ambient Available must suppress -v mounts");
+        assert!(
+            warnings.is_empty(),
+            "ambient Available should not produce warnings"
+        );
+    }
+
+    #[test]
+    fn test_ambient_not_available_uses_tarball_subscription() {
+        let mut warnings = Vec::new();
+        let result = should_use_subscription_mounts(
+            &AmbientSubscription::NotAvailable,
+            true,
+            &mut warnings,
+        );
+        assert!(result, "non-RHEL with tarball subscription should mount");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_ambient_not_available_no_subscription_no_mounts() {
+        let mut warnings = Vec::new();
+        let result = should_use_subscription_mounts(
+            &AmbientSubscription::NotAvailable,
+            false,
+            &mut warnings,
+        );
+        assert!(!result, "non-RHEL without subscription should not mount");
+    }
+
+    #[test]
+    fn test_ambient_incomplete_falls_back_to_tarball() {
+        let mut warnings = Vec::new();
+        let result = should_use_subscription_mounts(
+            &AmbientSubscription::IncompleteBundle {
+                reason: "missing: rhsm.conf".into(),
+            },
+            true,
+            &mut warnings,
+        );
+        assert!(result, "incomplete ambient with tarball should fall back to mounts");
+        assert_eq!(warnings.len(), 1, "should warn about incomplete bundle");
+        assert!(
+            matches!(warnings[0], BuildWarning::AmbientBundleIncomplete { .. }),
+            "warning should be AmbientBundleIncomplete"
+        );
+    }
+
+    #[test]
+    fn test_ambient_incomplete_no_tarball_no_mounts() {
+        let mut warnings = Vec::new();
+        let result = should_use_subscription_mounts(
+            &AmbientSubscription::IncompleteBundle {
+                reason: "missing: CA certs".into(),
+            },
+            false,
+            &mut warnings,
+        );
+        assert!(!result, "incomplete ambient without tarball should not mount");
+        assert_eq!(warnings.len(), 1);
     }
 }
