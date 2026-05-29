@@ -16,9 +16,11 @@ sudo dnf install inspectah
 # Scan
 sudo inspectah scan
 
-# Review findings in the browser, then build
+# Review findings in the browser
 inspectah refine hostname-*.tar.gz
-podman build -t my-image -f Containerfile .
+
+# Build the bootc image
+inspectah build hostname-*.tar.gz --tag my-image:v1
 ```
 
 ## Installation
@@ -54,8 +56,8 @@ inspectah runs a four-stage pipeline:
 4. **Render** -- writes migration artifacts: Containerfile, config
    tree, audit report, HTML dashboard, kickstart, and secrets review.
 
-inspectah does not build images. It produces the inputs for
-`podman build` (or any OCI-compatible builder).
+Use `inspectah build` to build the image directly from the scan tarball,
+or use `podman build` manually with the generated Containerfile.
 
 ### Fleet mode
 
@@ -89,6 +91,10 @@ hostname-20260527-143000.tar.gz
     │   ├── etc/                    #   Modified configs, repos, timers
     │   ├── opt/                    #   Non-RPM software
     │   └── usr/                    #   Files under /usr/local
+    ├── subscription/               # RHEL subscription material (conditional)
+    │   ├── entitlement/            #   Cert/key pairs
+    │   ├── rhsm/                   #   CA certs and rhsm.conf
+    │   └── redhat.repo             #   Red Hat repo definition
     ├── env-files/                  # .env files (conditional)
     ├── quadlet/                    # Container workload units (conditional)
     ├── inspectah-users.toml        # User/group config for bootc-image-builder (conditional)
@@ -102,6 +108,7 @@ Use `--inspect-only` to write a JSON snapshot without the full tarball.
 | Command | Description |
 |---------|-------------|
 | `scan` | Scan the system and produce a migration tarball |
+| `build <tarball> --tag <tag>` | Build a bootc image from a scan tarball |
 | `refine <tarball>` | Open a browser UI to review and edit findings |
 | `fleet init <dir>` | Generate a fleet manifest from a directory of tarballs |
 | `fleet aggregate [inputs]` | Merge host tarballs into a fleet specification |
