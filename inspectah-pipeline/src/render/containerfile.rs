@@ -73,6 +73,23 @@ fn render_containerfile_inner(
     let base_str = base.as_deref().unwrap_or("");
     let mut lines: Vec<String> = Vec::new();
 
+    // Subscription mount instructions — show before any other build content
+    if snap.preserved_subscription {
+        lines.push("# === RHEL Subscription ===".into());
+        lines.push("# This build requires RHEL entitlement certificates for repo access.".into());
+        lines.push("# Build with:".into());
+        lines.push("#   podman build \\".into());
+        lines.push(
+            "#     -v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z \\".into(),
+        );
+        lines.push("#     -v ./subscription/rhsm:/run/secrets/rhsm:z \\".into());
+        lines.push("#     -v ./subscription/redhat.repo:/run/secrets/redhat.repo:z \\".into());
+        lines.push("#     -f Containerfile .".into());
+        lines.push("#".into());
+        lines.push("# Or use: inspectah build <tarball> -t <name:tag>".into());
+        lines.push(String::new());
+    }
+
     // Completeness warning — surface before any build instructions
     let affected_ids: Vec<_> = match &snap.completeness {
         Completeness::Partial {
