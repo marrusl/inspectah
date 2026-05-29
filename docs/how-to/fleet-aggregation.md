@@ -173,6 +173,30 @@ inspectah fleet aggregate --manifest fleet.toml --baseline quay.io/centos-bootc/
 inspectah fleet aggregate --manifest fleet.toml --baseline registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 
+### Sensitive data acknowledgment
+
+When any contributing scan was run with `--preserve-password-hashes`,
+`--preserve-ssh-keys`, or `--preserve-subscription`, the merged output
+contains sensitive material. Fleet aggregate refuses to produce output
+unless you acknowledge this with `--ack-sensitive`:
+
+```bash
+inspectah fleet aggregate --ack-sensitive --manifest fleet.toml
+```
+
+Without the flag, fleet aggregate exits with an error listing which
+sensitive data types are present and instructing you to re-run with
+`--ack-sensitive`.
+
+### Subscription merging
+
+When multiple hosts have subscription data, fleet aggregate selects the
+bundle with the latest certificate expiry date. If expiry dates are
+identical, the snapshot with the lexicographically first hostname wins.
+Incomplete bundles (missing required components) are excluded from
+selection. The winning bundle's `source_hostname` field records where it
+came from.
+
 ### Verbose and strict modes
 
 Show per-host detail during aggregation:

@@ -64,9 +64,9 @@ Core contains several important modules:
 
 - **types/** -- One module per domain: `rpm`, `config`, `services`, `network`,
   `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
-  `nonrpm`, `fleet`, and supporting types like `warnings`, `redaction`,
-  `completeness`, and `preflight`. Each defines the serializable structs that
-  flow through the entire pipeline.
+  `nonrpm`, `fleet`, `subscription`, and supporting types like `warnings`,
+  `redaction`, `completeness`, and `preflight`. Each defines the serializable
+  structs that flow through the entire pipeline.
 - **traits/** -- The `Inspector`, `Renderer`, `Detector`, `Executor`, and
   `Progress` traits that define the contracts between crates. Collectors
   implement `Inspector`. Output generators implement `Renderer`. The executor
@@ -117,6 +117,11 @@ Collect's inspectors mirror the domain types in core:
   **nonrpm.rs**, **users.rs** -- Domain-specific inspectors for containers,
   storage mounts, cron/timers, SELinux policy, non-RPM software, and user
   accounts.
+- **subscription.rs** -- RHEL subscription material collection: entitlement
+  cert/key pairs from `/etc/pki/entitlement`, CA certs from `/etc/rhsm/ca`,
+  `rhsm.conf`, and `redhat.repo`. Parses X.509 expiry dates, validates
+  bundle completeness, and extracts org metadata from consumer certs.
+  Activated by `--preserve-subscription`.
 - **baseline.rs** -- Baseline image querying: runs `podman run` against the
   target image to extract its package list, service presets, and config
   defaults for subtraction.
@@ -138,6 +143,12 @@ transformation logic.
 
 Pipeline's modules:
 
+- **build/** -- Build planning and execution. Given an inspectah tarball,
+  extracts it safely, detects RHEL ambient subscription status, plans
+  subscription certificate mounts, checks cert expiry, and constructs the
+  `podman build` command. Sub-modules: `extract.rs` (archive safety and
+  tarball extraction), `rhel.rs` (ambient subscription detection and
+  validation).
 - **orchestrate.rs** -- The top-level scan orchestrator. Runs inspectors in
   sequence, feeds results through baseline subtraction, and dispatches to
   renderers. This is where the scan workflow is defined.
@@ -234,9 +245,9 @@ CLI's modules:
 
 - **main.rs** -- Entry point, clap argument definitions, and subcommand
   routing.
-- **commands/** -- One module per subcommand: `scan.rs`, `refine.rs`,
-  `fleet.rs`, `version.rs`, and `pull_progress.rs` (image pull progress
-  tracking for baseline resolution).
+- **commands/** -- One module per subcommand: `scan.rs`, `build.rs`,
+  `refine.rs`, `fleet.rs`, `version.rs`, and `pull_progress.rs` (image pull
+  progress tracking for baseline resolution).
 - **progress/** -- Terminal progress display with multiple backends: `rich.rs`
   (animated spinners and progress bars), `plain.rs` (line-by-line output for
   non-TTY environments), `flat.rs` (minimal output), and `display.rs`

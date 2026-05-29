@@ -19,6 +19,7 @@ inspectah [COMMAND]
 | Command   | Description                                          |
 |-----------|------------------------------------------------------|
 | `scan`    | Scan the current system and produce a migration snapshot |
+| `build`   | Build a bootc container image from an inspectah tarball |
 | `refine`  | Interactively refine scan output and re-render       |
 | `fleet`   | Aggregate and manage fleet-wide migration snapshots  |
 | `version` | Print version, commit, and build date                |
@@ -51,7 +52,8 @@ inspectah scan [OPTIONS]
 | `--no-baseline` | bool | `false` | Skip baseline extraction (degraded classification mode) |
 | `--preserve-password-hashes` | bool | `false` | Preserve password hashes for users with status `password_set` |
 | `--preserve-ssh-keys` | bool | `false` | Preserve full SSH `authorized_keys` content per user |
-| `--acknowledge-sensitive` | bool | `false` | Acknowledge that snapshot contains sensitive data (required for export when preserve flags used) |
+| `--preserve-subscription` | bool | `false` | Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds |
+| `--ack-sensitive` | bool | `false` | Acknowledge that snapshot contains sensitive data (required for export when preserve flags used). Alias: `--acknowledge-sensitive` |
 | `--progress <MODE>` | enum | `rich` | Progress display mode: `rich`, `plain`, or `flat` |
 | `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors, including fast ones |
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints) |
@@ -93,7 +95,13 @@ sudo inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream9
 Scan with sensitive data preserved (requires acknowledgment):
 
 ```bash
-sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --acknowledge-sensitive
+sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --ack-sensitive
+```
+
+Scan with RHEL subscription material preserved (for building on non-RHEL hosts):
+
+```bash
+sudo inspectah scan --preserve-subscription --ack-sensitive
 ```
 
 Scan in CI with flat progress output:
@@ -245,6 +253,7 @@ inspectah fleet aggregate [OPTIONS] [INPUTS]...
 | `--json-only` | bool | `false` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`) |
 | `--strict` | bool | `false` | Treat warnings as errors |
 | `-v, --verbose` | bool | `false` | Show per-host detail in output |
+| `--ack-sensitive` | bool | `false` | Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys). Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive` |
 
 #### Examples
 
@@ -288,6 +297,80 @@ Strict mode (fail on warnings):
 
 ```bash
 inspectah fleet aggregate --strict --manifest fleet.toml
+```
+
+Aggregate snapshots that contain sensitive data (subscription certs, password hashes):
+
+```bash
+inspectah fleet aggregate --ack-sensitive /srv/snapshots/
+```
+
+---
+
+## inspectah build
+
+Build a bootc container image from an inspectah tarball snapshot. Extracts
+the tarball, validates its contents, plans the build (including RHEL
+subscription certificate mounts when needed), and executes `podman build`.
+
+```
+inspectah build [OPTIONS] <TARBALL> --tag <TAG>
+```
+
+### Arguments
+
+| Argument    | Required | Description                                 |
+|-------------|----------|---------------------------------------------|
+| `<TARBALL>` | yes      | Path to inspectah tarball (`.tar.gz` snapshot) |
+
+### Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-t, --tag <TAG>` | string | **required** | Image tag (must include version, e.g., `myimage:v1`) |
+| `--dry-run` | bool | `false` | Show the build command without executing it |
+| `--keep-context` | bool | `false` | Keep the extracted build context after build completes |
+| `[-- <PODMAN_ARGS>...]` | string | — | Additional arguments to pass to `podman build` (after `--`) |
+
+### Behavior
+
+1. **Extract** -- extracts the tarball to a temporary directory (or a named
+   cache directory when `--keep-context` is set).
+2. **Validate** -- confirms the tarball contains a `Containerfile` and checks
+   archive safety (rejects path traversal, symlink escapes, hardlinks, and
+   device nodes).
+3. **Detect RHEL pass-through** -- if building on a subscribed RHEL host,
+   uses the host's ambient subscription. If not (macOS, Fedora, CI), falls
+   back to subscription material from the tarball's `subscription/` directory.
+4. **Check certificate expiry** -- warns when entitlement certificates are
+   expired or expiring within 14 days.
+5. **Build** -- constructs and runs the `podman build` command with
+   subscription certificate mounts (`-v`) when applicable.
+
+### Examples
+
+Build an image from a scan tarball:
+
+```bash
+inspectah build snapshot.tar.gz --tag my-bootc-image:v1
+```
+
+Preview the podman command without executing it:
+
+```bash
+inspectah build snapshot.tar.gz --tag my-bootc-image:v1 --dry-run
+```
+
+Keep the extracted build context for inspection after the build:
+
+```bash
+inspectah build snapshot.tar.gz --tag my-bootc-image:v1 --keep-context
+```
+
+Pass additional flags to podman:
+
+```bash
+inspectah build snapshot.tar.gz --tag my-bootc-image:v1 -- --no-cache --platform linux/arm64
 ```
 
 ---

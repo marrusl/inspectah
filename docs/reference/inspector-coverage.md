@@ -268,3 +268,36 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 | `/etc/sudoers`, `/etc/sudoers.d/` | Sudoers rules |
 | `~/.ssh/authorized_keys` | SSH key references (redacted by default) |
 | `/etc/subuid`, `/etc/subgid` | Subordinate UID/GID mappings |
+
+---
+
+### SubscriptionInspector
+
+| | |
+|:---|:---|
+| **ID** | `Subscription` |
+| **Applies to** | `PackageBased` systems |
+| **Snapshot field** | `subscription` (`SubscriptionSection`) |
+| **Source** | `inspectors/subscription.rs` |
+| **Activation** | Only runs when `--preserve-subscription` is passed |
+
+**What it reads:**
+
+| Data source | Purpose |
+|:------------|:--------|
+| `/etc/pki/entitlement/*.pem` | Entitlement certificate and key pairs (serial-number matched) |
+| `/etc/rhsm/ca/` | CA certificates (e.g., `redhat-uep.pem`) |
+| `/etc/rhsm/rhsm.conf` | Subscription manager configuration |
+| `/etc/yum.repos.d/redhat.repo` | Red Hat repository definition |
+| `/etc/pki/consumer/cert.pem` | Consumer cert for org metadata (org ID, system UUID, RHSM server) |
+
+**Section fields:** `entitlement_certs`, `ca_certs`, `config_files`, `earliest_expiry`, `incomplete`, `org_id`, `system_uuid`, `rhsm_server`, `source_hostname`.
+
+**Behaviors:**
+
+- Cert/key files are base64-encoded in the snapshot and decoded during tarball staging.
+- Certificate expiry is parsed from X.509 PEM data. Certs expiring within 14 days or already expired trigger warnings.
+- Bundle completeness is evaluated against a four-component contract (entitlement pair, CA cert, rhsm.conf, redhat.repo). Missing components set `incomplete: true` with a warning naming the missing item.
+- Symlinks within subscription paths are followed; symlinks resolving outside approved roots are rejected with a warning.
+- Files over 1 MB are rejected.
+- Permission-denied errors produce warnings (not silent skips).
