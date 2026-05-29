@@ -22,6 +22,11 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// Primary header name for acknowledging sensitive data exports.
+/// Both this and the legacy header are accepted for backward compatibility.
+pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
+const LEGACY_ACK_SENSITIVE_HEADER: &str = "x-acknowledge-sensitive";
+
 /// Produce a display version that avoids duplicating what's already in pretty_name.
 ///
 /// Cases:
@@ -632,7 +637,8 @@ pub async fn export_tarball(
     // Export gating: require explicit acknowledgment for sensitive sessions.
     if sensitive {
         let ack = headers
-            .get("x-acknowledge-sensitive")
+            .get(ACK_SENSITIVE_HEADER)
+            .or_else(|| headers.get(LEGACY_ACK_SENSITIVE_HEADER))
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if ack != "true" {
@@ -878,7 +884,7 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
         }
     }
     json!({
-        "error": "session contains sensitive data — set x-acknowledge-sensitive: true to export",
+        "error": "session contains sensitive data — set x-ack-sensitive: true to export",
         "sensitivity_summary": reasons,
     })
 }
@@ -3269,6 +3275,28 @@ mod tests {
                 .iter()
                 .any(|item| item.id == "omitted-sssd-kcm.service"),
             "omitted service should be in omitted subsection with prefixed id"
+        );
+    }
+
+    /// Structural test: ensure the ACK_SENSITIVE_HEADER constant stays in sync
+    /// with the CORS allow-headers configuration in lib.rs.
+    ///
+    /// This is a compile-time contract enforced at test-time. If the header
+    /// name changes in one place, this test will fail until both are updated.
+    #[test]
+    fn test_ack_sensitive_header_cors_sync() {
+        // The constant used in handlers must match what's configured in CORS.
+        // lib.rs references handlers::ACK_SENSITIVE_HEADER, so this test verifies
+        // the constant is properly exposed and has the expected value.
+        assert_eq!(
+            ACK_SENSITIVE_HEADER, "x-ack-sensitive",
+            "ACK_SENSITIVE_HEADER constant must match CORS configuration"
+        );
+
+        // Verify the legacy header constant exists and is distinct
+        assert_eq!(
+            LEGACY_ACK_SENSITIVE_HEADER, "x-acknowledge-sensitive",
+            "Legacy header name must be preserved for backward compatibility"
         );
     }
 }

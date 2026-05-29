@@ -59,7 +59,8 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderName::from_static("x-acknowledge-sensitive"),
+            axum::http::HeaderName::from_static(handlers::ACK_SENSITIVE_HEADER),
+            axum::http::HeaderName::from_static("x-acknowledge-sensitive"), // legacy
         ]);
 
     let served = served_origin.to_string();
