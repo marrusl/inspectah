@@ -349,9 +349,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         body.push(
             "# WARNING: Embedding password hashes in a Containerfile is a security risk.".into(),
         );
-        body.push(
-            "# Consider using a secrets manager or deploy-time provisioning instead.".into(),
-        );
+        body.push("# Consider using a secrets manager or deploy-time provisioning instead.".into());
         let mut chpasswd_entries: Vec<String> = Vec::new();
         for u in &pw_users {
             let name = str_field(u, "name");

@@ -1,3 +1,4 @@
+pub mod build;
 pub mod collect;
 pub mod orchestrate;
 pub mod redaction;

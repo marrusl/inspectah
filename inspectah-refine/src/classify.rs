@@ -170,9 +170,7 @@ fn classify_package(
     }
 
     // Empty source_repo or @commandline means unknown provenance — always Investigate.
-    if entry.source_repo.is_empty()
-        || entry.source_repo.eq_ignore_ascii_case("@commandline")
-    {
+    if entry.source_repo.is_empty() || entry.source_repo.eq_ignore_ascii_case("@commandline") {
         return TriageTag {
             triage: Triage::SingleHost(TriageBucket::Investigate),
             primary_reason: TriageReason::PackageNoRepoSource,
@@ -274,9 +272,7 @@ pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
             // Sensitive path annotation: add to items in sensitive directories.
             // OS-default files in sensitive directories are NOT annotated —
             // they are stock package contents, not meaningful user customizations.
-            if is_sensitive_path(&entry.path)
-                && !is_os_default_sensitive(&entry.path)
-            {
+            if is_sensitive_path(&entry.path) && !is_os_default_sensitive(&entry.path) {
                 annotations.push(TriageAnnotation::SensitivePath);
             }
 
@@ -513,11 +509,7 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
     let tuned_pkg_installed = snap
         .rpm
         .as_ref()
-        .map(|rpm| {
-            rpm.packages_added
-                .iter()
-                .any(|p| p.name == "tuned")
-        })
+        .map(|rpm| rpm.packages_added.iter().any(|p| p.name == "tuned"))
         .unwrap_or(false);
 
     let (reason, bucket, annotations) = if !tuned_pkg_installed {
@@ -664,7 +656,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Baseline);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageBaselineMatch
+        );
     }
 
     #[test]
@@ -676,7 +671,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageUserAdded);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageUserAdded
+        );
     }
 
     #[test]
@@ -688,7 +686,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -701,7 +702,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -714,7 +718,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -726,7 +733,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -739,7 +749,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -751,7 +764,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -763,7 +779,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageLocalInstall);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageLocalInstall
+        );
     }
 
     #[test]
@@ -775,7 +794,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -808,7 +830,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Baseline);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageBaselineMatch
+        );
     }
 
     #[test]
@@ -820,7 +845,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageProvenanceUnavailable);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageProvenanceUnavailable
+        );
     }
 
     #[test]
@@ -832,7 +860,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageLocalInstall);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageLocalInstall
+        );
     }
 
     #[test]
@@ -841,19 +872,29 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
     fn commandline_source_repo_is_investigate() {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into()]),
-            vec![pkg("rpmfusion-free-release", PackageState::Added, "@commandline")],
+            vec![pkg(
+                "rpmfusion-free-release",
+                PackageState::Added,
+                "@commandline",
+            )],
         );
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -913,17 +954,10 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
-                packages_added: vec![pkg(
-                    "epel-release",
-                    PackageState::Added,
-                    "@commandline",
-                )],
+                packages_added: vec![pkg("epel-release", PackageState::Added, "@commandline")],
                 file_ownership: vec![FileOwnershipEntry {
                     package_name: "epel-release".into(),
-                    paths: vec![
-                        "/etc/yum.repos.d/epel.repo".into(),
-                        "/usr/bin/crb".into(),
-                    ],
+                    paths: vec!["/etc/yum.repos.d/epel.repo".into(), "/usr/bin/crb".into()],
                 }],
                 ..Default::default()
             }),
@@ -955,7 +989,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -964,7 +1001,10 @@ mod tests {
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -982,16 +1022,28 @@ mod tests {
         assert_eq!(result.len(), 4);
 
         assert_bucket(&result[0].triage, TriageBucket::Baseline);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageBaselineMatch
+        );
 
         assert_bucket(&result[1].triage, TriageBucket::Site);
-        assert_eq!(result[1].triage.primary_reason, TriageReason::PackageUserAdded);
+        assert_eq!(
+            result[1].triage.primary_reason,
+            TriageReason::PackageUserAdded
+        );
 
         assert_bucket(&result[2].triage, TriageBucket::Investigate);
-        assert_eq!(result[2].triage.primary_reason, TriageReason::PackageLocalInstall);
+        assert_eq!(
+            result[2].triage.primary_reason,
+            TriageReason::PackageLocalInstall
+        );
 
         assert_bucket(&result[3].triage, TriageBucket::Investigate);
-        assert_eq!(result[3].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            result[3].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -1011,10 +1063,16 @@ mod tests {
         assert_eq!(result.len(), 2);
 
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
 
         assert_bucket(&result[1].triage, TriageBucket::Investigate);
-        assert_eq!(result[1].triage.primary_reason, TriageReason::PackageVersionChanged);
+        assert_eq!(
+            result[1].triage.primary_reason,
+            TriageReason::PackageVersionChanged
+        );
     }
 
     use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
@@ -1043,7 +1101,10 @@ mod tests {
         };
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
+        assert!(
+            result[0].triage.annotations.is_empty(),
+            "no SensitivePath annotation"
+        );
         assert_bucket(&result[0].triage, TriageBucket::Site);
         assert_eq!(result[0].triage.primary_reason, TriageReason::ConfigUnowned);
     }
@@ -1062,7 +1123,10 @@ mod tests {
         };
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
+        assert!(
+            result[0].triage.annotations.is_empty(),
+            "no SensitivePath annotation"
+        );
     }
 
     #[test]
@@ -1079,7 +1143,10 @@ mod tests {
         };
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
+        assert!(
+            result[0].triage.annotations.is_empty(),
+            "no SensitivePath annotation"
+        );
     }
 
     #[test]
@@ -1093,7 +1160,10 @@ mod tests {
         };
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
-        assert!(result[0].triage.annotations.is_empty(), "no SensitivePath annotation");
+        assert!(
+            result[0].triage.annotations.is_empty(),
+            "no SensitivePath annotation"
+        );
     }
 
     #[test]
@@ -1108,7 +1178,10 @@ mod tests {
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
         assert!(
-            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            result[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::SensitivePath),
             "SensitivePath annotation expected"
         );
     }
@@ -1128,9 +1201,15 @@ mod tests {
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
         assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(result[0].triage.primary_reason, TriageReason::ConfigModified);
+        assert_eq!(
+            result[0].triage.primary_reason,
+            TriageReason::ConfigModified
+        );
         assert!(
-            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            result[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::SensitivePath),
             "SensitivePath annotation expected for modified sensitive path"
         );
     }
@@ -1150,7 +1229,10 @@ mod tests {
         let result = classify_configs(&snap);
         assert_eq!(result.len(), 1);
         assert!(
-            result[0].triage.annotations.contains(&TriageAnnotation::SensitivePath),
+            result[0]
+                .triage
+                .annotations
+                .contains(&TriageAnnotation::SensitivePath),
             "SensitivePath annotation expected"
         );
     }
@@ -1185,7 +1267,10 @@ mod tests {
         let result = classify_packages(&snap);
         let bash = result.iter().find(|p| p.entry.name == "bash").unwrap();
         assert_bucket(&bash.triage, TriageBucket::Baseline);
-        assert_eq!(bash.triage.primary_reason, TriageReason::PackageBaselineMatch);
+        assert_eq!(
+            bash.triage.primary_reason,
+            TriageReason::PackageBaselineMatch
+        );
     }
 
     #[test]

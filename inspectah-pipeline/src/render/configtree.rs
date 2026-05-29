@@ -324,11 +324,7 @@ pub fn write_config_tree(
             }
         }
         // Synthesized sysctl conf — only included overrides
-        let included_sysctls: Vec<_> = kb
-            .sysctl_overrides
-            .iter()
-            .filter(|s| s.include)
-            .collect();
+        let included_sysctls: Vec<_> = kb.sysctl_overrides.iter().filter(|s| s.include).collect();
         if !included_sysctls.is_empty() {
             let sysctl_dir = output_dir.join("sysctl/etc/sysctl.d");
             let _ = std::fs::create_dir_all(&sysctl_dir);
@@ -337,10 +333,7 @@ pub fn write_config_tree(
             for s in &included_sysctls {
                 conf.push_str(&format!("{} = {}\n", s.key, s.runtime));
             }
-            let _ = std::fs::write(
-                sysctl_dir.join("99-inspectah-migrated.conf"),
-                &conf,
-            );
+            let _ = std::fs::write(sysctl_dir.join("99-inspectah-migrated.conf"), &conf);
         }
 
         // Kernel arguments drop-in
@@ -550,8 +543,73 @@ pub fn write_config_tree(
     // env-files/ directory via write_env_files(). See design decision: .env files
     // are high-probability secret carriers requiring operator review.
 
+    // Stage subscription material (decoded from base64)
+    if snap.preserved_subscription
+        && let Some(ref sub) = snap.subscription
+    {
+        stage_subscription_files(output_dir, sub)?;
+    }
+
     // Return the actual top-level directories materialized under config/
     Ok(config_copy_roots(&config_dir))
+}
+
+/// Stage subscription files into subscription/ directory, decoding from base64.
+fn stage_subscription_files(
+    output_dir: &Path,
+    section: &inspectah_core::types::subscription::SubscriptionSection,
+) -> Result<(), RenderError> {
+    use base64::Engine;
+
+    let sub_dir = output_dir.join("subscription");
+
+    // Entitlement certs -> subscription/entitlement/
+    let ent_dir = sub_dir.join("entitlement");
+    for f in &section.entitlement_certs {
+        let filename = Path::new(&f.path).file_name().unwrap_or_default();
+        let dest = ent_dir.join(filename);
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&f.content)
+            .map_err(|e| {
+                RenderError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?;
+        std::fs::write(&dest, decoded)?;
+    }
+
+    // CA certs -> subscription/rhsm/ca/
+    let ca_dir = sub_dir.join("rhsm/ca");
+    for f in &section.ca_certs {
+        let filename = Path::new(&f.path).file_name().unwrap_or_default();
+        let dest = ca_dir.join(filename);
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&f.content)
+            .map_err(|e| {
+                RenderError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?;
+        std::fs::write(&dest, decoded)?;
+    }
+
+    // Config files (rhsm.conf -> subscription/rhsm/, redhat.repo -> subscription/)
+    for f in &section.config_files {
+        let dest = if f.path.contains("rhsm.conf") {
+            sub_dir.join("rhsm/rhsm.conf")
+        } else if f.path.contains("redhat.repo") {
+            sub_dir.join("redhat.repo")
+        } else {
+            continue;
+        };
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&f.content)
+            .map_err(|e| {
+                RenderError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?;
+        std::fs::write(&dest, decoded)?;
+    }
+
+    Ok(())
 }
 
 /// Returns the sorted list of top-level directory names under config_dir
@@ -626,6 +684,7 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
 mod tests {
     use super::*;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
     use inspectah_core::types::network::{FirewallZone, NetworkSection};
     use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
@@ -634,7 +693,6 @@ mod tests {
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
     use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
-    use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
     use tempfile::TempDir;
 
@@ -1197,9 +1255,7 @@ mod tests {
         );
         // Non-quadlet config file must still exist
         assert!(
-            dir.path()
-                .join("config/etc/httpd/conf/httpd.conf")
-                .exists(),
+            dir.path().join("config/etc/httpd/conf/httpd.conf").exists(),
             "non-quadlet config file must still be materialized"
         );
         // Quadlet must be written to quadlet/ directory instead
@@ -1464,21 +1520,90 @@ mod tests {
                 .exists(),
             "bundled script.sh must be materialized alongside tuned.conf"
         );
-        let conf = std::fs::read_to_string(
-            dir.path().join("tuned/etc/tuned/my-profile/tuned.conf"),
-        )
-        .unwrap();
+        let conf =
+            std::fs::read_to_string(dir.path().join("tuned/etc/tuned/my-profile/tuned.conf"))
+                .unwrap();
         assert!(
             conf.contains("Custom perf profile"),
             "tuned.conf content must be preserved"
         );
-        let script = std::fs::read_to_string(
-            dir.path().join("tuned/etc/tuned/my-profile/script.sh"),
-        )
-        .unwrap();
+        let script =
+            std::fs::read_to_string(dir.path().join("tuned/etc/tuned/my-profile/script.sh"))
+                .unwrap();
         assert!(
             script.contains("#!/bin/bash"),
             "script.sh content must be preserved"
         );
+    }
+
+    #[test]
+    fn test_subscription_dir_staged() {
+        use base64::Engine;
+        use inspectah_core::types::subscription::{SubscriptionFile, SubscriptionSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.subscription = Some(SubscriptionSection {
+            entitlement_certs: vec![
+                SubscriptionFile {
+                    path: "/etc/pki/entitlement/123.pem".into(),
+                    content: base64::engine::general_purpose::STANDARD.encode("cert-data"),
+                    size_bytes: 9,
+                    cert_expiry: None,
+                },
+                SubscriptionFile {
+                    path: "/etc/pki/entitlement/123-key.pem".into(),
+                    content: base64::engine::general_purpose::STANDARD.encode("key-data"),
+                    size_bytes: 8,
+                    cert_expiry: None,
+                },
+            ],
+            ca_certs: vec![SubscriptionFile {
+                path: "/etc/rhsm/ca/redhat-uep.pem".into(),
+                content: base64::engine::general_purpose::STANDARD.encode("ca-data"),
+                size_bytes: 7,
+                cert_expiry: None,
+            }],
+            config_files: vec![
+                SubscriptionFile {
+                    path: "/etc/rhsm/rhsm.conf".into(),
+                    content: base64::engine::general_purpose::STANDARD.encode("[rhsm]"),
+                    size_bytes: 6,
+                    cert_expiry: None,
+                },
+                SubscriptionFile {
+                    path: "/etc/yum.repos.d/redhat.repo".into(),
+                    content: base64::engine::general_purpose::STANDARD.encode("[rhel]"),
+                    size_bytes: 6,
+                    cert_expiry: None,
+                },
+            ],
+            ..Default::default()
+        });
+        snap.preserved_subscription = true;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert!(dir.path().join("subscription/entitlement/123.pem").exists());
+        assert!(
+            dir.path()
+                .join("subscription/entitlement/123-key.pem")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("subscription/rhsm/ca/redhat-uep.pem")
+                .exists()
+        );
+        assert!(dir.path().join("subscription/rhsm/rhsm.conf").exists());
+        assert!(dir.path().join("subscription/redhat.repo").exists());
+    }
+
+    #[test]
+    fn test_no_subscription_no_dir() {
+        let snap = InspectionSnapshot::new();
+        let dir = tempfile::TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        assert!(!dir.path().join("subscription").exists());
     }
 }

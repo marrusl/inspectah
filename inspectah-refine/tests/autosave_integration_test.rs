@@ -85,11 +85,23 @@ fn make_session_with_real_tarball() -> (RefineSession, tempfile::TempDir) {
 }
 
 fn exclude_httpd() -> RefinementOp {
-    RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: false }
+    RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+        },
+        include: false,
+    }
 }
 
 fn exclude_glibc() -> RefinementOp {
-    RefinementOp::SetInclude { item_id: ItemId::Package { name: "glibc".into(), arch: "x86_64".into() }, include: false }
+    RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+        },
+        include: false,
+    }
 }
 
 #[test]
@@ -269,7 +281,13 @@ fn resume_preserves_redo_tail() {
     session.apply(exclude_httpd()).unwrap();
     session.apply(exclude_glibc()).unwrap();
     session
-        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: true })
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: true,
+        })
         .unwrap();
 
     // Undo once: cursor=2, ops=3
@@ -305,7 +323,13 @@ fn resume_does_not_truncate_redo_on_autosave() {
     session.apply(exclude_httpd()).unwrap();
     session.apply(exclude_glibc()).unwrap();
     session
-        .apply(RefinementOp::SetInclude { item_id: ItemId::Package { name: "httpd".into(), arch: "x86_64".into() }, include: true })
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: true,
+        })
         .unwrap();
     session.undo().unwrap();
 

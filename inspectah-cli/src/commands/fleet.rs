@@ -62,6 +62,10 @@ pub struct FleetAggregateArgs {
     /// Show per-host detail in output
     #[arg(long, short)]
     pub verbose: bool,
+
+    /// Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)
+    #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
+    pub ack_sensitive: bool,
 }
 
 #[derive(Debug, Args)]
@@ -142,6 +146,34 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
 
     // --- Step 3: Merge snapshots ---
     let snapshots: Vec<InspectionSnapshot> = hosts.into_iter().map(|h| h.snapshot).collect();
+
+    // --- Step 3.5: Check for sensitive data in input snapshots ---
+    let has_sensitive = snapshots.iter().any(|s| s.sensitive_snapshot);
+
+    if has_sensitive && !args.ack_sensitive {
+        // Collect which types of sensitive data are present
+        let mut sensitive_types = std::collections::HashSet::new();
+        for snapshot in &snapshots {
+            if snapshot.preserved_subscription {
+                sensitive_types.insert("subscription certs");
+            }
+            if snapshot.preserved_credentials {
+                sensitive_types.insert("password hashes");
+            }
+            if snapshot.preserved_ssh_keys {
+                sensitive_types.insert("SSH keys");
+            }
+        }
+
+        let type_list: Vec<&str> = sensitive_types.into_iter().collect();
+        let type_list_str = type_list.join(", ");
+
+        bail!(
+            "Fleet contains snapshots with sensitive data ({}).\n\
+             To export, re-run with --ack-sensitive",
+            type_list_str
+        );
+    }
 
     let (merged, warnings) = merge_snapshots(snapshots, manifest.as_ref())
         .map_err(|errors| format_validation_errors(&errors))?;
@@ -772,7 +804,7 @@ mod tests {
         // serialization: target_image is a top-level struct with image_ref,
         // NOT inside the meta HashMap.
         let snapshot_json = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {
                 "hostname": "host-a.example.com"
             },
@@ -799,7 +831,7 @@ mod tests {
         // If target_image only exists inside meta (old/wrong shape),
         // extraction should return None — not silently read the wrong path.
         let snapshot_json = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {
                 "hostname": "host-b.example.com",
                 "target_image": "registry.redhat.io/rhel9/rhel-bootc:9.4"
@@ -826,13 +858,13 @@ mod tests {
 
         // Two tarballs with the same baseline
         let json_common = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-1"},
             "target_image": {"image_ref": common_image, "strategy": "BootcStatus"}
         });
         // One tarball with a different baseline
         let json_outlier = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-3"},
             "target_image": {"image_ref": outlier_image, "strategy": "BootcStatus"}
         });
@@ -887,12 +919,12 @@ mod tests {
         let beta_image = "registry.example.com/beta:1.0";
 
         let json_alpha = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-alpha"},
             "target_image": {"image_ref": alpha_image, "strategy": "BootcStatus"}
         });
         let json_beta = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-beta"},
             "target_image": {"image_ref": beta_image, "strategy": "BootcStatus"}
         });
@@ -940,6 +972,7 @@ mod tests {
             json_only,
             strict: false,
             verbose: false,
+            ack_sensitive: false,
         }
     }
 
@@ -964,13 +997,13 @@ mod tests {
     /// distinct hostnames to avoid the duplicate-hostname error.
     fn make_fleet_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
         });
         let json_b = serde_json::json!({
-            "schema_version": 17,
+            "schema_version": 18,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
@@ -995,6 +1028,7 @@ mod tests {
             json_only: true,
             strict: false,
             verbose: false,
+            ack_sensitive: false,
         };
 
         run_aggregate(&args).expect("--json-only --output-dir should succeed");
@@ -1027,6 +1061,7 @@ mod tests {
             json_only: true,
             strict: false,
             verbose: false,
+            ack_sensitive: false,
         };
 
         run_aggregate(&args).expect("--json-only --output-file should succeed");
@@ -1040,5 +1075,123 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&content).expect("output should be valid JSON");
         assert!(parsed.is_object(), "parsed JSON should be an object");
+    }
+
+    // -----------------------------------------------------------------------
+    // --ack-sensitive export gate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fleet_aggregate_refuses_sensitive_snapshot_without_ack() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create one normal snapshot and one sensitive snapshot
+        let json_normal = serde_json::json!({
+            "schema_version": 18,
+            "meta": {"hostname": "host-normal.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
+            "sensitive_snapshot": false
+        });
+
+        let json_sensitive = serde_json::json!({
+            "schema_version": 18,
+            "meta": {"hostname": "host-sensitive.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
+            "sensitive_snapshot": true,
+            "preserved_subscription": true,
+            "preserved_credentials": false,
+            "preserved_ssh_keys": false
+        });
+
+        let t1 = make_test_tarball(dir.path(), "host-normal.tar.gz", &json_normal);
+        let t2 = make_test_tarball(dir.path(), "host-sensitive.tar.gz", &json_sensitive);
+
+        let args = FleetAggregateArgs {
+            inputs: vec![t1, t2],
+            manifest: None,
+            baseline: None,
+            output_dir: None,
+            output_file: None,
+            json_only: false,
+            strict: false,
+            verbose: false,
+            ack_sensitive: false,
+        };
+
+        let result = run_aggregate(&args);
+        assert!(
+            result.is_err(),
+            "should refuse to export sensitive data without --ack-sensitive"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("sensitive data"),
+            "error should mention sensitive data, got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("subscription certs"),
+            "error should list subscription certs as present, got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("--ack-sensitive"),
+            "error should instruct to use --ack-sensitive, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_fleet_aggregate_allows_sensitive_snapshot_with_ack() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let json_sensitive = serde_json::json!({
+            "schema_version": 18,
+            "meta": {"hostname": "host-a.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
+            "sensitive_snapshot": true,
+            "preserved_subscription": true,
+            "preserved_credentials": false,
+            "preserved_ssh_keys": false
+        });
+
+        let json_b = serde_json::json!({
+            "schema_version": 18,
+            "meta": {"hostname": "host-b.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
+            "sensitive_snapshot": false
+        });
+
+        let t1 = make_test_tarball(dir.path(), "host-a.tar.gz", &json_sensitive);
+        let t2 = make_test_tarball(dir.path(), "host-b.tar.gz", &json_b);
+
+        let out_dir = dir.path().join("output");
+        let args = FleetAggregateArgs {
+            inputs: vec![t1, t2],
+            manifest: None,
+            baseline: None,
+            output_dir: Some(out_dir.clone()),
+            output_file: None,
+            json_only: false,
+            strict: false,
+            verbose: false,
+            ack_sensitive: true,
+        };
+
+        let result = run_aggregate(&args);
+        assert!(
+            result.is_ok(),
+            "should allow export with --ack-sensitive: {:?}",
+            result.err()
+        );
+
+        // Verify output was created
+        let tarballs: Vec<_> = std::fs::read_dir(&out_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("gz"))
+            .collect();
+        assert_eq!(tarballs.len(), 1, "should create one tarball");
     }
 }

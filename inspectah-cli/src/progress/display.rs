@@ -85,15 +85,27 @@ pub fn metric_label(kind: &MetricKind, value: usize) -> String {
     match kind {
         MetricKind::PackagesFound => format!("{value} found"),
         MetricKind::ReposMapped => {
-            if value == 1 { "1 repo mapped".to_string() } else { format!("{value} repos mapped") }
+            if value == 1 {
+                "1 repo mapped".to_string()
+            } else {
+                format!("{value} repos mapped")
+            }
         }
         MetricKind::ConfigsModified => format!("{value} modified"),
         MetricKind::UnitsFound => {
-            if value == 1 { "1 unit".to_string() } else { format!("{value} units") }
+            if value == 1 {
+                "1 unit".to_string()
+            } else {
+                format!("{value} units")
+            }
         }
         MetricKind::ContainersFound => format!("{value} found"),
         MetricKind::TimersFound => {
-            if value == 1 { "1 timer".to_string() } else { format!("{value} timers") }
+            if value == 1 {
+                "1 timer".to_string()
+            } else {
+                format!("{value} timers")
+            }
         }
     }
 }
@@ -171,7 +183,10 @@ mod tests {
         assert_eq!(metric_label(&MetricKind::PackagesFound, 847), "847 found");
         assert_eq!(metric_label(&MetricKind::ReposMapped, 8), "8 repos mapped");
         assert_eq!(metric_label(&MetricKind::ReposMapped, 1), "1 repo mapped");
-        assert_eq!(metric_label(&MetricKind::ConfigsModified, 12), "12 modified");
+        assert_eq!(
+            metric_label(&MetricKind::ConfigsModified, 12),
+            "12 modified"
+        );
         assert_eq!(metric_label(&MetricKind::UnitsFound, 4), "4 units");
         assert_eq!(metric_label(&MetricKind::UnitsFound, 1), "1 unit");
         assert_eq!(metric_label(&MetricKind::ContainersFound, 3), "3 found");
