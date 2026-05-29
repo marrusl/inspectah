@@ -82,7 +82,7 @@ const stages = [
   {
     id: 'inspectors',
     label: 'Inspectors',
-    sublabel: '11 Registered',
+    sublabel: '12 Registered',
     color: 'teal',
     tooltip: 'Parallel data collectors that scan each system domain.',
     children: [
@@ -97,6 +97,7 @@ const stages = [
       { text: 'SELinux', detail: 'Policy, booleans, file contexts' },
       { text: 'Non-RPM Software', detail: 'Binaries not from RPM packages' },
       { text: 'Users & Groups', detail: 'Local accounts, groups, SSH keys' },
+      { text: 'Subscription', detail: 'RHSM entitlement certs and config (--preserve-subscription)' },
     ],
   },
   {
@@ -119,6 +120,7 @@ const stages = [
       { text: 'selinux', detail: 'Policy and boolean state' },
       { text: 'non_rpm_software', detail: 'Unpackaged binaries' },
       { text: 'users_groups', detail: 'Account and group data' },
+      { text: 'subscription', detail: 'RHSM entitlement certs and metadata' },
     ],
   },
   {
@@ -165,6 +167,21 @@ const stages = [
       { text: '.tar.gz archive', detail: 'All artifacts in one file' },
       { text: 'Self-contained', detail: 'Ready to share or version-control' },
       { text: 'Reproducible', detail: 'Re-scan produces comparable output' },
+      { text: 'subscription/ directory', detail: 'RHSM certs for build-time mounting (--preserve-subscription)' },
+    ],
+  },
+  {
+    id: 'build',
+    label: 'Build',
+    sublabel: 'inspectah build',
+    color: 'rose',
+    tooltip: 'Automates podman build with subscription cert mounting. Replaces the manual extract-mount-build workflow.',
+    children: [
+      { text: 'Extract tarball', detail: 'Safe extraction with archive validation (hardlink/symlink checks)' },
+      { text: 'Validate contents', detail: 'Checks Containerfile presence and structural integrity' },
+      { text: 'RHEL pass-through detection', detail: 'Uses ambient subscription on RHEL hosts automatically' },
+      { text: 'Mount planning', detail: 'Plans -v bind mounts for subscription certs from tarball or host' },
+      { text: 'podman build', detail: 'Executes the build with cert mounts and user-specified args' },
     ],
   },
 ];
@@ -179,6 +196,7 @@ const { svg, g, width, height, zoom } = createDiagramShell({
     { color: colors.blue.stroke,   label: 'Processing' },
     { color: colors.red.stroke,    label: 'Sensitive Data Handling' },
     { color: colors.orange.stroke, label: 'Output' },
+    { color: colors.rose.stroke,   label: 'Build' },
   ],
 });
 
