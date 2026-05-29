@@ -136,10 +136,38 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     // Build and deploy
     lines.push("## Build and deploy".into());
     lines.push(String::new());
-    lines.push("```bash".into());
-    lines.push("podman build -t my-bootc-image -f Containerfile .".into());
-    lines.push("```".into());
-    lines.push(String::new());
+
+    // Subscription-specific build instructions
+    if snap.preserved_subscription {
+        lines.push("## Building with Subscription".into());
+        lines.push(String::new());
+        lines.push("This image requires RHEL subscription material at build time.".into());
+        lines.push(String::new());
+        lines.push(
+            "**Recommended:** Use the build helper (handles subscription mounts automatically):"
+                .into(),
+        );
+        lines.push(String::new());
+        lines.push("```bash".into());
+        lines.push("inspectah build <tarball> -t my-bootc-image:latest".into());
+        lines.push("```".into());
+        lines.push(String::new());
+        lines.push("**Manual build:** Mount subscription directories:".into());
+        lines.push(String::new());
+        lines.push("```bash".into());
+        lines.push("podman build \\".into());
+        lines.push("  -v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z \\".into());
+        lines.push("  -v ./subscription/rhsm:/run/secrets/rhsm:z \\".into());
+        lines.push("  -v ./subscription/redhat.repo:/run/secrets/redhat.repo:z \\".into());
+        lines.push("  -t my-bootc-image -f Containerfile .".into());
+        lines.push("```".into());
+        lines.push(String::new());
+    } else {
+        lines.push("```bash".into());
+        lines.push("podman build -t my-bootc-image -f Containerfile .".into());
+        lines.push("```".into());
+        lines.push(String::new());
+    }
     lines.push("```bash".into());
 
     let has_kargs = snap
@@ -366,6 +394,25 @@ mod tests {
         assert!(
             !md.contains("WARNING: Incomplete inspection"),
             "full completeness must not produce warning"
+        );
+    }
+
+    #[test]
+    fn test_readme_subscription_build_instructions() {
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("## Building with Subscription"),
+            "must have subscription build section heading"
+        );
+        assert!(
+            md.contains("inspectah build"),
+            "must reference inspectah build helper"
+        );
+        assert!(
+            md.contains("-v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z"),
+            "must include subscription mount instructions"
         );
     }
 }
