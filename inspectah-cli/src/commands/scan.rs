@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
@@ -24,13 +25,13 @@ use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::subscription::SubscriptionInspector;
 use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
-use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_core::traits::renderer::RenderContext;
-use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -100,9 +101,13 @@ pub struct ScanArgs {
     #[arg(long)]
     pub preserve_ssh_keys: bool,
 
-    /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
+    /// Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds
     #[arg(long)]
-    pub acknowledge_sensitive: bool,
+    pub preserve_subscription: bool,
+
+    /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
+    #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
+    pub ack_sensitive: bool,
 
     /// Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)
     #[arg(long, value_name = "MODE")]
@@ -243,7 +248,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 if term_width >= pull_progress::MIN_VIEWPORT_WIDTH {
                     let content_width = pull_progress::viewport_content_width(term_width);
                     let viewport_lines = pull_progress::viewport_height(term_height);
-                    let mut ring: Vec<String> = (0..viewport_lines).map(|_| String::new()).collect();
+                    let mut ring: Vec<String> =
+                        (0..viewport_lines).map(|_| String::new()).collect();
                     let mut ring_pos: usize = 0;
 
                     let result = {
@@ -314,7 +320,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         preserve_ssh_keys: args.preserve_ssh_keys,
     };
 
-    let inspectors: Vec<Box<dyn Inspector>> = vec![
+    let mut inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ServicesInspector::new()),
         Box::new(StorageInspector::new()),
@@ -327,6 +333,11 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
+
+    // Add SubscriptionInspector when --preserve-subscription is set
+    if args.preserve_subscription {
+        inspectors.push(Box::new(SubscriptionInspector::new()));
+    }
 
     let verbosity = if args.quiet {
         crate::progress::Verbosity::Quiet
@@ -382,9 +393,11 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     snapshot.no_baseline = args.no_baseline;
 
     // Set sensitivity metadata from CLI flags
-    snapshot.sensitive_snapshot = args.preserve_password_hashes || args.preserve_ssh_keys;
+    snapshot.sensitive_snapshot =
+        args.preserve_password_hashes || args.preserve_ssh_keys || args.preserve_subscription;
     snapshot.preserved_credentials = args.preserve_password_hashes;
     snapshot.preserved_ssh_keys = args.preserve_ssh_keys;
+    snapshot.preserved_subscription = args.preserve_subscription;
 
     // Version comparison line (prints after collection, since version_changes
     // is populated by the RPM inspector during collection)
@@ -413,14 +426,29 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     redact(&mut snapshot, &RedactOptions::default());
 
     // Export gating: if snapshot contains sensitive data, require acknowledgment
-    if snapshot.sensitive_snapshot && !args.acknowledge_sensitive {
+    if snapshot.sensitive_snapshot && !args.ack_sensitive {
+        // Build dynamic list of what sensitive data types are actually present
+        let mut sensitive_items = Vec::new();
+        if snapshot.preserved_subscription {
+            sensitive_items.push("subscription certs");
+        }
+        if snapshot.preserved_credentials {
+            sensitive_items.push("password hashes");
+        }
+        if snapshot.preserved_ssh_keys {
+            sensitive_items.push("SSH keys");
+        }
+
+        let items_list = if sensitive_items.is_empty() {
+            "sensitive data".to_string()
+        } else {
+            sensitive_items.join(", ")
+        };
+
         anyhow::bail!(
-            "Snapshot contains sensitive data (password hashes or SSH keys).\n\
-             To export, re-run with --acknowledge-sensitive\n\
-             Preserved credentials: {}\n\
-             Preserved SSH keys: {}",
-            snapshot.preserved_credentials,
-            snapshot.preserved_ssh_keys
+            "Snapshot contains sensitive data ({}).\n\
+             To export, re-run with --ack-sensitive",
+            items_list
         );
     }
 
