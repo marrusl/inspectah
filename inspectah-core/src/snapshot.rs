@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 17;
+pub const SCHEMA_VERSION: u32 = 18;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -74,6 +74,12 @@ pub struct InspectionSnapshot {
     /// True if SSH authorized keys were preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_ssh_keys: bool,
+    /// Subscription data. None if not collected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<crate::types::subscription::SubscriptionSection>,
+    /// True if subscription data was preserved by operator choice.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub preserved_subscription: bool,
     /// Fleet snapshot metadata. None for single-host snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
@@ -305,5 +311,34 @@ mod tests {
         let snap = InspectionSnapshot::new();
         let json = serde_json::to_string(&snap).unwrap();
         assert!(!json.contains("fleet_meta"));
+    }
+
+    #[test]
+    fn test_snapshot_with_subscription() {
+        use crate::types::subscription::{SubscriptionFile, SubscriptionSection};
+        let expiry = time::OffsetDateTime::from_unix_timestamp(1_723_680_000).unwrap();
+        let mut snap = InspectionSnapshot::new();
+        snap.subscription = Some(SubscriptionSection {
+            entitlement_certs: vec![SubscriptionFile {
+                path: "/etc/pki/entitlement/123.pem".into(),
+                content: "base64data".into(),
+                size_bytes: 1024,
+                cert_expiry: Some(expiry),
+            }],
+            ..Default::default()
+        });
+        snap.preserved_subscription = true;
+        snap.sensitive_snapshot = true;
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed = InspectionSnapshot::load(&json).unwrap();
+        assert!(parsed.subscription.is_some());
+        assert!(parsed.preserved_subscription);
+    }
+
+    #[test]
+    fn test_v17_snapshot_rejected() {
+        let json = r#"{"schema_version": 17, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let result = InspectionSnapshot::load(json);
+        assert!(result.is_err());
     }
 }

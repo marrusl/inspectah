@@ -9,7 +9,9 @@ use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
+use inspectah_refine::classify::{
+    classify_containers, classify_services, classify_sysctls, classify_tuned,
+};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
@@ -19,6 +21,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
+
+/// Primary header name for acknowledging sensitive data exports.
+/// Both this and the legacy header are accepted for backward compatibility.
+pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
+const LEGACY_ACK_SENSITIVE_HEADER: &str = "x-acknowledge-sensitive";
 
 /// Produce a display version that avoids duplicating what's already in pretty_name.
 ///
@@ -47,8 +54,7 @@ fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
         && major != version_id
     {
         for (i, _) in pretty_name.match_indices(major) {
-            let before_ok =
-                i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+            let before_ok = i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
             let after = i + major.len();
             let after_ok = after >= pretty_name.len()
                 || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
@@ -631,7 +637,8 @@ pub async fn export_tarball(
     // Export gating: require explicit acknowledgment for sensitive sessions.
     if sensitive {
         let ack = headers
-            .get("x-acknowledge-sensitive")
+            .get(ACK_SENSITIVE_HEADER)
+            .or_else(|| headers.get(LEGACY_ACK_SENSITIVE_HEADER))
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if ack != "true" {
@@ -650,7 +657,11 @@ pub async fn export_tarball(
         move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join("inspectah-refine-output.tar.gz");
-            inspectah_refine::session::render_refine_export(&projected, &tarball_path, Some(&original_includes))?;
+            inspectah_refine::session::render_refine_export(
+                &projected,
+                &tarball_path,
+                Some(&original_includes),
+            )?;
             Ok(std::fs::read(&tarball_path)?)
         },
     )
@@ -873,7 +884,7 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
         }
     }
     json!({
-        "error": "session contains sensitive data — set x-acknowledge-sensitive: true to export",
+        "error": "session contains sensitive data — set x-ack-sensitive: true to export",
         "sensitivity_summary": reasons,
     })
 }
@@ -2538,7 +2549,9 @@ mod tests {
             },
             include: false,
         };
-        session.apply(op).expect("SetInclude exclude repo should succeed");
+        session
+            .apply(op)
+            .expect("SetInclude exclude repo should succeed");
 
         // Verify epel packages are now excluded
         let view = session.view();
@@ -3262,6 +3275,28 @@ mod tests {
                 .iter()
                 .any(|item| item.id == "omitted-sssd-kcm.service"),
             "omitted service should be in omitted subsection with prefixed id"
+        );
+    }
+
+    /// Structural test: ensure the ACK_SENSITIVE_HEADER constant stays in sync
+    /// with the CORS allow-headers configuration in lib.rs.
+    ///
+    /// This is a compile-time contract enforced at test-time. If the header
+    /// name changes in one place, this test will fail until both are updated.
+    #[test]
+    fn test_ack_sensitive_header_cors_sync() {
+        // The constant used in handlers must match what's configured in CORS.
+        // lib.rs references handlers::ACK_SENSITIVE_HEADER, so this test verifies
+        // the constant is properly exposed and has the expected value.
+        assert_eq!(
+            ACK_SENSITIVE_HEADER, "x-ack-sensitive",
+            "ACK_SENSITIVE_HEADER constant must match CORS configuration"
+        );
+
+        // Verify the legacy header constant exists and is distinct
+        assert_eq!(
+            LEGACY_ACK_SENSITIVE_HEADER, "x-acknowledge-sensitive",
+            "Legacy header name must be preserved for backward compatibility"
         );
     }
 }

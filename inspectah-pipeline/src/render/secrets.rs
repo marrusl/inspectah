@@ -6,7 +6,11 @@ use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, Redact
 
 /// Render the secrets review markdown from a snapshot.
 pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
-    if snap.redactions.is_empty() {
+    // Check if there's ANY sensitive content (redactions OR subscription)
+    let has_redactions = !snap.redactions.is_empty();
+    let has_subscription = snap.preserved_subscription;
+
+    if !has_redactions && !has_subscription {
         return "# Secrets Review\n\nNo redactions recorded.\n".to_string();
     }
 
@@ -144,6 +148,53 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
     }
 
+    // Subscription material
+    if snap.preserved_subscription {
+        lines.push("## Subscription Material".into());
+        lines.push(String::new());
+        lines.push(
+            "RHEL subscription material was preserved in `subscription/` for build-time mounting."
+                .into(),
+        );
+        lines.push(String::new());
+        lines.push(
+            "**Action:** Mount these directories at build time (do NOT copy into the image):"
+                .into(),
+        );
+        lines.push(String::new());
+        lines.push("```bash".into());
+        lines.push("podman build \\".into());
+        lines.push("  -v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z \\".into());
+        lines.push("  -v ./subscription/rhsm:/run/secrets/rhsm:z \\".into());
+        lines.push("  -v ./subscription/redhat.repo:/run/secrets/redhat.repo:z \\".into());
+        lines.push("  -f Containerfile .".into());
+        lines.push("```".into());
+        lines.push(String::new());
+        lines.push("Or use the build helper:".into());
+        lines.push(String::new());
+        lines.push("```bash".into());
+        lines.push("inspectah build <tarball> -t <name:tag>".into());
+        lines.push("```".into());
+        lines.push(String::new());
+        if let Some(ref sub) = snap.subscription
+            && !sub.entitlement_certs.is_empty()
+        {
+            lines.push(format!(
+                "**Certificates:** {} entitlement certificate(s)",
+                sub.entitlement_certs.len()
+            ));
+            if let Some(expiry) = sub.earliest_expiry {
+                lines.push(format!(
+                    "**Earliest expiry:** {}",
+                    expiry
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_else(|_| "unknown".into())
+                ));
+            }
+            lines.push(String::new());
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -208,5 +259,31 @@ mod tests {
         assert!(md.contains("# Secrets Review"));
         assert!(md.contains("Excluded Files"));
         assert!(md.contains("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_secrets_review_subscription_only() {
+        use inspectah_core::types::subscription::SubscriptionSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        snap.subscription = Some(SubscriptionSection::default());
+        snap.redactions = vec![]; // No redactions, only subscription
+        let md = render_secrets_review(&snap);
+        assert!(
+            md.contains("# Secrets Review"),
+            "must have secrets review header"
+        );
+        assert!(
+            !md.contains("No redactions recorded"),
+            "must not say 'no redactions' when subscription is present"
+        );
+        assert!(
+            md.contains("## Subscription Material"),
+            "must have subscription section"
+        );
+        assert!(
+            md.contains("inspectah build"),
+            "must reference inspectah build helper"
+        );
     }
 }

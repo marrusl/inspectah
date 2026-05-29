@@ -73,6 +73,23 @@ fn render_containerfile_inner(
     let base_str = base.as_deref().unwrap_or("");
     let mut lines: Vec<String> = Vec::new();
 
+    // Subscription mount instructions — show before any other build content
+    if snap.preserved_subscription {
+        lines.push("# === RHEL Subscription ===".into());
+        lines.push("# This build requires RHEL entitlement certificates for repo access.".into());
+        lines.push("# Build with:".into());
+        lines.push("#   podman build \\".into());
+        lines.push(
+            "#     -v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z \\".into(),
+        );
+        lines.push("#     -v ./subscription/rhsm:/run/secrets/rhsm:z \\".into());
+        lines.push("#     -v ./subscription/redhat.repo:/run/secrets/redhat.repo:z \\".into());
+        lines.push("#     -f Containerfile .".into());
+        lines.push("#".into());
+        lines.push("# Or use: inspectah build <tarball> -t <name:tag>".into());
+        lines.push(String::new());
+    }
+
     // Completeness warning — surface before any build instructions
     let affected_ids: Vec<_> = match &snap.completeness {
         Completeness::Partial {
@@ -106,7 +123,11 @@ fn render_containerfile_inner(
     }
 
     // 1. Packages section (FROM + repos + GPG + modules + packages)
-    lines.extend(packages_section_lines(snap, base.as_deref(), original_includes));
+    lines.extend(packages_section_lines(
+        snap,
+        base.as_deref(),
+        original_includes,
+    ));
 
     // bootc label for ostree-desktops base images
     if matches!(snap.system_type, SystemType::RpmOstree | SystemType::Bootc)
@@ -239,7 +260,11 @@ fn install_name_for_package(
     }
 }
 
-fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, original_includes: Option<&std::collections::HashMap<String, bool>>) -> Vec<String> {
+fn packages_section_lines(
+    snap: &InspectionSnapshot,
+    base: Option<&str>,
+    original_includes: Option<&std::collections::HashMap<String, bool>>,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     match base {
@@ -261,7 +286,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, origina
         .count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
-        lines.extend(section(&format!("Custom Repositories ({included_repos})"), body));
+        lines.extend(section(
+            &format!("Custom Repositories ({included_repos})"),
+            body,
+        ));
     }
 
     // GPG keys — batch standard-dir keys, per-key import for non-standard
@@ -341,7 +369,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, origina
         for key in &nonstandard_keys {
             gpg_body.push(format!("RUN rpm --import {}", key.path));
         }
-        lines.extend(section(&format!("GPG Keys ({})", included_gpg.len()), gpg_body));
+        lines.extend(section(
+            &format!("GPG Keys ({})", included_gpg.len()),
+            gpg_body,
+        ));
     }
 
     // Module streams
@@ -426,7 +457,9 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, origina
                     return true;
                 }
             }
-            leaf_filter.as_ref().is_none_or(|leaf_ids| leaf_ids.contains(&id))
+            leaf_filter
+                .as_ref()
+                .is_none_or(|leaf_ids| leaf_ids.contains(&id))
         })
         .collect();
 
@@ -458,7 +491,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>, origina
         pkg_body.push("        /var/log/dnf* \\".into());
         pkg_body.push("        /var/log/hawkey.log \\".into());
         pkg_body.push("        /var/log/rhsm".into());
-        lines.extend(section(&format!("Packages ({})", install_names.len()), pkg_body));
+        lines.extend(section(
+            &format!("Packages ({})", install_names.len()),
+            pkg_body,
+        ));
     }
 
     if !todo_lines.is_empty() {
@@ -608,9 +644,8 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         .filter(|u| u.include)
         .collect();
 
-    let has_content = !local_timers.is_empty()
-        || !included_timers.is_empty()
-        || !st.at_jobs.is_empty();
+    let has_content =
+        !local_timers.is_empty() || !included_timers.is_empty() || !st.at_jobs.is_empty();
     if !has_content {
         return Vec::new();
     }
@@ -1015,9 +1050,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "# {} sysctl override(s) — merged into single drop-in",
             included_sysctl
         ));
-        body.push(
-            "COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into(),
-        );
+        body.push("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into());
     }
 
     // Tuned — gated on include
@@ -1025,9 +1058,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         if is_valid_tuned_profile(&kb.tuned_active) {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
             if !kb.tuned_custom_profiles.is_empty() {
-                body.push(
-                    "COPY tuned/etc/tuned/ /etc/tuned/".into(),
-                );
+                body.push("COPY tuned/etc/tuned/ /etc/tuned/".into());
             }
             body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
@@ -2153,10 +2184,7 @@ mod tests {
     fn test_from_omitted_when_no_target_image() {
         let snap = InspectionSnapshot::new();
         let result = base_image_from_snapshot(&snap);
-        assert!(
-            result.is_none(),
-            "no target_image must return None"
-        );
+        assert!(result.is_none(), "no target_image must return None");
         let output = render_containerfile(&snap, None);
         assert!(
             output.contains("# FROM line omitted"),

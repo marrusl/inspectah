@@ -1,6 +1,6 @@
-pub mod classify;
 pub mod autosave;
 pub mod baseline_summary;
+pub mod classify;
 pub mod fleet;
 pub mod normalize;
 pub mod repo_index;

@@ -106,18 +106,22 @@ impl PlainRenderer {
                 let name = display::step_name(&step);
                 let _ = writeln!(state.writer, "    \u{25b8} {name}");
             }
-            ProgressEvent::StepFinished { inspector, step, outcome } => {
+            ProgressEvent::StepFinished {
+                inspector,
+                step,
+                outcome,
+            } => {
                 let name = display::step_name(&step);
                 let use_color = state.use_color;
                 let step_metric = state.step_metrics.remove(&inspector);
-                let (symbol, suffix) =
-                    format_step_outcome(&outcome, &step_metric, use_color);
-                let _ = writeln!(
-                    state.writer,
-                    "    {symbol} {name:<36} {suffix}"
-                );
+                let (symbol, suffix) = format_step_outcome(&outcome, &step_metric, use_color);
+                let _ = writeln!(state.writer, "    {symbol} {name:<36} {suffix}");
             }
-            ProgressEvent::Metric { inspector, kind, value } => {
+            ProgressEvent::Metric {
+                inspector,
+                kind,
+                value,
+            } => {
                 state.step_metrics.insert(inspector, (kind.clone(), value));
                 state.inspector_metrics.insert(inspector, (kind, value));
             }
@@ -127,19 +131,17 @@ impl PlainRenderer {
                 let _ = writeln!(state.writer, "    \u{25b8} {name}");
             }
             ProgressEvent::ProbeFinished {
-                inspector, probe, outcome,
+                inspector,
+                probe,
+                outcome,
             } => {
                 if matches!(outcome, ProbeOutcome::Found { .. }) {
                     *state.probes_found.entry(inspector).or_insert(0) += 1;
                 }
                 let name = display::probe_name(&probe);
                 let use_color = state.use_color;
-                let (symbol, suffix) =
-                    format_probe_outcome(&outcome, use_color);
-                let _ = writeln!(
-                    state.writer,
-                    "    {symbol} {name:<36} {suffix}"
-                );
+                let (symbol, suffix) = format_probe_outcome(&outcome, use_color);
+                let _ = writeln!(state.writer, "    {symbol} {name:<36} {suffix}");
             }
         }
     }
@@ -165,7 +167,11 @@ fn format_inspector_outcome(
                 if count == 0 {
                     "none found".to_string()
                 } else {
-                    if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
+                    if count == 1 {
+                        "1 ecosystem".to_string()
+                    } else {
+                        format!("{count} ecosystems")
+                    }
                 }
             } else {
                 match last_metric {
@@ -186,7 +192,9 @@ fn format_inspector_outcome(
         InspectorOutcome::Degraded { reason } => {
             let sym = colored("~", YELLOW, use_color);
             let suf = match elapsed {
-                Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("degraded: {reason} ({s:.1}s)"),
+                Some(s) if s >= display::TIMER_THRESHOLD_SECS => {
+                    format!("degraded: {reason} ({s:.1}s)")
+                }
                 _ => format!("degraded: {reason}"),
             };
             (sym, suf)
@@ -240,10 +248,7 @@ fn format_step_outcome(
 }
 
 /// Format the symbol and suffix for a probe finish line.
-fn format_probe_outcome(
-    outcome: &ProbeOutcome,
-    use_color: bool,
-) -> (String, String) {
+fn format_probe_outcome(outcome: &ProbeOutcome, use_color: bool) -> (String, String) {
     match outcome {
         ProbeOutcome::Found { count } => {
             let sym = colored("\u{2713}", GREEN, use_color);
@@ -284,8 +289,7 @@ mod tests {
     }
 
     fn output_text(buf: &Arc<Mutex<Vec<u8>>>) -> String {
-        String::from_utf8(buf.lock().expect("test lock").clone())
-            .expect("valid utf8")
+        String::from_utf8(buf.lock().expect("test lock").clone()).expect("valid utf8")
     }
 
     #[test]
@@ -304,21 +308,25 @@ mod tests {
         // Started line uses ▸
         assert!(
             lines[0].starts_with('\u{25b8}'),
-            "expected started line with ▸, got: {}", lines[0]
+            "expected started line with ▸, got: {}",
+            lines[0]
         );
         assert!(
             lines[0].contains("RPM packages"),
-            "expected inspector name, got: {}", lines[0]
+            "expected inspector name, got: {}",
+            lines[0]
         );
 
         // Done line uses ✓ — separate from started
         assert!(
             lines[1].contains('\u{2713}'),
-            "expected done line with ✓, got: {}", lines[1]
+            "expected done line with ✓, got: {}",
+            lines[1]
         );
         assert!(
             lines[1].contains("RPM packages"),
-            "expected inspector name on done line, got: {}", lines[1]
+            "expected inspector name on done line, got: {}",
+            lines[1]
         );
     }
 
@@ -538,21 +546,25 @@ mod tests {
         // Inspector line is NOT indented
         assert!(
             lines[0].starts_with('\u{25b8}'),
-            "inspector line should not be indented, got: {}", lines[0]
+            "inspector line should not be indented, got: {}",
+            lines[0]
         );
         // Step lines ARE indented (4 spaces)
         assert!(
             lines[1].starts_with("    "),
-            "step line should be indented, got: {}", lines[1]
+            "step line should be indented, got: {}",
+            lines[1]
         );
         assert!(
             lines[2].starts_with("    "),
-            "step done line should be indented, got: {}", lines[2]
+            "step done line should be indented, got: {}",
+            lines[2]
         );
         // Step done has metric
         assert!(
             lines[2].contains("847 found"),
-            "expected metric on step done, got: {}", lines[2]
+            "expected metric on step done, got: {}",
+            lines[2]
         );
     }
 

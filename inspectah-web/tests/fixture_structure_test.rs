@@ -10,8 +10,7 @@
 // Run with: INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_structure_test
 
 fn fixture_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("ui/e2e/fixtures")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/e2e/fixtures")
 }
 
 fn snapshot_fixture(name: &str, relative_path: &str) {
@@ -62,7 +61,10 @@ fn fixture_single_host_user_preview() {
 
 #[test]
 fn fixture_single_host_user_preview_redacted() {
-    snapshot_fixture("single_host_user_preview_redacted", "single-host/user-preview-redacted.json");
+    snapshot_fixture(
+        "single_host_user_preview_redacted",
+        "single-host/user-preview-redacted.json",
+    );
 }
 
 // --- Body fixtures: fleet (GET presets) ---
@@ -86,17 +88,26 @@ fn fixture_fleet_sections() {
 
 #[test]
 fn fixture_sequence_after_exclude() {
-    snapshot_fixture("seq_after_exclude", "sequences/exclude-undo-redo/01-after-exclude.json");
+    snapshot_fixture(
+        "seq_after_exclude",
+        "sequences/exclude-undo-redo/01-after-exclude.json",
+    );
 }
 
 #[test]
 fn fixture_sequence_after_undo() {
-    snapshot_fixture("seq_after_undo", "sequences/exclude-undo-redo/02-after-undo.json");
+    snapshot_fixture(
+        "seq_after_undo",
+        "sequences/exclude-undo-redo/02-after-undo.json",
+    );
 }
 
 #[test]
 fn fixture_sequence_after_redo() {
-    snapshot_fixture("seq_after_redo", "sequences/exclude-undo-redo/03-after-redo.json");
+    snapshot_fixture(
+        "seq_after_redo",
+        "sequences/exclude-undo-redo/03-after-redo.json",
+    );
 }
 
 // --- Error fixtures ---
@@ -140,7 +151,10 @@ fn fixture_post_undo_success() {
 
 #[test]
 fn fixture_post_undo_nothing() {
-    snapshot_post_fixture("post_undo_nothing", "post-responses/undo/nothing-to-undo.json");
+    snapshot_post_fixture(
+        "post_undo_nothing",
+        "post-responses/undo/nothing-to-undo.json",
+    );
 }
 
 #[test]
@@ -150,12 +164,18 @@ fn fixture_post_redo_success() {
 
 #[test]
 fn fixture_post_fleet_diff_success() {
-    snapshot_post_fixture("post_fleet_diff_success", "post-responses/fleet-diff/success.json");
+    snapshot_post_fixture(
+        "post_fleet_diff_success",
+        "post-responses/fleet-diff/success.json",
+    );
 }
 
 #[test]
 fn fixture_post_tarball_sensitive_required() {
-    snapshot_post_fixture("post_tarball_sensitive_required", "post-responses/tarball/sensitive-required.json");
+    snapshot_post_fixture(
+        "post_tarball_sensitive_required",
+        "post-responses/tarball/sensitive-required.json",
+    );
 }
 
 #[test]
@@ -165,17 +185,26 @@ fn fixture_post_tarball_stale() {
 
 #[test]
 fn fixture_post_user_password_success() {
-    snapshot_post_fixture("post_user_password_success", "post-responses/user-password/success.json");
+    snapshot_post_fixture(
+        "post_user_password_success",
+        "post-responses/user-password/success.json",
+    );
 }
 
 #[test]
 fn fixture_post_user_password_invalid() {
-    snapshot_post_fixture("post_user_password_invalid", "post-responses/user-password/invalid.json");
+    snapshot_post_fixture(
+        "post_user_password_invalid",
+        "post-responses/user-password/invalid.json",
+    );
 }
 
 #[test]
 fn fixture_post_user_strategy_success() {
-    snapshot_post_fixture("post_user_strategy_success", "post-responses/user-strategy/success.json");
+    snapshot_post_fixture(
+        "post_user_strategy_success",
+        "post-responses/user-strategy/success.json",
+    );
 }
 
 #[test]

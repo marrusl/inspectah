@@ -4,9 +4,9 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
+use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
@@ -140,7 +140,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::ElfBinaries,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Scan Python venvs.
@@ -154,7 +158,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::PythonVenvs,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Scan pip packages (system-level dist-info).
@@ -168,7 +176,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::PipPackages,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Scan npm packages (package-lock.json).
@@ -182,7 +194,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::NpmPackages,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Scan gem packages (Gemfile.lock).
@@ -196,7 +212,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::GemPackages,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Collect .env files.
@@ -210,7 +230,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::EnvFiles,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Collect git repos.
@@ -224,7 +248,11 @@ impl Inspector for NonRpmInspector {
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::GitRepos,
-            outcome: if found > 0 { ProbeOutcome::Found { count: found } } else { ProbeOutcome::Empty },
+            outcome: if found > 0 {
+                ProbeOutcome::Found { count: found }
+            } else {
+                ProbeOutcome::Empty
+            },
         });
 
         // Filter ostree-internal /var paths.
@@ -1879,7 +1907,11 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(git_finished.len(), 1, "should have one GitRepos ProbeFinished");
+        assert_eq!(
+            git_finished.len(),
+            1,
+            "should have one GitRepos ProbeFinished"
+        );
         match &git_finished[0] {
             ProgressEvent::ProbeFinished { outcome, .. } => {
                 assert_eq!(

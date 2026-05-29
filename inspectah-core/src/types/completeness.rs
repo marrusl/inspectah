@@ -20,6 +20,7 @@ pub enum InspectorId {
     KernelBoot,
     Selinux,
     UsersGroups,
+    Subscription,
     Hardware,
     Ostree,
     OsRelease,
@@ -61,6 +62,8 @@ pub enum SectionData {
     Selinux(super::selinux::SelinuxSection),
     #[serde(rename = "users_groups")]
     UsersGroups(super::users::UserGroupSection),
+    #[serde(rename = "subscription")]
+    Subscription(super::subscription::SubscriptionSection),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

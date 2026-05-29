@@ -1,5 +1,5 @@
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct ExecResult {
@@ -52,4 +52,13 @@ pub trait Executor: Send + Sync {
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>>;
     fn read_link(&self, path: &Path) -> io::Result<String>;
     fn host_root(&self) -> &Path;
+
+    /// Resolve the final target of a path by following the entire symlink chain.
+    ///
+    /// For real executors this uses `std::fs::canonicalize()`. Mock executors
+    /// walk their `links` map iteratively with cycle detection.
+    ///
+    /// Returns the fully-resolved absolute path, or an error if the chain is
+    /// broken (dangling symlink), loops, or hits a permission wall.
+    fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf>;
 }
