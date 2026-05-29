@@ -9,7 +9,7 @@ use inspectah_core::types::subscription::{
     SubscriptionFile, SubscriptionSection, match_entitlement_pairs,
 };
 use inspectah_core::types::warnings::Warning;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 const MAX_FILE_SIZE: u64 = 1_048_576; // 1 MB safety valve
 
@@ -123,48 +123,25 @@ fn warn(message: impl Into<String>) -> Warning {
 // Symlink boundary check
 // ---------------------------------------------------------------------------
 
-/// Normalize a path by resolving `.` and `..` components lexically (no filesystem access).
-/// This is used for symlink boundary validation in unit tests where the filesystem
-/// paths don't exist. For real execution the real executor's read_link already
-/// follows the chain.
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                // Pop unless we'd go above root
-                if !components.is_empty() {
-                    components.pop();
-                }
-            }
-            Component::CurDir => {} // skip
-            other => components.push(other),
-        }
-    }
-    components.iter().collect()
-}
+/// Check whether a symlink's fully-resolved target falls within an approved
+/// subscription root. Uses `Executor::resolve_final_target()` to follow the
+/// entire symlink chain — including multi-hop chains that pass through
+/// approved directories before escaping.
+///
+/// Returns `Ok(true)` if the resolved target is within an approved root,
+/// `Ok(false)` if it resolves outside, or `Err` if the chain is broken
+/// (dangling symlink, loop, permission error).
+fn is_symlink_safe(
+    exec: &dyn Executor,
+    file_path: &Path,
+) -> Result<bool, std::io::Error> {
+    let resolved = exec.resolve_final_target(file_path)?;
+    let host_root = exec.host_root();
 
-/// Check whether a symlink target resolves within an approved subscription root.
-/// `link_target` is the raw string from `read_link()`. `file_path` is the
-/// absolute path of the symlink (within host_root). `host_root` is the
-/// executor's host root prefix.
-fn is_symlink_within_approved_roots(link_target: &str, file_path: &Path, host_root: &Path) -> bool {
-    let target_path = Path::new(link_target);
-
-    // Resolve relative symlinks against the symlink's parent directory
-    let resolved = if target_path.is_absolute() {
-        host_root.join(link_target.trim_start_matches('/'))
-    } else {
-        let parent = file_path.parent().unwrap_or(file_path);
-        parent.join(target_path)
-    };
-
-    let canonical = normalize_path(&resolved);
-
-    APPROVED_ROOTS.iter().any(|root| {
+    Ok(APPROVED_ROOTS.iter().any(|root| {
         let full_root = host_root.join(root.trim_start_matches('/'));
-        canonical.starts_with(&full_root)
-    })
+        resolved.starts_with(&full_root)
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -195,15 +172,25 @@ fn collect_dir_pems(
         }
         let file_path = dir_path.join(entry);
 
-        // Validate symlink stays within approved subscription roots.
-        if let Ok(target) = exec.read_link(&file_path)
-            && !is_symlink_within_approved_roots(&target, &file_path, exec.host_root())
-        {
-            warnings.push(warn(format!(
-                "Symlink {dir}/{entry} resolves outside \
-                 approved subscription paths, skipped"
-            )));
-            continue;
+        // Validate symlink chain stays within approved subscription roots.
+        // Only check paths that are actually symlinks (read_link succeeds).
+        if exec.read_link(&file_path).is_ok() {
+            match is_symlink_safe(exec, &file_path) {
+                Ok(true) => {} // safe, continue to read
+                Ok(false) => {
+                    warnings.push(warn(format!(
+                        "Symlink {dir}/{entry} resolves outside \
+                         approved subscription paths, skipped"
+                    )));
+                    continue;
+                }
+                Err(e) => {
+                    warnings.push(warn(format!(
+                        "Cannot resolve symlink {dir}/{entry}: {e}"
+                    )));
+                    continue;
+                }
+            }
         }
 
         match exec.read_file(&file_path) {
@@ -237,15 +224,24 @@ fn collect_single_file(
 ) -> Option<SubscriptionFile> {
     let file_path = Path::new(exec.host_root()).join(path.trim_start_matches('/'));
 
-    // Validate symlink boundary
-    if let Ok(target) = exec.read_link(&file_path)
-        && !is_symlink_within_approved_roots(&target, &file_path, exec.host_root())
-    {
-        warnings.push(warn(format!(
-            "{path} is a symlink resolving outside \
-             approved subscription paths, skipped"
-        )));
-        return None;
+    // Validate symlink chain boundary
+    if exec.read_link(&file_path).is_ok() {
+        match is_symlink_safe(exec, &file_path) {
+            Ok(true) => {} // safe, continue to read
+            Ok(false) => {
+                warnings.push(warn(format!(
+                    "{path} is a symlink resolving outside \
+                     approved subscription paths, skipped"
+                )));
+                return None;
+            }
+            Err(e) => {
+                warnings.push(warn(format!(
+                    "Cannot resolve symlink {path}: {e}"
+                )));
+                return None;
+            }
+        }
     }
 
     match exec.read_file(&file_path) {
@@ -733,45 +729,106 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_path_removes_dotdot() {
-        let p = normalize_path(Path::new("/etc/pki/entitlement/../../shadow"));
-        assert_eq!(p, PathBuf::from("/etc/shadow"));
-    }
-
-    #[test]
-    fn test_normalize_path_preserves_clean() {
-        let p = normalize_path(Path::new("/etc/pki/entitlement/123.pem"));
-        assert_eq!(p, PathBuf::from("/etc/pki/entitlement/123.pem"));
-    }
-
-    #[test]
-    fn test_is_symlink_within_approved_roots_absolute() {
-        let result = is_symlink_within_approved_roots(
-            "/etc/pki/entitlement/real.pem",
+    fn test_is_symlink_safe_within_root() {
+        let exec = MockExecutor::new()
+            .with_link(
+                "/etc/pki/entitlement/link.pem",
+                "/etc/pki/entitlement/real.pem",
+            );
+        let result = is_symlink_safe(
+            &exec,
             Path::new("/etc/pki/entitlement/link.pem"),
-            Path::new("/"),
         );
-        assert!(result);
+        assert!(result.unwrap_or(false));
     }
 
     #[test]
-    fn test_is_symlink_outside_approved_roots() {
-        let result = is_symlink_within_approved_roots(
-            "/etc/shadow",
+    fn test_is_symlink_safe_outside_root() {
+        let exec = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/evil.pem", "/etc/shadow");
+        let result = is_symlink_safe(
+            &exec,
             Path::new("/etc/pki/entitlement/evil.pem"),
-            Path::new("/"),
         );
-        assert!(!result);
+        assert!(!result.unwrap_or(true));
     }
 
     #[test]
-    fn test_is_symlink_relative_escape() {
-        let result = is_symlink_within_approved_roots(
-            "../../shadow",
+    fn test_is_symlink_safe_relative_escape() {
+        let exec = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/escape.pem", "../../shadow");
+        let result = is_symlink_safe(
+            &exec,
             Path::new("/etc/pki/entitlement/escape.pem"),
-            Path::new("/"),
         );
-        assert!(!result);
+        assert!(!result.unwrap_or(true));
+    }
+
+    #[test]
+    fn test_multi_hop_symlink_escape_rejected() {
+        // Multi-hop: allowed -> allowed -> outside
+        let exec = MockExecutor::new()
+            .with_dir("/etc/pki/entitlement", vec!["hop1.pem"])
+            .with_link(
+                "/etc/pki/entitlement/hop1.pem",
+                "/etc/pki/entitlement/hop2.pem",
+            )
+            .with_link("/etc/pki/entitlement/hop2.pem", "/etc/shadow");
+
+        let mut certs = Vec::new();
+        let mut warnings = Vec::new();
+        collect_dir_pems(&exec, ENTITLEMENT_DIR, &mut certs, &mut warnings);
+        assert!(certs.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("outside"));
+    }
+
+    #[test]
+    fn test_symlink_loop_produces_warning() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc/pki/entitlement", vec!["loop.pem"])
+            .with_link(
+                "/etc/pki/entitlement/loop.pem",
+                "/etc/pki/entitlement/loop.pem",
+            );
+
+        let mut certs = Vec::new();
+        let mut warnings = Vec::new();
+        collect_dir_pems(&exec, ENTITLEMENT_DIR, &mut certs, &mut warnings);
+        assert!(certs.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("resolve symlink"));
+    }
+
+    #[test]
+    fn test_dangling_symlink_produces_warning() {
+        // Symlink points to a path not in links or files — resolve_final_target
+        // returns Ok(target) since the mock has no link entry for the target.
+        // But the target is outside approved roots, so it should be rejected.
+        let exec = MockExecutor::new()
+            .with_dir("/etc/pki/entitlement", vec!["dangling.pem"])
+            .with_link("/etc/pki/entitlement/dangling.pem", "/nonexistent/path");
+
+        let mut certs = Vec::new();
+        let mut warnings = Vec::new();
+        collect_dir_pems(&exec, ENTITLEMENT_DIR, &mut certs, &mut warnings);
+        assert!(certs.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("outside"));
+    }
+
+    #[test]
+    fn test_single_file_multi_hop_escape_rejected() {
+        let exec = MockExecutor::new()
+            .with_link("/etc/rhsm/rhsm.conf", "/etc/rhsm/hop2.conf")
+            .with_link("/etc/rhsm/hop2.conf", "/etc/shadow")
+            .with_file("/etc/rhsm/rhsm.conf", "content");
+
+        let mut warnings = Vec::new();
+        let result = collect_single_file(&exec, RHSM_CONF, &mut warnings);
+        assert!(result.is_none());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("outside"));
     }
 
     #[test]
