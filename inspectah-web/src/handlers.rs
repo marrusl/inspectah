@@ -9,7 +9,9 @@ use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
+use inspectah_refine::classify::{
+    classify_containers, classify_services, classify_sysctls, classify_tuned,
+};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
@@ -47,8 +49,7 @@ fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
         && major != version_id
     {
         for (i, _) in pretty_name.match_indices(major) {
-            let before_ok =
-                i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+            let before_ok = i == 0 || !pretty_name.as_bytes()[i - 1].is_ascii_alphanumeric();
             let after = i + major.len();
             let after_ok = after >= pretty_name.len()
                 || !pretty_name.as_bytes()[after].is_ascii_alphanumeric();
@@ -650,7 +651,11 @@ pub async fn export_tarball(
         move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join("inspectah-refine-output.tar.gz");
-            inspectah_refine::session::render_refine_export(&projected, &tarball_path, Some(&original_includes))?;
+            inspectah_refine::session::render_refine_export(
+                &projected,
+                &tarball_path,
+                Some(&original_includes),
+            )?;
             Ok(std::fs::read(&tarball_path)?)
         },
     )
@@ -2538,7 +2543,9 @@ mod tests {
             },
             include: false,
         };
-        session.apply(op).expect("SetInclude exclude repo should succeed");
+        session
+            .apply(op)
+            .expect("SetInclude exclude repo should succeed");
 
         // Verify epel packages are now excluded
         let view = session.view();

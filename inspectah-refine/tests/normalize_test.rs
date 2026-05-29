@@ -374,10 +374,7 @@ fn test_user_added_with_baseline_is_site_leaf_filtered() {
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(
-        rpm.packages_added[0].include,
-        "httpd: Site leaf, included"
-    );
+    assert!(rpm.packages_added[0].include, "httpd: Site leaf, included");
     assert!(
         !rpm.packages_added[1].include,
         "apr: Site non-leaf, excluded by leaf filter"

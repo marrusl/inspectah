@@ -29,8 +29,8 @@ const RESET: &str = "\x1b[0m";
 
 /// Braille spinner frames.
 const SPINNER: &[char] = &[
-    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}',
-    '\u{2827}', '\u{2807}', '\u{280f}',
+    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280f}',
 ];
 
 /// Elapsed time threshold — only show `(Ns)` after this duration.
@@ -166,19 +166,55 @@ impl ChecklistState {
                     match id {
                         InspectorId::Rpm => {
                             self.rows[idx].sub_steps = vec![
-                                SubStepRow { step: StepId::QueryingPackages, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::ClassifyingPackages, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::ResolvingSourceRepos, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::ResolvingDepTree, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::VerifyingIntegrity, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::MappingFileOwnership, state: RowState::Pending, metric: None },
+                                SubStepRow {
+                                    step: StepId::QueryingPackages,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::ClassifyingPackages,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::ResolvingSourceRepos,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::ResolvingDepTree,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::VerifyingIntegrity,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::MappingFileOwnership,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
                             ];
                         }
                         InspectorId::Config => {
                             self.rows[idx].sub_steps = vec![
-                                SubStepRow { step: StepId::ApplyingRpmVerification, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::WalkingFilesystem, state: RowState::Pending, metric: None },
-                                SubStepRow { step: StepId::ClassifyingConfigs, state: RowState::Pending, metric: None },
+                                SubStepRow {
+                                    step: StepId::ApplyingRpmVerification,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::WalkingFilesystem,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
+                                SubStepRow {
+                                    step: StepId::ClassifyingConfigs,
+                                    state: RowState::Pending,
+                                    metric: None,
+                                },
                             ];
                         }
                         _ => {}
@@ -193,7 +229,9 @@ impl ChecklistState {
                         .unwrap_or_default();
 
                     // Non-RPM parent: compute ecosystem count from found probes.
-                    if id == InspectorId::NonRpmSoftware && matches!(outcome, InspectorOutcome::Complete) {
+                    if id == InspectorId::NonRpmSoftware
+                        && matches!(outcome, InspectorOutcome::Complete)
+                    {
                         let ecosystems = self.rows[idx]
                             .probes
                             .iter()
@@ -244,10 +282,7 @@ impl ChecklistState {
                 if let Some(idx) = self.find_row(inspector) {
                     // If the sub-step was pre-populated (Pending), transition
                     // it to Active. Otherwise append a new row (backwards compat).
-                    if let Some(sub) = self.rows[idx]
-                        .sub_steps
-                        .iter_mut()
-                        .find(|s| s.step == step)
+                    if let Some(sub) = self.rows[idx].sub_steps.iter_mut().find(|s| s.step == step)
                     {
                         sub.state = RowState::Active;
                     } else {
@@ -267,10 +302,7 @@ impl ChecklistState {
                 if let Some(idx) = self.find_row(inspector) {
                     // Take metric before borrowing sub_steps mutably.
                     let captured_metric = self.rows[idx].last_metric.take();
-                    if let Some(sub) = self.rows[idx]
-                        .sub_steps
-                        .iter_mut()
-                        .find(|s| s.step == step)
+                    if let Some(sub) = self.rows[idx].sub_steps.iter_mut().find(|s| s.step == step)
                     {
                         sub.metric = captured_metric;
                         sub.state = match outcome {
@@ -319,10 +351,8 @@ impl ChecklistState {
                             self.rows[idx].probes.retain(|p| p.probe != probe);
                         }
                         ProbeOutcome::Found { count } => {
-                            if let Some(p) = self.rows[idx]
-                                .probes
-                                .iter_mut()
-                                .find(|p| p.probe == probe)
+                            if let Some(p) =
+                                self.rows[idx].probes.iter_mut().find(|p| p.probe == probe)
                             {
                                 p.state = ProbeRowState::Found { count };
                             }
@@ -373,7 +403,11 @@ impl ChecklistState {
                         if count == 0 {
                             "none found".to_string()
                         } else {
-                            if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
+                            if count == 1 {
+                                "1 ecosystem".to_string()
+                            } else {
+                                format!("{count} ecosystems")
+                            }
                         }
                     } else {
                         match &row.inspector_metric {
@@ -391,9 +425,7 @@ impl ChecklistState {
                 RowState::Degraded { reason, elapsed } => {
                     let sym = colored("~", YELLOW, use_color);
                     let suf = format_elapsed_suf(*elapsed);
-                    format!(
-                        "  {sym} {name:<40} degraded: {reason}{suf}"
-                    )
+                    format!("  {sym} {name:<40} degraded: {reason}{suf}")
                 }
                 RowState::Failed { reason } => {
                     let sym = colored("\u{2717}", RED, use_color); // ✗
@@ -566,7 +598,12 @@ impl RichRenderer {
     /// Spawns a background tick thread that redraws every ~100ms.
     /// Call [`finalize`] to stop the tick thread and print the final
     /// durable output.
-    pub fn new(writer: Box<dyn Write + Send>, use_color: bool, terminal_height: usize, _verbose: bool) -> Self {
+    pub fn new(
+        writer: Box<dyn Write + Send>,
+        use_color: bool,
+        terminal_height: usize,
+        _verbose: bool,
+    ) -> Self {
         let state = Arc::new(Mutex::new(ChecklistState::new(use_color, terminal_height)));
         let writer = Arc::new(Mutex::new(writer));
         let stop_tick = Arc::new(AtomicBool::new(false));
@@ -1183,7 +1220,10 @@ mod tests {
             "ReposMapped should say '8 repos mapped', got: {joined}"
         );
         // Parent completion line should show last metric (no [n/N] numbering in rich mode)
-        let rpm_line = lines.iter().find(|l| l.contains("RPM packages") && l.contains('\u{2713}')).expect("RPM done line");
+        let rpm_line = lines
+            .iter()
+            .find(|l| l.contains("RPM packages") && l.contains('\u{2713}'))
+            .expect("RPM done line");
         assert!(
             rpm_line.contains("8 repos mapped"),
             "parent completion should show last metric, got: {rpm_line}"
@@ -1252,10 +1292,21 @@ mod tests {
         let mut state = test_state();
         state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Rpm));
 
-        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
-        assert_eq!(rpm_row.sub_steps.len(), 6, "RPM should have 6 pre-populated sub-steps");
+        let rpm_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Rpm)
+            .unwrap();
+        assert_eq!(
+            rpm_row.sub_steps.len(),
+            6,
+            "RPM should have 6 pre-populated sub-steps"
+        );
         assert!(
-            rpm_row.sub_steps.iter().all(|s| matches!(s.state, RowState::Pending)),
+            rpm_row
+                .sub_steps
+                .iter()
+                .all(|s| matches!(s.state, RowState::Pending)),
             "all RPM sub-steps should start as Pending"
         );
     }
@@ -1265,10 +1316,21 @@ mod tests {
         let mut state = test_state();
         state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Config));
 
-        let cfg_row = state.rows.iter().find(|r| r.id == InspectorId::Config).unwrap();
-        assert_eq!(cfg_row.sub_steps.len(), 3, "Config should have 3 pre-populated sub-steps");
+        let cfg_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Config)
+            .unwrap();
+        assert_eq!(
+            cfg_row.sub_steps.len(),
+            3,
+            "Config should have 3 pre-populated sub-steps"
+        );
         assert!(
-            cfg_row.sub_steps.iter().all(|s| matches!(s.state, RowState::Pending)),
+            cfg_row
+                .sub_steps
+                .iter()
+                .all(|s| matches!(s.state, RowState::Pending)),
             "all Config sub-steps should start as Pending"
         );
     }
@@ -1284,10 +1346,17 @@ mod tests {
             inspector: InspectorId::Rpm,
             step: StepId::QueryingPackages,
         });
-        assert_eq!(state.rows[0].sub_steps.len(), 6, "should not push a duplicate");
+        assert_eq!(
+            state.rows[0].sub_steps.len(),
+            6,
+            "should not push a duplicate"
+        );
         assert!(matches!(state.rows[0].sub_steps[0].state, RowState::Active));
         // Remaining sub-steps stay Pending.
-        assert!(matches!(state.rows[0].sub_steps[1].state, RowState::Pending));
+        assert!(matches!(
+            state.rows[0].sub_steps[1].state,
+            RowState::Pending
+        ));
     }
 
     #[test]
@@ -1318,7 +1387,11 @@ mod tests {
             outcome: InspectorOutcome::Interrupted,
         });
 
-        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
+        let rpm_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Rpm)
+            .unwrap();
 
         // Step 0 (QueryingPackages) was already Complete — stays Complete
         assert!(
@@ -1360,7 +1433,11 @@ mod tests {
             },
         });
 
-        let cfg_row = state.rows.iter().find(|r| r.id == InspectorId::Config).unwrap();
+        let cfg_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Config)
+            .unwrap();
 
         // Active step → Failed
         assert!(
@@ -1400,7 +1477,11 @@ mod tests {
             outcome: InspectorOutcome::Complete,
         });
 
-        let rpm_row = state.rows.iter().find(|r| r.id == InspectorId::Rpm).unwrap();
+        let rpm_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Rpm)
+            .unwrap();
 
         // Remaining pending sub-steps should be swept to Complete
         for sub in &rpm_row.sub_steps[1..] {
@@ -1420,8 +1501,15 @@ mod tests {
         let mut state = test_state();
         state.handle_event(ProgressEvent::InspectorStarted(InspectorId::Services));
 
-        let svc_row = state.rows.iter().find(|r| r.id == InspectorId::Services).unwrap();
-        assert!(svc_row.sub_steps.is_empty(), "Services should have no sub-steps");
+        let svc_row = state
+            .rows
+            .iter()
+            .find(|r| r.id == InspectorId::Services)
+            .unwrap();
+        assert!(
+            svc_row.sub_steps.is_empty(),
+            "Services should have no sub-steps"
+        );
     }
 
     #[test]

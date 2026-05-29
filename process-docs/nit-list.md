@@ -62,6 +62,12 @@ Deferred non-blocking items from the spec/plan review rounds. Address when touch
 
 - [ ] `users_groups_decisions` on `ViewResponse` is `Vec<serde_json::Value>` — an untyped escape hatch. This means the Playwright fixture-structure validation (insta snapshots) cannot catch drift in the users/groups decision payload. `users.spec.ts` tests rely on structural fixture correctness only. Typing this field as a proper DTO (e.g., `Vec<UserGroupDecision>`) is the prerequisite for full fixture-validation coverage of the users/groups surface. Flagged during Playwright testing expansion spec review (Tang, round 2).
 
+## Preserve-Subscription Plan Deferrals
+
+- [ ] **Spec/plan provenance alignment:** Spec text says `source_hostname` belongs in fleet metadata; plan stores it in `SubscriptionSection.source_hostname` (per Task 1 contract decision — keeps provenance with the data it describes). Spec needs a text update to match the plan. Non-blocking.
+- [ ] **`--prefer-host-subscription` override flag:** On RHEL hosts, ambient pass-through wins over tarball-carried certs when the ambient bundle is valid. A user override to force tarball certs is not included in v1. File as enhancement if requested.
+- [ ] **Hardlink extraction:** `TarballExtractor` rejects escaping hardlinks but does not extract within-root hardlinks. inspectah tarballs don't use hardlinks today. Add extraction support if a future tarball format uses them.
+
 ---
 
 ## Completed

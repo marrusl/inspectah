@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
-use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
+use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::users::UserContainerfileStrategy;
@@ -56,46 +56,93 @@ impl ContentHash {
 #[serde(tag = "kind", content = "key")]
 pub enum ItemId {
     // RPM section
-    Package { name: String, arch: String },
-    Repo { path: String },
-    ModuleStream { module_stream: String },
-    VersionLock { name_arch: String },
+    Package {
+        name: String,
+        arch: String,
+    },
+    Repo {
+        path: String,
+    },
+    ModuleStream {
+        module_stream: String,
+    },
+    VersionLock {
+        name_arch: String,
+    },
 
     // Config section
-    Config { path: String },
+    Config {
+        path: String,
+    },
 
     // Services section
-    Service { unit: String },
-    DropIn { path: String },
+    Service {
+        unit: String,
+    },
+    DropIn {
+        path: String,
+    },
 
     // Containers section
-    Quadlet { path: String },
-    Compose { path: String },
-    Flatpak { app_id: String, remote: String, branch: String },
+    Quadlet {
+        path: String,
+    },
+    Compose {
+        path: String,
+    },
+    Flatpak {
+        app_id: String,
+        remote: String,
+        branch: String,
+    },
 
     // Network section
-    NMConnection { path: String },
-    FirewallZone { path: String },
+    NMConnection {
+        path: String,
+    },
+    FirewallZone {
+        path: String,
+    },
 
     // Kernel/boot section
-    KernelModule { name: String },
-    Sysctl { key: String },
-    TunedSelection { profile: String },
+    KernelModule {
+        name: String,
+    },
+    Sysctl {
+        key: String,
+    },
+    TunedSelection {
+        profile: String,
+    },
 
     // Scheduled section
-    CronJob { path: String },
-    SystemdTimer { name: String },
-    AtJob { file: String },
-    GeneratedTimer { name: String },
+    CronJob {
+        path: String,
+    },
+    SystemdTimer {
+        name: String,
+    },
+    AtJob {
+        file: String,
+    },
+    GeneratedTimer {
+        name: String,
+    },
 
     // SELinux section
-    SelinuxPort { protocol_port: String },
+    SelinuxPort {
+        protocol_port: String,
+    },
 
     // Storage section
-    Fstab { mount_point: String },
+    Fstab {
+        mount_point: String,
+    },
 
     // Non-RPM section
-    NonRpm { name: String },
+    NonRpm {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +189,6 @@ pub enum UserPasswordOp {
     },
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoProvenance {
@@ -159,7 +205,6 @@ pub enum RepoTier {
     ThirdParty,
     None,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -424,16 +469,31 @@ impl RefineStats {
             included: 0,
             excluded: 0,
         };
-        self.sections.iter().find(|s| s.kind == kind).unwrap_or(&EMPTY)
+        self.sections
+            .iter()
+            .find(|s| s.kind == kind)
+            .unwrap_or(&EMPTY)
     }
 
     // Convenience accessors for the two sections that existing callers use most.
-    pub fn total_packages(&self) -> usize { self.section(SectionKind::Package).total }
-    pub fn included_packages(&self) -> usize { self.section(SectionKind::Package).included }
-    pub fn excluded_packages(&self) -> usize { self.section(SectionKind::Package).excluded }
-    pub fn total_configs(&self) -> usize { self.section(SectionKind::Config).total }
-    pub fn included_configs(&self) -> usize { self.section(SectionKind::Config).included }
-    pub fn excluded_configs(&self) -> usize { self.section(SectionKind::Config).excluded }
+    pub fn total_packages(&self) -> usize {
+        self.section(SectionKind::Package).total
+    }
+    pub fn included_packages(&self) -> usize {
+        self.section(SectionKind::Package).included
+    }
+    pub fn excluded_packages(&self) -> usize {
+        self.section(SectionKind::Package).excluded
+    }
+    pub fn total_configs(&self) -> usize {
+        self.section(SectionKind::Config).total
+    }
+    pub fn included_configs(&self) -> usize {
+        self.section(SectionKind::Config).included
+    }
+    pub fn excluded_configs(&self) -> usize {
+        self.section(SectionKind::Config).excluded
+    }
 }
 
 impl ChangesSummary {
@@ -491,7 +551,6 @@ pub enum RefineMode {
     Fleet(FleetContext),
 }
 
-
 #[derive(Debug, thiserror::Error)]
 pub enum RefineError {
     #[error("unknown target: {0}")]
@@ -529,7 +588,11 @@ mod triage_tests {
 
     #[test]
     fn triage_bucket_serde_roundtrip() {
-        let buckets = vec![TriageBucket::Baseline, TriageBucket::Site, TriageBucket::Investigate];
+        let buckets = vec![
+            TriageBucket::Baseline,
+            TriageBucket::Site,
+            TriageBucket::Investigate,
+        ];
         for b in buckets {
             let json = serde_json::to_string(&b).unwrap();
             let back: TriageBucket = serde_json::from_str(&json).unwrap();
@@ -541,7 +604,10 @@ mod triage_tests {
     fn fleet_triage_serde_roundtrip() {
         let ft = FleetTriage {
             bucket: FleetBucket::Divergent,
-            prevalence: Prevalence { count: 42, total: 50 },
+            prevalence: Prevalence {
+                count: 42,
+                total: 50,
+            },
         };
         let json = serde_json::to_string(&ft).unwrap();
         let back: FleetTriage = serde_json::from_str(&json).unwrap();

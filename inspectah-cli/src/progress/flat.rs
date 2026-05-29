@@ -86,13 +86,21 @@ impl FlatRenderer {
                 let name = display::step_name(&step);
                 let _ = writeln!(state.writer, "  {name}...");
             }
-            ProgressEvent::StepFinished { inspector, step, outcome } => {
+            ProgressEvent::StepFinished {
+                inspector,
+                step,
+                outcome,
+            } => {
                 let name = display::step_name(&step);
                 let step_metric = state.step_metrics.remove(&inspector);
                 let suffix = format_step_outcome(&outcome, &step_metric);
                 let _ = writeln!(state.writer, "  {name}... {suffix}");
             }
-            ProgressEvent::Metric { inspector, kind, value } => {
+            ProgressEvent::Metric {
+                inspector,
+                kind,
+                value,
+            } => {
                 state.step_metrics.insert(inspector, (kind.clone(), value));
                 state.inspector_metrics.insert(inspector, (kind, value));
             }
@@ -102,7 +110,9 @@ impl FlatRenderer {
                 let _ = writeln!(state.writer, "  {name}...");
             }
             ProgressEvent::ProbeFinished {
-                inspector, probe, outcome,
+                inspector,
+                probe,
+                outcome,
             } => {
                 if matches!(outcome, ProbeOutcome::Found { .. }) {
                     *state.probes_found.entry(inspector).or_insert(0) += 1;
@@ -131,7 +141,11 @@ fn format_inspector_outcome(
                 if count == 0 {
                     "none found".to_string()
                 } else {
-                    if count == 1 { "1 ecosystem".to_string() } else { format!("{count} ecosystems") }
+                    if count == 1 {
+                        "1 ecosystem".to_string()
+                    } else {
+                        format!("{count} ecosystems")
+                    }
                 }
             } else {
                 match last_metric {
@@ -146,7 +160,9 @@ fn format_inspector_outcome(
         }
         InspectorOutcome::Skipped { reason } => format!("skipped ({reason})"),
         InspectorOutcome::Degraded { reason } => match elapsed {
-            Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("degraded: {reason} ({s:.1}s)"),
+            Some(s) if s >= display::TIMER_THRESHOLD_SECS => {
+                format!("degraded: {reason} ({s:.1}s)")
+            }
             _ => format!("degraded: {reason}"),
         },
         InspectorOutcome::Failed { reason } => format!("failed: {reason}"),
@@ -158,10 +174,7 @@ fn format_inspector_outcome(
 ///
 /// If a metric was received since the last step/inspector event,
 /// it replaces the generic "done" with a count (e.g. "847 found").
-fn format_step_outcome(
-    outcome: &StepOutcome,
-    last_metric: &Option<(MetricKind, usize)>,
-) -> String {
+fn format_step_outcome(outcome: &StepOutcome, last_metric: &Option<(MetricKind, usize)>) -> String {
     match outcome {
         StepOutcome::Complete => match last_metric {
             Some((kind, value)) => display::metric_label(kind, *value),
@@ -493,10 +506,7 @@ mod tests {
         });
 
         let text = output_text(&buf);
-        assert!(
-            text.contains("Network... interrupted"),
-            "got: {text}"
-        );
+        assert!(text.contains("Network... interrupted"), "got: {text}");
     }
 
     #[test]

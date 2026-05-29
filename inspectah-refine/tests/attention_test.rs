@@ -6,7 +6,7 @@ use inspectah_core::types::rpm::{
     PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
 };
 use inspectah_refine::classify::classify_configs;
-use inspectah_refine::types::{TriageAnnotation, TriageBucket, TriageReason, Triage};
+use inspectah_refine::types::{Triage, TriageAnnotation, TriageBucket, TriageReason};
 
 fn assert_bucket(tag: &inspectah_refine::types::TriageTag, expected: TriageBucket) {
     match &tag.triage {
@@ -60,27 +60,51 @@ fn make_snap_with_package(
 
 #[test]
 fn test_added_baseline_match_is_baseline() {
-    let snap = make_snap_with_package("glibc", PackageState::Added, "baseos", Some(vec!["glibc".into()]));
+    let snap = make_snap_with_package(
+        "glibc",
+        PackageState::Added,
+        "baseos",
+        Some(vec!["glibc".into()]),
+    );
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_eq!(pkgs.len(), 1);
     assert_bucket(&pkgs[0].triage, TriageBucket::Baseline);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageBaselineMatch);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageBaselineMatch
+    );
 }
 
 #[test]
 fn test_added_not_in_baseline_known_repo_is_site() {
-    let snap = make_snap_with_package("httpd", PackageState::Added, "appstream", Some(vec!["glibc".into()]));
+    let snap = make_snap_with_package(
+        "httpd",
+        PackageState::Added,
+        "appstream",
+        Some(vec!["glibc".into()]),
+    );
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Site);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageUserAdded);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageUserAdded
+    );
 }
 
 #[test]
 fn test_added_not_in_baseline_empty_repo_is_investigate() {
-    let snap = make_snap_with_package("mystery", PackageState::Added, "", Some(vec!["glibc".into()]));
+    let snap = make_snap_with_package(
+        "mystery",
+        PackageState::Added,
+        "",
+        Some(vec!["glibc".into()]),
+    );
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageNoRepoSource
+    );
 }
 
 #[test]
@@ -88,7 +112,10 @@ fn test_added_no_baseline_known_repo_is_investigate() {
     let snap = make_snap_with_package("httpd", PackageState::Added, "appstream", None);
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageProvenanceUnavailable);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageProvenanceUnavailable
+    );
 }
 
 #[test]
@@ -96,49 +123,96 @@ fn test_added_no_baseline_empty_repo_is_investigate() {
     let snap = make_snap_with_package("mystery", PackageState::Added, "", None);
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageNoRepoSource
+    );
 }
 
 #[test]
 fn test_modified_upgrade_in_baseline_is_site() {
-    let mut snap = make_snap_with_package("glibc", PackageState::Modified, "baseos", Some(vec!["glibc".into()]));
-    snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
-        name: "glibc".into(), arch: "x86_64".into(),
-        direction: VersionChangeDirection::Upgrade, ..Default::default()
-    });
+    let mut snap = make_snap_with_package(
+        "glibc",
+        PackageState::Modified,
+        "baseos",
+        Some(vec!["glibc".into()]),
+    );
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .version_changes
+        .push(VersionChange {
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+            direction: VersionChangeDirection::Upgrade,
+            ..Default::default()
+        });
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Site);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageVersionChanged
+    );
 }
 
 #[test]
 fn test_modified_downgrade_in_baseline_is_investigate() {
-    let mut snap = make_snap_with_package("glibc", PackageState::Modified, "baseos", Some(vec!["glibc".into()]));
-    snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
-        name: "glibc".into(), arch: "x86_64".into(),
-        direction: VersionChangeDirection::Downgrade, ..Default::default()
-    });
+    let mut snap = make_snap_with_package(
+        "glibc",
+        PackageState::Modified,
+        "baseos",
+        Some(vec!["glibc".into()]),
+    );
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .version_changes
+        .push(VersionChange {
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+            direction: VersionChangeDirection::Downgrade,
+            ..Default::default()
+        });
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageVersionChanged
+    );
 }
 
 #[test]
 fn test_modified_no_version_change_entry_defaults_to_site() {
-    let snap = make_snap_with_package("httpd", PackageState::Modified, "appstream", Some(vec!["glibc".into()]));
+    let snap = make_snap_with_package(
+        "httpd",
+        PackageState::Modified,
+        "appstream",
+        Some(vec!["glibc".into()]),
+    );
     let pkgs = inspectah_refine::classify::classify_packages(&snap);
     assert_bucket(&pkgs[0].triage, TriageBucket::Site);
-    assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageVersionChanged);
+    assert_eq!(
+        pkgs[0].triage.primary_reason,
+        TriageReason::PackageVersionChanged
+    );
 }
 
 #[test]
 fn test_local_install_always_investigate() {
     for baseline in [Some(vec!["glibc".into()]), None] {
         for repo in ["appstream", ""] {
-            let snap = make_snap_with_package("custom", PackageState::LocalInstall, repo, baseline.clone());
+            let snap = make_snap_with_package(
+                "custom",
+                PackageState::LocalInstall,
+                repo,
+                baseline.clone(),
+            );
             let pkgs = inspectah_refine::classify::classify_packages(&snap);
             assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-            assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageLocalInstall);
+            assert_eq!(
+                pkgs[0].triage.primary_reason,
+                TriageReason::PackageLocalInstall
+            );
         }
     }
 }
@@ -149,7 +223,10 @@ fn test_no_repo_always_investigate() {
         let snap = make_snap_with_package("orphan", PackageState::NoRepo, "", baseline.clone());
         let pkgs = inspectah_refine::classify::classify_packages(&snap);
         assert_bucket(&pkgs[0].triage, TriageBucket::Investigate);
-        assert_eq!(pkgs[0].triage.primary_reason, TriageReason::PackageNoRepoSource);
+        assert_eq!(
+            pkgs[0].triage.primary_reason,
+            TriageReason::PackageNoRepoSource
+        );
     }
 }
 
@@ -159,12 +236,17 @@ fn config_modified_gets_site() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
-            kind: ConfigFileKind::RpmOwnedModified, include: true, ..Default::default()
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
         }],
     });
     let configs = classify_configs(&snap);
     assert_bucket(&configs[0].triage, TriageBucket::Site);
-    assert_eq!(configs[0].triage.primary_reason, TriageReason::ConfigModified);
+    assert_eq!(
+        configs[0].triage.primary_reason,
+        TriageReason::ConfigModified
+    );
 }
 
 #[test]
@@ -173,7 +255,9 @@ fn config_rpm_default_gets_baseline() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/logrotate.conf".into(),
-            kind: ConfigFileKind::RpmOwnedDefault, include: true, ..Default::default()
+            kind: ConfigFileKind::RpmOwnedDefault,
+            include: true,
+            ..Default::default()
         }],
     });
     let configs = classify_configs(&snap);
@@ -186,11 +270,18 @@ fn sensitive_path_adds_annotation() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/custom_config".into(),
-            kind: ConfigFileKind::Unowned, include: true, ..Default::default()
+            kind: ConfigFileKind::Unowned,
+            include: true,
+            ..Default::default()
         }],
     });
     let configs = classify_configs(&snap);
-    assert!(configs[0].triage.annotations.contains(&TriageAnnotation::SensitivePath));
+    assert!(
+        configs[0]
+            .triage
+            .annotations
+            .contains(&TriageAnnotation::SensitivePath)
+    );
 }
 
 #[test]
@@ -199,11 +290,18 @@ fn sensitive_path_annotation_on_modified_too() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/sshd_config".into(),
-            kind: ConfigFileKind::RpmOwnedModified, include: true, ..Default::default()
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
         }],
     });
     let configs = classify_configs(&snap);
-    assert!(configs[0].triage.annotations.contains(&TriageAnnotation::SensitivePath));
+    assert!(
+        configs[0]
+            .triage
+            .annotations
+            .contains(&TriageAnnotation::SensitivePath)
+    );
 }
 
 #[test]
@@ -219,11 +317,14 @@ fn unresolved_hints_surface_as_investigate() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
-            kind: ConfigFileKind::RpmOwnedModified, include: true, ..Default::default()
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
         }],
     });
     snap.redaction_state = Some(RedactionState::PartiallyRedacted {
-        redacted_by: "inspectah 0.8.0".into(), config_hash: "abc".into(),
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
         unresolved_count: 1,
         unresolved_hints: vec![RedactionHint {
             path: "/etc/myapp/config".into(),
@@ -234,7 +335,10 @@ fn unresolved_hints_surface_as_investigate() {
     let configs = classify_configs(&snap);
     assert_eq!(configs.len(), 1);
     assert_bucket(&configs[0].triage, TriageBucket::Investigate);
-    assert!(matches!(configs[0].triage.primary_reason, TriageReason::Custom(_)));
+    assert!(matches!(
+        configs[0].triage.primary_reason,
+        TriageReason::Custom(_)
+    ));
 }
 
 #[test]
@@ -243,11 +347,14 @@ fn fully_redacted_snapshot_no_hint_tags() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
-            kind: ConfigFileKind::RpmOwnedModified, include: true, ..Default::default()
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
         }],
     });
     snap.redaction_state = Some(RedactionState::FullyRedacted {
-        redacted_by: "inspectah 0.8.0".into(), config_hash: "abc".into(),
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
     });
     let configs = classify_configs(&snap);
     assert_eq!(configs.len(), 1);
@@ -259,7 +366,10 @@ fn make_snap_with_config(path: &str, kind: ConfigFileKind) -> InspectionSnapshot
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
-            path: path.into(), kind, include: true, ..Default::default()
+            path: path.into(),
+            kind,
+            include: true,
+            ..Default::default()
         }],
     });
     snap
@@ -267,10 +377,16 @@ fn make_snap_with_config(path: &str, kind: ConfigFileKind) -> InspectionSnapshot
 
 #[test]
 fn test_config_rpm_owned_default_is_baseline() {
-    let snap = make_snap_with_config("/etc/httpd/conf/httpd.conf", ConfigFileKind::RpmOwnedDefault);
+    let snap = make_snap_with_config(
+        "/etc/httpd/conf/httpd.conf",
+        ConfigFileKind::RpmOwnedDefault,
+    );
     let configs = classify_configs(&snap);
     assert_bucket(&configs[0].triage, TriageBucket::Baseline);
-    assert_eq!(configs[0].triage.primary_reason, TriageReason::ConfigDefault);
+    assert_eq!(
+        configs[0].triage.primary_reason,
+        TriageReason::ConfigDefault
+    );
 }
 
 #[test]
@@ -278,7 +394,10 @@ fn test_config_baseline_match_is_baseline() {
     let snap = make_snap_with_config("/etc/sysconfig/network", ConfigFileKind::BaselineMatch);
     let configs = classify_configs(&snap);
     assert_bucket(&configs[0].triage, TriageBucket::Baseline);
-    assert_eq!(configs[0].triage.primary_reason, TriageReason::ConfigBaselineMatch);
+    assert_eq!(
+        configs[0].triage.primary_reason,
+        TriageReason::ConfigBaselineMatch
+    );
 }
 
 #[test]
@@ -286,7 +405,10 @@ fn test_config_unowned_is_site() {
     let snap = make_snap_with_config("/etc/custom.conf", ConfigFileKind::Unowned);
     let configs = classify_configs(&snap);
     assert_bucket(&configs[0].triage, TriageBucket::Site);
-    assert_eq!(configs[0].triage.primary_reason, TriageReason::ConfigUnowned);
+    assert_eq!(
+        configs[0].triage.primary_reason,
+        TriageReason::ConfigUnowned
+    );
 }
 
 #[test]
@@ -294,7 +416,10 @@ fn test_config_rpm_owned_modified_is_site() {
     let snap = make_snap_with_config("/etc/ssh/sshd_config", ConfigFileKind::RpmOwnedModified);
     let configs = classify_configs(&snap);
     assert_bucket(&configs[0].triage, TriageBucket::Site);
-    assert_eq!(configs[0].triage.primary_reason, TriageReason::ConfigModified);
+    assert_eq!(
+        configs[0].triage.primary_reason,
+        TriageReason::ConfigModified
+    );
 }
 
 #[test]
@@ -302,10 +427,23 @@ fn test_config_sensitive_path_annotation() {
     // Unowned at a sensitive path -> gets SensitivePath annotation
     let snap = make_snap_with_config("/etc/ssh/custom_keys", ConfigFileKind::Unowned);
     let configs = classify_configs(&snap);
-    assert!(configs[0].triage.annotations.contains(&TriageAnnotation::SensitivePath));
+    assert!(
+        configs[0]
+            .triage
+            .annotations
+            .contains(&TriageAnnotation::SensitivePath)
+    );
 
     // RpmOwnedDefault at a sensitive path that IS an os-default -> no annotation
-    let snap2 = make_snap_with_config("/etc/pki/ca-trust/cert.pem", ConfigFileKind::RpmOwnedDefault);
+    let snap2 = make_snap_with_config(
+        "/etc/pki/ca-trust/cert.pem",
+        ConfigFileKind::RpmOwnedDefault,
+    );
     let configs2 = classify_configs(&snap2);
-    assert!(!configs2[0].triage.annotations.contains(&TriageAnnotation::SensitivePath));
+    assert!(
+        !configs2[0]
+            .triage
+            .annotations
+            .contains(&TriageAnnotation::SensitivePath)
+    );
 }

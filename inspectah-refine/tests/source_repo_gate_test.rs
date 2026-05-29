@@ -45,10 +45,18 @@ fn test_source_repo_proof_rust_collector_path() {
     let session = RefineSession::new(snap);
     let view = session.view();
 
-    let httpd = view.packages.iter().find(|p| p.entry.name == "httpd").unwrap();
+    let httpd = view
+        .packages
+        .iter()
+        .find(|p| p.entry.name == "httpd")
+        .unwrap();
     assert_eq!(httpd.triage.bucket(), TriageBucket::Site);
     assert!(!httpd.entry.source_repo.is_empty());
 
-    let local = view.packages.iter().find(|p| p.entry.name == "local-pkg").unwrap();
+    let local = view
+        .packages
+        .iter()
+        .find(|p| p.entry.name == "local-pkg")
+        .unwrap();
     assert_eq!(local.triage.bucket(), TriageBucket::Investigate);
 }

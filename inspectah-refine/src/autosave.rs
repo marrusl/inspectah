@@ -12,10 +12,18 @@ use tempfile::NamedTempFile;
 enum LegacyRefinementOp {
     ExcludePackage(LegacyPackageTarget),
     IncludePackage(LegacyPackageTarget),
-    ExcludeConfig { path: PathBuf },
-    IncludeConfig { path: PathBuf },
-    ExcludeRepo { section_id: String },
-    IncludeRepo { section_id: String },
+    ExcludeConfig {
+        path: PathBuf,
+    },
+    IncludeConfig {
+        path: PathBuf,
+    },
+    ExcludeRepo {
+        section_id: String,
+    },
+    IncludeRepo {
+        section_id: String,
+    },
     // Forward-compatible: pass through any v2 op as raw JSON
     #[serde(untagged)]
     Other(serde_json::Value),
@@ -198,10 +206,9 @@ pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std:
             let state: SessionState = serde_json::from_str(&contents)?;
             Ok(Some(state))
         }
-        other => Err(format!(
-            "unsupported session schema version: {other} (expected 1 or 2)"
-        )
-        .into()),
+        other => {
+            Err(format!("unsupported session schema version: {other} (expected 1 or 2)").into())
+        }
     }
 }
 
@@ -236,7 +243,8 @@ mod tests {
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
         header.set_cksum();
-        tar.append_data(&mut header, "dummy.txt", &data[..]).unwrap();
+        tar.append_data(&mut header, "dummy.txt", &data[..])
+            .unwrap();
         tar.finish().unwrap();
     }
 
@@ -261,7 +269,11 @@ mod tests {
             "saved_at": "100s"
         });
         let session_path = session_file_path(&tarball);
-        std::fs::write(&session_path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
+        std::fs::write(
+            &session_path,
+            serde_json::to_string_pretty(&v1_json).unwrap(),
+        )
+        .unwrap();
 
         let loaded = load_session(&tarball).unwrap().unwrap();
 
@@ -336,7 +348,11 @@ mod tests {
             "saved_at": "200s"
         });
         let session_path = session_file_path(&tarball);
-        std::fs::write(&session_path, serde_json::to_string_pretty(&v2_json).unwrap()).unwrap();
+        std::fs::write(
+            &session_path,
+            serde_json::to_string_pretty(&v2_json).unwrap(),
+        )
+        .unwrap();
 
         let loaded = load_session(&tarball).unwrap().unwrap();
         assert_eq!(loaded.schema_version, 2);
@@ -420,12 +436,19 @@ mod tests {
             "saved_at": "400s"
         });
         let session_path = session_file_path(&tarball);
-        std::fs::write(&session_path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
+        std::fs::write(
+            &session_path,
+            serde_json::to_string_pretty(&v1_json).unwrap(),
+        )
+        .unwrap();
 
         let loaded = load_session(&tarball).unwrap().unwrap();
         assert_eq!(loaded.schema_version, 2);
         assert_eq!(loaded.ops.len(), 5);
-        assert_eq!(loaded.cursor, 3, "cursor must be preserved through migration");
+        assert_eq!(
+            loaded.cursor, 3,
+            "cursor must be preserved through migration"
+        );
     }
 
     #[test]
@@ -444,7 +467,11 @@ mod tests {
             "saved_at": "0s"
         });
         let session_path = session_file_path(&tarball);
-        std::fs::write(&session_path, serde_json::to_string_pretty(&bad_json).unwrap()).unwrap();
+        std::fs::write(
+            &session_path,
+            serde_json::to_string_pretty(&bad_json).unwrap(),
+        )
+        .unwrap();
 
         let result = load_session(&tarball);
         assert!(result.is_err());
