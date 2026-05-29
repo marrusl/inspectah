@@ -5,7 +5,9 @@ use inspectah_core::fleet::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::fleet::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_pipeline::render::containerfile::{render_containerfile, render_containerfile_with_originals};
+use inspectah_pipeline::render::containerfile::{
+    render_containerfile, render_containerfile_with_originals,
+};
 
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};

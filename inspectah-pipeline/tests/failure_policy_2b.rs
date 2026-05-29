@@ -82,7 +82,14 @@ fn network_permission_denied_degraded() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(NetworkInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -130,7 +137,14 @@ fn network_not_found_not_degraded() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(NetworkInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -173,7 +187,14 @@ fn containers_podman_json_parse_error_degraded() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(ContainersInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -229,7 +250,14 @@ fn containers_all_dirs_missing_complete() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(ContainersInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -257,7 +285,14 @@ fn users_passwd_failure_incomplete() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(UsersGroupsInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -299,7 +334,14 @@ fn users_shadow_permission_denied_degraded() {
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
         vec![Box::new(UsersGroupsInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -360,7 +402,14 @@ fn mixed_failures_across_inspectors() {
         Box::new(UsersGroupsInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors, None, &NullProgress, &AtomicBool::new(false));
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {

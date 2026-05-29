@@ -61,9 +61,7 @@ pub fn detect_mode(cli_flag: Option<&ProgressMode>) -> Mode {
     }
 
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
-    let is_dumb = std::env::var("TERM")
-        .map(|t| t == "dumb")
-        .unwrap_or(false);
+    let is_dumb = std::env::var("TERM").map(|t| t == "dumb").unwrap_or(false);
 
     if !is_tty || is_dumb {
         Mode::Flat

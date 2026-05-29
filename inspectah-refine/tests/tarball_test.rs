@@ -190,4 +190,3 @@ fn reject_missing_snapshot_json() {
     let result = inspectah_refine::tarball::from_tarball(&tarball_path);
     assert!(matches!(result, Err(RefineError::SnapshotLoad(_))));
 }
-

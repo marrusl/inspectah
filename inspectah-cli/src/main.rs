@@ -23,6 +23,8 @@ enum Commands {
     Refine(commands::refine::RefineArgs),
     /// Aggregate and manage fleet-wide migration snapshots
     Fleet(commands::fleet::FleetArgs),
+    /// Build a bootc container image from an inspectah tarball snapshot
+    Build(commands::build::BuildArgs),
     /// Print version, commit, and build date
     Version,
 }
@@ -65,6 +67,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Build(args) => match commands::build::run_build(&args) {
+            Ok(outcome) => {
+                let code = outcome.exit_code();
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        },
         Commands::Version => {
             commands::version::print_version();
         }
