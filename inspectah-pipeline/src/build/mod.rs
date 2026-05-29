@@ -110,7 +110,31 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("inspectah/builds");
         let named_dir = cache_dir.join(format!("build-{}", std::process::id()));
-        std::fs::create_dir_all(&named_dir)?;
+
+        // Fail fast if the directory exists and is non-empty.
+        // This prevents reuse of directories that could contain attacker-placed symlinks.
+        if named_dir.exists() {
+            let is_empty = std::fs::read_dir(&named_dir)
+                .context("failed to read keep-context directory")?
+                .next()
+                .is_none();
+
+            if !is_empty {
+                return Ok((
+                    BuildOutcome::PreflightFailed {
+                        reason: format!(
+                            "extraction directory already exists and is non-empty: {}. \
+                             Remove it first or omit --keep-context.",
+                            named_dir.display()
+                        ),
+                    },
+                    warnings,
+                ));
+            }
+        } else {
+            std::fs::create_dir_all(&named_dir)?;
+        }
+
         named_dir
     } else {
         // TempDir owns the path -- Drop cleans it up automatically.
@@ -852,5 +876,71 @@ mod tests {
             }
             other => panic!("expected DryRun or PodmanNotFound, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_keep_context_fails_on_nonempty_dir() {
+        // This test verifies the fail-fast behavior when --keep-context points
+        // to an existing non-empty directory. Since we can't easily override
+        // dirs::cache_dir() in tests, we verify the behavior by:
+        // 1. Running a build with keep_context=true (creates the directory)
+        // 2. Adding a file to that directory
+        // 3. Running another build with keep_context=true (should fail)
+
+        let tmp = tempfile::tempdir().unwrap();
+        let tarball = build_test_tarball(tmp.path(), "FROM ubi9:latest", false);
+
+        // Determine the keep-context directory that will be used.
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("inspectah/builds");
+        let pid_dir = cache_dir.join(format!("build-{}", std::process::id()));
+
+        // Clean up any existing directory from previous test runs.
+        if pid_dir.exists() {
+            std::fs::remove_dir_all(&pid_dir).ok();
+        }
+
+        // First build: should succeed (or fail for other reasons, but not "non-empty").
+        let config1 = BuildConfig {
+            tarball: tarball.clone(),
+            tag: "test:v1".into(),
+            dry_run: true,
+            keep_context: true,
+            podman_args: vec![],
+        };
+
+        let result1 = plan_and_execute(&config1);
+        // On macOS without podman, we get PodmanNotFound, which is fine.
+        // We just need the directory to be created.
+        assert!(result1.is_ok() || pid_dir.exists());
+
+        // Add a leftover file to the directory to make it non-empty.
+        std::fs::create_dir_all(&pid_dir).ok();
+        std::fs::write(pid_dir.join("leftover.txt"), "attacker symlink here").unwrap();
+
+        // Second build: should fail with PreflightFailed due to non-empty directory.
+        let tarball2 = build_test_tarball(tmp.path(), "FROM ubi9:latest", false);
+        let config2 = BuildConfig {
+            tarball: tarball2,
+            tag: "test:v2".into(),
+            dry_run: true,
+            keep_context: true,
+            podman_args: vec![],
+        };
+
+        let result2 = plan_and_execute(&config2);
+        assert!(result2.is_ok());
+        let (outcome, _) = result2.unwrap();
+        match outcome {
+            BuildOutcome::PreflightFailed { reason } => {
+                assert!(reason.contains("already exists and is non-empty"), "{reason}");
+                assert!(reason.contains(&pid_dir.to_string_lossy().to_string()), "{reason}");
+            }
+            other => panic!("expected PreflightFailed for non-empty dir, got: {other:?}"),
+        }
+
+        // Cleanup.
+        std::fs::remove_dir_all(&pid_dir).ok();
     }
 }
