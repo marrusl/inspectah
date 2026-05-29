@@ -412,18 +412,18 @@ fn archive_rejects_symlink_escape() {
     );
 }
 
-/// Hard link targeting parent directory is rejected.
+/// All hardlinks are rejected (inspectah tarballs do not use them).
 #[test]
-fn archive_rejects_hardlink_escape() {
+fn archive_rejects_hardlink() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let tarball = build_evil_tarball(tmp.path(), "hardlink-escape", |builder| {
+    let tarball = build_evil_tarball(tmp.path(), "hardlink", |builder| {
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Link);
-        header.set_path("prefix/evil-hardlink").expect("set path");
+        header.set_path("prefix/some-hardlink").expect("set path");
         header.set_size(0);
         header.set_mode(0o644);
         header
-            .set_link_name("../../../etc/shadow")
+            .set_link_name("target.txt")
             .expect("set link");
         header.set_cksum();
         builder.append(&header, std::io::empty()).expect("append");
@@ -432,9 +432,10 @@ fn archive_rejects_hardlink_escape() {
     let extractor = TarballExtractor::new(tmp.path().join("out-hardlink"));
     let result = extractor.extract(&tarball);
     assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
     assert!(
-        result.unwrap_err().to_string().contains("hard link escape"),
-        "should reject hard link escape"
+        err.contains("hardlinks are not supported"),
+        "expected hardlink rejection error, got: {err}"
     );
 }
 
