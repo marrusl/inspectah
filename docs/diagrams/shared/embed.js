@@ -204,10 +204,36 @@ export function createDiagramShell(config) {
   }
   window.addEventListener('resize', handleResize);
 
+  // Re-center diagram on fullscreen enter/exit
+  function handleFullscreenRecenter() {
+    // Update SVG dimensions to match new viewport
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    svg.attr('width', w).attr('height', h).attr('viewBox', `0 0 ${w} ${h}`);
+
+    // Compute bounds from actual rendered content
+    const gNode = g.node();
+    if (!gNode) return;
+    const bbox = gNode.getBBox();
+    if (bbox.width === 0 && bbox.height === 0) return;
+
+    // Re-center with a short delay to let the viewport settle
+    requestAnimationFrame(() => {
+      centerView(svg, zoom, {
+        x: bbox.x,
+        y: bbox.y,
+        width: bbox.width,
+        height: bbox.height,
+      }, { padding: 60 });
+    });
+  }
+  document.addEventListener('fullscreenchange', handleFullscreenRecenter);
+
   /** Tear down all event listeners and DOM elements created by the shell. */
   function cleanup() {
     zoomCleanup();
     fsCleanup();
+    document.removeEventListener('fullscreenchange', handleFullscreenRecenter);
     mqReducedMotion.removeEventListener('change', handleMotionChange);
     window.removeEventListener('resize', handleResize);
     titleOverlay.remove();
