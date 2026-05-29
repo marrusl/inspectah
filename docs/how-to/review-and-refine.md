@@ -181,14 +181,18 @@ of all changes made in the current session.
 
 ### Resume a previous session
 
-Session progress is saved automatically alongside the tarball. When you
-run `inspectah refine` on the same tarball again, it resumes where you
-left off with all your previous include/exclude decisions intact.
+Session progress is saved automatically alongside the tarball in a file
+named `.inspectah-session-<basename>.json` (for example,
+`.inspectah-session-hostname-20260527-143000.json` for a tarball named
+`hostname-20260527-143000.tar.gz`).
+
+When you run `inspectah refine` on the same tarball again, it resumes
+where you left off with all your previous include/exclude decisions intact.
 
 To start fresh and discard saved progress:
 
 ```bash
-inspectah refine --fresh ./scan-output.tar.gz
+inspectah refine --fresh scan-output.tar.gz
 ```
 
 ### Autosave

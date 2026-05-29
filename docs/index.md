@@ -18,7 +18,7 @@ sudo inspectah scan
 inspectah refine <snapshot.tar.gz>
 ```
 
-See [Getting Started](tutorials/) for a full walkthrough.
+See [Getting Started](getting-started) for a full walkthrough.
 
 {% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
