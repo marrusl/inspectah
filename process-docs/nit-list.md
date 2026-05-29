@@ -64,9 +64,17 @@ Deferred non-blocking items from the spec/plan review rounds. Address when touch
 
 ## Preserve-Subscription Plan Deferrals
 
-- [ ] **Spec/plan provenance alignment:** Spec text says `source_hostname` belongs in fleet metadata; plan stores it in `SubscriptionSection.source_hostname` (per Task 1 contract decision — keeps provenance with the data it describes). Spec needs a text update to match the plan. Non-blocking.
+- [ ] **Spec/plan provenance alignment:** Spec text says `source_hostname` belongs in fleet metadata; plan stores it in `SubscriptionSection.source_hostname` (per Task 1 contract decision — keeps provenance with the data it describes). Spec needs a text update to match the plan.
 - [ ] **`--prefer-host-subscription` override flag:** On RHEL hosts, ambient pass-through wins over tarball-carried certs when the ambient bundle is valid. A user override to force tarball certs is not included in v1. File as enhancement if requested.
-- [ ] **Hardlink extraction:** `TarballExtractor` rejects escaping hardlinks but does not extract within-root hardlinks. inspectah tarballs don't use hardlinks today. Add extraction support if a future tarball format uses them.
+- [ ] **Hardlink extraction support:** `TarballExtractor` rejects all hardlinks. inspectah tarballs don't use them today. Add within-root extraction support if a future tarball format needs them.
+
+## Preserve-Subscription Code Review Follow-ups
+
+Items flagged during code review. Reviewers approved at POC bar — these raise it to production bar.
+
+- [ ] **Planner-level ambient fallback test:** Current ambient proof tests cover the `detect_ambient_subscription_in()` helper and `should_use_subscription_mounts()`. Add a deterministic test at the `plan_and_execute()` level in `inspectah-pipeline/src/build/mod.rs` proving that incomplete ambient + complete tarball produces a build command with `-v` subscription mounts, and that complete ambient produces a build command without them.
+- [ ] **AbsolutePath branch direct proof:** `inspectah-pipeline/src/build/extract.rs::test_reject_absolute_path()` proves the safety property indirectly (via path traversal guard after prefix stripping). Either exercise the literal `ArchiveViolation::AbsolutePath` branch directly with a tar entry that survives prefix stripping with a leading `/`, or rename the test so its coverage claim matches what it actually proves.
+- [ ] **Symlink collector: `canonicalize()` vs lexical normalization:** The real executor uses `std::fs::canonicalize()` for `resolve_final_target()`, but the mock uses lexical chain-following. If intermediate directory symlinks matter in production subscription paths (unlikely but possible with custom subscription-manager configurations), the mock could miss divergence. Consider a filesystem-backed integration test using real symlink chains on a temp directory.
 
 ---
 
