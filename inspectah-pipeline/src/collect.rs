@@ -403,7 +403,7 @@ fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut R
 
 /// Classify whether an inspector belongs to Wave 2 (depends on RPM state).
 fn is_wave2(id: InspectorId) -> bool {
-    !matches!(id, InspectorId::Rpm)
+    !matches!(id, InspectorId::Rpm | InspectorId::Subscription)
 }
 
 /// Map a SourceSystem variant to the corresponding SystemType for the snapshot.
@@ -1000,8 +1000,9 @@ mod tests {
 
     #[test]
     fn test_is_wave2_classifier() {
-        // Only RPM is wave 1
+        // Wave 1: RPM and Subscription (standalone, no dependencies)
         assert!(!is_wave2(InspectorId::Rpm));
+        assert!(!is_wave2(InspectorId::Subscription));
 
         // All others are wave 2
         assert!(is_wave2(InspectorId::Services));
