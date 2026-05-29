@@ -1,6 +1,6 @@
 use inspectah_core::traits::executor::{ExecResult, Executor};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use wait_timeout::ChildExt;
@@ -401,6 +401,10 @@ impl Executor for RealExecutor {
 
     fn host_root(&self) -> &Path {
         Path::new("/")
+    }
+
+    fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
+        std::fs::canonicalize(path)
     }
 }
 

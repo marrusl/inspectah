@@ -1,7 +1,7 @@
 use inspectah_core::traits::executor::{ExecResult, Executor};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 pub struct MockExecutor {
@@ -208,6 +208,52 @@ impl Executor for MockExecutor {
     fn host_root(&self) -> &Path {
         Path::new("/")
     }
+
+    fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
+        let mut current = normalize_mock_path(path);
+        let mut visited = HashSet::new();
+
+        loop {
+            let key = current.to_str().unwrap_or("").to_string();
+            if !visited.insert(key.clone()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("symlink loop detected at {}", current.display()),
+                ));
+            }
+
+            let target_str = match self.links.get(&key) {
+                Some(t) => t.clone(),
+                None => return Ok(current),
+            };
+
+            let target_path = Path::new(&target_str);
+            current = if target_path.is_absolute() {
+                normalize_mock_path(target_path)
+            } else {
+                let parent = current.parent().unwrap_or(Path::new("/"));
+                normalize_mock_path(&parent.join(target_path))
+            };
+        }
+    }
+}
+
+/// Lexical path normalization for mock symlink resolution.
+/// Resolves `.` and `..` components without filesystem access.
+fn normalize_mock_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                if !components.is_empty() {
+                    components.pop();
+                }
+            }
+            Component::CurDir => {}
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
 }
 
 #[cfg(test)]
@@ -281,6 +327,49 @@ mod tests {
     fn test_mock_host_root() {
         let mock = MockExecutor::new();
         assert_eq!(mock.host_root(), Path::new("/"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_no_link() {
+        let mock = MockExecutor::new();
+        let result = mock.resolve_final_target(Path::new("/etc/rhsm/rhsm.conf")).unwrap();
+        assert_eq!(result, PathBuf::from("/etc/rhsm/rhsm.conf"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_single_hop() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/link.pem", "/etc/pki/entitlement/real.pem");
+        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/link.pem")).unwrap();
+        assert_eq!(result, PathBuf::from("/etc/pki/entitlement/real.pem"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_multi_hop() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/a.pem", "/etc/pki/entitlement/b.pem")
+            .with_link("/etc/pki/entitlement/b.pem", "/etc/shadow");
+        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/a.pem")).unwrap();
+        assert_eq!(result, PathBuf::from("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_relative() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/link.pem", "../../shadow");
+        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/link.pem")).unwrap();
+        assert_eq!(result, PathBuf::from("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_loop() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/pki/entitlement/a.pem", "/etc/pki/entitlement/b.pem")
+            .with_link("/etc/pki/entitlement/b.pem", "/etc/pki/entitlement/a.pem");
+        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/a.pem"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("loop"));
     }
 
     #[test]
