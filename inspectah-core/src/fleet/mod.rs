@@ -127,6 +127,50 @@ pub fn merge_snapshots(
     merged.sensitive_snapshot = sorted_snapshots.iter().any(|s| s.sensitive_snapshot);
     merged.preserved_credentials = sorted_snapshots.iter().any(|s| s.preserved_credentials);
     merged.preserved_ssh_keys = sorted_snapshots.iter().any(|s| s.preserved_ssh_keys);
+
+    // Subscription merge: OR the boolean, pick winner by latest typed expiry
+    merged.preserved_subscription = sorted_snapshots.iter().any(|s| s.preserved_subscription);
+
+    let subscription_candidates: Vec<_> = sorted_snapshots
+        .iter()
+        .filter(|s| s.subscription.is_some() && !s.subscription.as_ref().unwrap().incomplete)
+        .collect();
+
+    if !subscription_candidates.is_empty() {
+        // Helper: extract hostname for tiebreak (prefer section field, fall back to meta)
+        let hostname_of = |snap: &InspectionSnapshot| -> String {
+            snap.subscription
+                .as_ref()
+                .and_then(|s| s.source_hostname.as_deref())
+                .or_else(|| snap.meta.get("hostname").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .to_string()
+        };
+
+        let winner = subscription_candidates
+            .iter()
+            .max_by(|a, b| {
+                let ea = a.subscription.as_ref().and_then(|s| s.earliest_expiry);
+                let eb = b.subscription.as_ref().and_then(|s| s.earliest_expiry);
+                match (ea, eb) {
+                    (Some(a_exp), Some(b_exp)) => {
+                        // Typed comparison + hostname tiebreak: lexicographically
+                        // first (smallest) hostname wins for deterministic ordering.
+                        // Reversed comparison makes smallest appear "greater" to max_by.
+                        a_exp
+                            .cmp(&b_exp)
+                            .then_with(|| hostname_of(b).cmp(&hostname_of(a)))
+                    }
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    // hostname tiebreak: lexicographically first (smallest) hostname wins
+                    (None, None) => hostname_of(b).cmp(&hostname_of(a)),
+                }
+            })
+            .unwrap();
+        merged.subscription = winner.subscription.clone();
+    }
+
     // os_release from first host (already sorted by hostname)
     merged.os_release = sorted_snapshots.first().and_then(|s| s.os_release.clone());
 
@@ -838,5 +882,118 @@ mod tests {
                 .iter()
                 .any(|h| h.path == "/etc/ssh/ssh_host_rsa_key")
         );
+    }
+
+    #[test]
+    fn test_fleet_merge_subscription_picks_latest_expiry() {
+        use crate::types::subscription::{SubscriptionFile, SubscriptionSection};
+
+        let early = time::OffsetDateTime::from_unix_timestamp(1_719_792_000).unwrap(); // 2024-07-01
+        let late = time::OffsetDateTime::from_unix_timestamp(1_725_148_800).unwrap(); // 2024-09-01
+
+        let mut snap1 = valid_snap("host-a");
+        snap1.preserved_subscription = true;
+        snap1.sensitive_snapshot = true;
+        snap1.subscription = Some(SubscriptionSection {
+            entitlement_certs: vec![SubscriptionFile {
+                path: "/etc/pki/entitlement/111.pem".into(),
+                content: "cert-a".into(),
+                size_bytes: 6,
+                cert_expiry: Some(early),
+            }],
+            earliest_expiry: Some(early),
+            source_hostname: Some("host-a".into()),
+            ..Default::default()
+        });
+
+        let mut snap2 = valid_snap("host-b");
+        snap2.preserved_subscription = true;
+        snap2.sensitive_snapshot = true;
+        snap2.subscription = Some(SubscriptionSection {
+            entitlement_certs: vec![SubscriptionFile {
+                path: "/etc/pki/entitlement/222.pem".into(),
+                content: "cert-b".into(),
+                size_bytes: 6,
+                cert_expiry: Some(late),
+            }],
+            earliest_expiry: Some(late),
+            source_hostname: Some("host-b".into()),
+            ..Default::default()
+        });
+
+        let (merged, _warnings) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        assert!(merged.preserved_subscription);
+        assert!(merged.sensitive_snapshot);
+        let sub = merged.subscription.unwrap();
+        // Should pick host-b (later expiry) — typed comparison, not string
+        assert_eq!(sub.earliest_expiry, Some(late));
+        assert_eq!(sub.source_hostname.as_deref(), Some("host-b"));
+    }
+
+    #[test]
+    fn test_fleet_merge_subscription_hostname_tiebreak() {
+        use crate::types::subscription::{SubscriptionFile, SubscriptionSection};
+
+        let same_time = time::OffsetDateTime::from_unix_timestamp(1_719_792_000).unwrap();
+
+        let mut snap1 = valid_snap("host-beta");
+        snap1.preserved_subscription = true;
+        snap1.sensitive_snapshot = true;
+        snap1.subscription = Some(SubscriptionSection {
+            earliest_expiry: Some(same_time),
+            source_hostname: Some("host-beta".into()),
+            entitlement_certs: vec![SubscriptionFile {
+                path: "111.pem".into(),
+                content: "c".into(),
+                size_bytes: 1,
+                cert_expiry: Some(same_time),
+            }],
+            ..Default::default()
+        });
+
+        let mut snap2 = valid_snap("host-alpha");
+        snap2.preserved_subscription = true;
+        snap2.sensitive_snapshot = true;
+        snap2.subscription = Some(SubscriptionSection {
+            earliest_expiry: Some(same_time),
+            source_hostname: Some("host-alpha".into()),
+            entitlement_certs: vec![SubscriptionFile {
+                path: "222.pem".into(),
+                content: "c".into(),
+                size_bytes: 1,
+                cert_expiry: Some(same_time),
+            }],
+            ..Default::default()
+        });
+
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let sub = merged.subscription.unwrap();
+        // Alphabetical tiebreak — host-alpha wins
+        assert_eq!(sub.source_hostname.as_deref(), Some("host-alpha"));
+    }
+
+    #[test]
+    fn test_fleet_merge_subscription_mixed_presence() {
+        use crate::types::subscription::{SubscriptionFile, SubscriptionSection};
+
+        let snap1 = valid_snap("host-a");
+        // No subscription
+
+        let mut snap2 = valid_snap("host-b");
+        snap2.preserved_subscription = true;
+        snap2.sensitive_snapshot = true;
+        snap2.subscription = Some(SubscriptionSection {
+            entitlement_certs: vec![SubscriptionFile {
+                path: "cert".into(),
+                content: "c".into(),
+                size_bytes: 1,
+                cert_expiry: None,
+            }],
+            ..Default::default()
+        });
+
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        assert!(merged.preserved_subscription);
+        assert!(merged.subscription.is_some());
     }
 }
