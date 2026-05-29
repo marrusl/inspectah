@@ -6,7 +6,7 @@
 //! - Duplicate path entries
 //! - File-type replacement (e.g., file replacing symlink at same path)
 //! - Special file types (device nodes, FIFOs, sockets) -- REJECTED, not skipped
-//! - Hard links escaping extraction root
+//! - Hard links (all hardlinks are rejected; inspectah tarballs do not use them)
 //! - Symlinks escaping extraction root
 //!
 //! Post-extraction defense-in-depth: canonicalize() on destinations
@@ -22,7 +22,6 @@ enum EntryKind {
     Regular,
     Directory,
     Symlink,
-    Hardlink,
 }
 
 impl EntryKind {
@@ -31,7 +30,6 @@ impl EntryKind {
             Self::Regular => "regular",
             Self::Directory => "directory",
             Self::Symlink => "symlink",
-            Self::Hardlink => "hardlink",
         }
     }
 }
@@ -51,10 +49,7 @@ pub enum ArchiveViolation {
         path: String,
         kind: &'static str,
     },
-    HardlinkEscape {
-        path: String,
-        target: String,
-    },
+    Hardlink(String),
     SymlinkEscape {
         path: String,
         target: String,
@@ -73,8 +68,8 @@ impl std::fmt::Display for ArchiveViolation {
             Self::SpecialFileType { path, kind } => {
                 write!(f, "forbidden file type at {path}: {kind}")
             }
-            Self::HardlinkEscape { path, target } => {
-                write!(f, "hard link escape: {path} -> {target}")
+            Self::Hardlink(p) => {
+                write!(f, "hardlinks are not supported in inspectah tarballs: {p}")
             }
             Self::SymlinkEscape { path, target } => {
                 write!(f, "symlink escape: {path} -> {target}")
@@ -134,12 +129,16 @@ impl TarballExtractor {
 
             let entry_type = entry.header().entry_type();
 
+            // SAFETY: hardlinks are not supported
+            if entry_type == tar::EntryType::Link {
+                bail!("{}", ArchiveViolation::Hardlink(path_str));
+            }
+
             // SAFETY: special file types -- REJECT, don't skip
             let kind = match entry_type {
                 tar::EntryType::Regular | tar::EntryType::GNUSparse => EntryKind::Regular,
                 tar::EntryType::Directory => EntryKind::Directory,
                 tar::EntryType::Symlink => EntryKind::Symlink,
-                tar::EntryType::Link => EntryKind::Hardlink,
                 tar::EntryType::Char => {
                     bail!(
                         "{}",
@@ -198,24 +197,19 @@ impl TarballExtractor {
             }
             seen_paths.insert(stripped_str.clone(), kind);
 
-            // SAFETY: symlink/hardlink escape
-            if (entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link)
+            // SAFETY: symlink escape
+            if entry_type == tar::EntryType::Symlink
                 && let Some(link) = entry.link_name()?.map(|p| p.to_path_buf())
             {
                 let link_str = link.to_string_lossy();
                 if link_str.contains("..") || link_str.starts_with('/') {
-                    let violation = if entry_type == tar::EntryType::Symlink {
+                    bail!(
+                        "{}",
                         ArchiveViolation::SymlinkEscape {
                             path: stripped_str,
                             target: link_str.into_owned(),
                         }
-                    } else {
-                        ArchiveViolation::HardlinkEscape {
-                            path: stripped_str,
-                            target: link_str.into_owned(),
-                        }
-                    };
-                    bail!("{violation}");
+                    );
                 }
             }
 
@@ -260,7 +254,6 @@ impl TarballExtractor {
                         std::os::unix::fs::symlink(&link, &dest)?;
                     }
                 }
-                // Hardlinks validated above; extraction handled by tar crate.
                 _ => {}
             }
         }
@@ -296,11 +289,8 @@ mod tests {
         assert!(v.to_string().contains("type replacement"));
         assert!(v.to_string().contains("regular -> symlink"));
 
-        let v = ArchiveViolation::HardlinkEscape {
-            path: "link".into(),
-            target: "../outside".into(),
-        };
-        assert!(v.to_string().contains("hard link escape"));
+        let v = ArchiveViolation::Hardlink("link".into());
+        assert!(v.to_string().contains("hardlinks are not supported"));
 
         let v = ArchiveViolation::SymlinkEscape {
             path: "link".into(),
@@ -528,17 +518,17 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_hardlink_escape() {
+    fn test_extract_rejects_hardlink() {
         let tmp = tempfile::tempdir().unwrap();
         let tarball_path = tmp.path().join("hardlink.tar.gz");
 
         let mut builder = tar::Builder::new(Vec::new());
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Link);
-        header.set_path("prefix/evil-hardlink").unwrap();
+        header.set_path("prefix/some-hardlink").unwrap();
         header.set_size(0);
         header.set_mode(0o644);
-        header.set_link_name("../../../etc/shadow").unwrap();
+        header.set_link_name("target.txt").unwrap();
         header.set_cksum();
         builder.append(&header, std::io::empty()).unwrap();
         let tar_bytes = builder.into_inner().unwrap();
@@ -550,9 +540,10 @@ mod tests {
         let extractor = TarballExtractor::new(tmp.path().join("out"));
         let result = extractor.extract(&tarball_path);
         assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
         assert!(
-            result.unwrap_err().to_string().contains("hard link escape"),
-            "expected hard link escape error"
+            err.contains("hardlinks are not supported"),
+            "expected hardlink rejection error, got: {err}"
         );
     }
 
