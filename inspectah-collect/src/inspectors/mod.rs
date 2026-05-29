@@ -8,4 +8,5 @@ pub mod scheduled;
 pub mod selinux;
 pub mod services;
 pub mod storage;
+pub mod subscription;
 pub mod users;
