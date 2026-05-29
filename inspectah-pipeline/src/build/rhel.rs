@@ -29,8 +29,18 @@ pub enum AmbientSubscription {
 /// 2. rhsm.conf present
 /// 3. At least one CA cert
 /// 4. `/etc/yum.repos.d/redhat.repo` present (host-managed by subscription-manager)
+///
+/// Note: A successful ambient subscription assumes stock RHEL subscription-manager
+/// pass-through behavior for container builds.
 pub fn detect_ambient_subscription() -> AmbientSubscription {
-    let passthrough_marker = Path::new("/usr/share/rhel/secrets/etc-pki-entitlement");
+    detect_ambient_subscription_in(Path::new("/"))
+}
+
+/// Internal helper: detect ambient subscription relative to a root path.
+///
+/// This allows tests to use temporary directories with controlled contents.
+fn detect_ambient_subscription_in(root: &Path) -> AmbientSubscription {
+    let passthrough_marker = root.join("usr/share/rhel/secrets/etc-pki-entitlement");
     if !passthrough_marker.exists() {
         return AmbientSubscription::NotAvailable;
     }
@@ -38,25 +48,25 @@ pub fn detect_ambient_subscription() -> AmbientSubscription {
     let mut missing = Vec::new();
 
     // 1. Serial-matched entitlement cert+key pair.
-    let ent_dir = Path::new("/etc/pki/entitlement");
+    let ent_dir = root.join("etc/pki/entitlement");
     if !ent_dir.exists() {
         missing.push("/etc/pki/entitlement directory");
     } else {
-        let has_matched_pair = check_serial_matched_pair(ent_dir);
+        let has_matched_pair = check_serial_matched_pair(&ent_dir);
         if !has_matched_pair {
             missing.push("serial-matched entitlement cert+key pair");
         }
     }
 
     // 2. rhsm.conf.
-    if !Path::new("/etc/rhsm/rhsm.conf").exists() {
+    if !root.join("etc/rhsm/rhsm.conf").exists() {
         missing.push("rhsm.conf");
     }
 
     // 3. CA certs.
-    let ca_dir = Path::new("/etc/rhsm/ca");
+    let ca_dir = root.join("etc/rhsm/ca");
     let has_ca = ca_dir.exists()
-        && std::fs::read_dir(ca_dir)
+        && std::fs::read_dir(&ca_dir)
             .ok()
             .map(|entries| {
                 entries
@@ -69,7 +79,7 @@ pub fn detect_ambient_subscription() -> AmbientSubscription {
     }
 
     // 4. redhat.repo -- host-managed by subscription-manager.
-    if !Path::new("/etc/yum.repos.d/redhat.repo").exists() {
+    if !root.join("etc/yum.repos.d/redhat.repo").exists() {
         missing.push("redhat.repo at /etc/yum.repos.d/redhat.repo");
     }
 
@@ -179,5 +189,107 @@ mod tests {
         assert_eq!(format!("{available:?}"), "Available");
         assert!(format!("{incomplete:?}").contains("rhsm.conf"));
         assert_eq!(format!("{not_available:?}"), "NotAvailable");
+    }
+
+    /// Helper: create a complete ambient subscription bundle in a temp directory.
+    fn setup_complete_ambient(root: &std::path::Path) {
+        // Create passthrough marker.
+        let marker = root.join("usr/share/rhel/secrets/etc-pki-entitlement");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, "").unwrap();
+
+        // Create entitlement pair.
+        let ent_dir = root.join("etc/pki/entitlement");
+        std::fs::create_dir_all(&ent_dir).unwrap();
+        std::fs::write(ent_dir.join("12345.pem"), "cert").unwrap();
+        std::fs::write(ent_dir.join("12345-key.pem"), "key").unwrap();
+
+        // Create rhsm.conf.
+        let rhsm_dir = root.join("etc/rhsm");
+        std::fs::create_dir_all(&rhsm_dir).unwrap();
+        std::fs::write(rhsm_dir.join("rhsm.conf"), "config").unwrap();
+
+        // Create CA cert.
+        let ca_dir = root.join("etc/rhsm/ca");
+        std::fs::create_dir_all(&ca_dir).unwrap();
+        std::fs::write(ca_dir.join("redhat-uep.pem"), "ca").unwrap();
+
+        // Create redhat.repo.
+        let repos_dir = root.join("etc/yum.repos.d");
+        std::fs::create_dir_all(&repos_dir).unwrap();
+        std::fs::write(repos_dir.join("redhat.repo"), "repo").unwrap();
+    }
+
+    #[test]
+    fn test_detect_ambient_complete_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_complete_ambient(tmp.path());
+        let result = detect_ambient_subscription_in(tmp.path());
+        assert_eq!(result, AmbientSubscription::Available);
+    }
+
+    #[test]
+    fn test_detect_ambient_missing_entitlement_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_complete_ambient(tmp.path());
+        // Remove entitlement files.
+        std::fs::remove_file(tmp.path().join("etc/pki/entitlement/12345.pem")).unwrap();
+        std::fs::remove_file(tmp.path().join("etc/pki/entitlement/12345-key.pem")).unwrap();
+
+        let result = detect_ambient_subscription_in(tmp.path());
+        match result {
+            AmbientSubscription::IncompleteBundle { reason } => {
+                assert!(reason.contains("serial-matched entitlement cert+key pair"));
+            }
+            _ => panic!("expected IncompleteBundle, got: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_detect_ambient_missing_rhsm_conf() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_complete_ambient(tmp.path());
+        // Remove rhsm.conf.
+        std::fs::remove_file(tmp.path().join("etc/rhsm/rhsm.conf")).unwrap();
+
+        let result = detect_ambient_subscription_in(tmp.path());
+        match result {
+            AmbientSubscription::IncompleteBundle { reason } => {
+                assert!(reason.contains("rhsm.conf"));
+            }
+            _ => panic!("expected IncompleteBundle, got: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_detect_ambient_missing_ca_cert() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_complete_ambient(tmp.path());
+        // Remove CA cert.
+        std::fs::remove_file(tmp.path().join("etc/rhsm/ca/redhat-uep.pem")).unwrap();
+
+        let result = detect_ambient_subscription_in(tmp.path());
+        match result {
+            AmbientSubscription::IncompleteBundle { reason } => {
+                assert!(reason.contains("CA certs"));
+            }
+            _ => panic!("expected IncompleteBundle, got: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_detect_ambient_missing_redhat_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_complete_ambient(tmp.path());
+        // Remove redhat.repo.
+        std::fs::remove_file(tmp.path().join("etc/yum.repos.d/redhat.repo")).unwrap();
+
+        let result = detect_ambient_subscription_in(tmp.path());
+        match result {
+            AmbientSubscription::IncompleteBundle { reason } => {
+                assert!(reason.contains("redhat.repo"));
+            }
+            _ => panic!("expected IncompleteBundle, got: {result:?}"),
+        }
     }
 }
