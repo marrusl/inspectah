@@ -13,7 +13,8 @@ const mockFleetView: FleetViewResponse = {
   generation: 1,
   can_undo: false,
   can_redo: false,
-  containerfile_preview: "FROM registry.access.redhat.com/ubi9/ubi:latest\nRUN dnf install -y httpd",
+  containerfile_preview:
+    "FROM registry.access.redhat.com/ubi9/ubi:latest\nRUN dnf install -y httpd",
   session_is_sensitive: false,
   summary: {
     host_count: 5,
@@ -36,7 +37,10 @@ const mockFleetView: FleetViewResponse = {
         consensus: {
           items: [
             {
-              item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
+              item_id: {
+                kind: "Package",
+                key: { name: "httpd", arch: "x86_64" },
+              },
               include: true,
               triage: {
                 bucket: "investigate" as const,
@@ -131,7 +135,9 @@ describe("fleet-client", () => {
 
       const result = await fetchFleetView();
 
-      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/view", { method: "GET" });
+      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/view", {
+        method: "GET",
+      });
       expect(result).toEqual(mockFleetView);
     });
 
@@ -174,7 +180,10 @@ describe("fleet-client", () => {
       });
 
       const configItemRequest: FleetDiffRequest = {
-        item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
+        item_id: {
+          kind: "Config",
+          key: { path: "/etc/httpd/conf/httpd.conf" },
+        },
         base: "xyz789",
         target: "uvw012",
       };

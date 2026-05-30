@@ -78,7 +78,12 @@ export function ContainerSection({
   );
 
   const handleToggleFlatpak = useCallback(
-    (appId: string, remote: string, branch: string, currentInclude: boolean) => {
+    (
+      appId: string,
+      remote: string,
+      branch: string,
+      currentInclude: boolean,
+    ) => {
       const id = `flatpak:${appId}`;
       setPendingIds((prev) => new Set(prev).add(id));
       const op: RefinementOp = {
@@ -160,10 +165,7 @@ export function ContainerSection({
             }}
           >
             <div className="inspectah-decision-row__main">
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__toggle"
-              >
+              <div role="gridcell" className="inspectah-decision-row__toggle">
                 <input
                   type="checkbox"
                   role="checkbox"
@@ -175,10 +177,7 @@ export function ContainerSection({
                   style={{ minWidth: 20, minHeight: 20 }}
                 />
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__name"
-              >
+              <div role="gridcell" className="inspectah-decision-row__name">
                 <span>{q.name}</span>
                 <span
                   style={{
@@ -190,11 +189,10 @@ export function ContainerSection({
                   {q.image}
                 </span>
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__badge"
-              >
-                <Label color="grey" isCompact>Quadlet</Label>
+              <div role="gridcell" className="inspectah-decision-row__badge">
+                <Label color="grey" isCompact>
+                  Quadlet
+                </Label>
                 <span
                   style={{
                     fontSize: "var(--pf-t--global--font--size--xs)",
@@ -206,10 +204,7 @@ export function ContainerSection({
                 </span>
               </div>
               {badge && (
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__badge"
-                >
+                <div role="gridcell" className="inspectah-decision-row__badge">
                   <Label color={attentionLabelColor(level)}>{badge}</Label>
                 </div>
               )}
@@ -245,10 +240,7 @@ export function ContainerSection({
             }}
           >
             <div className="inspectah-decision-row__main">
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__toggle"
-              >
+              <div role="gridcell" className="inspectah-decision-row__toggle">
                 <input
                   type="checkbox"
                   role="checkbox"
@@ -262,10 +254,7 @@ export function ContainerSection({
                   style={{ minWidth: 20, minHeight: 20 }}
                 />
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__name"
-              >
+              <div role="gridcell" className="inspectah-decision-row__name">
                 <span>{f.app_id}</span>
                 <span
                   style={{
@@ -277,11 +266,10 @@ export function ContainerSection({
                   {f.remote}/{f.branch}
                 </span>
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__badge"
-              >
-                <Label color="grey" isCompact>Flatpak</Label>
+              <div role="gridcell" className="inspectah-decision-row__badge">
+                <Label color="grey" isCompact>
+                  Flatpak
+                </Label>
                 <span
                   style={{
                     fontSize: "var(--pf-t--global--font--size--xs)",
@@ -293,10 +281,7 @@ export function ContainerSection({
                 </span>
               </div>
               {badge && (
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__badge"
-                >
+                <div role="gridcell" className="inspectah-decision-row__badge">
                   <Label color={attentionLabelColor(level)}>{badge}</Label>
                 </div>
               )}

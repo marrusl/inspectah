@@ -76,10 +76,7 @@ export function TunedSection({
 
   if (tuned.length === 0) {
     return (
-      <div
-        className="inspectah-service-section"
-        data-testid="tuned-section"
-      >
+      <div className="inspectah-service-section" data-testid="tuned-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
           No tuned profile selections detected.
         </p>
@@ -121,27 +118,19 @@ export function TunedSection({
             }}
           >
             <div className="inspectah-decision-row__main">
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__toggle"
-              >
+              <div role="gridcell" className="inspectah-decision-row__toggle">
                 <input
                   type="checkbox"
                   role="checkbox"
                   id={`switch-tuned-${t.active_profile}`}
                   checked={t.include}
-                  onChange={() =>
-                    handleToggle(t.active_profile, t.include)
-                  }
+                  onChange={() => handleToggle(t.active_profile, t.include)}
                   disabled={isPending}
                   aria-label={`Toggle ${t.active_profile}`}
                   style={{ minWidth: 20, minHeight: 20 }}
                 />
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__name"
-              >
+              <div role="gridcell" className="inspectah-decision-row__name">
                 <span>{t.active_profile}</span>
                 {t.custom_profiles.length > 0 && (
                   <span
@@ -156,10 +145,7 @@ export function TunedSection({
                 )}
               </div>
               {badge && (
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__badge"
-                >
+                <div role="gridcell" className="inspectah-decision-row__badge">
                   <Label color={attentionLabelColor(level)}>{badge}</Label>
                 </div>
               )}

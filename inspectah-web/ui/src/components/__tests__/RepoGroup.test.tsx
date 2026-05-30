@@ -49,7 +49,9 @@ describe("RepoGroup", () => {
     );
     expect(screen.queryByTestId("child")).not.toBeInTheDocument();
 
-    const chevron = screen.getByTestId("repo-group-epel").querySelector(".inspectah-repo-group-header__chevron")!;
+    const chevron = screen
+      .getByTestId("repo-group-epel")
+      .querySelector(".inspectah-repo-group-header__chevron")!;
     await userEvent.click(chevron as HTMLElement);
     expect(screen.getByTestId("child")).toBeVisible();
   });
@@ -97,7 +99,11 @@ describe("RepoGroup", () => {
   it("calls onRepoToggle when switch is clicked", async () => {
     const onRepoToggle = vi.fn();
     render(
-      <RepoGroup repo={baseRepo} defaultExpanded={true} onRepoToggle={onRepoToggle}>
+      <RepoGroup
+        repo={baseRepo}
+        defaultExpanded={true}
+        onRepoToggle={onRepoToggle}
+      >
         <div>content</div>
       </RepoGroup>,
     );
@@ -107,7 +113,11 @@ describe("RepoGroup", () => {
   });
 
   it("does not show toggle for distro repos", () => {
-    const distroRepo: RepoGroupInfo = { ...baseRepo, section_id: "baseos", is_distro: true };
+    const distroRepo: RepoGroupInfo = {
+      ...baseRepo,
+      section_id: "baseos",
+      is_distro: true,
+    };
     render(
       <RepoGroup repo={distroRepo} defaultExpanded={true}>
         <div>content</div>
@@ -138,7 +148,11 @@ describe("RepoGroup", () => {
 
   it("shows summaryText in collapsed header when provided", () => {
     render(
-      <RepoGroup repo={baseRepo} defaultExpanded={false} summaryText="No action needed">
+      <RepoGroup
+        repo={baseRepo}
+        defaultExpanded={false}
+        summaryText="No action needed"
+      >
         <div>content</div>
       </RepoGroup>,
     );

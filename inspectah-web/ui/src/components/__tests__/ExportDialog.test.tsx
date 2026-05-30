@@ -93,9 +93,7 @@ describe("ExportDialog", () => {
     );
 
     expect(screen.getByText("Context sections")).toBeInTheDocument();
-    expect(
-      screen.getByText(/cannot be toggled/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/cannot be toggled/)).toBeInTheDocument();
   });
 
   it("renders Export and Cancel buttons", () => {
@@ -110,12 +108,8 @@ describe("ExportDialog", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("button", { name: "Export" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Cancel" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
   it("calls onClose when Cancel is clicked", async () => {
@@ -302,9 +296,7 @@ describe("ExportDialog", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Export failed")).toBeInTheDocument();
-      expect(
-        screen.getByText("internal server error"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("internal server error")).toBeInTheDocument();
     });
   });
 

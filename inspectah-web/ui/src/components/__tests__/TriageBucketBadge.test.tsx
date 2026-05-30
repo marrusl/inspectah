@@ -6,7 +6,10 @@ import type { RefinedPackage, RefinedConfig, TriageTag } from "../../api/types";
 
 // --- Test data factories ---
 
-function makeTriageTag(bucket: string, reason: TriageTag["primary_reason"] = "package_user_added"): TriageTag {
+function makeTriageTag(
+  bucket: string,
+  reason: TriageTag["primary_reason"] = "package_user_added",
+): TriageTag {
   return {
     triage: { mode: "single_host" as const, [bucket]: null },
     primary_reason: reason,
@@ -14,10 +17,7 @@ function makeTriageTag(bucket: string, reason: TriageTag["primary_reason"] = "pa
   };
 }
 
-function makePkgItem(
-  name: string,
-  triage: TriageTag,
-): DecisionItemKind {
+function makePkgItem(name: string, triage: TriageTag): DecisionItemKind {
   const pkg: RefinedPackage = {
     entry: {
       name,
@@ -35,10 +35,7 @@ function makePkgItem(
   return { type: "package", data: pkg };
 }
 
-function makeConfigItem(
-  path: string,
-  triage: TriageTag,
-): DecisionItemKind {
+function makeConfigItem(path: string, triage: TriageTag): DecisionItemKind {
   const config: RefinedConfig = {
     entry: {
       path,
@@ -79,7 +76,10 @@ describe("Triage bucket badge on package rows", () => {
   });
 
   it("shows Site badge for package with site triage", () => {
-    const item = makePkgItem("curl", makeTriageTag("site", "package_version_changed"));
+    const item = makePkgItem(
+      "curl",
+      makeTriageTag("site", "package_version_changed"),
+    );
     render(
       <DecisionItem
         item={item}
@@ -96,7 +96,10 @@ describe("Triage bucket badge on package rows", () => {
   });
 
   it("does not show bucket badge for package with baseline triage", () => {
-    const item = makePkgItem("bash", makeTriageTag("baseline", "package_baseline_match"));
+    const item = makePkgItem(
+      "bash",
+      makeTriageTag("baseline", "package_baseline_match"),
+    );
     render(
       <DecisionItem
         item={item}
@@ -111,7 +114,10 @@ describe("Triage bucket badge on package rows", () => {
   });
 
   it("does not show bucket badge for config items", () => {
-    const item = makeConfigItem("/etc/httpd/conf/httpd.conf", makeTriageTag("investigate", "config_modified"));
+    const item = makeConfigItem(
+      "/etc/httpd/conf/httpd.conf",
+      makeTriageTag("investigate", "config_modified"),
+    );
     render(
       <DecisionItem
         item={item}
@@ -140,7 +146,10 @@ describe("Triage bucket badge on package rows", () => {
   });
 
   it("shows Divergent badge for package with divergent triage", () => {
-    const item = makePkgItem("openssl", makeTriageTag("divergent", "package_version_changed"));
+    const item = makePkgItem(
+      "openssl",
+      makeTriageTag("divergent", "package_version_changed"),
+    );
     render(
       <DecisionItem
         item={item}
@@ -157,7 +166,10 @@ describe("Triage bucket badge on package rows", () => {
   });
 
   it("does not show bucket badge for universal triage", () => {
-    const item = makePkgItem("glibc", makeTriageTag("universal", "package_baseline_match"));
+    const item = makePkgItem(
+      "glibc",
+      makeTriageTag("universal", "package_baseline_match"),
+    );
     render(
       <DecisionItem
         item={item}

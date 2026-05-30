@@ -129,10 +129,7 @@ export function ServiceSection({
 
   if (services.length === 0) {
     return (
-      <div
-        className="inspectah-service-section"
-        data-testid="service-section"
-      >
+      <div className="inspectah-service-section" data-testid="service-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
           No service state changes detected.
         </p>
@@ -175,27 +172,19 @@ export function ServiceSection({
               }}
             >
               <div className="inspectah-decision-row__main">
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__toggle"
-                >
+                <div role="gridcell" className="inspectah-decision-row__toggle">
                   <input
                     type="checkbox"
                     role="checkbox"
                     id={`switch-service-${svc.unit}`}
                     checked={svc.include}
-                    onChange={() =>
-                      handleToggleService(svc.unit, svc.include)
-                    }
+                    onChange={() => handleToggleService(svc.unit, svc.include)}
                     disabled={isPending}
                     aria-label={`Toggle ${svc.unit}`}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__name"
-                >
+                <div role="gridcell" className="inspectah-decision-row__name">
                   <span>{svc.unit}</span>
                   {svc.owning_package && (
                     <span
@@ -242,7 +231,8 @@ export function ServiceSection({
                     borderLeft: diBorder,
                     paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
                     opacity: parentExcluded ? 0.55 : 1,
-                    transition: "opacity 200ms ease, background-color 150ms ease",
+                    transition:
+                      "opacity 200ms ease, background-color 150ms ease",
                   }}
                   onKeyDown={(e) => {
                     if (e.target !== e.currentTarget) return;
@@ -267,9 +257,7 @@ export function ServiceSection({
                         role="checkbox"
                         id={`switch-dropin-${di.path}`}
                         checked={di.include}
-                        onChange={() =>
-                          handleToggleDropin(di.path, di.include)
-                        }
+                        onChange={() => handleToggleDropin(di.path, di.include)}
                         disabled={disabled}
                         aria-label={`Toggle ${di.path}`}
                         aria-disabled={parentExcluded}
@@ -293,7 +281,10 @@ export function ServiceSection({
                         role="gridcell"
                         className="inspectah-decision-row__badge"
                       >
-                        <Label color="grey" data-testid={`dropin-excluded-badge-${di.path}`}>
+                        <Label
+                          color="grey"
+                          data-testid={`dropin-excluded-badge-${di.path}`}
+                        >
                           Service excluded
                         </Label>
                       </div>

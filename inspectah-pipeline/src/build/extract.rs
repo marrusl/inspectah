@@ -408,7 +408,10 @@ mod tests {
 
         let extractor = TarballExtractor::new(tmp.path().join("out"));
         let result = extractor.extract(&tarball_path);
-        assert!(result.is_err(), "path reaching absolute location must be rejected");
+        assert!(
+            result.is_err(),
+            "path reaching absolute location must be rejected"
+        );
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("path traversal"),

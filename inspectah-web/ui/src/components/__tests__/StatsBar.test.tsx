@@ -73,7 +73,9 @@ describe("StatsBar", () => {
       />,
     );
 
-    expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/all actionable items reviewed/i),
+    ).toBeInTheDocument();
   });
 
   it("renders dashes when stats are null", () => {
@@ -192,7 +194,9 @@ describe("StatsBar", () => {
         isPending={false}
       />,
     );
-    expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/all actionable items reviewed/i),
+    ).toBeInTheDocument();
   });
 
   it("renders fleet summary when fleetSummary is provided", () => {
@@ -203,7 +207,12 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 5, hostnames: ["host-a", "host-b", "host-c", "host-d", "host-e"], totalItems: 2480, needsReviewCount: 27 }}
+        fleetSummary={{
+          hostCount: 5,
+          hostnames: ["host-a", "host-b", "host-c", "host-d", "host-e"],
+          totalItems: 2480,
+          needsReviewCount: 27,
+        }}
       />,
     );
 
@@ -228,11 +237,18 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 3, hostnames: ["a", "b", "c"], totalItems: 100, needsReviewCount: 0 }}
+        fleetSummary={{
+          hostCount: 3,
+          hostnames: ["a", "b", "c"],
+          totalItems: 100,
+          needsReviewCount: 0,
+        }}
       />,
     );
 
-    expect(screen.getByTestId("fleet-stats-summary")).toHaveTextContent("All reviewed");
+    expect(screen.getByTestId("fleet-stats-summary")).toHaveTextContent(
+      "All reviewed",
+    );
   });
 
   it("opens hostname popover when host count is clicked", async () => {
@@ -243,7 +259,12 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 3, hostnames: ["zulu-host", "alpha-host", "mid-host"], totalItems: 100, needsReviewCount: 0 }}
+        fleetSummary={{
+          hostCount: 3,
+          hostnames: ["zulu-host", "alpha-host", "mid-host"],
+          totalItems: 100,
+          needsReviewCount: 0,
+        }}
       />,
     );
 
@@ -260,7 +281,9 @@ describe("StatsBar", () => {
     expect(entries[2]).toHaveTextContent("zulu-host");
 
     // Copy button should be present
-    expect(screen.getByTestId("fleet-hostname-copy")).toHaveTextContent("Copy all");
+    expect(screen.getByTestId("fleet-hostname-copy")).toHaveTextContent(
+      "Copy all",
+    );
   });
 
   it("copies hostnames to clipboard when copy button is clicked", async () => {
@@ -274,7 +297,12 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{ hostCount: 2, hostnames: ["beta", "alpha"], totalItems: 50, needsReviewCount: 0 }}
+        fleetSummary={{
+          hostCount: 2,
+          hostnames: ["beta", "alpha"],
+          totalItems: 50,
+          needsReviewCount: 0,
+        }}
       />,
     );
 

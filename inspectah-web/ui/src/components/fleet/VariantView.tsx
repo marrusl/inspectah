@@ -83,13 +83,21 @@ export function VariantView({
     : null;
 
   return (
-    <div ref={viewRef} className="variant-view" data-testid="variant-view" onKeyDown={handleKeyDown} tabIndex={-1}>
-      <div className="variant-view__options" role="radiogroup" aria-label="Variant options">
+    <div
+      ref={viewRef}
+      className="variant-view"
+      data-testid="variant-view"
+      onKeyDown={handleKeyDown}
+      tabIndex={-1}
+    >
+      <div
+        className="variant-view__options"
+        role="radiogroup"
+        aria-label="Variant options"
+      >
         {variants.options.map((option) => {
           const hostLabel =
-            option.host_count === 1
-              ? "1 host"
-              : `${option.host_count} hosts`;
+            option.host_count === 1 ? "1 host" : `${option.host_count} hosts`;
           const isSelected = option.hash === selectedHash;
 
           return (
@@ -105,15 +113,18 @@ export function VariantView({
                 <span className="variant-view__option-hash">
                   {option.hash.substring(0, 8)}
                 </span>
-                <span className="variant-view__option-hosts">
-                  {hostLabel}:
-                </span>
+                <span className="variant-view__option-hosts">{hostLabel}:</span>
                 <span className="variant-view__option-hostnames">
                   {option.hosts.join(", ")}
                 </span>
               </span>
               {isSelected && (
-                <span className="variant-view__selected-indicator" data-testid="variant-selected-indicator">Selected</span>
+                <span
+                  className="variant-view__selected-indicator"
+                  data-testid="variant-selected-indicator"
+                >
+                  Selected
+                </span>
               )}
               {!isSelected && variants.options.length >= 2 && (
                 <Button

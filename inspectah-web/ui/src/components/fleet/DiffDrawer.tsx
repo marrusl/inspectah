@@ -35,7 +35,9 @@ function HunkView({ hunk }: { hunk: DiffHunk }) {
           return (
             <div key={i} className={className}>
               <span className="diff-drawer__line-prefix">{prefix}</span>
-              <span className="diff-drawer__line-content">{change.content}</span>
+              <span className="diff-drawer__line-content">
+                {change.content}
+              </span>
             </div>
           );
         })}
@@ -54,14 +56,14 @@ export function DiffDrawer({
   baseLabel,
 }: DiffDrawerProps) {
   const title =
-    targetLabel && baseLabel
-      ? `Diff: ${targetLabel} vs ${baseLabel}`
-      : "Diff";
+    targetLabel && baseLabel ? `Diff: ${targetLabel} vs ${baseLabel}` : "Diff";
 
   return (
     <div className="diff-drawer" data-testid="diff-drawer">
       <div className="diff-drawer__header">
-        <span className="diff-drawer__title" data-testid="diff-drawer-title">{title}</span>
+        <span className="diff-drawer__title" data-testid="diff-drawer-title">
+          {title}
+        </span>
         <Button variant="plain" onClick={onClose} aria-label="Close">
           &times;
         </Button>
@@ -87,11 +89,13 @@ export function DiffDrawer({
           <>
             <div className="diff-drawer__stats">
               <span className="diff-drawer__stats-insertions">
-                +{diff.stats.insertions} insertion{diff.stats.insertions !== 1 ? "s" : ""}
+                +{diff.stats.insertions} insertion
+                {diff.stats.insertions !== 1 ? "s" : ""}
               </span>
               {", "}
               <span className="diff-drawer__stats-deletions">
-                -{diff.stats.deletions} deletion{diff.stats.deletions !== 1 ? "s" : ""}
+                -{diff.stats.deletions} deletion
+                {diff.stats.deletions !== 1 ? "s" : ""}
               </span>
             </div>
 

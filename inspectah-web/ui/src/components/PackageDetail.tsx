@@ -1,6 +1,18 @@
 import { useState } from "react";
-import { Content, DescriptionList, DescriptionListGroup, DescriptionListTerm, DescriptionListDescription, Label, Button } from "@patternfly/react-core";
-import type { RefinedPackage, AttentionTag, VersionChangeEntry } from "../api/types";
+import {
+  Content,
+  DescriptionList,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  DescriptionListDescription,
+  Label,
+  Button,
+} from "@patternfly/react-core";
+import type {
+  RefinedPackage,
+  AttentionTag,
+  VersionChangeEntry,
+} from "../api/types";
 import { attentionLabelColor, formatReasonText } from "./attentionUtils";
 import { DependencyModal } from "./DependencyModal";
 
@@ -24,8 +36,10 @@ function formatState(state: string): string {
 }
 
 function formatEvrPair(
-  baseEpoch: string, baseVersion: string,
-  hostEpoch: string, hostVersion: string,
+  baseEpoch: string,
+  baseVersion: string,
+  hostEpoch: string,
+  hostVersion: string,
 ): [string, string] {
   const norm = (e: string): string => (e === "" ? "0" : e);
   const baseNorm = norm(baseEpoch);
@@ -41,14 +55,21 @@ function formatEvrPair(
   return [fmt(baseEpoch, baseVersion), fmt(hostEpoch, hostVersion)];
 }
 
-export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetailProps) {
+export function PackageDetail({
+  pkg,
+  leafDepTree,
+  versionChange,
+}: PackageDetailProps) {
   const [depModalOpen, setDepModalOpen] = useState(false);
   const canonicalId = `${pkg.entry.name}.${pkg.entry.arch}`;
   const deps = leafDepTree?.[canonicalId];
   const hasDeps = deps && deps.length > 0;
 
   return (
-    <div data-testid="package-detail" style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}>
+    <div
+      data-testid="package-detail"
+      style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}
+    >
       <DescriptionList isHorizontal isCompact>
         <DescriptionListGroup>
           <DescriptionListTerm>NEVRA</DescriptionListTerm>
@@ -75,12 +96,18 @@ export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetail
             <DescriptionListTerm>Attention</DescriptionListTerm>
             <DescriptionListDescription>
               {(pkg.attention ?? []).map((tag: AttentionTag, i: number) => (
-                <span key={i} style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}>
+                <span
+                  key={i}
+                  style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}
+                >
                   <Label color={attentionLabelColor(tag.level)}>
                     {formatReasonText(tag.reason, tag.detail)}
                   </Label>
                   {tag.detail && (
-                    <Content component="small" style={{ marginLeft: "var(--pf-t--global--spacer--xs)" }}>
+                    <Content
+                      component="small"
+                      style={{ marginLeft: "var(--pf-t--global--spacer--xs)" }}
+                    >
                       {tag.detail}
                     </Content>
                   )}
@@ -97,25 +124,32 @@ export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetail
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {versionChange && (() => {
-          const [baseEvr, hostEvr] = formatEvrPair(
-            versionChange.base_epoch, versionChange.base_version,
-            versionChange.host_epoch, versionChange.host_version,
-          );
-          return (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Version Change</DescriptionListTerm>
-              <DescriptionListDescription>
-                <Content component="small">
-                  {hostEvr} → {baseEvr}{" "}
-                  <Label color={versionChange.direction === "downgrade" ? "red" : "blue"}>
-                    {versionChange.direction}
-                  </Label>
-                </Content>
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          );
-        })()}
+        {versionChange &&
+          (() => {
+            const [baseEvr, hostEvr] = formatEvrPair(
+              versionChange.base_epoch,
+              versionChange.base_version,
+              versionChange.host_epoch,
+              versionChange.host_version,
+            );
+            return (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Version Change</DescriptionListTerm>
+                <DescriptionListDescription>
+                  <Content component="small">
+                    {hostEvr} → {baseEvr}{" "}
+                    <Label
+                      color={
+                        versionChange.direction === "downgrade" ? "red" : "blue"
+                      }
+                    >
+                      {versionChange.direction}
+                    </Label>
+                  </Content>
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+            );
+          })()}
       </DescriptionList>
       {hasDeps && (
         <>

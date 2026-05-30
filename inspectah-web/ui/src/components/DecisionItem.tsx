@@ -62,14 +62,20 @@ function isIncluded(item: DecisionItemKind): boolean {
 
 function buildItemId(item: DecisionItemKind): ItemId {
   if (item.type === "package") {
-    return { kind: "Package", key: { name: item.data.entry.name, arch: item.data.entry.arch } };
+    return {
+      kind: "Package",
+      key: { name: item.data.entry.name, arch: item.data.entry.arch },
+    };
   }
   return { kind: "Config", key: { path: item.data.entry.path } };
 }
 
 function buildToggleOp(item: DecisionItemKind): RefinementOp {
   const itemId = buildItemId(item);
-  return { op: "SetInclude", target: { item_id: itemId, include: !item.data.entry.include } };
+  return {
+    op: "SetInclude",
+    target: { item_id: itemId, include: !item.data.entry.include },
+  };
 }
 
 const LEVEL_BORDER: Record<string, string> = {
@@ -107,16 +113,19 @@ export function DecisionItem({
   // Derive effective attention level: triageTag takes priority over legacy level prop
   const effectiveLevel: AttentionLevel = triageTag
     ? triageBucketToAttention(triageTag)
-    : level ?? "routine";
+    : (level ?? "routine");
 
   const isNeedsReview = effectiveLevel === "needs_review";
   const showUnviewedDot = isNeedsReview && !isViewed;
 
-  const matchingVc = item.type === "package" && versionChanges
-    ? versionChanges.find(
-        (vc) => vc.name === item.data.entry.name && vc.arch === item.data.entry.arch,
-      ) ?? null
-    : null;
+  const matchingVc =
+    item.type === "package" && versionChanges
+      ? (versionChanges.find(
+          (vc) =>
+            vc.name === item.data.entry.name &&
+            vc.arch === item.data.entry.arch,
+        ) ?? null)
+      : null;
 
   const handleToggle = useCallback(() => {
     if (!onToggleInclude) return;
@@ -158,9 +167,9 @@ export function DecisionItem({
 
   // Use triage bucket for border when available, otherwise legacy level
   const triageBucketKey = triageTag
-    ? (triageTag.triage.mode === "single_host"
-        ? (Object.keys(triageTag.triage).find((k) => k !== "mode") ?? "baseline")
-        : triageTag.triage.bucket)
+    ? triageTag.triage.mode === "single_host"
+      ? (Object.keys(triageTag.triage).find((k) => k !== "mode") ?? "baseline")
+      : triageTag.triage.bucket
     : null;
   const borderLeft = triageBucketKey
     ? (LEVEL_BORDER[triageBucketKey] ?? "none")
@@ -172,15 +181,20 @@ export function DecisionItem({
     const bucket = extractTriageBucket(triageTag);
     // Skip badge for baseline — it's the default, no signal value
     if (bucket === "baseline" || bucket === "universal") return null;
-    return { text: formatTriageBucket(bucket), color: triageBucketLabelColor(bucket) };
+    return {
+      text: formatTriageBucket(bucket),
+      color: triageBucketLabelColor(bucket),
+    };
   })();
 
   // Badge text from triage primary_reason or legacy attention
   const badgeText = (() => {
     if (triageTag) {
       const reason = triageTag.primary_reason;
-      if (typeof reason === "object" && "custom" in reason) return reason.custom;
-      if (reason === "package_provenance_unavailable") return "Baseline Unavailable";
+      if (typeof reason === "object" && "custom" in reason)
+        return reason.custom;
+      if (reason === "package_provenance_unavailable")
+        return "Baseline Unavailable";
       if (reason === "package_user_added" && item.type === "package") {
         return (item.data as RefinedPackage).entry.source_repo || "Unknown";
       }
@@ -189,11 +203,17 @@ export function DecisionItem({
     }
     // Legacy path
     if (effectiveLevel === "informational") {
-      if (topReason?.reason === "package_provenance_unavailable") return "Baseline Unavailable";
-      if (topReason?.reason === "package_user_added" && item.type === "package") {
+      if (topReason?.reason === "package_provenance_unavailable")
+        return "Baseline Unavailable";
+      if (
+        topReason?.reason === "package_user_added" &&
+        item.type === "package"
+      ) {
         return (item.data as RefinedPackage).entry.source_repo || "Unknown";
       }
-      return topReason ? formatReasonText(topReason.reason, topReason.detail) : null;
+      return topReason
+        ? formatReasonText(topReason.reason, topReason.detail)
+        : null;
     }
     if (effectiveLevel === "needs_review" && topReason) {
       return formatReasonText(topReason.reason, topReason.detail);
@@ -241,10 +261,16 @@ export function DecisionItem({
               aria-label="Not yet reviewed"
             />
           )}
-          <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
+          <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>
+            {name}
+          </span>
         </div>
         {bucketBadge && (
-          <div role="gridcell" className="inspectah-decision-row__badge" data-testid="triage-bucket-badge">
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid="triage-bucket-badge"
+          >
             <Label color={bucketBadge.color} isCompact>
               {bucketBadge.text}
             </Label>
@@ -252,9 +278,7 @@ export function DecisionItem({
         )}
         {badgeText && (
           <div role="gridcell" className="inspectah-decision-row__badge">
-            <Label color={attentionLabelColor(topAttention)}>
-              {badgeText}
-            </Label>
+            <Label color={attentionLabelColor(topAttention)}>{badgeText}</Label>
           </div>
         )}
         <div role="gridcell" className="inspectah-decision-row__expand">
@@ -272,7 +296,11 @@ export function DecisionItem({
       {isExpanded && (
         <div role="gridcell" className="inspectah-decision-row__detail">
           {item.type === "package" ? (
-            <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
+            <PackageDetail
+              pkg={item.data as RefinedPackage}
+              leafDepTree={leafDepTree}
+              versionChange={matchingVc}
+            />
           ) : (
             <ConfigDetail config={item.data as RefinedConfig} />
           )}

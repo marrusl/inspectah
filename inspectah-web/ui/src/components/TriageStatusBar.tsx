@@ -16,7 +16,11 @@ function bucketLabel(bucket: string): string {
   return labels[bucket] ?? bucket.charAt(0).toUpperCase() + bucket.slice(1);
 }
 
-export function TriageStatusBar({ bucketCounts }: { bucketCounts: Record<string, number> }) {
+export function TriageStatusBar({
+  bucketCounts,
+}: {
+  bucketCounts: Record<string, number>;
+}) {
   return (
     <div className="inspectah-triage-status-bar">
       {Object.entries(bucketCounts).map(([bucket, count]) => (

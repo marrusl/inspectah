@@ -72,10 +72,7 @@ describe("PackageList", () => {
   // --- Basic rendering ---
 
   it("renders package name and repo text for each package", () => {
-    const pkgs = [
-      makePkg("bash", "baseos"),
-      makePkg("nginx", "epel"),
-    ];
+    const pkgs = [makePkg("bash", "baseos"), makePkg("nginx", "epel")];
     render(
       <PackageList
         mode="single"
@@ -112,12 +109,8 @@ describe("PackageList", () => {
   // --- Fleet layout ---
 
   it("fleet: renders repo inline with name, prevalence in right column", () => {
-    const pkgs = [
-      makeFleetPkg("httpd", "appstream", 3, 5),
-    ];
-    const repos = [
-      { ...distroRepo, section_id: "appstream" },
-    ];
+    const pkgs = [makeFleetPkg("httpd", "appstream", 3, 5)];
+    const repos = [{ ...distroRepo, section_id: "appstream" }];
     render(
       <PackageList
         mode="fleet"
@@ -162,9 +155,9 @@ describe("PackageList", () => {
 
   it("sorts by repo tier-first when right column sort active (single-machine)", () => {
     const pkgs = [
-      makePkg("nginx", "epel"),       // third_party
-      makePkg("bash", "baseos"),      // distro
-      makePkg("devel", "crb"),        // official_optional
+      makePkg("nginx", "epel"), // third_party
+      makePkg("bash", "baseos"), // distro
+      makePkg("devel", "crb"), // official_optional
     ];
     render(
       <PackageList
@@ -267,7 +260,9 @@ describe("PackageList", () => {
     );
     const row = screen.getByTestId("package-row-bash");
     const repoText = within(row).getByTestId("repo-text");
-    expect(repoText).toHaveStyle({ color: "var(--pf-t--global--text--color--subtle)" });
+    expect(repoText).toHaveStyle({
+      color: "var(--pf-t--global--text--color--subtle)",
+    });
   });
 
   it("renders official-optional repo with green text and dotted underline", () => {
@@ -320,8 +315,12 @@ describe("PackageList", () => {
         onRepoToggle={vi.fn()}
       />,
     );
-    expect(screen.getByRole("columnheader", { name: /packages/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /repo/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: /packages/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: /repo/i }),
+    ).toBeInTheDocument();
   });
 
   it("fleet: SortHeader shows Packages / Prevalence", () => {
@@ -334,8 +333,12 @@ describe("PackageList", () => {
         onRepoToggle={vi.fn()}
       />,
     );
-    expect(screen.getByRole("columnheader", { name: /packages/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /prevalence/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: /packages/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: /prevalence/i }),
+    ).toBeInTheDocument();
   });
 
   // --- Dismissed-state wiring ---
@@ -431,10 +434,7 @@ describe("PackageList", () => {
   // --- Sort toggle direction ---
 
   it("clicking the active sort column toggles direction", () => {
-    const pkgs = [
-      makePkg("zsh", "baseos"),
-      makePkg("bash", "baseos"),
-    ];
+    const pkgs = [makePkg("zsh", "baseos"), makePkg("bash", "baseos")];
     render(
       <PackageList
         mode="single"
@@ -474,10 +474,7 @@ describe("PackageList", () => {
 
   it("excluded zone stays visible with 'No excluded packages' after repo re-enabled (latched)", () => {
     const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
-    const pkgs = [
-      makePkg("bash", "baseos"),
-      makePkg("nginx", "epel"),
-    ];
+    const pkgs = [makePkg("bash", "baseos"), makePkg("nginx", "epel")];
     // Render with repo disabled — excluded zone appears
     const { rerender } = render(
       <PackageList
@@ -527,10 +524,14 @@ describe("PackageList", () => {
     );
     // httpd has conflict — popover trigger should be present
     const httpdRow = screen.getByTestId("package-row-httpd");
-    expect(within(httpdRow).getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+    expect(
+      within(httpdRow).getByRole("button", { name: /repo conflict/i }),
+    ).toBeInTheDocument();
     // curl has no conflict — no popover trigger
     const curlRow = screen.getByTestId("package-row-curl");
-    expect(within(curlRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+    expect(
+      within(curlRow).queryByRole("button", { name: /repo conflict/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("fleet: dismissing a conflict hides popover trigger and reports count", () => {
@@ -560,7 +561,9 @@ describe("PackageList", () => {
     const dismissBtn = screen.getByText("Dismiss");
     fireEvent.click(dismissBtn);
     // Popover trigger should disappear (dismissed)
-    expect(screen.queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /repo conflict/i }),
+    ).not.toBeInTheDocument();
     // Dismissed count reported as 1
     expect(onDismissedCountChange).toHaveBeenCalledWith(1);
   });
@@ -589,7 +592,9 @@ describe("PackageList", () => {
     // Dismiss the conflict
     fireEvent.click(screen.getByRole("button", { name: /repo conflict/i }));
     fireEvent.click(screen.getByText("Dismiss"));
-    expect(screen.queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /repo conflict/i }),
+    ).not.toBeInTheDocument();
 
     // Restore dismissed via prop toggle
     rerender(
@@ -604,7 +609,9 @@ describe("PackageList", () => {
       />,
     );
     // Popover trigger reappears
-    expect(screen.getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /repo conflict/i }),
+    ).toBeInTheDocument();
     // Count reset to 0
     expect(onDismissedCountChange).toHaveBeenCalledWith(0);
   });

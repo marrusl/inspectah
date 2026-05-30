@@ -40,7 +40,11 @@ export function UsersGroupsSection({
   );
 
   const handlePasswordChange = useCallback(
-    async (username: string, choice: "none" | "preserve" | "new", hash?: string) => {
+    async (
+      username: string,
+      choice: "none" | "preserve" | "new",
+      hash?: string,
+    ) => {
       setIsPending(true);
       try {
         const view = await setUserPassword(username, choice, hash);
@@ -72,10 +76,7 @@ export function UsersGroupsSection({
         <Content>
           <h2>Users &amp; Groups</h2>
         </Content>
-        <EmptyState
-          titleText="No non-system users detected"
-          headingLevel="h3"
-        >
+        <EmptyState titleText="No non-system users detected" headingLevel="h3">
           <EmptyStateBody>
             This system has no non-system users (UID 1000&ndash;59999) that
             require migration decisions.

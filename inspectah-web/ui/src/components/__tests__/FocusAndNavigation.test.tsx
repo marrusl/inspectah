@@ -22,7 +22,11 @@ const MOCK_VIEW = {
         fleet: null,
       },
       attention: [
-        { level: "needs_review", reason: "package_user_added", detail: "Not found in base image" },
+        {
+          level: "needs_review",
+          reason: "package_user_added",
+          detail: "Not found in base image",
+        },
       ],
     },
     {
@@ -38,7 +42,11 @@ const MOCK_VIEW = {
         fleet: null,
       },
       attention: [
-        { level: "informational", reason: "package_version_changed", detail: null },
+        {
+          level: "informational",
+          reason: "package_version_changed",
+          detail: null,
+        },
       ],
     },
   ],
@@ -72,7 +80,13 @@ const MOCK_SECTIONS = [
   {
     id: "containers",
     display_name: "Containers",
-    items: [{ id: "ctr-1", title: "nginx-proxy", searchable_text: "nginx proxy container" }],
+    items: [
+      {
+        id: "ctr-1",
+        title: "nginx-proxy",
+        searchable_text: "nginx proxy container",
+      },
+    ],
   },
   {
     id: "network",
@@ -177,7 +191,10 @@ describe("Overlay close returns focus to hamburger", () => {
         onchange: null,
         addListener: () => {},
         removeListener: () => {},
-        addEventListener: (_: string, cb: (e: MediaQueryListEvent | MediaQueryList) => void) => {
+        addEventListener: (
+          _: string,
+          cb: (e: MediaQueryListEvent | MediaQueryList) => void,
+        ) => {
           // Simulate immediate call for the 1023px query
           if (query === "(max-width: 1023px)") {
             cb({ matches: true, media: query } as MediaQueryList);
@@ -274,7 +291,9 @@ describe("Focus fallback for context/empty sections", () => {
     });
 
     // The context item should have a data-testid and be focusable
-    const contextItem = document.querySelector('[data-testid^="context-item-"]');
+    const contextItem = document.querySelector(
+      '[data-testid^="context-item-"]',
+    );
     expect(contextItem).toBeTruthy();
     expect(contextItem).toHaveAttribute("tabindex", "-1");
   });
@@ -356,7 +375,9 @@ describe("Retry button refetches all endpoints", () => {
 
     // After retry, sections succeeds and the app loads
     await waitFor(() => {
-      expect(screen.queryByTestId("initial-load-error")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("initial-load-error"),
+      ).not.toBeInTheDocument();
     });
   });
 });
@@ -442,34 +463,69 @@ describe("RepoBar renders in packages section", () => {
       packages: [
         {
           entry: {
-            name: "httpd", epoch: "0", version: "2.4.57", release: "1.el9",
-            arch: "x86_64", state: "added", include: true, source_repo: "epel", fleet: null,
+            name: "httpd",
+            epoch: "0",
+            version: "2.4.57",
+            release: "1.el9",
+            arch: "x86_64",
+            state: "added",
+            include: true,
+            source_repo: "epel",
+            fleet: null,
           },
-          attention: [{ level: "informational", reason: "package_version_changed", detail: null }],
+          attention: [
+            {
+              level: "informational",
+              reason: "package_version_changed",
+              detail: null,
+            },
+          ],
         },
       ],
       repo_groups: [
-        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+        {
+          section_id: "epel",
+          provenance: "verified" as const,
+          is_distro: false,
+          package_count: 1,
+          enabled: true,
+        },
       ],
     };
 
     mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
       if (url === "/api/view") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_VIEW_WITH_GROUPS) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW_WITH_GROUPS),
+        });
       }
       if (url === "/api/snapshot/sections") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SECTIONS) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
       }
       if (url === "/api/health") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_HEALTH) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
       }
       if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ids: [] }) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
       }
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
       }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
     });
 
     render(<App />);
@@ -489,37 +545,97 @@ describe("App-level packages rendering with unified components", () => {
       ...MOCK_VIEW,
       packages: [
         {
-          entry: { name: "httpd", epoch: "0", version: "2.4.57", release: "1.el9", arch: "x86_64", state: "added", include: true, source_repo: "appstream", fleet: null },
-          attention: [{ level: "needs_review", reason: "package_user_added", detail: "Not found in base image" }],
+          entry: {
+            name: "httpd",
+            epoch: "0",
+            version: "2.4.57",
+            release: "1.el9",
+            arch: "x86_64",
+            state: "added",
+            include: true,
+            source_repo: "appstream",
+            fleet: null,
+          },
+          attention: [
+            {
+              level: "needs_review",
+              reason: "package_user_added",
+              detail: "Not found in base image",
+            },
+          ],
         },
         {
-          entry: { name: "glibc", epoch: "0", version: "2.34", release: "100.el9", arch: "x86_64", state: "unchanged", include: true, source_repo: "baseos", fleet: null },
-          attention: [{ level: "routine", reason: "package_baseline_match", detail: null }],
+          entry: {
+            name: "glibc",
+            epoch: "0",
+            version: "2.34",
+            release: "100.el9",
+            arch: "x86_64",
+            state: "unchanged",
+            include: true,
+            source_repo: "baseos",
+            fleet: null,
+          },
+          attention: [
+            {
+              level: "routine",
+              reason: "package_baseline_match",
+              detail: null,
+            },
+          ],
         },
       ],
       repo_groups: [
-        { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
-        { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+        {
+          section_id: "appstream",
+          provenance: "verified",
+          is_distro: true,
+          package_count: 1,
+          enabled: true,
+        },
+        {
+          section_id: "baseos",
+          provenance: "verified",
+          is_distro: true,
+          package_count: 1,
+          enabled: true,
+        },
       ],
     };
 
     mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
       if (url === "/api/view") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(FLAT_VIEW) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(FLAT_VIEW),
+        });
       }
       if (url === "/api/snapshot/sections") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SECTIONS) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
       }
       if (url === "/api/health") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_HEALTH) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
       }
       if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ids: [] }) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
       }
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
       }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
     });
 
     render(<App />);

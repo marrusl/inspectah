@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContainerSection } from "../ContainerSection";
-import type { QuadletDecisionDto, FlatpakDecisionDto, ViewResponse } from "../../api/types";
+import type {
+  QuadletDecisionDto,
+  FlatpakDecisionDto,
+  ViewResponse,
+} from "../../api/types";
 
 // Mock the applyOp client
 vi.mock("../../api/client", () => ({
@@ -12,7 +16,9 @@ vi.mock("../../api/client", () => ({
 import { applyOp } from "../../api/client";
 const mockApplyOp = vi.mocked(applyOp);
 
-function makeQuadlet(overrides: Partial<QuadletDecisionDto> = {}): QuadletDecisionDto {
+function makeQuadlet(
+  overrides: Partial<QuadletDecisionDto> = {},
+): QuadletDecisionDto {
   return {
     path: "/etc/containers/systemd/myapp.container",
     name: "myapp.container",
@@ -27,7 +33,9 @@ function makeQuadlet(overrides: Partial<QuadletDecisionDto> = {}): QuadletDecisi
   };
 }
 
-function makeFlatpak(overrides: Partial<FlatpakDecisionDto> = {}): FlatpakDecisionDto {
+function makeFlatpak(
+  overrides: Partial<FlatpakDecisionDto> = {},
+): FlatpakDecisionDto {
   return {
     app_id: "org.mozilla.firefox",
     remote: "flathub",
@@ -60,7 +68,9 @@ describe("ContainerSection", () => {
         onMutationError={onMutationError}
       />,
     );
-    expect(screen.getByText(/No quadlet or flatpak items detected/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No quadlet or flatpak items detected/),
+    ).toBeInTheDocument();
   });
 
   it("renders quadlet with lifecycle badge", () => {
@@ -106,7 +116,9 @@ describe("ContainerSection", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: /Toggle myapp\.container/ });
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Toggle myapp\.container/,
+    });
     await userEvent.click(checkbox);
 
     expect(mockApplyOp).toHaveBeenCalledWith({
@@ -134,7 +146,9 @@ describe("ContainerSection", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: /Toggle org\.mozilla\.firefox/ });
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Toggle org\.mozilla\.firefox/,
+    });
     await userEvent.click(checkbox);
 
     expect(mockApplyOp).toHaveBeenCalledWith({
@@ -142,7 +156,11 @@ describe("ContainerSection", () => {
       target: {
         item_id: {
           kind: "Flatpak",
-          key: { app_id: "org.mozilla.firefox", remote: "flathub", branch: "stable" },
+          key: {
+            app_id: "org.mozilla.firefox",
+            remote: "flathub",
+            branch: "stable",
+          },
         },
         include: false,
       },
@@ -159,7 +177,9 @@ describe("ContainerSection", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: /Toggle myapp\.container/ });
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Toggle myapp\.container/,
+    });
     expect(checkbox).not.toBeChecked();
   });
 
@@ -173,7 +193,9 @@ describe("ContainerSection", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: /Toggle org\.mozilla\.firefox/ });
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Toggle org\.mozilla\.firefox/,
+    });
     expect(checkbox).not.toBeChecked();
   });
 

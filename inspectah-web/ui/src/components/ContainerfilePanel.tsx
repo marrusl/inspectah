@@ -35,14 +35,17 @@ export function ContainerfilePanel({
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Resize drag handlers
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current = true;
-    dragStartX.current = e.clientX;
-    dragStartWidth.current = panelWidth;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, [panelWidth]);
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      isDragging.current = true;
+      dragStartX.current = e.clientX;
+      dragStartWidth.current = panelWidth;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [panelWidth],
+  );
 
   useEffect(() => {
     const handleDragMove = (e: MouseEvent) => {
@@ -50,7 +53,10 @@ export function ContainerfilePanel({
       // Panel is on the right, so dragging left increases width
       const delta = dragStartX.current - e.clientX;
       const maxWidth = window.innerWidth * MAX_WIDTH_RATIO;
-      const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, dragStartWidth.current + delta));
+      const newWidth = Math.min(
+        maxWidth,
+        Math.max(MIN_WIDTH, dragStartWidth.current + delta),
+      );
       setPanelWidth(newWidth);
     };
 
@@ -124,7 +130,8 @@ export function ContainerfilePanel({
     [DOCKERFILE_KEYWORDS],
   );
 
-  const { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight } = useContainerfileDiff(content, isOpen);
+  const { diffResult, hasPendingChanges, pruneRemovingLine, clearHighlight } =
+    useContainerfileDiff(content, isOpen);
   const [highlightsActive, setHighlightsActive] = useState(false);
 
   /** Apply crypt(3) hash redaction to a line's text when sensitive. */
@@ -143,11 +150,17 @@ export function ContainerfilePanel({
 
   // Removal animation lifecycle: glow -> collapse -> prune
   // + reduced motion support: immediate prune for removing, 2s clear for added
-  const removingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const addedTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const removingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  const addedTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   useEffect(() => {
     if (!highlightsActive) return;
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
 
     const removing = diffResult.lines.filter((l) => l.state === "removing");
     for (const dl of removing) {
@@ -160,7 +173,9 @@ export function ContainerfilePanel({
       } else {
         // Phase 1: glow for 300ms, then collapse
         const glowTimer = setTimeout(() => {
-          const el = document.querySelector(`[data-line-id="${dl.id}"]`) as HTMLElement | null;
+          const el = document.querySelector(
+            `[data-line-id="${dl.id}"]`,
+          ) as HTMLElement | null;
           if (el) {
             // Set explicit max-height from measured height
             el.style.maxHeight = `${el.scrollHeight}px`;
@@ -246,7 +261,8 @@ export function ContainerfilePanel({
 
       const bodyRect = panelBody.getBoundingClientRect();
       const lineRect = firstChanged.getBoundingClientRect();
-      const alreadyVisible = lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom;
+      const alreadyVisible =
+        lineRect.top >= bodyRect.top && lineRect.bottom <= bodyRect.bottom;
 
       if (alreadyVisible) {
         setHighlightsActive(true);
@@ -255,7 +271,9 @@ export function ContainerfilePanel({
 
       const el = firstChanged as HTMLElement;
       const targetTop = el.offsetTop - Math.round(panelBody.clientHeight / 3);
-      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const prefersReducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
       panelBody.scrollTo({
         top: Math.max(0, targetTop),
         behavior: prefersReducedMotion ? "auto" : "smooth",
@@ -280,10 +298,14 @@ export function ContainerfilePanel({
     if (!diffResult.hasChanges) return "";
     const parts: string[] = [];
     if (diffResult.addedCount > 0) {
-      parts.push(`${diffResult.addedCount} line${diffResult.addedCount === 1 ? "" : "s"} added`);
+      parts.push(
+        `${diffResult.addedCount} line${diffResult.addedCount === 1 ? "" : "s"} added`,
+      );
     }
     if (diffResult.removedCount > 0) {
-      parts.push(`${diffResult.removedCount} line${diffResult.removedCount === 1 ? "" : "s"} removed`);
+      parts.push(
+        `${diffResult.removedCount} line${diffResult.removedCount === 1 ? "" : "s"} removed`,
+      );
     }
     return `Containerfile updated: ${parts.join(", ")}`;
   }, [diffResult.hasChanges, diffResult.addedCount, diffResult.removedCount]);
@@ -338,7 +360,12 @@ export function ContainerfilePanel({
           size="sm"
         />
       </div>
-      <div ref={panelBodyRef} className="inspectah-cf-panel__body" tabIndex={0} aria-label="Containerfile preview content">
+      <div
+        ref={panelBodyRef}
+        className="inspectah-cf-panel__body"
+        tabIndex={0}
+        aria-label="Containerfile preview content"
+      >
         {loading ? (
           <>
             <Skeleton width="90%" />
@@ -354,26 +381,30 @@ export function ContainerfilePanel({
                   const displayText = redactLine(dl.text);
                   const lineClasses = [
                     "inspectah-cf-panel__line",
-                    highlightsActive && dl.state === "added" ? "inspectah-cf-line--added" : "",
-                    highlightsActive && dl.state === "removing" ? "inspectah-cf-line--removing" : "",
+                    highlightsActive && dl.state === "added"
+                      ? "inspectah-cf-line--added"
+                      : "",
+                    highlightsActive && dl.state === "removing"
+                      ? "inspectah-cf-line--removing"
+                      : "",
                   ]
                     .filter(Boolean)
                     .join(" ");
 
-                  const isChanged = dl.state === "added" || dl.state === "removing";
+                  const isChanged =
+                    dl.state === "added" || dl.state === "removing";
                   return (
                     <span
                       key={dl.id}
                       className={lineClasses}
                       {...(isChanged ? { "data-line-id": dl.id } : {})}
-                      {...(dl.state === "removing" ? { "aria-hidden": "true" } : {})}
+                      {...(dl.state === "removing"
+                        ? { "aria-hidden": "true" }
+                        : {})}
                     >
                       {tokenizeLine(displayText).map((tok, j) =>
                         tok.isKeyword ? (
-                          <span
-                            key={j}
-                            className="inspectah-cf-panel__keyword"
-                          >
+                          <span key={j} className="inspectah-cf-panel__keyword">
                             {tok.text}
                           </span>
                         ) : (

@@ -31,9 +31,10 @@ export function AttentionSummary({
       style={{
         padding: "var(--pf-t--global--spacer--sm) 0",
         fontSize: "var(--pf-t--global--font--size--body--default)",
-        color: needsReviewCount > 0
-          ? "var(--pf-t--global--color--status--danger--default)"
-          : "var(--pf-t--global--text--color--subtle)",
+        color:
+          needsReviewCount > 0
+            ? "var(--pf-t--global--color--status--danger--default)"
+            : "var(--pf-t--global--text--color--subtle)",
         fontWeight: needsReviewCount > 0 ? 600 : 400,
       }}
     >

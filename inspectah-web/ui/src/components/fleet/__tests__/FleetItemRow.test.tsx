@@ -15,10 +15,15 @@ const defaultAck: UseVariantAckResult = {
   totalCount: 0,
 };
 
-function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetItem {
+function makeItem(
+  overrides: Partial<FleetItem> & { item_id: ItemId },
+): FleetItem {
   return {
     include: true,
-    triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
+    triage: {
+      bucket: "universal" as const,
+      prevalence: { count: 1, total: 1 },
+    },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     ...overrides,
@@ -156,7 +161,10 @@ describe("FleetItemRow", () => {
   });
 
   it("sets data-item-id attribute", () => {
-    const itemId: ItemId = { kind: "Package", key: { name: "httpd", arch: "x86_64" } };
+    const itemId: ItemId = {
+      kind: "Package",
+      key: { name: "httpd", arch: "x86_64" },
+    };
     const item = makeItem({ item_id: itemId });
 
     render(
@@ -237,8 +245,14 @@ describe("FleetItemRow", () => {
     const levels = ["needs_review", "informational", "routine"];
     for (const level of levels) {
       const item = makeItem({
-        item_id: { kind: "Package", key: { name: `test-${level}`, arch: "x86_64" } },
-        triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
+        item_id: {
+          kind: "Package",
+          key: { name: `test-${level}`, arch: "x86_64" },
+        },
+        triage: {
+          bucket: "universal" as const,
+          prevalence: { count: 1, total: 1 },
+        },
       });
 
       const { unmount } = render(
@@ -258,7 +272,10 @@ describe("FleetItemRow", () => {
   it("does not render attention badge for none level", () => {
     const item = makeItem({
       item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
-      triage: { bucket: "universal" as const, prevalence: { count: 1, total: 1 } },
+      triage: {
+        bucket: "universal" as const,
+        prevalence: { count: 1, total: 1 },
+      },
     });
 
     render(

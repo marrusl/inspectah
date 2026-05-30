@@ -136,5 +136,13 @@ export function useVariantAck(
 
   const totalCount = actionableIds.length;
 
-  return { isAcked, getStatus, confirm, unconfirm, markChanged, unackedCount, totalCount };
+  return {
+    isAcked,
+    getStatus,
+    confirm,
+    unconfirm,
+    markChanged,
+    unackedCount,
+    totalCount,
+  };
 }

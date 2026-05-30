@@ -126,8 +126,8 @@ function PopoverDialog({
       <ul className="repo-conflict-popover__list">
         {entries.map((entry) => (
           <li key={entry.repo}>
-            <strong>{entry.repo}</strong> &mdash;{" "}
-            {entry.host_count} {entry.host_count === 1 ? "host" : "hosts"}
+            <strong>{entry.repo}</strong> &mdash; {entry.host_count}{" "}
+            {entry.host_count === 1 ? "host" : "hosts"}
           </li>
         ))}
       </ul>

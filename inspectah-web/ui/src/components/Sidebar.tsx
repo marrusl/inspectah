@@ -78,11 +78,15 @@ function decisionCount(
   }
   if (id === "containers") {
     if (!viewData) return "...";
-    return String((viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0));
+    return String(
+      (viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0),
+    );
   }
   if (id === "system_tuning") {
     if (!viewData) return "...";
-    return String((viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0));
+    return String(
+      (viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0),
+    );
   }
   if (!stats) return "...";
   const section = stats.sections?.find((s: { kind: string }) => {
@@ -189,7 +193,9 @@ export function Sidebar({
               onClick={() => onSelect(sec.id)}
             >
               {sec.label}{" "}
-              <Badge isRead>{decisionCount(stats, sec.id, userDecisionCount, viewData)}</Badge>
+              <Badge isRead>
+                {decisionCount(stats, sec.id, userDecisionCount, viewData)}
+              </Badge>
             </NavItem>
           ))}
         </NavGroup>
@@ -202,8 +208,7 @@ export function Sidebar({
               aria-current={activeSection === sec.id ? "page" : undefined}
               onClick={() => onSelect(sec.id)}
             >
-              {sec.label}{" "}
-              <Badge isRead>{sectionCount(sections, sec.id)}</Badge>
+              {sec.label} <Badge isRead>{sectionCount(sections, sec.id)}</Badge>
             </NavItem>
           ))}
         </NavGroup>
@@ -213,10 +218,12 @@ export function Sidebar({
 
   if (overlay) {
     return (
-      <div className="inspectah-sidebar-backdrop" onClick={handleBackdropClick} data-testid="sidebar-backdrop">
-        <div onClick={(e) => e.stopPropagation()}>
-          {sidebarContent}
-        </div>
+      <div
+        className="inspectah-sidebar-backdrop"
+        onClick={handleBackdropClick}
+        data-testid="sidebar-backdrop"
+      >
+        <div onClick={(e) => e.stopPropagation()}>{sidebarContent}</div>
       </div>
     );
   }

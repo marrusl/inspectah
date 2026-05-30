@@ -61,7 +61,11 @@ export function SectionSearch({
         onChange={(_e, val) => onChange(val)}
         onClear={() => onChange("")}
         onKeyDown={handleKeyDown}
-        resultsCount={resultCount > 0 ? `${resultCount} match${resultCount === 1 ? "" : "es"}` : undefined}
+        resultsCount={
+          resultCount > 0
+            ? `${resultCount} match${resultCount === 1 ? "" : "es"}`
+            : undefined
+        }
         aria-label="Filter section items"
         data-testid="section-search-input"
       />

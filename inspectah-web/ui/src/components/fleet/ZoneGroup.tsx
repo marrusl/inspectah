@@ -31,7 +31,10 @@ export function ZoneGroup({
   }, [forceExpanded]);
 
   return (
-    <div className={`fleet-zone-group fleet-zone-group--${zone}`} data-testid={`zone-${zone}`}>
+    <div
+      className={`fleet-zone-group fleet-zone-group--${zone}`}
+      data-testid={`zone-${zone}`}
+    >
       <ExpandableSection
         isExpanded={isExpanded}
         onToggle={(_event, expanded) => setIsExpanded(expanded)}

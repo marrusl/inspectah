@@ -144,21 +144,33 @@ describe("DiffDrawer", () => {
     );
 
     // Equal line (space prefix, no modifier class)
-    const equalLines = container.querySelectorAll(".diff-drawer__line:not(.diff-drawer__line--insert):not(.diff-drawer__line--delete)");
+    const equalLines = container.querySelectorAll(
+      ".diff-drawer__line:not(.diff-drawer__line--insert):not(.diff-drawer__line--delete)",
+    );
     expect(equalLines.length).toBeGreaterThan(0);
     const firstEqualLine = equalLines[0];
-    expect(firstEqualLine.querySelector(".diff-drawer__line-prefix")?.textContent).toBe(" ");
+    expect(
+      firstEqualLine.querySelector(".diff-drawer__line-prefix")?.textContent,
+    ).toBe(" ");
 
     // Delete line (- prefix, delete class)
-    const deleteLines = container.querySelectorAll(".diff-drawer__line--delete");
+    const deleteLines = container.querySelectorAll(
+      ".diff-drawer__line--delete",
+    );
     expect(deleteLines).toHaveLength(1);
-    expect(deleteLines[0].querySelector(".diff-drawer__line-prefix")?.textContent).toBe("-");
+    expect(
+      deleteLines[0].querySelector(".diff-drawer__line-prefix")?.textContent,
+    ).toBe("-");
 
     // Insert lines (+ prefix, insert class)
-    const insertLines = container.querySelectorAll(".diff-drawer__line--insert");
+    const insertLines = container.querySelectorAll(
+      ".diff-drawer__line--insert",
+    );
     expect(insertLines).toHaveLength(2);
     insertLines.forEach((line) => {
-      expect(line.querySelector(".diff-drawer__line-prefix")?.textContent).toBe("+");
+      expect(line.querySelector(".diff-drawer__line-prefix")?.textContent).toBe(
+        "+",
+      );
     });
   });
 

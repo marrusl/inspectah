@@ -22,7 +22,10 @@ const MOCK_DIFF: FleetDiffResponse = {
 };
 
 const CONFIG_ITEM: ItemId = { kind: "Config", key: { path: "/etc/foo.conf" } };
-const PKG_ITEM: ItemId = { kind: "Package", key: { name: "httpd", arch: "x86_64" } };
+const PKG_ITEM: ItemId = {
+  kind: "Package",
+  key: { name: "httpd", arch: "x86_64" },
+};
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -46,9 +49,12 @@ describe("useFleetDiff", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledWith("/api/fleet/diff", expect.objectContaining({
-      method: "POST",
-    }));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/fleet/diff",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
     expect(result.current.diff).toEqual(MOCK_DIFF);
     expect(result.current.error).toBeNull();
     expect(result.current.isLoading).toBe(false);
@@ -79,7 +85,10 @@ describe("useFleetDiff", () => {
   it("sets isLoading during fetch", async () => {
     let resolveFetch: (value: Response) => void;
     vi.spyOn(globalThis, "fetch").mockImplementation(
-      () => new Promise((resolve) => { resolveFetch = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
     );
 
     const { result } = renderHook(() => useFleetDiff());

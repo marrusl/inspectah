@@ -9,7 +9,8 @@ describe("ContextItem", () => {
     id: "svc-1",
     title: "httpd.service",
     subtitle: "Apache HTTP Server",
-    detail: "Loaded: loaded (/usr/lib/systemd/system/httpd.service; enabled)\nActive: active (running)",
+    detail:
+      "Loaded: loaded (/usr/lib/systemd/system/httpd.service; enabled)\nActive: active (running)",
     searchable_text: "httpd apache web server",
   };
 
@@ -42,7 +43,9 @@ describe("ContextItem", () => {
 
   it("does not show expand control when detail is null", () => {
     render(<ContextItem item={mockItemNoDetail} />);
-    const expandButton = screen.queryByRole("button", { name: /expand detail/i });
+    const expandButton = screen.queryByRole("button", {
+      name: /expand detail/i,
+    });
     expect(expandButton).not.toBeInTheDocument();
   });
 
@@ -69,7 +72,9 @@ describe("ContextItem", () => {
     await user.click(expandButton);
     expect(screen.getByText(/Loaded: loaded/)).toBeInTheDocument();
 
-    const collapseButton = screen.getByRole("button", { name: /collapse detail/i });
+    const collapseButton = screen.getByRole("button", {
+      name: /collapse detail/i,
+    });
     await user.click(collapseButton);
     expect(screen.queryByText(/Loaded: loaded/)).not.toBeInTheDocument();
   });

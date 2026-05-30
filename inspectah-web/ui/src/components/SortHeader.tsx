@@ -45,13 +45,20 @@ export function SortHeader({
   const leftSortDir = ariaSortValue("left", activeColumn, direction);
   const rightSortDir = ariaSortValue("right", activeColumn, direction);
 
-  function sortLabel(label: string, sortDir: "ascending" | "descending" | "none"): string {
+  function sortLabel(
+    label: string,
+    sortDir: "ascending" | "descending" | "none",
+  ): string {
     if (sortDir === "none") return `Sort by ${label}`;
     return `Sort by ${label}, currently ${sortDir === "ascending" ? "ascending" : "descending"}`;
   }
 
   return (
-    <div role="grid" aria-label="Sort controls" className="inspectah-sort-header">
+    <div
+      role="grid"
+      aria-label="Sort controls"
+      className="inspectah-sort-header"
+    >
       <div role="row">
         <div role="columnheader" aria-sort={leftSortDir}>
           <button
@@ -64,7 +71,10 @@ export function SortHeader({
           >
             {leftLabel}
             {activeColumn === "left" && (
-              <span className="inspectah-sort-header__chevron" aria-hidden="true">
+              <span
+                className="inspectah-sort-header__chevron"
+                aria-hidden="true"
+              >
                 {chevron(direction)}
               </span>
             )}
@@ -81,7 +91,10 @@ export function SortHeader({
           >
             {rightLabel}
             {activeColumn === "right" && (
-              <span className="inspectah-sort-header__chevron" aria-hidden="true">
+              <span
+                className="inspectah-sort-header__chevron"
+                aria-hidden="true"
+              >
                 {chevron(direction)}
               </span>
             )}

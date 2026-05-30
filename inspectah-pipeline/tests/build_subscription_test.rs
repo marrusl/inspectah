@@ -422,9 +422,7 @@ fn archive_rejects_hardlink() {
         header.set_path("prefix/some-hardlink").expect("set path");
         header.set_size(0);
         header.set_mode(0o644);
-        header
-            .set_link_name("target.txt")
-            .expect("set link");
+        header.set_link_name("target.txt").expect("set link");
         header.set_cksum();
         builder.append(&header, std::io::empty()).expect("append");
     });

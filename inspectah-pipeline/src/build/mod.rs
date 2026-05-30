@@ -191,11 +191,8 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
         }
     };
 
-    let use_subscription_mounts = should_use_subscription_mounts(
-        &ambient,
-        has_subscription,
-        &mut warnings,
-    );
+    let use_subscription_mounts =
+        should_use_subscription_mounts(&ambient, has_subscription, &mut warnings);
 
     // Check cert expiry at build time (only for tarball-sourced certs).
     if has_subscription && ambient != AmbientSubscription::Available {
@@ -958,8 +955,14 @@ mod tests {
         let (outcome, _) = result2.unwrap();
         match outcome {
             BuildOutcome::PreflightFailed { reason } => {
-                assert!(reason.contains("already exists and is non-empty"), "{reason}");
-                assert!(reason.contains(&pid_dir.to_string_lossy().to_string()), "{reason}");
+                assert!(
+                    reason.contains("already exists and is non-empty"),
+                    "{reason}"
+                );
+                assert!(
+                    reason.contains(&pid_dir.to_string_lossy().to_string()),
+                    "{reason}"
+                );
             }
             other => panic!("expected PreflightFailed for non-empty dir, got: {other:?}"),
         }
@@ -988,11 +991,8 @@ mod tests {
     #[test]
     fn test_ambient_not_available_uses_tarball_subscription() {
         let mut warnings = Vec::new();
-        let result = should_use_subscription_mounts(
-            &AmbientSubscription::NotAvailable,
-            true,
-            &mut warnings,
-        );
+        let result =
+            should_use_subscription_mounts(&AmbientSubscription::NotAvailable, true, &mut warnings);
         assert!(result, "non-RHEL with tarball subscription should mount");
         assert!(warnings.is_empty());
     }
@@ -1018,7 +1018,10 @@ mod tests {
             true,
             &mut warnings,
         );
-        assert!(result, "incomplete ambient with tarball should fall back to mounts");
+        assert!(
+            result,
+            "incomplete ambient with tarball should fall back to mounts"
+        );
         assert_eq!(warnings.len(), 1, "should warn about incomplete bundle");
         assert!(
             matches!(warnings[0], BuildWarning::AmbientBundleIncomplete { .. }),
@@ -1036,7 +1039,10 @@ mod tests {
             false,
             &mut warnings,
         );
-        assert!(!result, "incomplete ambient without tarball should not mount");
+        assert!(
+            !result,
+            "incomplete ambient without tarball should not mount"
+        );
         assert_eq!(warnings.len(), 1);
     }
 }

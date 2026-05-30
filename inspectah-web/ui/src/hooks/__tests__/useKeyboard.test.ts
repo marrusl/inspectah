@@ -4,7 +4,9 @@ import { fireEvent } from "@testing-library/react";
 import { useKeyboard } from "../useKeyboard";
 import type { UseKeyboardOptions } from "../useKeyboard";
 
-function makeOptions(overrides: Partial<UseKeyboardOptions> = {}): UseKeyboardOptions {
+function makeOptions(
+  overrides: Partial<UseKeyboardOptions> = {},
+): UseKeyboardOptions {
   return {
     onUndo: vi.fn(),
     onRedo: vi.fn(),

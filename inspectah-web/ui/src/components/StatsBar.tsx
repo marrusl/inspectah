@@ -10,12 +10,19 @@ import {
   Popover,
   Badge,
 } from "@patternfly/react-core";
-import { UndoIcon, RedoIcon, ExportIcon, SunIcon, MoonIcon, CopyIcon } from "@patternfly/react-icons";
+import {
+  UndoIcon,
+  RedoIcon,
+  ExportIcon,
+  SunIcon,
+  MoonIcon,
+  CopyIcon,
+} from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
 
 function ThemeToggle() {
-  const [dark, setDark] = useState(
-    () => document.documentElement.classList.contains("pf-v6-theme-dark"),
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains("pf-v6-theme-dark"),
   );
   const toggle = useCallback(() => {
     const next = !dark;
@@ -37,7 +44,13 @@ function ThemeToggle() {
   );
 }
 
-function HostnamePopover({ hostCount, hostnames }: { hostCount: number; hostnames: string[] }) {
+function HostnamePopover({
+  hostCount,
+  hostnames,
+}: {
+  hostCount: number;
+  hostnames: string[];
+}) {
   const [copied, setCopied] = useState(false);
   const sorted = [...hostnames].sort((a, b) => a.localeCompare(b));
 
@@ -58,9 +71,14 @@ function HostnamePopover({ hostCount, hostnames }: { hostCount: number; hostname
       }
       bodyContent={
         <div>
-          <div className="fleet-hostname-list" data-testid="fleet-hostname-list">
+          <div
+            className="fleet-hostname-list"
+            data-testid="fleet-hostname-list"
+          >
             {sorted.map((h) => (
-              <div key={h} className="fleet-hostname-entry">{h}</div>
+              <div key={h} className="fleet-hostname-entry">
+                {h}
+              </div>
             ))}
           </div>
           <Button
@@ -124,9 +142,10 @@ export function StatsBar({
   fleetSummary,
 }: StatsBarProps) {
   const needsReviewTotal = stats?.needs_review_count ?? null;
-  const remaining = needsReviewTotal != null
-    ? Math.max(0, needsReviewTotal - viewedNeedsReviewCount)
-    : null;
+  const remaining =
+    needsReviewTotal != null
+      ? Math.max(0, needsReviewTotal - viewedNeedsReviewCount)
+      : null;
 
   // Completion signal logic
   const showCompletionSignal = needsReviewTotal != null && remaining !== null;
@@ -135,9 +154,7 @@ export function StatsBar({
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
       <ToolbarContent>
-        {hamburger && (
-          <ToolbarItem>{hamburger}</ToolbarItem>
-        )}
+        {hamburger && <ToolbarItem>{hamburger}</ToolbarItem>}
         <ToolbarGroup align={{ default: "alignStart" }}>
           {fleetSummary ? (
             <ToolbarItem>
@@ -145,10 +162,14 @@ export function StatsBar({
                 <HostnamePopover
                   hostCount={fleetSummary.hostCount}
                   hostnames={fleetSummary.hostnames}
-                />{" · "}
-                <strong>{fleetSummary.totalItems.toLocaleString()}</strong> items{" · "}
+                />
+                {" · "}
+                <strong>{fleetSummary.totalItems.toLocaleString()}</strong>{" "}
+                items{" · "}
                 {fleetSummary.needsReviewCount > 0 ? (
-                  <Label color="blue">{fleetSummary.needsReviewCount} need review</Label>
+                  <Label color="blue">
+                    {fleetSummary.needsReviewCount} need review
+                  </Label>
                 ) : (
                   <Label color="green">All reviewed</Label>
                 )}
@@ -159,15 +180,29 @@ export function StatsBar({
               <ToolbarItem>
                 <Content component="small">
                   <strong>Packages:</strong>{" "}
-                  {stat(stats?.sections?.find(s => s.kind === "package")?.included)} included /{" "}
-                  {stat(stats?.sections?.find(s => s.kind === "package")?.excluded)} excluded
+                  {stat(
+                    stats?.sections?.find((s) => s.kind === "package")
+                      ?.included,
+                  )}{" "}
+                  included /{" "}
+                  {stat(
+                    stats?.sections?.find((s) => s.kind === "package")
+                      ?.excluded,
+                  )}{" "}
+                  excluded
                 </Content>
               </ToolbarItem>
               <ToolbarItem>
                 <Content component="small">
                   <strong>Configs:</strong>{" "}
-                  {stat(stats?.sections?.find(s => s.kind === "config")?.included)} included /{" "}
-                  {stat(stats?.sections?.find(s => s.kind === "config")?.excluded)} excluded
+                  {stat(
+                    stats?.sections?.find((s) => s.kind === "config")?.included,
+                  )}{" "}
+                  included /{" "}
+                  {stat(
+                    stats?.sections?.find((s) => s.kind === "config")?.excluded,
+                  )}{" "}
+                  excluded
                 </Content>
               </ToolbarItem>
               <ToolbarItem>
@@ -182,7 +217,9 @@ export function StatsBar({
                   ) : (
                     <>
                       {remaining != null ? String(remaining) : "-"} of{" "}
-                      {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
+                      {needsReviewTotal != null
+                        ? String(needsReviewTotal)
+                        : "-"}{" "}
                       to review
                     </>
                   )}
@@ -212,11 +249,7 @@ export function StatsBar({
           </ToolbarItem>
           <ToolbarItem variant="separator" />
           <ToolbarItem>
-            <Button
-              variant="primary"
-              onClick={onExport}
-              icon={<ExportIcon />}
-            >
+            <Button variant="primary" onClick={onExport} icon={<ExportIcon />}>
               Export
             </Button>
           </ToolbarItem>

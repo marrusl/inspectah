@@ -1,4 +1,9 @@
-import type { AttentionLevel, AttentionReason, TriageTag, TriageReason } from "../api/types";
+import type {
+  AttentionLevel,
+  AttentionReason,
+  TriageTag,
+  TriageReason,
+} from "../api/types";
 
 /** Map attention level to PatternFly Label color prop. */
 export function attentionLabelColor(
@@ -15,7 +20,10 @@ export function attentionLabelColor(
 }
 
 /** Format an AttentionReason for display, optionally incorporating detail. */
-export function formatReasonText(reason: AttentionReason, detail?: string | null): string {
+export function formatReasonText(
+  reason: AttentionReason,
+  detail?: string | null,
+): string {
   if (typeof reason === "object" && "custom" in reason) {
     return reason.custom;
   }
@@ -39,7 +47,13 @@ export function formatReasonText(reason: AttentionReason, detail?: string | null
     config_orphaned: "Orphaned",
     sensitive_path: "Sensitive Path",
   };
-  return map[reason] ?? reason.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  return (
+    map[reason] ??
+    reason
+      .split("_")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ")
+  );
 }
 
 /** Highest-priority attention level from a list of tags. */
@@ -148,5 +162,11 @@ export function formatTriageReason(reason: TriageReason): string {
     tuned_unusual_state: "Unusual State",
     sensitive_path: "Sensitive Path",
   };
-  return map[reason] ?? reason.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  return (
+    map[reason] ??
+    reason
+      .split("_")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ")
+  );
 }

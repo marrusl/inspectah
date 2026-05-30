@@ -69,7 +69,10 @@ export function RoutineSummary({
   const effectiveExpanded = forceExpanded || isExpanded;
 
   return (
-    <div data-testid="routine-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
+    <div
+      data-testid="routine-summary"
+      style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}
+    >
       <button
         type="button"
         onClick={() => setIsExpanded((prev) => !prev)}
@@ -86,15 +89,16 @@ export function RoutineSummary({
           gap: "var(--pf-t--global--spacer--xs)",
         }}
       >
-        {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-        + {items.length} routine
+        {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}+{" "}
+        {items.length} routine
       </button>
       {effectiveExpanded &&
         items.map((item, idx) => {
           const id = getItemId(item);
-          const level = (item.data.attention ?? []).length > 0
-            ? highestAttention(item.data.attention!)
-            : "routine";
+          const level =
+            (item.data.attention ?? []).length > 0
+              ? highestAttention(item.data.attention!)
+              : "routine";
           const flatIdx = flatItemIds.indexOf(id);
           return (
             <DecisionItem

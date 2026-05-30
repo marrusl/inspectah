@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-cli"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-collect"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "base64",
  "inspectah-core",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-core"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "base64",
  "chrono",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-pipeline"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-refine"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "flate2",
  "inspectah-core",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-web"
-version = "0.8.3-alpha.1"
+version = "0.8.4-alpha.1"
 dependencies = [
  "axum",
  "http-body-util",

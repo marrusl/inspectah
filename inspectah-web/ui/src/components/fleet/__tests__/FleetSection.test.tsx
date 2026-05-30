@@ -14,17 +14,25 @@ const defaultAck: UseVariantAckResult = {
   totalCount: 0,
 };
 
-function makeItem(overrides: Partial<FleetItem> & { item_id: ItemId }): FleetItem {
+function makeItem(
+  overrides: Partial<FleetItem> & { item_id: ItemId },
+): FleetItem {
   return {
     include: true,
-    triage: { bucket: "universal" as const, prevalence: { count: 2, total: 3 } },
+    triage: {
+      bucket: "universal" as const,
+      prevalence: { count: 2, total: 3 },
+    },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     ...overrides,
   };
 }
 
-const pkgItem = (name: string, overrides: Partial<FleetItem> = {}): FleetItem => {
+const pkgItem = (
+  name: string,
+  overrides: Partial<FleetItem> = {},
+): FleetItem => {
   const [n, a] = name.includes(".") ? name.split(".") : [name, "x86_64"];
   return makeItem({
     item_id: { kind: "Package", key: { name: n, arch: a } },
@@ -94,7 +102,11 @@ describe("FleetSectionContent", () => {
       id: "packages",
       display_name: "Packages",
       is_decision_section: true,
-      items: [pkgItem("httpd.x86_64"), pkgItem("nginx.x86_64"), pkgItem("curl.x86_64")],
+      items: [
+        pkgItem("httpd.x86_64"),
+        pkgItem("nginx.x86_64"),
+        pkgItem("curl.x86_64"),
+      ],
     };
 
     render(
@@ -186,7 +198,10 @@ describe("FleetSectionContent", () => {
       is_decision_section: true,
       zones: {
         consensus: {
-          items: [cfgItem("/etc/httpd/conf/httpd.conf"), cfgItem("/etc/sysctl.conf")],
+          items: [
+            cfgItem("/etc/httpd/conf/httpd.conf"),
+            cfgItem("/etc/sysctl.conf"),
+          ],
           count: 2,
         },
         near_consensus: { items: [cfgItem("/etc/nginx/nginx.conf")], count: 1 },

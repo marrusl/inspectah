@@ -11,9 +11,11 @@ function applyTheme() {
 }
 
 applyTheme();
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  if (!localStorage.getItem("inspectah-theme")) applyTheme();
-});
+window
+  .matchMedia("(prefers-color-scheme: dark)")
+  .addEventListener("change", () => {
+    if (!localStorage.getItem("inspectah-theme")) applyTheme();
+  });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

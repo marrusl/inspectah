@@ -34,36 +34,39 @@ export function useViewed(onViewedChange?: () => void): UseViewedResult {
     };
   }, []);
 
-  const markAsViewed = useCallback((id: string) => {
-    setViewedIds((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-
-    // Deduplicate in-flight POSTs
-    if (pendingRef.current.has(id)) return;
-    pendingRef.current.add(id);
-
-    markViewed(id)
-      .then(() => {
-        // Notify App that viewed state changed (debounced)
-        if (onViewedChange) {
-          if (notifyTimerRef.current) clearTimeout(notifyTimerRef.current);
-          notifyTimerRef.current = setTimeout(() => {
-            onViewedChange();
-            notifyTimerRef.current = null;
-          }, 300);
-        }
-      })
-      .catch(() => {
-        // Non-critical — don't revert optimistic update
-      })
-      .finally(() => {
-        pendingRef.current.delete(id);
+  const markAsViewed = useCallback(
+    (id: string) => {
+      setViewedIds((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
       });
-  }, [onViewedChange]);
+
+      // Deduplicate in-flight POSTs
+      if (pendingRef.current.has(id)) return;
+      pendingRef.current.add(id);
+
+      markViewed(id)
+        .then(() => {
+          // Notify App that viewed state changed (debounced)
+          if (onViewedChange) {
+            if (notifyTimerRef.current) clearTimeout(notifyTimerRef.current);
+            notifyTimerRef.current = setTimeout(() => {
+              onViewedChange();
+              notifyTimerRef.current = null;
+            }, 300);
+          }
+        })
+        .catch(() => {
+          // Non-critical — don't revert optimistic update
+        })
+        .finally(() => {
+          pendingRef.current.delete(id);
+        });
+    },
+    [onViewedChange],
+  );
 
   return { viewedIds, markAsViewed };
 }

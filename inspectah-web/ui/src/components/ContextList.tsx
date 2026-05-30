@@ -8,7 +8,9 @@ export interface ContextListProps {
 }
 
 export function ContextList({ section }: ContextListProps) {
-  const subsections = (section.subsections ?? []).filter((sub) => sub.items.length > 0);
+  const subsections = (section.subsections ?? []).filter(
+    (sub) => sub.items.length > 0,
+  );
   const hasAnyItems = section.items.length > 0 || subsections.length > 0;
 
   if (!hasAnyItems) {
@@ -28,10 +30,7 @@ export function ContextList({ section }: ContextListProps) {
   return (
     <>
       {section.items.length > 0 && (
-        <div
-          role="list"
-          aria-label={`${section.display_name} context items`}
-        >
+        <div role="list" aria-label={`${section.display_name} context items`}>
           {section.items.map((item) => (
             <ContextItem key={item.id} item={item} />
           ))}
@@ -40,11 +39,10 @@ export function ContextList({ section }: ContextListProps) {
 
       {subsections.map((sub) => (
         <div key={sub.id} className="inspectah-context-subsection">
-          <div className="inspectah-context-subsection__label">{sub.display_name}</div>
-          <div
-            role="list"
-            aria-label={`${sub.display_name} context items`}
-          >
+          <div className="inspectah-context-subsection__label">
+            {sub.display_name}
+          </div>
+          <div role="list" aria-label={`${sub.display_name} context items`}>
             {sub.items.map((item) => (
               <ContextItem key={item.id} item={item} />
             ))}

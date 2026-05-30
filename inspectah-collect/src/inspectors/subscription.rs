@@ -131,10 +131,7 @@ fn warn(message: impl Into<String>) -> Warning {
 /// Returns `Ok(true)` if the resolved target is within an approved root,
 /// `Ok(false)` if it resolves outside, or `Err` if the chain is broken
 /// (dangling symlink, loop, permission error).
-fn is_symlink_safe(
-    exec: &dyn Executor,
-    file_path: &Path,
-) -> Result<bool, std::io::Error> {
+fn is_symlink_safe(exec: &dyn Executor, file_path: &Path) -> Result<bool, std::io::Error> {
     let resolved = exec.resolve_final_target(file_path)?;
     let host_root = exec.host_root();
 
@@ -185,9 +182,7 @@ fn collect_dir_pems(
                     continue;
                 }
                 Err(e) => {
-                    warnings.push(warn(format!(
-                        "Cannot resolve symlink {dir}/{entry}: {e}"
-                    )));
+                    warnings.push(warn(format!("Cannot resolve symlink {dir}/{entry}: {e}")));
                     continue;
                 }
             }
@@ -236,9 +231,7 @@ fn collect_single_file(
                 return None;
             }
             Err(e) => {
-                warnings.push(warn(format!(
-                    "Cannot resolve symlink {path}: {e}"
-                )));
+                warnings.push(warn(format!("Cannot resolve symlink {path}: {e}")));
                 return None;
             }
         }
@@ -730,37 +723,25 @@ mod tests {
 
     #[test]
     fn test_is_symlink_safe_within_root() {
-        let exec = MockExecutor::new()
-            .with_link(
-                "/etc/pki/entitlement/link.pem",
-                "/etc/pki/entitlement/real.pem",
-            );
-        let result = is_symlink_safe(
-            &exec,
-            Path::new("/etc/pki/entitlement/link.pem"),
+        let exec = MockExecutor::new().with_link(
+            "/etc/pki/entitlement/link.pem",
+            "/etc/pki/entitlement/real.pem",
         );
+        let result = is_symlink_safe(&exec, Path::new("/etc/pki/entitlement/link.pem"));
         assert!(result.unwrap_or(false));
     }
 
     #[test]
     fn test_is_symlink_safe_outside_root() {
-        let exec = MockExecutor::new()
-            .with_link("/etc/pki/entitlement/evil.pem", "/etc/shadow");
-        let result = is_symlink_safe(
-            &exec,
-            Path::new("/etc/pki/entitlement/evil.pem"),
-        );
+        let exec = MockExecutor::new().with_link("/etc/pki/entitlement/evil.pem", "/etc/shadow");
+        let result = is_symlink_safe(&exec, Path::new("/etc/pki/entitlement/evil.pem"));
         assert!(!result.unwrap_or(true));
     }
 
     #[test]
     fn test_is_symlink_safe_relative_escape() {
-        let exec = MockExecutor::new()
-            .with_link("/etc/pki/entitlement/escape.pem", "../../shadow");
-        let result = is_symlink_safe(
-            &exec,
-            Path::new("/etc/pki/entitlement/escape.pem"),
-        );
+        let exec = MockExecutor::new().with_link("/etc/pki/entitlement/escape.pem", "../../shadow");
+        let result = is_symlink_safe(&exec, Path::new("/etc/pki/entitlement/escape.pem"));
         assert!(!result.unwrap_or(true));
     }
 

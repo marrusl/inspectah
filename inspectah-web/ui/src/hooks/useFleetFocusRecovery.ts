@@ -39,7 +39,9 @@ export function useFleetFocusRecovery(generation: number | null): void {
 
     // Use requestAnimationFrame to let the DOM settle after the state update
     requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-item-id='${CSS.escape(savedId)}']`);
+      const el = document.querySelector(
+        `[data-item-id='${CSS.escape(savedId)}']`,
+      );
       if (el) {
         (el as HTMLElement).focus();
       } else {

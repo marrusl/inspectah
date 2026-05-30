@@ -22,10 +22,7 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
 
   if (packages.length === 0) {
     return (
-      <div
-        data-testid="excluded-zone"
-        style={{ opacity: 0.55 }}
-      >
+      <div data-testid="excluded-zone" style={{ opacity: 0.55 }}>
         <div
           aria-live="polite"
           style={{
@@ -54,10 +51,7 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
   const collapsed = packages.length >= COLLAPSE_THRESHOLD && !expanded;
 
   return (
-    <div
-      data-testid="excluded-zone"
-      style={{ opacity: 0.55 }}
-    >
+    <div data-testid="excluded-zone" style={{ opacity: 0.55 }}>
       <div
         aria-live="polite"
         style={{
@@ -79,7 +73,9 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
           onClick={() => setExpanded((prev) => !prev)}
           style={{ fontSize: "var(--pf-t--global--font--size--body--sm)" }}
         >
-          {expanded ? `Hide ${packages.length} excluded` : `Show ${packages.length} excluded`}
+          {expanded
+            ? `Hide ${packages.length} excluded`
+            : `Show ${packages.length} excluded`}
         </Button>
       )}
       <div

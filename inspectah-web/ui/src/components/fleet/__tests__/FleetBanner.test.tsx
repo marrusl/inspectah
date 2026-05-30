@@ -24,22 +24,14 @@ function makeSummary(overrides: Partial<FleetSummary> = {}): FleetSummary {
   };
 }
 
-const configItem = (
-  path: string,
-  sectionId: string,
-  variantCount: number,
-) => ({
+const configItem = (path: string, sectionId: string, variantCount: number) => ({
   item_id: { kind: "Config" as const, key: { path } },
   section_id: sectionId,
   variant_count: variantCount,
   max_host_spread: 2,
 });
 
-const pkgItem = (
-  nameArch: string,
-  sectionId: string,
-  variantCount: number,
-) => {
+const pkgItem = (nameArch: string, sectionId: string, variantCount: number) => {
   const [name, arch] = nameArch.split(".");
   return {
     item_id: { kind: "Package" as const, key: { name, arch } },
@@ -108,9 +100,7 @@ describe("FleetBanner", () => {
   });
 
   it("renders success state when all items reviewed", () => {
-    const items = [
-      configItem("/etc/httpd/conf/httpd.conf", "config_files", 3),
-    ];
+    const items = [configItem("/etc/httpd/conf/httpd.conf", "config_files", 3)];
     const summary = makeSummary({ actionable_variant_items: items });
     const ack: UseVariantAckResult = {
       ...defaultAck,
@@ -125,9 +115,7 @@ describe("FleetBanner", () => {
 
     const banner = screen.getByTestId("fleet-banner");
     expect(banner).toHaveAttribute("data-severity", "success");
-    expect(
-      screen.getByText("All 1 variants reviewed"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("All 1 variants reviewed")).toBeInTheDocument();
   });
 
   it("shows item names with section tags", () => {
@@ -154,9 +142,7 @@ describe("FleetBanner", () => {
 
   it("calls onNavigate when item clicked", async () => {
     const user = userEvent.setup();
-    const items = [
-      configItem("/etc/httpd/conf/httpd.conf", "config_files", 3),
-    ];
+    const items = [configItem("/etc/httpd/conf/httpd.conf", "config_files", 3)];
     const summary = makeSummary({ actionable_variant_items: items });
     const onNavigate = vi.fn();
     const ack: UseVariantAckResult = {
@@ -181,9 +167,7 @@ describe("FleetBanner", () => {
   });
 
   it("shows informational variant count when present", () => {
-    const items = [
-      configItem("/etc/httpd/conf/httpd.conf", "config_files", 3),
-    ];
+    const items = [configItem("/etc/httpd/conf/httpd.conf", "config_files", 3)];
     const summary = makeSummary({
       actionable_variant_items: items,
       informational_variant_count: 5,

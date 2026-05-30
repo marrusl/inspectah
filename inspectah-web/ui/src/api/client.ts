@@ -65,11 +65,23 @@ export function applyOp(op: RefinementOp): Promise<ViewResponse> {
 }
 
 export function excludeRepo(sectionId: string): Promise<ViewResponse> {
-  return applyOp({ op: "SetInclude", target: { item_id: { kind: "Repo", key: { path: sectionId } }, include: false } });
+  return applyOp({
+    op: "SetInclude",
+    target: {
+      item_id: { kind: "Repo", key: { path: sectionId } },
+      include: false,
+    },
+  });
 }
 
 export function includeRepo(sectionId: string): Promise<ViewResponse> {
-  return applyOp({ op: "SetInclude", target: { item_id: { kind: "Repo", key: { path: sectionId } }, include: true } });
+  return applyOp({
+    op: "SetInclude",
+    target: {
+      item_id: { kind: "Repo", key: { path: sectionId } },
+      include: true,
+    },
+  });
 }
 
 export function undo(): Promise<ViewResponse> {
@@ -125,9 +137,7 @@ export function setUserPassword(
   return postJson("/api/user-password", { username, choice, hash });
 }
 
-export function fetchUserPreview(
-  reveal = false,
-): Promise<UserPreviewResponse> {
+export function fetchUserPreview(reveal = false): Promise<UserPreviewResponse> {
   const url = reveal ? "/api/user-preview?reveal=true" : "/api/user-preview";
   return getJson(url);
 }
