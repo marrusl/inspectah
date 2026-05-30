@@ -22,7 +22,7 @@ use inspectah_core::types::storage::{FstabEntry, StorageSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
-use inspectah_web::handlers::{AppState, normalize_for_context};
+use inspectah_web::handlers::{AppState, normalize_for_reference};
 use std::sync::{Arc, Mutex, OnceLock};
 use tower::ServiceExt;
 
@@ -826,12 +826,12 @@ async fn view_response_excludes_leaf_dep_tree() {
     );
 }
 
-// --- normalize_for_context unit tests ---------------------------------------
+// --- normalize_for_reference unit tests ---------------------------------------
 
 #[test]
 fn normalize_services_maps_state_changes_with_dropins() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
 
     // httpd.service state_change (with folded drop-in detail)
@@ -874,7 +874,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
 #[test]
 fn normalize_containers_maps_all_types() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let ctr = sections.iter().find(|s| s.id == "containers").unwrap();
 
     assert_eq!(ctr.items.len(), 4, "quadlet + compose + running + flatpak");
@@ -909,20 +909,20 @@ fn normalize_containers_maps_all_types() {
 }
 
 #[test]
-fn normalize_for_context_excludes_users_groups() {
+fn normalize_for_reference_excludes_users_groups() {
     // Users & groups data moved to ViewResponse.users_groups_decisions.
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     assert!(
         sections.iter().all(|s| s.id != "users_groups"),
-        "users_groups section should no longer appear in normalize_for_context"
+        "users_groups section should no longer appear in normalize_for_reference"
     );
 }
 
 #[test]
 fn normalize_network_maps_connections_and_firewall() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let net = sections.iter().find(|s| s.id == "network").unwrap();
 
     // NMConnection
@@ -960,7 +960,7 @@ fn normalize_network_maps_connections_and_firewall() {
 #[test]
 fn normalize_storage_maps_fstab() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let stor = sections.iter().find(|s| s.id == "storage").unwrap();
 
     let boot = stor.items.iter().find(|i| i.id == "/boot").unwrap();
@@ -971,7 +971,7 @@ fn normalize_storage_maps_fstab() {
 #[test]
 fn normalize_scheduled_tasks_maps_cron_and_timers() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let sched = sections.iter().find(|s| s.id == "scheduled_tasks").unwrap();
 
     assert_eq!(sched.items.len(), 2, "1 cron + 1 timer");
@@ -994,7 +994,7 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
 #[test]
 fn normalize_selinux_includes_mode_and_modules() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let se = sections.iter().find(|s| s.id == "selinux").unwrap();
 
     // Mode item
@@ -1018,7 +1018,7 @@ fn normalize_selinux_includes_mode_and_modules() {
 #[test]
 fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let kb = sections.iter().find(|s| s.id == "kernel_boot").unwrap();
 
     let cmdline = kb.items.iter().find(|i| i.id == "cmdline").unwrap();
@@ -1039,7 +1039,7 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
 #[test]
 fn normalize_non_rpm_maps_packages_and_version() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1082,7 +1082,7 @@ fn normalize_non_rpm_maps_packages_and_version() {
 fn normalize_non_rpm_empty_section() {
     // Snapshot with no non-rpm data
     let snap = InspectionSnapshot::new();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1091,9 +1091,9 @@ fn normalize_non_rpm_empty_section() {
 }
 
 #[test]
-fn normalize_for_context_section_count_and_ids() {
+fn normalize_for_reference_section_count_and_ids() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
     // Users & groups moved to ViewResponse — 9 sections remain.
     assert_eq!(sections.len(), 9, "exactly 9 context sections");
 
@@ -1118,9 +1118,9 @@ fn normalize_for_context_section_count_and_ids() {
 }
 
 #[test]
-fn normalize_for_context_item_counts() {
+fn normalize_for_reference_item_counts() {
     let snap = rich_snapshot();
-    let sections = normalize_for_context(&snap);
+    let sections = normalize_for_reference(&snap);
 
     // Verify non-zero item counts for sections with data
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
@@ -1144,7 +1144,7 @@ fn sections_cache_returns_same_pointer() {
     // First call populates cache
     let sections1 = state.sections_cache.get_or_init(|| {
         let session = state.session.lock().unwrap();
-        normalize_for_context(session.snapshot())
+        normalize_for_reference(session.snapshot())
     });
     // Second call returns cached value
     let sections2 = state.sections_cache.get().unwrap();

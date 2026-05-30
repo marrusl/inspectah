@@ -292,7 +292,7 @@ export interface ContextSubsection {
   items: ContextItem[];
 }
 
-export interface ContextSection {
+export interface ReferenceSection {
   id: string;
   display_name: string;
   items: ContextItem[];

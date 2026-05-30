@@ -7,7 +7,7 @@ import { ShortcutOverlay } from "./ShortcutOverlay";
 import { GlobalSearch } from "./GlobalSearch";
 import type { GlobalSearchHandle } from "./GlobalSearch";
 import { ExportDialog } from "./ExportDialog";
-import type { RefineStats, ContextSection } from "../api/types";
+import type { RefineStats, ReferenceSection } from "../api/types";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
 import type { FleetSummary } from "./StatsBar";
@@ -71,7 +71,7 @@ export interface AppShellProps {
   searchPackageItems: DecisionItemKind[];
   searchConfigItems: DecisionItemKind[];
   searchUserDecisions?: UserDecision[];
-  searchContextSections: ContextSection[] | null;
+  searchContextSections: ReferenceSection[] | null;
   /** GlobalSearch result navigation. */
   onSearchNavigate: (sectionId: string, itemId: string) => void;
   /** Extra shortcuts appended to the overlay. */

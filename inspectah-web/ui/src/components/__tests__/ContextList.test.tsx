@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ContextList } from "../ContextList";
-import type { ContextSection } from "../../api/types";
+import type { ReferenceSection } from "../../api/types";
 
 describe("ContextList", () => {
-  const mockSection: ContextSection = {
+  const mockSection: ReferenceSection = {
     id: "services",
     display_name: "Services",
     items: [
@@ -47,7 +47,7 @@ describe("ContextList", () => {
   });
 
   it("renders EmptyState when section has no items", () => {
-    const emptySection: ContextSection = {
+    const emptySection: ReferenceSection = {
       id: "services",
       display_name: "Services",
       items: [],
@@ -64,7 +64,7 @@ describe("ContextList", () => {
     ];
 
     sections.forEach((section) => {
-      const emptySection: ContextSection = { ...section, items: [] };
+      const emptySection: ReferenceSection = { ...section, items: [] };
       const { unmount } = render(<ContextList section={emptySection} />);
       expect(
         screen.getByText(new RegExp(`No ${section.display_name} data`, "i"))
@@ -80,7 +80,7 @@ describe("ContextList", () => {
   });
 
   it("renders subsections after main items", () => {
-    const section: ContextSection = {
+    const section: ReferenceSection = {
       id: "services",
       display_name: "Services",
       items: [
@@ -117,7 +117,7 @@ describe("ContextList", () => {
   });
 
   it("does not show empty state when only subsections exist", () => {
-    const section: ContextSection = {
+    const section: ReferenceSection = {
       id: "services",
       display_name: "Services",
       items: [],

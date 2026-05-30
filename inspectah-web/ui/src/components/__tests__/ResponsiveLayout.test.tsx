@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { HealthResponse, ContextSection } from "../../api/types";
+import type { HealthResponse, ReferenceSection } from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
 
 const MOCK_STATS = mockStats({
@@ -33,7 +33,7 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-const MOCK_SECTIONS: ContextSection[] = [
+const MOCK_SECTIONS: ReferenceSection[] = [
   { id: "services", display_name: "Services", items: [] },
 ];
 

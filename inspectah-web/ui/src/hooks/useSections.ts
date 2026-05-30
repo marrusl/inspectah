@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ContextSection } from "../api/types";
+import type { ReferenceSection } from "../api/types";
 import { fetchSections } from "../api/client";
 
 export interface UseSectionsResult {
-  data: ContextSection[] | null;
+  data: ReferenceSection[] | null;
   loading: boolean;
   error: Error | null;
   refetch: () => void;
 }
 
 export function useSections(): UseSectionsResult {
-  const [data, setData] = useState<ContextSection[] | null>(null);
+  const [data, setData] = useState<ReferenceSection[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);

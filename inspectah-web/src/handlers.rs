@@ -75,13 +75,13 @@ use crate::error::AppError;
 /// that are immutable for the session lifetime.
 pub struct AppState {
     pub session: Arc<Mutex<RefineSession>>,
-    pub sections_cache: OnceLock<Vec<ContextSection>>,
+    pub sections_cache: OnceLock<Vec<ReferenceSection>>,
 }
 
-// -- Context section DTOs (presentation layer only) -----------------------
+// -- Reference section DTOs (presentation layer only) ---------------------
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct ContextSection {
+pub struct ReferenceSection {
     pub id: String,
     pub display_name: String,
     pub items: Vec<ContextItem>,
@@ -107,9 +107,9 @@ pub struct ContextItem {
     pub searchable_text: String,
 }
 
-/// Create a `ContextSection` with empty subsections.
-fn context_section(id: &str, display_name: &str, items: Vec<ContextItem>) -> ContextSection {
-    ContextSection {
+/// Create a `ReferenceSection` with empty subsections.
+fn reference_section(id: &str, display_name: &str, items: Vec<ContextItem>) -> ReferenceSection {
+    ReferenceSection {
         id: id.to_string(),
         display_name: display_name.to_string(),
         items,
@@ -894,7 +894,7 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let sections = state.sections_cache.get_or_init(|| {
         let session = state.session.lock().unwrap();
-        normalize_for_context(session.snapshot())
+        normalize_for_reference(session.snapshot())
     });
     Json(sections.clone())
 }
@@ -919,15 +919,15 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
     Json(json!({ "ids": ids }))
 }
 
-// -- normalize_for_context ------------------------------------------------
+// -- normalize_for_reference ----------------------------------------------
 
-/// Map an `InspectionSnapshot` to presentation-layer `ContextSection`s.
+/// Map an `InspectionSnapshot` to presentation-layer `ReferenceSection`s.
 /// Produces 9 sections matching the spec. Sections that are `None` in the
-/// snapshot produce a `ContextSection` with an empty `items` vec.
+/// snapshot produce a `ReferenceSection` with an empty `items` vec.
 ///
 /// Users & Groups data is no longer included here — it flows through
 /// `ViewResponse.users_groups_decisions` from the projected snapshot.
-pub fn normalize_for_context(snap: &InspectionSnapshot) -> Vec<ContextSection> {
+pub fn normalize_for_reference(snap: &InspectionSnapshot) -> Vec<ReferenceSection> {
     vec![
         normalize_services(snap),
         normalize_version_changes(snap),
@@ -969,14 +969,14 @@ fn format_evr_pair(
     (fmt(base_epoch, base_version), fmt(host_epoch, host_version))
 }
 
-fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_version_changes(snap: &InspectionSnapshot) -> ReferenceSection {
     // Three-state empty reason:
     // - "no_baseline"       — rpm section exists, but no baseline data
     // - "zero_drift"        — baseline exists, but no version changes detected
     // - "data_unavailable"  — no rpm section at all
     let rpm = match &snap.rpm {
         None => {
-            return ContextSection {
+            return ReferenceSection {
                 id: "version_changes".to_string(),
                 display_name: "Version Changes".to_string(),
                 items: Vec::new(),
@@ -993,7 +993,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
         } else {
             "no_baseline"
         };
-        return ContextSection {
+        return ReferenceSection {
             id: "version_changes".to_string(),
             display_name: "Version Changes".to_string(),
             items: Vec::new(),
@@ -1041,7 +1041,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
         });
     }
 
-    ContextSection {
+    ReferenceSection {
         id: "version_changes".to_string(),
         display_name: "Version Changes".to_string(),
         items,
@@ -1050,7 +1050,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     }
 }
 
-fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_services(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
     let mut subsections = Vec::new();
 
@@ -1288,7 +1288,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
+    ReferenceSection {
         id: "services".to_string(),
         display_name: "Services".to_string(),
         items,
@@ -1318,7 +1318,7 @@ fn typed_service_subtitle(current: ServiceUnitState, default: Option<PresetDefau
     }
 }
 
-fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_containers(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(ctr) = &snap.containers {
@@ -1426,10 +1426,10 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("containers", "Containers", items)
+    reference_section("containers", "Containers", items)
 }
 
-fn normalize_network(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_network(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(net) = &snap.network {
@@ -1559,10 +1559,10 @@ fn normalize_network(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("network", "Network", items)
+    reference_section("network", "Network", items)
 }
 
-fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_storage(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(stor) = &snap.storage {
@@ -1626,10 +1626,10 @@ fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("storage", "Storage", items)
+    reference_section("storage", "Storage", items)
 }
 
-fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(sched) = &snap.scheduled_tasks {
@@ -1712,10 +1712,10 @@ fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("scheduled_tasks", "Scheduled Tasks", items)
+    reference_section("scheduled_tasks", "Scheduled Tasks", items)
 }
 
-fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(nrpm) = &snap.non_rpm_software {
@@ -1778,10 +1778,10 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("non_rpm_software", "Non-RPM Software", items)
+    reference_section("non_rpm_software", "Non-RPM Software", items)
 }
 
-fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(kb) = &snap.kernel_boot {
@@ -1943,10 +1943,10 @@ fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("kernel_boot", "Kernel & Boot", items)
+    reference_section("kernel_boot", "Kernel & Boot", items)
 }
 
-fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
+fn normalize_selinux(snap: &InspectionSnapshot) -> ReferenceSection {
     let mut items = Vec::new();
 
     if let Some(se) = &snap.selinux {
@@ -2060,7 +2060,7 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    context_section("selinux", "Security & Access Control", items)
+    reference_section("selinux", "Security & Access Control", items)
 }
 
 #[cfg(test)]
@@ -2154,7 +2154,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let containers = sections.iter().find(|s| s.id == "containers").unwrap();
         let item = containers
             .items
@@ -2194,7 +2194,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let containers = sections.iter().find(|s| s.id == "containers").unwrap();
         let item = containers.items.iter().find(|i| i.id == "abc123").unwrap();
 
@@ -2220,7 +2220,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let containers = sections.iter().find(|s| s.id == "containers").unwrap();
         let item = containers.items.iter().find(|i| i.id == "abc123").unwrap();
 
@@ -2254,7 +2254,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let nonrpm = sections
             .iter()
             .find(|s| s.id == "non_rpm_software")
@@ -2293,7 +2293,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let nonrpm = sections
             .iter()
             .find(|s| s.id == "non_rpm_software")
@@ -2314,7 +2314,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let selinux = sections.iter().find(|s| s.id == "selinux").unwrap();
         let fips = selinux
             .items
@@ -2335,7 +2335,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
         let selinux = sections.iter().find(|s| s.id == "selinux").unwrap();
         let fips = selinux
             .items
@@ -2608,7 +2608,7 @@ mod tests {
         });
 
         // Users & groups no longer in sections — served via ViewResponse.
-        let sections = normalize_for_context(&snap);
+        let sections = normalize_for_reference(&snap);
 
         for section in &sections {
             match section.id.as_str() {

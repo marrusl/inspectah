@@ -82,7 +82,7 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-function makeViewWithContextSection(): FleetViewResponse {
+function makeViewWithReferenceSection(): FleetViewResponse {
   return {
     generation: 1,
     can_undo: false,
@@ -141,7 +141,7 @@ beforeEach(() => {
 
 describe("context section read-only behavior", () => {
   it("clicking a context-section item does not open VariantView", async () => {
-    mockFetchFleetView.mockResolvedValue(makeViewWithContextSection());
+    mockFetchFleetView.mockResolvedValue(makeViewWithReferenceSection());
     const user = userEvent.setup();
 
     render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);

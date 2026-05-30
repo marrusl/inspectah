@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect, forwardRef, useImper
 import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
-import type { ContextSection, UserDecision } from "../api/types";
+import type { ReferenceSection, UserDecision } from "../api/types";
 
 export interface GlobalSearchResult {
   /** Section ID (e.g. "packages", "configs", "services"). */
@@ -39,8 +39,8 @@ export interface GlobalSearchProps {
   configItems: DecisionItemKind[];
   /** User decisions for the users_groups section. */
   userDecisions?: UserDecision[];
-  /** Context sections (services, containers, etc.). */
-  contextSections: ContextSection[] | null;
+  /** Reference sections (services, containers, etc.). */
+  contextSections: ReferenceSection[] | null;
   /** Called when user selects a result -- navigates to section + item. */
   onNavigate: (sectionId: string, itemId: string) => void;
 }

@@ -6,7 +6,7 @@ import {
   Button,
   Alert,
 } from "@patternfly/react-core";
-import type { ViewResponse, RefinedPackage, RefinedConfig, RefinementOp, ContextSection } from "../api/types";
+import type { ViewResponse, RefinedPackage, RefinedConfig, RefinementOp, ReferenceSection } from "../api/types";
 import { applyOp } from "../api/client";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
@@ -43,7 +43,7 @@ export interface MainContentProps {
   activeSection: string;
   loading: boolean;
   viewData: ViewResponse | null;
-  sections: ContextSection[] | null;
+  sections: ReferenceSection[] | null;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   sectionSearchOpen: boolean;

@@ -8,7 +8,7 @@ import {
   Skeleton,
 } from "@patternfly/react-core";
 import type { RefineStats } from "../api/types";
-import type { ContextSection } from "../api/types";
+import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 
@@ -38,7 +38,7 @@ export interface SidebarProps {
   activeSection: string;
   onSelect: (sectionId: string) => void;
   stats: RefineStats | null;
-  sections: ContextSection[] | null;
+  sections: ReferenceSection[] | null;
   health: HealthResponse | null;
   /** View data for counting decision items (services). */
   viewData?: ViewResponse | null;
@@ -53,7 +53,7 @@ export interface SidebarProps {
 }
 
 function sectionCount(
-  sections: ContextSection[] | null,
+  sections: ReferenceSection[] | null,
   id: string,
 ): string | undefined {
   if (!sections) return "...";

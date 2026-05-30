@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   ViewResponse,
-  ContextSection,
+  ReferenceSection,
   AnnotatedOp,
   ChangesSummary,
   HealthResponse,
@@ -118,7 +118,7 @@ const mockView: ViewResponse = {
   session_is_sensitive: false,
 };
 
-const mockSections: ContextSection[] = [
+const mockSections: ReferenceSection[] = [
   {
     id: "services",
     display_name: "Systemd Services",
@@ -245,7 +245,7 @@ describe("GET endpoints", () => {
   });
 
   describe("fetchSections", () => {
-    it("sends GET to /api/snapshot/sections and returns ContextSection[]", async () => {
+    it("sends GET to /api/snapshot/sections and returns ReferenceSection[]", async () => {
       mockFetchSuccess(mockSections);
       const result = await fetchSections();
       const { url, init } = lastFetchCall();
