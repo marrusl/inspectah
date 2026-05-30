@@ -1111,6 +1111,237 @@ mod tests {
         );
     }
 
+    /// Regression test for the baseline filter bug (commit e324d65).
+    ///
+    /// Before the fix, `packages_added` contained ALL host packages (including
+    /// baseline overlap) when passed to `populate_source_repos` and
+    /// `classify_leaf_auto` → `classify_deps_dnf`. This caused expensive DNF
+    /// queries on base-image packages that don't need resolution.
+    ///
+    /// The guard works by stubbing `dnf repoquery --requires --resolve` for
+    /// ONLY the 3 delta packages. If someone reverts the `.retain()` filter,
+    /// `classify_deps_dnf` will probe `bash.x86_64` first (alphabetically
+    /// sorted), find no stub, get exit_code 127, return `None`, and the whole
+    /// leaf classification degrades — `leaf_packages` becomes `None`.
+    #[test]
+    fn test_baseline_filter_prevents_dnf_queries_on_base_packages() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        // 8 host packages: 5 overlap with baseline, 3 are delta-only.
+        let rpm_qa_output = "\
+0:bash-5.2.26-3.el9.x86_64
+0:glibc-2.34-60.el9.x86_64
+0:kernel-5.14.0-503.el9.x86_64
+0:coreutils-8.32-34.el9.x86_64
+0:vim-enhanced-9.0.1592-1.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+0:nodejs-18.19.0-1.el9.x86_64
+0:redis-7.0.12-1.el9.x86_64
+";
+        let file_ownership_output = "\
+@@bash
+/etc/profile.d/bash_completion.sh
+@@httpd
+/etc/httpd/conf/httpd.conf
+";
+
+        // Baseline: the 5 packages that overlap with host.
+        let mut packages = std::collections::HashMap::new();
+        for (name, ver, rel) in [
+            ("bash", "5.2.26", "3.el9"),
+            ("glibc", "2.34", "60.el9"),
+            ("kernel", "5.14.0", "503.el9"),
+            ("coreutils", "8.32", "34.el9"),
+            ("vim-enhanced", "9.0.1592", "1.el9"),
+        ] {
+            packages.insert(
+                format!("{name}.x86_64"),
+                BaselinePackageEntry {
+                    name: name.to_string(),
+                    epoch: Some("0".to_string()),
+                    version: ver.to_string(),
+                    release: rel.to_string(),
+                    arch: "x86_64".to_string(),
+                },
+            );
+        }
+
+        let baseline_data = BaselineData {
+            image_digest: "sha256:regression-test".to_string(),
+            packages,
+            extracted_at: "2026-05-29T00:00:00Z".to_string(),
+        };
+
+        // Build executor with stubs for ONLY the 3 delta packages' dep queries.
+        // If the baseline filter is reverted, classify_deps_dnf will probe
+        // "bash.x86_64" first (alphabetical sort), find no stub (exit 127),
+        // and return None — making leaf_packages None (Degraded).
+        let exec = MockExecutor::new()
+            .with_command(
+                &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
+                ExecResult {
+                    stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+                ExecResult {
+                    stdout: file_ownership_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/etc/yum.repos.d", vec!["redhat.repo"])
+            .with_file(
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-9-baseos]\nname=RHEL 9 BaseOS\n",
+            )
+            .with_dir("/etc/dnf/modules.d", vec![])
+            .with_command(
+                "rpm -Va",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // dnf repoquery --userinstalled: only delta packages are user-installed
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "httpd.x86_64\nnodejs.x86_64\nredis.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            // dnf repoquery --requires --resolve: stubs for the 3 delta packages ONLY.
+            // httpd is alphabetically first among delta — this is the probe.
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n httpd.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n nodejs.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n redis.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            // Source repo attribution: probe is first package alphabetically (httpd),
+            // then remaining in a single batch.
+            .with_command(
+                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n httpd",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "httpd rhel-9-appstream\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n nodejs redis",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "nodejs rhel-9-appstream\nredis epel\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            baseline_data: Some(&baseline_data),
+            rpm_state: None,
+        };
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+
+        if let SectionData::Rpm(rpm) = &output.section {
+            // Primary regression guard: leaf_packages is Some (not degraded).
+            // If .retain() is reverted, classify_deps_dnf probes "bash.x86_64"
+            // (no stub) → exit 127 → returns None → leaf_packages = None.
+            assert!(
+                rpm.leaf_packages.is_some(),
+                "leaf_packages should be Some (dep tree completed); \
+                 None means DNF queried base packages without stubs — \
+                 baseline filter regression"
+            );
+
+            // packages_added should contain only the 3 delta packages.
+            assert_eq!(
+                rpm.packages_added.len(),
+                3,
+                "expected 3 delta packages, got {}",
+                rpm.packages_added.len()
+            );
+            let added_names: Vec<&str> =
+                rpm.packages_added.iter().map(|p| p.name.as_str()).collect();
+            assert!(added_names.contains(&"httpd"));
+            assert!(added_names.contains(&"nodejs"));
+            assert!(added_names.contains(&"redis"));
+
+            // baseline_suppressed should list the 5 overlapping base packages.
+            let suppressed = rpm
+                .baseline_suppressed
+                .as_ref()
+                .expect("baseline_suppressed should be Some");
+            assert_eq!(
+                suppressed.len(),
+                5,
+                "expected 5 suppressed base packages, got {}",
+                suppressed.len()
+            );
+            assert!(suppressed.contains(&"bash.x86_64".to_string()));
+            assert!(suppressed.contains(&"glibc.x86_64".to_string()));
+            assert!(suppressed.contains(&"kernel.x86_64".to_string()));
+            assert!(suppressed.contains(&"coreutils.x86_64".to_string()));
+            assert!(suppressed.contains(&"vim-enhanced.x86_64".to_string()));
+
+            // Leaf/auto classification should only reference delta packages.
+            if let Some(ref leaf) = rpm.leaf_packages {
+                for pkg_id in leaf {
+                    assert!(
+                        !pkg_id.starts_with("bash.")
+                            && !pkg_id.starts_with("glibc.")
+                            && !pkg_id.starts_with("kernel.")
+                            && !pkg_id.starts_with("coreutils.")
+                            && !pkg_id.starts_with("vim-enhanced."),
+                        "leaf_packages should not reference base package: {pkg_id}"
+                    );
+                }
+            }
+            if let Some(ref auto) = rpm.auto_packages {
+                for pkg_id in auto {
+                    assert!(
+                        !pkg_id.starts_with("bash.")
+                            && !pkg_id.starts_with("glibc.")
+                            && !pkg_id.starts_with("kernel.")
+                            && !pkg_id.starts_with("coreutils.")
+                            && !pkg_id.starts_with("vim-enhanced."),
+                        "auto_packages should not reference base package: {pkg_id}"
+                    );
+                }
+            }
+        } else {
+            panic!("expected SectionData::Rpm");
+        }
+    }
+
     // --- query_user_installed tests ---
 
     #[test]
