@@ -19,7 +19,7 @@ pub mod rhel;
 use anyhow::{Context, Result, bail};
 use inspectah_core::types::subscription::{SubscriptionFile, match_entitlement_pairs};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use self::extract::TarballExtractor;
 use self::rhel::{AmbientSubscription, detect_ambient_subscription};
@@ -232,6 +232,11 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
         }
     }
 
+    // Write image ID to a temp file so we can inherit stdout for build output.
+    let iid_file = extract_dir.join(".inspectah-iidfile");
+    cmd_args.push("--iidfile".into());
+    cmd_args.push(iid_file.display().to_string());
+
     cmd_args.extend(config.podman_args.clone());
     cmd_args.push("-f".into());
     cmd_args.push("Containerfile".into());
@@ -250,36 +255,29 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
     }
 
     // Execute podman build.
-    // Spawn with inherited stderr so build output streams in real time.
-    // Stdout is piped to capture the image digest on the final line.
-    let child = Command::new(&podman)
+    // Both stdout and stderr are inherited so build output streams in real time.
+    // The image digest is captured via --iidfile instead of parsing stdout.
+    let status = Command::new(&podman)
         .args(&cmd_args)
         .current_dir(&extract_dir)
-        .stderr(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .spawn()
+        .status()
         .context("failed to execute podman")?;
 
-    let output = child
-        .wait_with_output()
-        .context("failed to wait for podman")?;
-
-    let exit_code = output.status.code().unwrap_or(1);
+    let exit_code = status.code().unwrap_or(1);
 
     if exit_code == 0 {
-        // Try to extract image digest from podman output.
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let digest = stdout
-            .lines()
-            .last()
-            .filter(|l| l.starts_with("sha256:") || l.len() == 64)
-            .map(|l| {
-                if l.starts_with("sha256:") {
-                    l.to_string()
+        let digest = std::fs::read_to_string(&iid_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if s.starts_with("sha256:") {
+                    s
                 } else {
-                    format!("sha256:{l}")
+                    format!("sha256:{s}")
                 }
             });
+        let _ = std::fs::remove_file(&iid_file);
 
         Ok((
             BuildOutcome::Success {
@@ -289,6 +287,7 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
             warnings,
         ))
     } else {
+        let _ = std::fs::remove_file(&iid_file);
         Ok((BuildOutcome::PodmanFailed { exit_code }, warnings))
     }
 }
