@@ -1,10 +1,10 @@
 import { EmptyState, EmptyStateBody } from "@patternfly/react-core";
 import { CubesIcon } from "@patternfly/react-icons";
-import type { ContextSection } from "../api/types";
+import type { ReferenceSection } from "../api/types";
 import { ContextItem } from "./ContextItem";
 
 export interface ContextListProps {
-  section: ContextSection;
+  section: ReferenceSection;
 }
 
 export function ContextList({ section }: ContextListProps) {

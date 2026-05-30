@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { ContextSection, HealthResponse, ViewResponse } from "../../api/types";
+import type { ReferenceSection, HealthResponse, ViewResponse } from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
 
 const MOCK_STATS = mockStats({
@@ -17,7 +17,7 @@ const MOCK_STATS = mockStats({
   baseline_available: true,
 });
 
-const MOCK_SECTIONS: ContextSection[] = [
+const MOCK_SECTIONS: ReferenceSection[] = [
   { id: "version_changes", display_name: "Version Changes", items: [] },
   { id: "containers", display_name: "Containers", items: [] },
   { id: "network", display_name: "Network", items: [] },

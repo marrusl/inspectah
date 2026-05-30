@@ -9,7 +9,7 @@ import type {
   ItemId,
   RefinementOp,
   RefineStats,
-  ContextSection,
+  ReferenceSection,
 } from "../api/types";
 import { fetchFleetView } from "../api/fleet-client";
 import "../fleet.css";
@@ -84,8 +84,8 @@ function itemIdKey(id: ItemId): string {
   return JSON.stringify(id);
 }
 
-/** Build ContextSection[] from fleet sections for GlobalSearch indexing. */
-function buildFleetSearchSections(sections: FleetSection[]): ContextSection[] {
+/** Build ReferenceSection[] from fleet sections for GlobalSearch indexing. */
+function buildFleetSearchSections(sections: FleetSection[]): ReferenceSection[] {
   return sections.map((s) => ({
     id: s.id,
     display_name: s.display_name,

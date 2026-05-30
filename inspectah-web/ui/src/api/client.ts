@@ -1,6 +1,6 @@
 import type {
   ViewResponse,
-  ContextSection,
+  ReferenceSection,
   AnnotatedOp,
   ChangesSummary,
   HealthResponse,
@@ -42,7 +42,7 @@ export function fetchView(): Promise<ViewResponse> {
   return getJson("/api/view");
 }
 
-export function fetchSections(): Promise<ContextSection[]> {
+export function fetchSections(): Promise<ReferenceSection[]> {
   return getJson("/api/snapshot/sections");
 }
 

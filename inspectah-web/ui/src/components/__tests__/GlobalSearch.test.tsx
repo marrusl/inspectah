@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { GlobalSearch } from "../GlobalSearch";
 import type { GlobalSearchProps } from "../GlobalSearch";
 import type { DecisionItemKind } from "../DecisionItem";
-import type { ContextSection, TriageAnnotation } from "../../api/types";
+import type { ReferenceSection, TriageAnnotation } from "../../api/types";
 
 const DEFAULT_TRIAGE = { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] as TriageAnnotation[] };
 
@@ -52,7 +52,7 @@ function makeConfigItem(path: string): DecisionItemKind {
   };
 }
 
-function makeContextSection(id: string, items: { id: string; title: string }[]): ContextSection {
+function makeReferenceSection(id: string, items: { id: string; title: string }[]): ReferenceSection {
   return {
     id,
     display_name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -71,7 +71,7 @@ function renderGlobalSearch(overrides: Partial<GlobalSearchProps> = {}) {
     packageItems: [makePackageItem("httpd"), makePackageItem("nginx")],
     configItems: [makeConfigItem("/etc/httpd/httpd.conf")],
     contextSections: [
-      makeContextSection("services", [
+      makeReferenceSection("services", [
         { id: "svc:httpd", title: "httpd.service" },
         { id: "svc:nginx", title: "nginx.service" },
       ]),

@@ -826,10 +826,10 @@ fn build_fleet_sections(
         }
     }
 
-    // --- Context sections (read-only, no toggles) ---
+    // --- Reference sections (read-only, no toggles) ---
     // These sections come from the snapshot, not from RefinedView.
     // Items have fleet prevalence but no include/exclude toggle.
-    build_context_sections(&mut sections, snap, ctx);
+    build_reference_sections(&mut sections, snap, ctx);
 
     sections
 }
@@ -890,10 +890,10 @@ fn build_section(
 }
 
 // ---------------------------------------------------------------------------
-// Context section builders (services, containers, etc.)
+// Reference section builders (services, containers, etc.)
 // ---------------------------------------------------------------------------
 
-fn build_context_sections(
+fn build_reference_sections(
     sections: &mut Vec<FleetSection>,
     snap: &InspectionSnapshot,
     ctx: &FleetContext,
