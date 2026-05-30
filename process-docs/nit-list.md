@@ -2,9 +2,7 @@
 
 Small output quality and polish items. Not worth individual specs — just fix when touching nearby code.
 
-## Build Output Streaming
-
-- [ ] **`inspectah build` swallows podman output:** The build command uses `Command::new().output()` which captures stdout and stderr into memory buffers. Users see nothing until the build finishes or fails, and on failure only get an opaque exit code (e.g., 125) with no error message. Fix: change `.output()` to `.spawn()` with inherited stdio so podman's output streams in real time. Location: `inspectah-pipeline/src/build/mod.rs`.
+## ~~Build Output Streaming~~ (DONE — 2026-05-30)
 
 ## Naming Consistency (Rust)
 
@@ -155,3 +153,12 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [x] **Fleet toggles broken:** Configs, services, drop-ins, and quadlets were recalculating include from raw prevalence instead of reading projected snapshot state. Fixed to use `entry.include`. *(DONE — 2026-05-26)*
 - [x] **Tuned fleet data wrong:** Three fixes — merge hardcoded `true`, view hardcoded `true`, prevalence passed as `None`. Added `is_stock_tuned_profile()` recognizing 14 stock profiles; both single-host and fleet paths suppress stock defaults. *(DONE — 2026-05-26)*
 - [x] **Prevalence badge contrast:** Replaced yellow-on-white text with tinted pill badges (green/amber/red) all exceeding WCAG AA 4.5:1. *(DONE — 2026-05-26)*
+
+### Build Output Streaming (DONE — 2026-05-30)
+
+- [x] **`inspectah build` swallowed podman output:** Stdout was piped to capture the image digest, which also captured all build step output. Fixed by using `--iidfile` to write the digest to a temp file, then inheriting both stdout and stderr so all podman output streams in real time. *(DONE — 2026-05-30)*
+
+### RPM Performance (DONE — 2026-05-30)
+
+- [x] **Baseline filter ran after DNF queries:** `packages_added` contained all host packages (~491), not just the delta (~120). Both `populate_source_repos` and `classify_leaf_auto` → `classify_deps_dnf` ran on everything. Fixed by filtering `packages_added` against baseline before expensive operations. Regression test guards the ordering. *(DONE — 2026-05-29)*
+- [x] **Per-package DNF dep resolution (~6s/query):** `classify_deps_dnf` spawned one `dnf repoquery` per package. With 120 delta packages: 711s. Ported Go's `classifyDepsRpm` approach as primary: `rpm -qR` per package (~8ms) + `rpm --whatprovides` in batches of 50, BFS graph traversal in Rust. DNF is now fallback. *(DONE — 2026-05-30)*
