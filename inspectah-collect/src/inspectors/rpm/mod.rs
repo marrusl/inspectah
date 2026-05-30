@@ -13,7 +13,9 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 /// RPM query format string for NEVRA parsing.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
@@ -605,6 +607,185 @@ fn classify_deps_dnf(
     Some(depends_on)
 }
 
+/// Result of dependency graph construction, carrying whether the graph
+/// already contains transitive closure (DNF `--recursive`) or only
+/// direct dependencies (rpm `-qR`).
+struct DepGraphResult {
+    depends_on: HashMap<String, HashSet<String>>,
+    transitive: bool,
+}
+
+/// Build a dependency graph using `rpm -qR` + `rpm -q --whatprovides`.
+///
+/// For each package in `added_ids`, runs `rpm -qR <name>` to get direct
+/// dependency capabilities, filters out `rpmlib(...)` and path deps,
+/// then resolves capabilities to provider packages via batched
+/// `rpm -q --whatprovides` calls.
+///
+/// Returns direct-only deps (caller must walk the graph for transitive closure).
+/// Returns `None` if `rpm -qR` fails on the first probe package.
+fn classify_deps_rpm(
+    exec: &dyn Executor,
+    added_ids: &HashSet<String>,
+) -> Option<HashMap<String, HashSet<String>>> {
+    if added_ids.is_empty() {
+        return Some(HashMap::new());
+    }
+
+    let start = Instant::now();
+
+    // Build a set of plain names (without .arch) for added packages.
+    let added_names: HashSet<&str> = added_ids.iter().map(|id| name_from_id(id)).collect();
+
+    let mut package_ids: Vec<&String> = added_ids.iter().collect();
+    package_ids.sort();
+
+    // NEVRA regex: extract name from e.g. "glibc-2.34-60.el9.x86_64"
+    let name_re = Regex::new(r"^(.+?)-\d").expect("NEVRA regex must compile");
+    let batch_size = 50;
+
+    let mut depends_on: HashMap<String, HashSet<String>> = HashMap::new();
+    for package_id in added_ids {
+        depends_on.insert(package_id.clone(), HashSet::new());
+    }
+
+    // Probe with first package to check if rpm -qR is available.
+    let first_name = name_from_id(package_ids[0]);
+    let probe = exec.run("rpm", &["-qR", first_name]);
+    if !probe.success() {
+        return None;
+    }
+
+    // Process first package's capabilities inline.
+    let first_caps = filter_capabilities(&probe.stdout);
+    resolve_providers(
+        exec,
+        package_ids[0],
+        &first_caps,
+        &added_names,
+        added_ids,
+        &name_re,
+        batch_size,
+        &mut depends_on,
+    );
+
+    // Query remaining packages.
+    for package_id in &package_ids[1..] {
+        let pkg_name = name_from_id(package_id);
+        let result = exec.run("rpm", &["-qR", pkg_name]);
+        if !result.success() {
+            continue;
+        }
+        let caps = filter_capabilities(&result.stdout);
+        resolve_providers(
+            exec,
+            package_id,
+            &caps,
+            &added_names,
+            added_ids,
+            &name_re,
+            batch_size,
+            &mut depends_on,
+        );
+    }
+
+    let elapsed = start.elapsed();
+    eprintln!(
+        "[timing] RPM dep tree resolution (rpm -qR): {:.1}s ({} packages queried)",
+        elapsed.as_secs_f64(),
+        package_ids.len(),
+    );
+
+    Some(depends_on)
+}
+
+/// Extract the package name from a canonical `name.arch` identity.
+fn name_from_id(id: &str) -> &str {
+    id.rsplit_once('.').map_or(id, |(name, _)| name)
+}
+
+/// Filter `rpm -qR` output to usable capability names.
+///
+/// Skips lines starting with `rpmlib(` or `/`, and takes only the first
+/// whitespace-separated field (capability name without version constraints).
+fn filter_capabilities(stdout: &str) -> Vec<String> {
+    let mut caps = Vec::new();
+    for line in stdout.lines() {
+        let cap = line.trim();
+        if cap.is_empty() || cap.starts_with("rpmlib(") || cap.starts_with('/') {
+            continue;
+        }
+        // Take the first field (before any whitespace version constraint).
+        let name = cap.split_whitespace().next().unwrap_or(cap);
+        if !name.is_empty() {
+            caps.push(name.to_string());
+        }
+    }
+    caps.sort();
+    caps.dedup();
+    caps
+}
+
+/// Resolve a set of capabilities to provider packages and record edges
+/// in the dependency graph.
+#[allow(clippy::too_many_arguments)]
+fn resolve_providers(
+    exec: &dyn Executor,
+    package_id: &str,
+    caps: &[String],
+    added_names: &HashSet<&str>,
+    added_ids: &HashSet<String>,
+    name_re: &Regex,
+    batch_size: usize,
+    depends_on: &mut HashMap<String, HashSet<String>>,
+) {
+    if caps.is_empty() {
+        return;
+    }
+
+    let pkg_name = name_from_id(package_id);
+
+    for chunk in caps.chunks(batch_size) {
+        let mut args: Vec<&str> = vec!["-q", "--whatprovides"];
+        args.extend(chunk.iter().map(|s| s.as_str()));
+
+        let result = exec.run("rpm", &args);
+        if !result.success() {
+            continue;
+        }
+
+        for pline in result.stdout.lines() {
+            let pline = pline.trim();
+            if pline.is_empty() || pline.contains("no package provides") {
+                continue;
+            }
+
+            // Parse NEVRA to extract provider name.
+            let provider = if let Some(m) = name_re.captures(pline) {
+                m.get(1).map(|g| g.as_str())
+            } else {
+                // Fallback: split on first '-'.
+                pline.split_once('-').map(|(n, _)| n)
+            };
+
+            if let Some(provider_name) = provider {
+                // Only track deps where the provider is also in added packages.
+                if provider_name != pkg_name && added_names.contains(provider_name) {
+                    // Find the matching canonical ID(s) in added_ids.
+                    // The provider NEVRA includes arch as the last dot-segment.
+                    let provider_arch = pline.rsplit_once('.').map(|(_, a)| a).unwrap_or("");
+                    let candidate_id = format!("{}.{}", provider_name, provider_arch);
+                    if added_ids.contains(&candidate_id)
+                        && let Some(deps) = depends_on.get_mut(package_id)
+                    {
+                        deps.insert(candidate_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency)
 /// sets using canonical `name.arch` identities. If dependency classification is
 /// unavailable or incomplete, returns explicit degraded-mode metadata instead of
@@ -621,15 +802,29 @@ fn classify_leaf_auto(
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
     let user_installed = query_user_installed(exec);
-    let Some(depends_on) = classify_deps_dnf(exec, &added_ids) else {
+
+    // Try rpm-based dep resolution first (fast), fall back to DNF (slow).
+    let graph = if let Some(rpm_deps) = classify_deps_rpm(exec, &added_ids) {
+        DepGraphResult {
+            depends_on: rpm_deps,
+            transitive: false,
+        }
+    } else if let Some(dnf_deps) = classify_deps_dnf(exec, &added_ids) {
+        DepGraphResult {
+            depends_on: dnf_deps,
+            transitive: true,
+        }
+    } else {
         return LeafClassification::unavailable();
     };
+
+    let depends_on = &graph.depends_on;
 
     let (mut leaf, mut auto): (Vec<String>, Vec<String>) = if let Some(ref ui) = user_installed {
         let leaf_set: HashSet<&String> = ui.intersection(&added_ids).collect();
         if leaf_set.is_empty() && !added_ids.is_empty() {
             // Fallback to graph-based when userinstalled has no overlap with added
-            graph_based_split(&added_ids, &depends_on)
+            graph_based_split(&added_ids, depends_on)
         } else {
             let mut l = Vec::new();
             let mut a = Vec::new();
@@ -643,7 +838,7 @@ fn classify_leaf_auto(
             (l, a)
         }
     } else {
-        graph_based_split(&added_ids, &depends_on)
+        graph_based_split(&added_ids, depends_on)
     };
 
     leaf.sort();
@@ -653,18 +848,52 @@ fn classify_leaf_auto(
     // Build per-leaf dep tree: for each leaf, list its auto dependencies.
     let auto_set: HashSet<&str> = auto.iter().map(|s| s.as_str()).collect();
     let mut dep_tree = serde_json::Map::new();
-    for lf in &leaf {
-        let mut filtered: Vec<String> = depends_on
-            .get(lf)
-            .map(|deps| {
-                deps.iter()
-                    .filter(|d| auto_set.contains(d.as_str()))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        filtered.sort();
-        dep_tree.insert(lf.clone(), serde_json::json!(filtered));
+
+    if graph.transitive {
+        // DNF --recursive already gave transitive closure.
+        for lf in &leaf {
+            let mut filtered: Vec<String> = depends_on
+                .get(lf)
+                .map(|deps| {
+                    deps.iter()
+                        .filter(|d| auto_set.contains(d.as_str()))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            filtered.sort();
+            dep_tree.insert(lf.clone(), serde_json::json!(filtered));
+        }
+    } else {
+        // rpm gives only direct deps; walk the graph (BFS) for transitive closure.
+        for lf in &leaf {
+            let mut reachable: HashSet<String> = HashSet::new();
+            let mut stack: Vec<String> = depends_on
+                .get(lf)
+                .map(|deps| deps.iter().cloned().collect())
+                .unwrap_or_default();
+
+            while let Some(dep) = stack.pop() {
+                if reachable.contains(&dep) {
+                    continue;
+                }
+                reachable.insert(dep.clone());
+                if let Some(next_deps) = depends_on.get(&dep) {
+                    for next in next_deps {
+                        if !reachable.contains(next) {
+                            stack.push(next.clone());
+                        }
+                    }
+                }
+            }
+
+            let mut filtered: Vec<String> = reachable
+                .into_iter()
+                .filter(|d| auto_set.contains(d.as_str()))
+                .collect();
+            filtered.sort();
+            dep_tree.insert(lf.clone(), serde_json::json!(filtered));
+        }
     }
 
     LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
@@ -2336,5 +2565,231 @@ mod tests {
             )),
             "dep tree step should emit Degraded outcome when leaf classification is unavailable"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // classify_deps_rpm tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_deps_rpm_builds_arch_aware_graph() {
+        // vim depends on glibc (via libc.so.6 capability).
+        // glibc has no deps in added set.
+        let exec = MockExecutor::new()
+            .with_command(
+                "rpm -qR glibc",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "rpmlib(CompressedFileNames) <= 3.0.4-1\n\
+                             /sbin/ldconfig\n\
+                             basesystem\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -q --whatprovides basesystem",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "basesystem-11-13.el9.noarch\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -qR vim",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "libc.so.6()(64bit)\n\
+                             libncurses.so.6()(64bit)\n\
+                             rpmlib(PayloadIsZstd) <= 5.4.18-1\n\
+                             /usr/bin/sh\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -q --whatprovides libc.so.6()(64bit) libncurses.so.6()(64bit)",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc-2.34-60.el9.x86_64\n\
+                             ncurses-libs-6.2-8.el9.x86_64\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added_ids: HashSet<String> = ["vim.x86_64", "glibc.x86_64"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let deps = classify_deps_rpm(&exec, &added_ids).expect("graph should be available");
+        // vim depends on glibc (via libc.so.6 → glibc-2.34-60.el9.x86_64).
+        assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
+        // ncurses-libs is not in added_ids, so it should not appear.
+        assert!(!deps
+            .get("vim.x86_64")
+            .unwrap()
+            .iter()
+            .any(|d| d.contains("ncurses")));
+        // glibc has no deps in the added set (basesystem is not in added_ids).
+        assert!(deps.get("glibc.x86_64").unwrap().is_empty());
+    }
+
+    #[test]
+    fn classify_deps_rpm_returns_none_when_rpm_unavailable() {
+        let exec = MockExecutor::new().with_command(
+            "rpm -qR glibc",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "rpm: command not found".into(),
+            },
+        );
+
+        let added_ids: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
+        let deps = classify_deps_rpm(&exec, &added_ids);
+        assert!(deps.is_none());
+    }
+
+    #[test]
+    fn classify_deps_rpm_empty_set_returns_empty_graph() {
+        let exec = MockExecutor::new();
+        let added_ids: HashSet<String> = HashSet::new();
+        let deps = classify_deps_rpm(&exec, &added_ids).expect("empty set should return Some");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn filter_capabilities_skips_rpmlib_and_paths() {
+        let stdout = "rpmlib(CompressedFileNames) <= 3.0.4-1\n\
+                      /usr/bin/sh\n\
+                      libc.so.6()(64bit)\n\
+                      /sbin/ldconfig\n\
+                      libm.so.6()(64bit)\n\
+                      rpmlib(PayloadIsZstd) <= 5.4.18-1\n";
+        let caps = filter_capabilities(stdout);
+        assert_eq!(caps, vec!["libc.so.6()(64bit)", "libm.so.6()(64bit)"]);
+    }
+
+    #[test]
+    fn filter_capabilities_deduplicates() {
+        let stdout = "libc.so.6()(64bit)\n\
+                      libc.so.6()(64bit)\n\
+                      libm.so.6()(64bit)\n";
+        let caps = filter_capabilities(stdout);
+        assert_eq!(caps, vec!["libc.so.6()(64bit)", "libm.so.6()(64bit)"]);
+    }
+
+    #[test]
+    fn filter_capabilities_strips_version_constraints() {
+        let stdout = "libc.so.6(GLIBC_2.17)(64bit) >= 2.17\n\
+                      libpthread.so.0()(64bit)\n";
+        let caps = filter_capabilities(stdout);
+        assert_eq!(
+            caps,
+            vec!["libc.so.6(GLIBC_2.17)(64bit)", "libpthread.so.0()(64bit)"]
+        );
+    }
+
+    #[test]
+    fn name_from_id_extracts_name() {
+        assert_eq!(name_from_id("glibc.x86_64"), "glibc");
+        assert_eq!(name_from_id("vim-enhanced.noarch"), "vim-enhanced");
+        assert_eq!(name_from_id("noarch"), "noarch"); // no dot → return whole string
+    }
+
+    #[test]
+    fn classify_leaf_auto_uses_rpm_with_bfs_transitive_closure() {
+        // Three packages: httpd depends on apr, apr depends on glibc.
+        // rpm -qR gives direct deps only → BFS must compute transitive closure.
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: "dnf not found".into(),
+                },
+            )
+            // rpm -qR for each package (sorted alphabetically: apr, glibc, httpd)
+            .with_command(
+                "rpm -qR apr",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "libc.so.6()(64bit)\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -q --whatprovides libc.so.6()(64bit)",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc-2.34-60.el9.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -qR glibc",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "rpmlib(CompressedFileNames) <= 3.0.4-1\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -qR httpd",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "libapr-1.so.0()(64bit)\nlibc.so.6()(64bit)\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "rpm -q --whatprovides libapr-1.so.0()(64bit) libc.so.6()(64bit)",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "apr-1.7.0-12.el9.x86_64\nglibc-2.34-60.el9.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let packages = vec![
+            PackageEntry {
+                name: "httpd".into(),
+                version: "2.4.57-5.el9".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                version: "1.7.0-12.el9".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                version: "2.34-60.el9".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            },
+        ];
+
+        let baseline = HashSet::new();
+        let result = classify_leaf_auto(&exec, &packages, &baseline);
+        // httpd is leaf (nothing depends on it).
+        assert_eq!(result.leaf_packages, Some(vec!["httpd.x86_64".to_string()]));
+        // apr and glibc are auto.
+        let mut auto = result.auto_packages.unwrap();
+        auto.sort();
+        assert_eq!(auto, vec!["apr.x86_64", "glibc.x86_64"]);
+        // httpd's dep tree should include BOTH apr and glibc (transitive via BFS).
+        let tree = result.leaf_dep_tree.as_object().unwrap();
+        let httpd_deps: Vec<String> =
+            serde_json::from_value(tree.get("httpd.x86_64").unwrap().clone()).unwrap();
+        assert!(httpd_deps.contains(&"apr.x86_64".to_string()));
+        assert!(httpd_deps.contains(&"glibc.x86_64".to_string()));
     }
 }
