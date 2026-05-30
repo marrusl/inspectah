@@ -233,21 +233,30 @@ impl Inspector for RpmInspector {
         progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
         use inspectah_core::types::progress::{MetricKind, ProgressEvent, StepId, StepOutcome};
+        use std::time::Instant;
 
         let exec = ctx.executor;
         let inspector_id = InspectorId::Rpm;
+        let inspector_start = Instant::now();
 
         // 1. Query packages
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::QueryingPackages,
         });
+        let step_start = Instant::now();
         let host_packages = self.query_packages(exec);
         if host_packages.is_empty() {
             return Err(InspectorError::Failed {
                 reason: "rpm -qa returned no packages".into(),
             });
         }
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM query packages (rpm -qa): {:.1}s ({} packages)",
+            elapsed.as_secs_f64(),
+            host_packages.len()
+        );
         progress.emit(ProgressEvent::Metric {
             inspector: inspector_id,
             kind: MetricKind::PackagesFound,
@@ -264,6 +273,7 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::ClassifyingPackages,
         });
+        let step_start = Instant::now();
         let baseline = self.build_baseline(ctx.baseline_data);
         let classification = classifier::classify_packages(&host_packages, &baseline);
         let version_changes = classification.version_changes;
@@ -295,6 +305,13 @@ impl Inspector for RpmInspector {
                 .collect(),
             None => Vec::new(),
         };
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM classify packages: {:.1}s ({} added, {} base-only)",
+            elapsed.as_secs_f64(),
+            packages_added.len(),
+            base_image_only.len()
+        );
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
             step: StepId::ClassifyingPackages,
@@ -306,6 +323,7 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::ResolvingSourceRepos,
         });
+        let step_start = Instant::now();
         if !packages_added.is_empty() {
             source_repos::populate_source_repos(exec, &mut packages_added);
         }
@@ -315,6 +333,12 @@ impl Inspector for RpmInspector {
             .filter(|r| !r.is_empty())
             .collect::<std::collections::HashSet<_>>()
             .len();
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM source repo resolution: {:.1}s ({} repos mapped)",
+            elapsed.as_secs_f64(),
+            repo_count
+        );
         progress.emit(ProgressEvent::Metric {
             inspector: inspector_id,
             kind: MetricKind::ReposMapped,
@@ -345,6 +369,7 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::ResolvingDepTree,
         });
+        let step_start = Instant::now();
         let baseline_name_set: HashSet<String> = ctx
             .baseline_data
             .map(|b| b.packages.keys().cloned().collect())
@@ -357,6 +382,12 @@ impl Inspector for RpmInspector {
         } else {
             StepOutcome::Complete
         };
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM dep tree resolution (dnf repoquery): {:.1}s ({} packages queried)",
+            elapsed.as_secs_f64(),
+            packages_added.len()
+        );
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
             step: StepId::ResolvingDepTree,
@@ -368,7 +399,13 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::VerifyingIntegrity,
         });
+        let step_start = Instant::now();
         let supp = self.collect_supplementary(exec, ctx.source_system);
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM supplementary data (repos, modules, rpm -Va): {:.1}s",
+            elapsed.as_secs_f64()
+        );
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
             step: StepId::VerifyingIntegrity,
@@ -380,12 +417,24 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::MappingFileOwnership,
         });
+        let step_start = Instant::now();
         let file_ownership = self.query_file_ownership(exec);
+        let elapsed = step_start.elapsed();
+        eprintln!(
+            "[timing] RPM file ownership query: {:.1}s ({} packages mapped)",
+            elapsed.as_secs_f64(),
+            file_ownership.len()
+        );
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
             step: StepId::MappingFileOwnership,
             outcome: StepOutcome::Complete,
         });
+
+        eprintln!(
+            "[timing] RPM inspector total: {:.1}s",
+            inspector_start.elapsed().as_secs_f64()
+        );
 
         // 8. Build baseline_package_names for downstream consumers
         let baseline_package_names = ctx.baseline_data.map(|b| {
