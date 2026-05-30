@@ -19,7 +19,7 @@ pub mod rhel;
 use anyhow::{Context, Result, bail};
 use inspectah_core::types::subscription::{SubscriptionFile, match_entitlement_pairs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use self::extract::TarballExtractor;
 use self::rhel::{AmbientSubscription, detect_ambient_subscription};
@@ -250,11 +250,19 @@ pub fn plan_and_execute(config: &BuildConfig) -> Result<(BuildOutcome, Vec<Build
     }
 
     // Execute podman build.
-    let output = Command::new(&podman)
+    // Spawn with inherited stderr so build output streams in real time.
+    // Stdout is piped to capture the image digest on the final line.
+    let child = Command::new(&podman)
         .args(&cmd_args)
         .current_dir(&extract_dir)
-        .output()
+        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .spawn()
         .context("failed to execute podman")?;
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for podman")?;
 
     let exit_code = output.status.code().unwrap_or(1);
 
