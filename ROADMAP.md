@@ -39,6 +39,9 @@
 | RPM Dep Tree: rpm-based Primary | DONE (2026-05-30) |
 | Build Output Streaming Fix | DONE (2026-05-30) |
 | **v0.8.4-alpha.1** | **TAGGED (2026-05-30)** |
+| Fleet Spec 2: Refine | DONE (2026-05-30) |
+| Unified Package/Repo Management | DONE (2026-05-30) |
+| Docs Overhaul | DONE (2026-05-30) |
 
 ## Roadmap to CLI Cutover
 
@@ -85,6 +88,24 @@
     ↓
 ✅ Fleet Phase 2b: Refine UI (zones, badges, drawers, variant view, diff drawer, fleet banner — shipped incrementally)
     ↓
+✅ Playwright E2E Testing Expansion (66 mock tests + 3 API smoke tests — 2026-05-27)
+    ↓
+✅ Single-Host / Fleet UI Convergence (visual alignment, shared components — 2026-05-27)
+    ↓
+✅ Preserve Subscription + Build (2026-05-29)
+    ↓
+✅ v0.8.3-alpha.1 (tagged 2026-05-29)
+    ↓
+✅ RPM Baseline Filter Fix + Dep Tree rpm-based Primary + Build Output Streaming (2026-05-30)
+    ↓
+✅ v0.8.4-alpha.1 (tagged 2026-05-30)
+    ↓
+✅ Fleet Spec 2: Refine (2026-05-30)
+    ↓
+✅ Unified Package/Repo Management (2026-05-30)
+    ↓
+✅ Docs Overhaul (2026-05-30)
+    ↓
 Config Content Editor (inline editing of config files in refine view — needs spec)
     ↓
 Fleet Spec 3: Architect (cross-role hierarchy, possibly multi-phase)
@@ -107,6 +128,18 @@ Expanded the Playwright e2e suite from 6 spec files (many skipped) to 11 with fu
 **Status:** Visual alignment completed across all promoted sections. Remaining nits tracked in nit-list.md, addressed incrementally.
 
 Single-host and fleet modes achieved visual convergence. Shared component patterns applied: RepoBar, DecisionItem, ContextItem, nav labels, padding, repo sort, os_name deduplication. Bugs fixed in shared components benefit both modes.
+
+### Fleet Spec 2: Refine (DONE — 2026-05-30)
+
+**Status:** Fleet sessions in the refine crate. Resolves the provenance gate, adds fleet-aware refine UX with prevalence columns, threshold controls, variant comparison and selection, baseline confirmation workflow, and section-level host indicators. Builds on Spec 1's merge engine, FleetSnapshotMeta, and per-section host counts.
+
+### Unified Package/Repo Management (DONE — 2026-05-30)
+
+**Status:** Unified package and repository management across single-host and fleet modes. Centralized package resolution and repository handling with consistent UI patterns.
+
+### Docs Overhaul (DONE — 2026-05-30)
+
+**Status:** Comprehensive documentation update following Diataxis framework with diagrams and GitHub Pages deployment.
 
 ### Fleet Phase 2a: Refine Engine (SHIPPED — 2026-05-21)
 
@@ -182,12 +215,6 @@ Applied strict intersection default to all 14 section types. Items below full pr
 ### Package Group Detection (MEDIUM — future)
 
 Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
-
-### Fleet Spec 2: Refine
-
-Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_state: None` for fleet tarballs), adds fleet-aware refine UX: prevalence columns, threshold controls, variant comparison and selection, baseline confirmation workflow, section-level host indicators. Builds on Spec 1's merge engine, FleetSnapshotMeta, and per-section host counts. Brainstorm inputs at `docs/specs/proposed/2026-05-07-fleet-refine-product-brainstorm.md` and `2026-05-07-fleet-refine-ux-brainstorm.md`.
-
-**Design decision for Spec 2:** Variant filenames currently use 8-char SHA-256 prefix (human-browsable). If refine needs to machine-correlate variant files back to merge-time identity, extend to full hash or 16+ chars. Decide during brainstorm whether variant files need to be machine-addressable.
 
 ### Driftify E2E Fixture Coverage Audit (MEDIUM — after testing expansion)
 
@@ -270,6 +297,6 @@ Rust binary becomes primary `inspectah` command. Go binary deprecated.
 
 - Architect v2 (multi-artifact decomposition)
 - ~~Remove Go source tree~~ (DONE — 2026-05-24)
-- Documentation overhaul
+- ~~Documentation overhaul~~ (DONE — 2026-05-30)
 - TUI mode
 - `inspectah build` command
