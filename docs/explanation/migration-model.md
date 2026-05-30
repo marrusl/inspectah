@@ -30,7 +30,7 @@ the same image tag is identical by construction, not by hope.
 
 The benefits are significant:
 
-- **Reproducibility** — the Containerfile is the source of truth, not the
+- **Reproducibility** — the container image is the source of truth, not the
   running host
 - **Atomic updates** — no partial-upgrade states, no "reboot and pray"
 - **Rollback** — the previous image is one reboot away
@@ -48,16 +48,16 @@ A package-to-image migration has three broad phases:
 2. **Build** — create a bootc container image that captures the desired state
 3. **Deploy** — switch hosts to the new image
 
-inspectah handles **phase 1 only**. It scans a running package-mode host,
-classifies everything it finds, and generates migration artifacts — a
-Containerfile, reports, and a structured snapshot. It answers the question:
-"What is on this host that the base image doesn't already provide?"
+inspectah handles **phases 1 and 2**. It scans a running package-mode host,
+classifies everything it finds, generates migration artifacts — a
+Containerfile, reports, and a structured snapshot — and can build the
+resulting bootc container image via `inspectah build`. It answers the
+question: "What is on this host that the base image doesn't already provide?"
+and then automates the image build.
 
-Building the image (phase 2) is done with `podman build`. Deploying it
-(phase 3) is done with `bootc switch` or your existing provisioning tooling.
-inspectah does not build images, does not deploy them, and does not manage
-anything at runtime. It generates analysis and artifacts, then gets out of the
-way.
+Deploying the image (phase 3) is done with `bootc switch` or your existing
+provisioning tooling. inspectah does not deploy images and does not manage
+anything at runtime.
 
 ## The inspection pipeline
 
@@ -144,14 +144,10 @@ annotations where human judgment is required.
 
 Understanding the boundaries is as important as understanding the capabilities:
 
-- **Does not build images.** The generated Containerfile is input to
-  `podman build`. inspectah produces the recipe; you (or your CI pipeline)
-  do the cooking.
 - **Does not deploy images.** Switching a host from package mode to image mode
   is done with `bootc switch`. inspectah has no role at deploy time.
-- **Does not manage runtime state.** It's a scan-and-generate tool. Once it
-  produces its artifacts, it's done. There is no daemon, no agent, no ongoing
-  process.
+- **Does not manage runtime state.** Once it produces artifacts (or builds
+  the image), it's done. There is no daemon, no agent, no ongoing process.
 - **Does not make migration decisions for you.** It presents findings and
   classifications. Whether a particular package belongs in your image, whether a
   config file should be baked in or templated at deploy time, whether a cron job
@@ -179,7 +175,7 @@ about what belongs in the shared image versus what's host-specific.
 The planned **architect** capability will extend this further by proposing
 layered image topologies for complex environments — a base layer shared by all
 hosts, with derived layers for different roles. This is a future direction; the
-core scan-refine-fleet workflow is available today.
+core scan-refine-build-fleet workflow is available today.
 
 ## Putting it together
 
@@ -189,11 +185,11 @@ A typical migration workflow looks like this:
 2. Use `inspectah refine` to review and adjust findings per host
 3. Use `inspectah fleet` to aggregate across hosts and identify the common
    image contents
-4. Take the generated Containerfile, customize it further as needed
-5. Build the image with `podman build`
+4. Review the generated Containerfile and customize further as needed
+5. Build the image with `inspectah build` (or `podman build` manually)
 6. Test the image in a staging environment
 7. Deploy with `bootc switch` or your provisioning system
 
-inspectah owns steps 1-3. Steps 4-7 are yours. The tool's job is to make
-steps 1-3 fast, thorough, and auditable — so you can spend your time on the
-decisions that matter instead of manually inventorying hosts.
+inspectah owns steps 1-5. Steps 6-7 are yours. The tool's job is to make
+the scan-refine-build cycle fast, thorough, and auditable — so you can spend
+your time on the decisions that matter instead of manually inventorying hosts.

@@ -48,11 +48,11 @@ inspectah scan [OPTIONS]
 |------|------|---------|-------------|
 | `--inspect-only` | bool | `false` | Write JSON snapshot only, skip tarball/artifact generation |
 | `-o, --output <OUTPUT>` | path | — | Output file path (tarball) or directory (with `--inspect-only`) |
-| `--base-image <BASE_IMAGE>` | string | — | Target base image for cross-distro conversion |
+| `--base-image <BASE_IMAGE>` | string | — | Target base image for version upgrades or cross-distro conversion (e.g., upgrade from RHEL 9.4 to 9.6, or convert from CentOS to RHEL) |
 | `--no-baseline` | bool | `false` | Skip baseline extraction (degraded classification mode) |
 | `--preserve-password-hashes` | bool | `false` | Preserve password hashes for users with status `password_set` |
 | `--preserve-ssh-keys` | bool | `false` | Preserve full SSH `authorized_keys` content per user |
-| `--preserve-subscription` | bool | `false` | Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds |
+| `--preserve-subscription` | bool | `false` | Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for building on non-RHEL hosts |
 | `--ack-sensitive` | bool | `false` | Acknowledge that snapshot contains sensitive data (required for export when preserve flags used). Alias: `--acknowledge-sensitive` |
 | `--progress <MODE>` | enum | `rich` | Progress display mode: `rich`, `plain`, or `flat` |
 | `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors, including fast ones |

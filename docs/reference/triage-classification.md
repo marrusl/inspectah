@@ -59,7 +59,7 @@ When inspectah scans one host, every item receives one of three buckets:
 |---|---|---|
 | **Baseline** | Already present in the base image. No migration action needed. | Excluded from Containerfile |
 | **Site** | User-installed, user-configured, or otherwise intentionally changed. This is your customization. | Included in Containerfile |
-| **Investigate** | Unclear origin or ambiguous state. Needs human review before deciding. | Included in Containerfile (flagged) |
+| **Investigate** | Unclear origin or ambiguous state. Needs human review before deciding. | Varies: packages excluded by default, config files included (flagged) |
 
 ### How each bucket is assigned
 
@@ -118,7 +118,7 @@ hosts have this item) on top of the single-host classification.
 
 | Bucket | Meaning | Prevalence | Default action |
 |---|---|---|---|
-| **Universal** | Present on all hosts. Part of the common baseline. | count = total | Excluded from Containerfile |
+| **Universal** | Present on all hosts. Consensus across the fleet. | count = total | Included in Containerfile (same items may also be excluded by baseline subtraction) |
 | **Partial** | Present on some hosts, absent on others. Role-specific. | count >= half of total | Excluded from Containerfile |
 | **Divergent** | Present on fewer than half the hosts. Unusual or role-specific. | count < half of total | Excluded from Containerfile |
 | **Investigate** | Divergent-zone item that appears on all hosts but with unclear provenance. Needs review. | count = total, but zone is Divergent | Included in Containerfile (flagged) |
@@ -221,16 +221,14 @@ triage bucket:
 | Bucket | Default include | Rationale |
 |---|---|---|
 | Baseline | No | Already in the base image |
-| Site | Yes | User customization to reproduce |
-| Investigate | Yes | Included to be safe; user reviews and removes if unneeded |
-| Universal | No | Fleet consensus -- already in the common baseline |
+| Site | Yes (leaf packages and non-orphaned configs) | User customization to reproduce |
+| Investigate | Varies by section | Packages: excluded by default (user reviews and adds if needed). Config files: included by default. |
+| Universal | Yes (maps to Baseline for include logic; items also in the base image are then removed by baseline subtraction) | Fleet consensus item. Included unless baseline subtraction removes it. |
 | Partial | No | Not universal across fleet |
 | Divergent | No | Below fleet consensus threshold |
 
 In fleet mode, items that are not present on all hosts (`count < total`) are
-excluded by default regardless of their single-host classification. This
-implements **strict intersection** semantics: only items common to all hosts
-are included automatically.
+excluded by default regardless of their single-host classification.
 
 Users can override any item's include/exclude state in the refine UI. The
 Containerfile is regenerated from the current include states when exported.

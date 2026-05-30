@@ -142,13 +142,14 @@ key material is omitted.
 ### Acknowledge sensitive data
 
 ```bash
-sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --acknowledge-sensitive
+sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --ack-sensitive
 ```
 
 When either `--preserve-password-hashes` or `--preserve-ssh-keys` is used,
-inspectah requires `--acknowledge-sensitive` as an explicit confirmation
-that the resulting snapshot contains sensitive data. This prevents
-accidental export of credentials.
+inspectah requires `--ack-sensitive` as an explicit confirmation that the
+resulting snapshot contains sensitive data. This prevents accidental export
+of credentials. The long form `--acknowledge-sensitive` is accepted as an
+alias.
 
 The acknowledge flag is only needed when a preserve flag is active. A
 standard scan (with default redaction) does not require it.
@@ -161,7 +162,7 @@ A common pattern for environments where you need full-fidelity user data:
 sudo inspectah scan \
   --preserve-password-hashes \
   --preserve-ssh-keys \
-  --acknowledge-sensitive \
+  --ack-sensitive \
   -o /secure/path/scan-output.tar.gz
 ```
 

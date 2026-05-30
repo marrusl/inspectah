@@ -39,7 +39,7 @@ The six crates form a layered dependency graph:
 | **inspectah-collect** | Host inspection, data gathering | core |
 | **inspectah-pipeline** | Orchestration, rendering, output generation | core, collect |
 | **inspectah-refine** | Interactive editing and re-rendering engine | core, pipeline |
-| **inspectah-web** | HTTP server, HTML reports, interactive UIs | core |
+| **inspectah-web** | HTTP server, HTML reports, interactive UIs | core, pipeline, refine |
 | **inspectah-cli** | Binary entry point, argument parsing, subcommands | all of the above |
 
 Dependencies flow in one direction: from the CLI inward toward core. No crate
@@ -236,8 +236,8 @@ every other crate and wires them together. Argument parsing, subcommand
 dispatch, and progress display -- the user-facing surface area lives here.
 
 **Why CLI is a thin shell.** The binary itself should do as little as possible.
-It parses arguments, selects the right workflow (scan, refine, fleet, or
-version), and hands off to the appropriate crate. This keeps the logic testable
+It parses arguments, selects the right workflow (scan, build, refine, fleet,
+or version), and hands off to the appropriate crate. This keeps the logic testable
 at the library level rather than requiring end-to-end CLI invocations to
 exercise it.
 
