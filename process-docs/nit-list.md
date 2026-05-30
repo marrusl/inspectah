@@ -2,6 +2,10 @@
 
 Small output quality and polish items. Not worth individual specs — just fix when touching nearby code.
 
+## Build Output Streaming
+
+- [ ] **`inspectah build` swallows podman output:** The build command uses `Command::new().output()` which captures stdout and stderr into memory buffers. Users see nothing until the build finishes or fails, and on failure only get an opaque exit code (e.g., 125) with no error message. Fix: change `.output()` to `.spawn()` with inherited stdio so podman's output streams in real time. Location: `inspectah-pipeline/src/build/mod.rs`.
+
 ## Naming Consistency (Rust)
 
 - [ ] **ContextSection → ReferenceSection:** The `ContextSection` struct in `inspectah-web/src/handlers.rs` and the `normalize_for_context()` function use "context" where the UI says "Reference." Rename to `ReferenceSection` / `normalize_for_reference()`. Also update the `context_section()` helper and the API test in `api_test.rs`. Frontend type in `api/types.ts` should match.
