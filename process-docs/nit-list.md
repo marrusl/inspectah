@@ -8,13 +8,15 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] **ContextSection → ReferenceSection:** The `ContextSection` struct in `inspectah-web/src/handlers.rs` and the `normalize_for_context()` function use "context" where the UI says "Reference." Rename to `ReferenceSection` / `normalize_for_reference()`. Also update the `context_section()` helper and the API test in `api_test.rs`. Frontend type in `api/types.ts` should match.
 
+**Audit note (2026-05-30):** Verified NOT complete. `ContextSection` struct, `normalize_for_context()` function, and `context_section()` helper still exist in `handlers.rs`. TypeScript `ContextSection` interface still in `api/types.ts`. The completed item in the "Completed" section (dated 2026-05-26) only renamed frontend constants `DECISION_SECTIONS` → `REVIEW_SECTIONS` and `CONTEXT_SECTIONS` → `REFERENCE_SECTIONS` in `Sidebar.tsx`, but did not touch the Rust backend or TypeScript types.
+
 ## Repo Tier Model
 
 - [ ] **RPM upload feature (needs spec):** Let users upload a local RPM into the tarball for repo-less packages. Separate folder in the tarball, direct `COPY + rpm -i` in the Containerfile. Turns "this package has no migration path" into "here's the RPM, install it directly." Solves the case for vendor installers, one-off downloads, and manual builds.
 
-## Fleet Aggregate Output
+## ~~Fleet Aggregate Output~~ (DONE — 2026-05-25)
 
-- [ ] Aggregate output should surface useful information about divergence and agreement across the fleet. Give the user a sense of the mess they're dealing with — how consistent are the hosts, where do they diverge, what's uniform vs. scattered.
+Moved to Completed section.
 
 ## Version Changes Sort
 
@@ -104,6 +106,10 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 ### Fleet Prevalence Bug (configs)
 
 - [x] Config prevalence undercount fixed. `FleetPrevalence` gains `aggregate_count`/`aggregate_hosts` (populated for multi-variant items). `merge_with_variants()` computes union of all variant hosts. Per-variant prevalence still tracks per-variant; aggregate tracks file-level. *(DONE — 2026-05-25)*
+
+### Fleet Aggregate Output (DONE — 2026-05-25)
+
+- [x] Aggregate output surfaces divergence and agreement across the fleet through the zone-based triage system. Fleet view displays items grouped into consensus zones (universal agreement), near-consensus zones (majority agreement), and divergent zones (scattered across hosts). The UI in `FleetSection.tsx` renders these zones with filtering and gives users a clear picture of fleet consistency. Backend triage logic assigns items to zones based on prevalence thresholds. *(DONE — 2026-05-25)*
 
 ### Fleet Conflict Count Bug
 
