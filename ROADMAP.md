@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-27)
+## Current Status (2026-05-30)
 
 | Phase | Status |
 |-------|--------|
@@ -33,6 +33,12 @@
 | Fleet Phase 2b: Refine UI | DONE (shipped incrementally across 2a/2b) |
 | Playwright E2E Testing Expansion | SHIPPED (2026-05-27) |
 | Single-Host / Fleet UI Convergence | DONE (2026-05-27) |
+| Preserve Subscription + Build | SHIPPED (2026-05-29) |
+| **v0.8.3-alpha.1** | **TAGGED (2026-05-29)** |
+| RPM Baseline Filter Fix | DONE (2026-05-29) |
+| RPM Dep Tree: rpm-based Primary | DONE (2026-05-30) |
+| Build Output Streaming Fix | DONE (2026-05-30) |
+| **v0.8.4-alpha.1** | **TAGGED (2026-05-30)** |
 
 ## Roadmap to CLI Cutover
 
