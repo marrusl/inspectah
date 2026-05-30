@@ -112,7 +112,7 @@ fn reject_absent_redaction_state() {
 }
 
 #[test]
-fn reject_path_traversal() {
+fn reject_parent_dir_traversal() {
     let dir = tempdir().unwrap();
     let tarball_path = dir.path().join("evil.tar.gz");
     let f = std::fs::File::create(&tarball_path).unwrap();
@@ -141,6 +141,45 @@ fn reject_path_traversal() {
 
     let result = inspectah_refine::tarball::from_tarball(&tarball_path);
     assert!(matches!(result, Err(RefineError::ArchiveSafety(_))));
+}
+
+#[test]
+fn reject_absolute_path() {
+    let dir = tempdir().unwrap();
+    let tarball_path = dir.path().join("evil-abs.tar.gz");
+    let f = std::fs::File::create(&tarball_path).unwrap();
+    let gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+    let mut tar = tar::Builder::new(gz);
+
+    // Craft a tar entry whose path starts with "/" — set_path rejects
+    // absolute paths, so write the bytes directly into the header.
+    let content = b"malicious content";
+    let mut header = tar::Header::new_ustar();
+    {
+        let raw = header.as_old_mut();
+        let path_bytes = b"/etc/shadow";
+        raw.name[..path_bytes.len()].copy_from_slice(path_bytes);
+        raw.name[path_bytes.len()] = 0;
+    }
+    header.set_size(content.len() as u64);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_cksum();
+    tar.append(&header, &content[..]).unwrap();
+    let gz = tar.into_inner().unwrap();
+    gz.finish().unwrap();
+
+    let result = inspectah_refine::tarball::from_tarball(&tarball_path);
+    match result {
+        Err(RefineError::ArchiveSafety(msg)) => {
+            assert!(
+                msg.contains("absolute path"),
+                "expected 'absolute path' in error, got: {msg}"
+            );
+        }
+        Err(other) => panic!("expected ArchiveSafety, got: {other:?}"),
+        Ok(_) => panic!("expected error for absolute path, got Ok"),
+    }
 }
 
 #[test]
