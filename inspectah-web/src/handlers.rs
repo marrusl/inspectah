@@ -6,7 +6,7 @@ use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
-use inspectah_core::types::users::UserContainerfileStrategy;
+use inspectah_core::types::users::{UserContainerfileStrategy, UserGroupDecision};
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::classify::{
@@ -203,7 +203,7 @@ pub struct ViewResponse {
     pub flatpaks: Vec<FlatpakDecisionDto>,
     pub sysctls: Vec<SysctlDecisionDto>,
     pub tuned: Vec<TunedDecisionDto>,
-    pub users_groups_decisions: Vec<serde_json::Value>,
+    pub users_groups_decisions: Vec<UserGroupDecision>,
     pub session_is_sensitive: bool,
 }
 
@@ -357,11 +357,14 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
     let (quadlets, flatpaks) = build_container_decisions(session);
     let sysctls = build_sysctl_decisions(session);
     let tuned = build_tuned_decisions(session);
-    let users_groups_decisions = session
+    let users_groups_decisions: Vec<UserGroupDecision> = session
         .snapshot_projected()
         .users_groups
         .map(|ug| ug.users)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect();
     let session_is_sensitive = session.is_sensitive();
     ViewResponse {
         view,
