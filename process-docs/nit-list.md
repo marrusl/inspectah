@@ -56,9 +56,9 @@ Moved to Completed section.
 
 - [x] RepoBar `aria-live` badge announces dismiss/restore changes via dedicated visually-hidden `aria-live="assertive"` span with explicit dismiss/restore messages. 4 tests added. *(commit 450ca18 — 2026-05-30)*
 
-## Type `users_groups_decisions` (Playwright fixture validation prerequisite)
+## ~~Type `users_groups_decisions`~~ (DONE — 2026-05-30)
 
-- [ ] `users_groups_decisions` on `ViewResponse` is `Vec<serde_json::Value>` — an untyped escape hatch. This means the Playwright fixture-structure validation (insta snapshots) cannot catch drift in the users/groups decision payload. `users.spec.ts` tests rely on structural fixture correctness only. Typing this field as a proper DTO (e.g., `Vec<UserGroupDecision>`) is the prerequisite for full fixture-validation coverage of the users/groups surface. Flagged during Playwright testing expansion spec review (Tang, round 2).
+- [x] `users_groups_decisions` on `ViewResponse` is `Vec<serde_json::Value>` — an untyped escape hatch. This means the Playwright fixture-structure validation (insta snapshots) cannot catch drift in the users/groups decision payload. `users.spec.ts` tests rely on structural fixture correctness only. Typing this field as a proper DTO (e.g., `Vec<UserGroupDecision>`) is the prerequisite for full fixture-validation coverage of the users/groups surface. Flagged during Playwright testing expansion spec review (Tang, round 2). *(commit 9121121 — 2026-05-30)*
 
 ## Preserve-Subscription Plan Deferrals
 
@@ -162,3 +162,7 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 - [x] **Baseline filter ran after DNF queries:** `packages_added` contained all host packages (~491), not just the delta (~120). Both `populate_source_repos` and `classify_leaf_auto` → `classify_deps_dnf` ran on everything. Fixed by filtering `packages_added` against baseline before expensive operations. Regression test guards the ordering. *(DONE — 2026-05-29)*
 - [x] **Per-package DNF dep resolution (~6s/query):** `classify_deps_dnf` spawned one `dnf repoquery` per package. With 120 delta packages: 711s. Ported Go's `classifyDepsRpm` approach as primary: `rpm -qR` per package (~8ms) + `rpm --whatprovides` in batches of 50, BFS graph traversal in Rust. DNF is now fallback. *(DONE — 2026-05-30)*
+
+### Code Formatting Cleanup (DONE — 2026-05-30)
+
+- [x] **cargo fmt:** Ran `cargo fmt` across the entire Rust codebase to ensure consistent formatting. 109 files formatted. *(commit 8b31640 — 2026-05-30)*
