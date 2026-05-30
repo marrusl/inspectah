@@ -28,10 +28,12 @@ describe("useFleetFocusRecovery", () => {
 
   beforeEach(() => {
     rafCallbacks = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb: FrameRequestCallback) => {
-      rafCallbacks.push(cb);
-      return rafCallbacks.length;
-    });
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (cb: FrameRequestCallback) => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      },
+    );
   });
 
   afterEach(() => {
@@ -48,12 +50,18 @@ describe("useFleetFocusRecovery", () => {
     const { getByTestId } = render(<TestHarness initialGeneration={1} />);
 
     const itemA = getByTestId("item-a");
-    act(() => { itemA.focus(); });
+    act(() => {
+      itemA.focus();
+    });
     expect(document.activeElement).toBe(itemA);
 
     // Bump generation
-    act(() => { getByTestId("bump").click(); });
-    act(() => { flushRaf(); });
+    act(() => {
+      getByTestId("bump").click();
+    });
+    act(() => {
+      flushRaf();
+    });
 
     expect(document.activeElement).toBe(itemA);
   });
@@ -91,14 +99,20 @@ describe("useFleetFocusRecovery", () => {
     const { getByTestId, queryByTestId } = render(<RemovableHarness />);
 
     const itemC = getByTestId("item-c");
-    act(() => { itemC.focus(); });
+    act(() => {
+      itemC.focus();
+    });
     expect(document.activeElement).toBe(itemC);
 
     // Remove item-c and bump generation
-    act(() => { getByTestId("remove-and-bump").click(); });
+    act(() => {
+      getByTestId("remove-and-bump").click();
+    });
     expect(queryByTestId("item-c")).toBeNull();
 
-    act(() => { flushRaf(); });
+    act(() => {
+      flushRaf();
+    });
 
     // Should fall back to item-a (the first remaining item)
     expect(document.activeElement).toBe(getByTestId("item-a"));
@@ -116,7 +130,9 @@ describe("useFleetFocusRecovery", () => {
 
     const { getByTestId } = render(<NullGenHarness />);
     const itemA = getByTestId("item-a");
-    act(() => { itemA.focus(); });
+    act(() => {
+      itemA.focus();
+    });
 
     // No rAF should have been queued for null generation
     expect(rafCallbacks).toHaveLength(0);

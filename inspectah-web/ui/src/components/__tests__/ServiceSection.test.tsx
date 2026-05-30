@@ -35,7 +35,9 @@ function makeTriage(bucket: "baseline" | "site" | "investigate"): TriageTag {
   };
 }
 
-function makeService(overrides: Partial<ServiceDecisionDto> = {}): ServiceDecisionDto {
+function makeService(
+  overrides: Partial<ServiceDecisionDto> = {},
+): ServiceDecisionDto {
   return {
     unit: "httpd.service",
     triage: makeTriage("site"),
@@ -44,7 +46,9 @@ function makeService(overrides: Partial<ServiceDecisionDto> = {}): ServiceDecisi
   };
 }
 
-function makeDropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionDto {
+function makeDropin(
+  overrides: Partial<DropInDecisionDto> = {},
+): DropInDecisionDto {
   return {
     unit: "httpd.service",
     path: "/etc/systemd/system/httpd.service.d/override.conf",
@@ -102,7 +106,9 @@ describe("ServiceSection", () => {
     ];
     render(<ServiceSection {...defaultProps} services={services} />);
 
-    expect(screen.getByTestId("service-item-httpd.service")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("service-item-httpd.service"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("service-item-sshd.service")).toBeInTheDocument();
   });
 
@@ -115,7 +121,11 @@ describe("ServiceSection", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     const parentGroup = screen.getByTestId("service-group-httpd.service");
@@ -170,7 +180,11 @@ describe("ServiceSection parent-child cascade", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     const dropinRow = screen.getByTestId(
@@ -189,7 +203,11 @@ describe("ServiceSection parent-child cascade", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     expect(
@@ -210,7 +228,11 @@ describe("ServiceSection parent-child cascade", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     const dropinRow = screen.getByTestId(
@@ -250,9 +272,12 @@ describe("ServiceSection parent-child cascade", () => {
     const checkbox = within(dropinRow).getByRole("checkbox");
     await userEvent.click(checkbox);
 
-    expect(mockFetch).toHaveBeenCalledWith("/api/op", expect.objectContaining({
-      method: "POST",
-    }));
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/op",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
   });
 
   it("reduced opacity on drop-in rows when parent excluded", () => {
@@ -264,7 +289,11 @@ describe("ServiceSection parent-child cascade", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     const dropinRow = screen.getByTestId(
@@ -282,7 +311,11 @@ describe("ServiceSection parent-child cascade", () => {
       }),
     ];
     render(
-      <ServiceSection {...defaultProps} services={services} dropins={dropins} />,
+      <ServiceSection
+        {...defaultProps}
+        services={services}
+        dropins={dropins}
+      />,
     );
 
     const dropinRow = screen.getByTestId(

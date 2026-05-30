@@ -37,7 +37,9 @@ function makeTriage(
   };
 }
 
-function makeSysctl(overrides: Partial<SysctlDecisionDto> = {}): SysctlDecisionDto {
+function makeSysctl(
+  overrides: Partial<SysctlDecisionDto> = {},
+): SysctlDecisionDto {
   return {
     key: "net.ipv4.ip_forward",
     runtime: "1",
@@ -96,7 +98,9 @@ describe("SysctlSection", () => {
     ];
     render(<SysctlSection {...defaultProps} sysctls={sysctls} />);
 
-    expect(screen.getByTestId("sysctl-item-net.ipv4.ip_forward")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("sysctl-item-net.ipv4.ip_forward"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("sysctl-item-vm.swappiness")).toBeInTheDocument();
     expect(screen.getByText("net.ipv4.ip_forward")).toBeInTheDocument();
     expect(screen.getByText("= 1")).toBeInTheDocument();
@@ -106,10 +110,15 @@ describe("SysctlSection", () => {
 
   it("shows source file in parentheses", () => {
     const sysctls = [
-      makeSysctl({ key: "net.ipv4.ip_forward", source: "/etc/sysctl.d/99-custom.conf" }),
+      makeSysctl({
+        key: "net.ipv4.ip_forward",
+        source: "/etc/sysctl.d/99-custom.conf",
+      }),
     ];
     render(<SysctlSection {...defaultProps} sysctls={sysctls} />);
-    expect(screen.getByText("(/etc/sysctl.d/99-custom.conf)")).toBeInTheDocument();
+    expect(
+      screen.getByText("(/etc/sysctl.d/99-custom.conf)"),
+    ).toBeInTheDocument();
   });
 
   it("shows runtime-only indicator for runtime_only_observation annotation", () => {

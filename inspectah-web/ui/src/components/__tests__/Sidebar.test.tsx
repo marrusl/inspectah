@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { ReferenceSection, HealthResponse, ViewResponse } from "../../api/types";
+import type {
+  ReferenceSection,
+  HealthResponse,
+  ViewResponse,
+} from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
 
 const MOCK_STATS = mockStats({
@@ -38,7 +42,15 @@ const MOCK_VIEW_DATA: ViewResponse = {
   repo_groups: [],
   version_changes: [],
   service_states: [
-    { unit: "sshd.service", triage: { triage: { mode: "single_host", baseline: null }, primary_reason: "service_baseline_match", annotations: [] }, include: true },
+    {
+      unit: "sshd.service",
+      triage: {
+        triage: { mode: "single_host", baseline: null },
+        primary_reason: "service_baseline_match",
+        annotations: [],
+      },
+      include: true,
+    },
   ],
   service_dropins: [],
   quadlets: [],
@@ -176,8 +188,7 @@ describe("Sidebar", () => {
     const host = screen.getByText(/testhost/);
     const nav = screen.getByLabelText("Sections");
     expect(
-      host.compareDocumentPosition(nav) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      host.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

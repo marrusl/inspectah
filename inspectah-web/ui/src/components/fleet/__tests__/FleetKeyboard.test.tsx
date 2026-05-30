@@ -17,7 +17,10 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
     item_id: configItemId,
     include: true,
-    triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
+    triage: {
+      bucket: "universal" as const,
+      prevalence: { count: 3, total: 3 },
+    },
     prevalence: { count: 3, total: 3 },
     source_repo: "",
     variants: {
@@ -25,7 +28,12 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
       selected: "aaa111",
       options: [
         { hash: "aaa111", hosts: ["host-a"], host_count: 1, selected: true },
-        { hash: "bbb222", hosts: ["host-b", "host-c"], host_count: 2, selected: false },
+        {
+          hash: "bbb222",
+          hosts: ["host-b", "host-c"],
+          host_count: 2,
+          selected: false,
+        },
         { hash: "ccc333", hosts: ["host-d"], host_count: 1, selected: false },
       ],
     },
@@ -33,7 +41,9 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
   };
 }
 
-function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult {
+function makeAck(
+  overrides?: Partial<UseVariantAckResult>,
+): UseVariantAckResult {
   return {
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
@@ -46,7 +56,9 @@ function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult 
   };
 }
 
-function makeDiffHook(overrides?: Partial<UseFleetDiffResult>): UseFleetDiffResult {
+function makeDiffHook(
+  overrides?: Partial<UseFleetDiffResult>,
+): UseFleetDiffResult {
   return {
     fetchDiff: vi.fn(),
     diff: null,
@@ -80,7 +92,9 @@ describe("Fleet keyboard", () => {
     );
 
     // Open the DiffDrawer by clicking "Diff vs selected" on a non-selected row
-    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    const diffLinks = screen.getAllByRole("button", {
+      name: /diff vs selected/i,
+    });
     await user.click(diffLinks[0]);
     expect(screen.getByTestId("diff-drawer")).toBeInTheDocument();
 
@@ -125,7 +139,10 @@ describe("Focus recovery", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
 
-    const itemId = JSON.stringify({ kind: "Config", key: { path: "/etc/foo" } });
+    const itemId = JSON.stringify({
+      kind: "Config",
+      key: { path: "/etc/foo" },
+    });
 
     // Create an element with data-item-id and tabIndex
     const item = document.createElement("div");
@@ -161,8 +178,14 @@ describe("Focus recovery", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
 
-    const removedId = JSON.stringify({ kind: "Config", key: { path: "/etc/removed" } });
-    const remainingId = JSON.stringify({ kind: "Config", key: { path: "/etc/remaining" } });
+    const removedId = JSON.stringify({
+      kind: "Config",
+      key: { path: "/etc/removed" },
+    });
+    const remainingId = JSON.stringify({
+      kind: "Config",
+      key: { path: "/etc/remaining" },
+    });
 
     // Create the remaining item (original was removed after refetch)
     const remainingItem = document.createElement("div");
@@ -171,7 +194,9 @@ describe("Focus recovery", () => {
     container.appendChild(remainingItem);
 
     // Try to restore focus to removed item — it doesn't exist
-    const el = document.querySelector(`[data-item-id='${CSS.escape(removedId)}']`);
+    const el = document.querySelector(
+      `[data-item-id='${CSS.escape(removedId)}']`,
+    );
     expect(el).toBeNull();
 
     // Fallback: focus the first item with data-item-id

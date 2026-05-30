@@ -42,7 +42,9 @@ describe("ContextList", () => {
     const { container } = render(<ContextList section={mockSection} />);
     const dataList = container.querySelector('[role="list"]');
     expect(dataList).toHaveStyle({
-      borderLeft: expect.stringContaining("var(--pf-t--global--border--color--default)"),
+      borderLeft: expect.stringContaining(
+        "var(--pf-t--global--border--color--default)",
+      ),
     });
   });
 
@@ -53,7 +55,9 @@ describe("ContextList", () => {
       items: [],
     };
     render(<ContextList section={emptySection} />);
-    expect(screen.getByText(/No Services data in this snapshot/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No Services data in this snapshot/i),
+    ).toBeInTheDocument();
   });
 
   it("shows correct empty state message for each section", () => {
@@ -67,7 +71,7 @@ describe("ContextList", () => {
       const emptySection: ReferenceSection = { ...section, items: [] };
       const { unmount } = render(<ContextList section={emptySection} />);
       expect(
-        screen.getByText(new RegExp(`No ${section.display_name} data`, "i"))
+        screen.getByText(new RegExp(`No ${section.display_name} data`, "i")),
       ).toBeInTheDocument();
       unmount();
     });
@@ -100,7 +104,8 @@ describe("ContextList", () => {
             {
               id: "custom-app.service",
               title: "custom-app.service",
-              subtitle: "package excluded - may still be present as a dependency",
+              subtitle:
+                "package excluded - may still be present as a dependency",
               detail: null,
               searchable_text: "custom-app",
             },
@@ -130,7 +135,8 @@ describe("ContextList", () => {
               id: "linked.service",
               title: "linked.service",
               subtitle: "linked (warning)",
-              detail: "unit linked.service has state 'linked' - linked unit requires manual handling",
+              detail:
+                "unit linked.service has state 'linked' - linked unit requires manual handling",
               searchable_text: "linked warning",
             },
           ],
@@ -140,7 +146,9 @@ describe("ContextList", () => {
 
     render(<ContextList section={section} />);
 
-    expect(screen.queryByText(/No Services data in this snapshot/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/No Services data in this snapshot/i),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Service Warnings")).toBeInTheDocument();
     expect(screen.getByText("linked.service")).toBeInTheDocument();
   });

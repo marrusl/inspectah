@@ -72,12 +72,26 @@ const ROUTINE_TAG: AttentionTag = {
   detail: null,
 };
 
-function attentionToTriage(tags: AttentionTag[]): import("../../api/types").TriageTag {
-  const bucketMap: Record<string, string> = { needs_review: "investigate", informational: "site", routine: "baseline" };
+function attentionToTriage(
+  tags: AttentionTag[],
+): import("../../api/types").TriageTag {
+  const bucketMap: Record<string, string> = {
+    needs_review: "investigate",
+    informational: "site",
+    routine: "baseline",
+  };
   const tag = tags[0];
   const bucket = tag ? (bucketMap[tag.level] ?? "baseline") : "baseline";
-  const reason = tag ? (typeof tag.reason === "string" ? tag.reason : "package_baseline_match") : "package_baseline_match";
-  return { triage: { mode: "single_host" as const, [bucket]: null }, primary_reason: reason as any, annotations: [] };
+  const reason = tag
+    ? typeof tag.reason === "string"
+      ? tag.reason
+      : "package_baseline_match"
+    : "package_baseline_match";
+  return {
+    triage: { mode: "single_host" as const, [bucket]: null },
+    primary_reason: reason as any,
+    annotations: [],
+  };
 }
 
 function makePkg(
@@ -117,9 +131,7 @@ describe("Empty state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(
-      screen.getByText("No items in this section"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("No items in this section")).toBeInTheDocument();
     expect(
       screen.getByText("There are no packages to triage."),
     ).toBeInTheDocument();
@@ -172,9 +184,7 @@ describe("Completion state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(
-      screen.queryByTestId("completion-message"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("completion-message")).not.toBeInTheDocument();
   });
 
   it("does not show completion message when items have no attention tags", async () => {
@@ -199,9 +209,7 @@ describe("Completion state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(
-      screen.queryByTestId("completion-message"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("completion-message")).not.toBeInTheDocument();
   });
 
   it("does not show completion message when unviewed NeedsReview items exist", async () => {
@@ -235,9 +243,7 @@ describe("Completion state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(
-      screen.queryByTestId("completion-message"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("completion-message")).not.toBeInTheDocument();
   });
 
   it("shows completion message when all NeedsReview items have been viewed", async () => {
@@ -347,31 +353,76 @@ describe("Packages section renders unified components", () => {
 describe("Version Changes empty states", () => {
   it("renders no_baseline empty state", async () => {
     const { MainContent } = await import("../MainContent");
-    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "no_baseline" }];
-    render(<MainContent activeSection="version_changes" loading={false}
-      viewData={{ ...MOCK_VIEW }} sections={sections}
-      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
-      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    const sections = [
+      {
+        id: "version_changes",
+        display_name: "Version Changes",
+        items: [],
+        empty_reason: "no_baseline",
+      },
+    ];
+    render(
+      <MainContent
+        activeSection="version_changes"
+        loading={false}
+        viewData={{ ...MOCK_VIEW }}
+        sections={sections}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        sectionSearchOpen={false}
+        onSectionSearchClose={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/requires a baseline/)).toBeInTheDocument();
   });
 
   it("renders zero_drift empty state", async () => {
     const { MainContent } = await import("../MainContent");
-    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "zero_drift" }];
-    render(<MainContent activeSection="version_changes" loading={false}
-      viewData={{ ...MOCK_VIEW }} sections={sections}
-      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
-      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    const sections = [
+      {
+        id: "version_changes",
+        display_name: "Version Changes",
+        items: [],
+        empty_reason: "zero_drift",
+      },
+    ];
+    render(
+      <MainContent
+        activeSection="version_changes"
+        loading={false}
+        viewData={{ ...MOCK_VIEW }}
+        sections={sections}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        sectionSearchOpen={false}
+        onSectionSearchClose={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/All packages match/)).toBeInTheDocument();
   });
 
   it("renders data_unavailable empty state", async () => {
     const { MainContent } = await import("../MainContent");
-    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "data_unavailable" }];
-    render(<MainContent activeSection="version_changes" loading={false}
-      viewData={{ ...MOCK_VIEW }} sections={sections}
-      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
-      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    const sections = [
+      {
+        id: "version_changes",
+        display_name: "Version Changes",
+        items: [],
+        empty_reason: "data_unavailable",
+      },
+    ];
+    render(
+      <MainContent
+        activeSection="version_changes"
+        loading={false}
+        viewData={{ ...MOCK_VIEW }}
+        sections={sections}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        sectionSearchOpen={false}
+        onSectionSearchClose={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/not available/)).toBeInTheDocument();
   });
 });

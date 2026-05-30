@@ -10,7 +10,8 @@ export function ItemDetailPane({ item }: ItemDetailPaneProps) {
   const { count, total } = item.prevalence;
   const kind = item.item_id.kind;
 
-  const isPackage = kind === "Package" || kind === "VersionLock" || kind === "NonRpm";
+  const isPackage =
+    kind === "Package" || kind === "VersionLock" || kind === "NonRpm";
 
   return (
     <div className="item-detail-pane" data-testid="item-detail-pane">
@@ -25,12 +26,17 @@ export function ItemDetailPane({ item }: ItemDetailPaneProps) {
         </div>
         <div className="item-detail-pane__field">
           <dt>Prevalence</dt>
-          <dd>{count}/{total} hosts</dd>
+          <dd>
+            {count}/{total} hosts
+          </dd>
         </div>
         {item.triage && item.triage.bucket !== "universal" && (
           <div className="item-detail-pane__field">
             <dt>Triage</dt>
-            <dd>{item.triage.bucket.charAt(0).toUpperCase() + item.triage.bucket.slice(1)}</dd>
+            <dd>
+              {item.triage.bucket.charAt(0).toUpperCase() +
+                item.triage.bucket.slice(1)}
+            </dd>
           </div>
         )}
         {item.variants && item.variants.count === 1 && (

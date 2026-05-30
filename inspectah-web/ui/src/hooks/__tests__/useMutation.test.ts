@@ -127,8 +127,7 @@ describe("useMutation", () => {
       callCount++;
       return {
         ok: true,
-        json: () =>
-          Promise.resolve({ ...MOCK_VIEW, generation: callCount }),
+        json: () => Promise.resolve({ ...MOCK_VIEW, generation: callCount }),
       } as Response;
     });
 

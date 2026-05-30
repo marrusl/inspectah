@@ -25,9 +25,16 @@ const MOCK_STATS = mockStats({
 function renderAppShell(overrides: Partial<AppShellProps> = {}) {
   const defaultProps: AppShellProps = {
     sidebar: <div data-testid="test-sidebar">Sidebar</div>,
-    children: ({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => (
+    children: ({
+      sectionSearchOpen,
+      onSectionSearchClose,
+      filterClearCounter,
+      searchSlot,
+    }) => (
       <div data-testid="test-content">
-        <span data-testid="section-search-open">{String(sectionSearchOpen)}</span>
+        <span data-testid="section-search-open">
+          {String(sectionSearchOpen)}
+        </span>
         <span data-testid="filter-clear-counter">{filterClearCounter}</span>
         {searchSlot}
         {sectionSearchOpen && (
@@ -131,9 +138,13 @@ describe("AppShell", () => {
     expect(screen.getByTestId("section-search-open").textContent).toBe("true");
 
     // Re-render with a different activeSection
-    const updatedChildren: AppShellProps["children"] = ({ sectionSearchOpen }) => (
+    const updatedChildren: AppShellProps["children"] = ({
+      sectionSearchOpen,
+    }) => (
       <div data-testid="test-content">
-        <span data-testid="section-search-open">{String(sectionSearchOpen)}</span>
+        <span data-testid="section-search-open">
+          {String(sectionSearchOpen)}
+        </span>
       </div>
     );
 
@@ -189,19 +200,21 @@ describe("AppShell", () => {
   });
 
   it("passes searchSlot to children", () => {
-    const childrenFn = vi.fn().mockImplementation(
-      ({ searchSlot }: { searchSlot: React.ReactNode }) => (
+    const childrenFn = vi
+      .fn()
+      .mockImplementation(({ searchSlot }: { searchSlot: React.ReactNode }) => (
         <div data-testid="test-content">
           <div data-testid="search-slot-container">{searchSlot}</div>
         </div>
-      ),
-    );
+      ));
 
     renderAppShell({ children: childrenFn });
 
     // The searchSlot should contain the GlobalSearch component
     const container = screen.getByTestId("search-slot-container");
-    expect(within(container).getByTestId("global-search-input")).toBeInTheDocument();
+    expect(
+      within(container).getByTestId("global-search-input"),
+    ).toBeInTheDocument();
   });
 
   it("toggles ContainerfilePanel on Ctrl+E", async () => {

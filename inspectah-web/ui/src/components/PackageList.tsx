@@ -183,7 +183,14 @@ export function PackageList({
     }
 
     return sorted;
-  }, [includedPackages, mode, activeColumn, direction, repoTierMap, dismissedConflicts]);
+  }, [
+    includedPackages,
+    mode,
+    activeColumn,
+    direction,
+    repoTierMap,
+    dismissedConflicts,
+  ]);
 
   // Sort handler
   const handleSort = useCallback(
@@ -261,7 +268,14 @@ function prevalenceClass(count: number, total: number): string {
   return "inspectah-package-row__prevalence--low";
 }
 
-function PackageRow({ pkg, mode, tier, dismissed, onToggle, onDismiss }: PackageRowProps) {
+function PackageRow({
+  pkg,
+  mode,
+  tier,
+  dismissed,
+  onToggle,
+  onDismiss,
+}: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
   const checkboxRef = useRef<HTMLInputElement>(null);
 

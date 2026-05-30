@@ -120,7 +120,7 @@ export function FleetSectionContent({
       setForceExpandZone(null);
       onNavTargetConsumed?.();
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealCounter]);
 
   if (!section) return null;
@@ -143,14 +143,18 @@ export function FleetSectionContent({
           return (
             <div key={key}>
               <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
-              {expanded && hasVariants && isDecisionSection && onSelectVariant && diffHook && (
-                <VariantView
-                  item={item}
-                  ack={ack}
-                  onSelectVariant={onSelectVariant}
-                  diffHook={diffHook}
-                />
-              )}
+              {expanded &&
+                hasVariants &&
+                isDecisionSection &&
+                onSelectVariant &&
+                diffHook && (
+                  <VariantView
+                    item={item}
+                    ack={ack}
+                    onSelectVariant={onSelectVariant}
+                    diffHook={diffHook}
+                  />
+                )}
               {expanded && !hasVariants && isDecisionSection && (
                 <ItemDetailPane item={item} />
               )}
@@ -164,7 +168,10 @@ export function FleetSectionContent({
   // Zone mode: group items by consensus zone
   const zones = section.zones;
   const consensusFiltered = filterItems(zones.consensus.items, filterText);
-  const nearConsensusFiltered = filterItems(zones.near_consensus.items, filterText);
+  const nearConsensusFiltered = filterItems(
+    zones.near_consensus.items,
+    filterText,
+  );
   const divergentFiltered = filterItems(zones.divergent.items, filterText);
 
   // Count zones with unfiltered items for header suppression
@@ -184,14 +191,18 @@ export function FleetSectionContent({
       return (
         <div key={key}>
           <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
-          {expanded && hasVariants && isDecisionSection && onSelectVariant && diffHook && (
-            <VariantView
-              item={item}
-              ack={ack}
-              onSelectVariant={onSelectVariant}
-              diffHook={diffHook}
-            />
-          )}
+          {expanded &&
+            hasVariants &&
+            isDecisionSection &&
+            onSelectVariant &&
+            diffHook && (
+              <VariantView
+                item={item}
+                ack={ack}
+                onSelectVariant={onSelectVariant}
+                diffHook={diffHook}
+              />
+            )}
           {expanded && !hasVariants && isDecisionSection && (
             <ItemDetailPane item={item} />
           )}

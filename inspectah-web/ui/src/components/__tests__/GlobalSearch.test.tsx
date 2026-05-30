@@ -6,7 +6,11 @@ import type { GlobalSearchProps } from "../GlobalSearch";
 import type { DecisionItemKind } from "../DecisionItem";
 import type { ReferenceSection, TriageAnnotation } from "../../api/types";
 
-const DEFAULT_TRIAGE = { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] as TriageAnnotation[] };
+const DEFAULT_TRIAGE = {
+  triage: { mode: "single_host" as const, baseline: null },
+  primary_reason: "package_baseline_match" as const,
+  annotations: [] as TriageAnnotation[],
+};
 
 function makePackageItem(name: string, arch = "x86_64"): DecisionItemKind {
   return {
@@ -47,12 +51,19 @@ function makeConfigItem(path: string): DecisionItemKind {
         fleet: null,
       },
       attention: [],
-      triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "config_baseline_match" as const, annotations: [] as TriageAnnotation[] },
+      triage: {
+        triage: { mode: "single_host" as const, baseline: null },
+        primary_reason: "config_baseline_match" as const,
+        annotations: [] as TriageAnnotation[],
+      },
     },
   };
 }
 
-function makeReferenceSection(id: string, items: { id: string; title: string }[]): ReferenceSection {
+function makeReferenceSection(
+  id: string,
+  items: { id: string; title: string }[],
+): ReferenceSection {
   return {
     id,
     display_name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -102,7 +113,11 @@ describe("GlobalSearch auto-reveal", () => {
         attention: [
           { level: "routine", reason: "package_baseline_match", detail: null },
         ],
-        triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] as TriageAnnotation[] },
+        triage: {
+          triage: { mode: "single_host" as const, baseline: null },
+          primary_reason: "package_baseline_match" as const,
+          annotations: [] as TriageAnnotation[],
+        },
       },
     };
 
@@ -124,7 +139,10 @@ describe("GlobalSearch auto-reveal", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     // onNavigate should be called with the correct section and item ID
-    expect(onNavigate).toHaveBeenCalledWith("packages", "packages:glibc.x86_64");
+    expect(onNavigate).toHaveBeenCalledWith(
+      "packages",
+      "packages:glibc.x86_64",
+    );
   });
 
   it("auto-expands collapsed config-managed summary when search selects item inside it", async () => {
@@ -147,7 +165,11 @@ describe("GlobalSearch auto-reveal", () => {
         attention: [
           { level: "routine", reason: "config_default", detail: null },
         ],
-        triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "config_default" as const, annotations: [] as TriageAnnotation[] },
+        triage: {
+          triage: { mode: "single_host" as const, baseline: null },
+          primary_reason: "config_default" as const,
+          annotations: [] as TriageAnnotation[],
+        },
       },
     };
 
@@ -180,7 +202,9 @@ describe("GlobalSearch", () => {
   it("shows no results initially (empty query)", () => {
     renderGlobalSearch();
 
-    expect(screen.queryByTestId("global-search-results")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("global-search-results"),
+    ).not.toBeInTheDocument();
   });
 
   it("filters results when user types a query", async () => {
@@ -261,7 +285,9 @@ describe("GlobalSearch", () => {
     expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
 
     await userEvent.clear(input);
-    expect(screen.queryByTestId("global-search-results")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("global-search-results"),
+    ).not.toBeInTheDocument();
   });
 
   it("clears query on Escape", async () => {
@@ -272,6 +298,8 @@ describe("GlobalSearch", () => {
     expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
 
     fireEvent.keyDown(input, { key: "Escape" });
-    expect(screen.queryByTestId("global-search-results")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("global-search-results"),
+    ).not.toBeInTheDocument();
   });
 });

@@ -239,7 +239,10 @@ export type RefinementOp =
   | { op: "UserStrategy"; target: { username: string; strategy: string } }
   | { op: "UserPassword"; target: UserPasswordOp }
   | { op: "SelectVariant"; target: { item_id: ItemId; target: string } }
-  | { op: "EditVariant"; target: { item_id: ItemId; content: string; based_on: string | null } }
+  | {
+      op: "EditVariant";
+      target: { item_id: ItemId; content: string; based_on: string | null };
+    }
   | { op: "DiscardVariant"; target: { item_id: ItemId; variant: string } }
   // Legacy ops kept for backward compat during migration
   | { op: "ExcludePackage"; target: PackageTarget }

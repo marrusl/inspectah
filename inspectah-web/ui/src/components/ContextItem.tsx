@@ -26,10 +26,15 @@ export function ContextItem({ item }: ContextItemProps) {
         onClick={hasDetail ? handleToggle : undefined}
         style={hasDetail ? { cursor: "pointer" } : undefined}
       >
-        <div id={`context-item-${item.id}`} className="inspectah-context-row__name">
+        <div
+          id={`context-item-${item.id}`}
+          className="inspectah-context-row__name"
+        >
           <span>{item.title}</span>
           {item.subtitle && (
-            <span className="inspectah-context-row__subtitle">{item.subtitle}</span>
+            <span className="inspectah-context-row__subtitle">
+              {item.subtitle}
+            </span>
           )}
         </div>
         {hasDetail && (
@@ -44,9 +49,7 @@ export function ContextItem({ item }: ContextItemProps) {
         )}
       </div>
       {hasDetail && isExpanded && (
-        <pre className="inspectah-context-row__detail">
-          {item.detail}
-        </pre>
+        <pre className="inspectah-context-row__detail">{item.detail}</pre>
       )}
     </div>
   );

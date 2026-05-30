@@ -18,7 +18,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ROUTINE_TAG: AttentionTag = { level: "routine", reason: "package_baseline_match", detail: null };
+const ROUTINE_TAG: AttentionTag = {
+  level: "routine",
+  reason: "package_baseline_match",
+  detail: null,
+};
 
 function makePkg(name: string): DecisionItemKind {
   return {
@@ -36,7 +40,11 @@ function makePkg(name: string): DecisionItemKind {
         fleet: null,
       },
       attention: [ROUTINE_TAG],
-      triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] },
+      triage: {
+        triage: { mode: "single_host" as const, baseline: null },
+        primary_reason: "package_baseline_match" as const,
+        annotations: [],
+      },
     },
   };
 }

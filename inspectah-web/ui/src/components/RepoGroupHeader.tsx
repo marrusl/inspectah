@@ -99,7 +99,10 @@ export function RepoGroupHeader({
       >
         {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
       </span>
-      <span className="inspectah-repo-group-header__label" style={disabledStyle}>
+      <span
+        className="inspectah-repo-group-header__label"
+        style={disabledStyle}
+      >
         {sectionId}
       </span>
       {label && (

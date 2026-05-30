@@ -81,10 +81,7 @@ export function SysctlSection({
 
   if (sysctls.length === 0) {
     return (
-      <div
-        className="inspectah-service-section"
-        data-testid="sysctl-section"
-      >
+      <div className="inspectah-service-section" data-testid="sysctl-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
           No sysctl overrides detected.
         </p>
@@ -126,10 +123,7 @@ export function SysctlSection({
             }}
           >
             <div className="inspectah-decision-row__main">
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__toggle"
-              >
+              <div role="gridcell" className="inspectah-decision-row__toggle">
                 <input
                   type="checkbox"
                   role="checkbox"
@@ -141,10 +135,7 @@ export function SysctlSection({
                   style={{ minWidth: 20, minHeight: 20 }}
                 />
               </div>
-              <div
-                role="gridcell"
-                className="inspectah-decision-row__name"
-              >
+              <div role="gridcell" className="inspectah-decision-row__name">
                 <span>{s.key}</span>
                 <span
                   style={{
@@ -168,20 +159,18 @@ export function SysctlSection({
                 )}
               </div>
               {runtimeOnly && (
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__badge"
-                >
-                  <Label color="yellow" isCompact data-testid={`sysctl-runtime-only-${s.key}`}>
+                <div role="gridcell" className="inspectah-decision-row__badge">
+                  <Label
+                    color="yellow"
+                    isCompact
+                    data-testid={`sysctl-runtime-only-${s.key}`}
+                  >
                     Runtime only
                   </Label>
                 </div>
               )}
               {badge && (
-                <div
-                  role="gridcell"
-                  className="inspectah-decision-row__badge"
-                >
+                <div role="gridcell" className="inspectah-decision-row__badge">
                   <Label color={attentionLabelColor(level)}>{badge}</Label>
                 </div>
               )}

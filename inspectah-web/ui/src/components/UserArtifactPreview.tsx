@@ -29,22 +29,19 @@ export function UserArtifactPreview({
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
 
-  const loadPreview = useCallback(
-    (reveal: boolean) => {
-      setLoading(true);
-      setError(null);
-      fetchUserPreview(reveal)
-        .then((resp) => {
-          setData(resp);
-          setRevealed(reveal);
-        })
-        .catch((err) =>
-          setError(err instanceof Error ? err.message : String(err)),
-        )
-        .finally(() => setLoading(false));
-    },
-    [],
-  );
+  const loadPreview = useCallback((reveal: boolean) => {
+    setLoading(true);
+    setError(null);
+    fetchUserPreview(reveal)
+      .then((resp) => {
+        setData(resp);
+        setRevealed(reveal);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -65,8 +62,8 @@ export function UserArtifactPreview({
 
   const content =
     activeTab === "kickstart"
-      ? data?.kickstart ?? ""
-      : data?.blueprint_toml ?? "";
+      ? (data?.kickstart ?? "")
+      : (data?.blueprint_toml ?? "");
 
   return (
     <Modal
@@ -147,7 +144,12 @@ export function UserArtifactPreview({
         )}
 
         {loading && (
-          <div style={{ textAlign: "center", padding: "var(--pf-t--global--spacer--lg)" }}>
+          <div
+            style={{
+              textAlign: "center",
+              padding: "var(--pf-t--global--spacer--lg)",
+            }}
+          >
             <Spinner size="lg" aria-label="Loading preview" />
           </div>
         )}

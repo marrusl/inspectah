@@ -47,10 +47,18 @@ function createStorageStub(): Storage {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
-    get length() { return Object.keys(store).length; },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
     key: (index: number) => Object.keys(store)[index] ?? null,
   };
 }
@@ -95,14 +103,22 @@ function configItemWithVariants(): FleetItem {
   return {
     item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
     include: true,
-    triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
+    triage: {
+      bucket: "divergent" as const,
+      prevalence: { count: 2, total: 3 },
+    },
     prevalence: { count: 2, total: 3 },
     source_repo: "",
     variants: {
       count: 2,
       selected: "aaa111",
       options: [
-        { hash: "aaa111", hosts: ["host1", "host2"], host_count: 2, selected: true },
+        {
+          hash: "aaa111",
+          hosts: ["host1", "host2"],
+          host_count: 2,
+          selected: true,
+        },
         { hash: "bbb222", hosts: ["host3"], host_count: 1, selected: false },
       ],
     },
@@ -181,7 +197,9 @@ describe("portal idempotency", () => {
     expect(banner).toBeInTheDocument();
 
     // Find the banner navigate button by its aria-label (config path)
-    const navButton = screen.getByRole("button", { name: /navigate to \/etc\/httpd/i });
+    const navButton = screen.getByRole("button", {
+      name: /navigate to \/etc\/httpd/i,
+    });
     expect(navButton).toBeInTheDocument();
 
     // First click — should open the variant view via portal navigation

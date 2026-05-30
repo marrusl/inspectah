@@ -74,7 +74,10 @@ export function parseSectionHeader(line: string): string | null {
  *
  * Genuinely new or removed headers (no matching pair) keep their highlight.
  */
-function suppressHeaderCountChanges(lines: DiffLine[]): { lines: DiffLine[]; suppressed: number } {
+function suppressHeaderCountChanges(lines: DiffLine[]): {
+  lines: DiffLine[];
+  suppressed: number;
+} {
   // Collect removing and added headers by section name
   const removingHeaders = new Map<string, number[]>(); // section name → indices
   const addedHeaders = new Map<string, number[]>();
@@ -146,7 +149,9 @@ export function computeDiff(
     return { lines, addedCount: 0, removedCount: 0, hasChanges: false };
   }
 
-  const priorIdMap = priorLines ? buildPriorIdMap(priorLines) : new Map<string, string[]>();
+  const priorIdMap = priorLines
+    ? buildPriorIdMap(priorLines)
+    : new Map<string, string[]>();
 
   const changes = diffLines(prev, next);
   const rawLines: DiffLine[] = [];
@@ -204,7 +209,12 @@ export interface UseContainerfileDiffReturn {
   clearHighlight: (id: string) => void;
 }
 
-const EMPTY_DIFF: DiffResult = { lines: [], addedCount: 0, removedCount: 0, hasChanges: false };
+const EMPTY_DIFF: DiffResult = {
+  lines: [],
+  addedCount: 0,
+  removedCount: 0,
+  hasChanges: false,
+};
 
 export function useContainerfileDiff(
   content: string | null,

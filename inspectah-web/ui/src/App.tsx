@@ -51,7 +51,11 @@ function App() {
  * Single-host refine UI. All single-host hooks (useView, useSections,
  * useMutation) live here and are never instantiated in fleet mode.
  */
-function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks/useHealth").UseHealthResult }) {
+function SingleHostApp({
+  healthFromRouter,
+}: {
+  healthFromRouter: import("./hooks/useHealth").UseHealthResult;
+}) {
   const [activeSection, setActiveSection] = useState("packages");
   const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -67,11 +71,21 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
       const container = mainContentRef.current;
       if (!container) return;
 
-      const firstRow = container.querySelector('[role="row"]') as HTMLElement | null;
-      if (firstRow) { firstRow.focus(); return; }
+      const firstRow = container.querySelector(
+        '[role="row"]',
+      ) as HTMLElement | null;
+      if (firstRow) {
+        firstRow.focus();
+        return;
+      }
 
-      const firstContextItem = container.querySelector('[data-testid^="context-item-"]') as HTMLElement | null;
-      if (firstContextItem) { firstContextItem.focus(); return; }
+      const firstContextItem = container.querySelector(
+        '[data-testid^="context-item-"]',
+      ) as HTMLElement | null;
+      if (firstContextItem) {
+        firstContextItem.focus();
+        return;
+      }
 
       const heading = container.querySelector("h2, h3") as HTMLElement | null;
       if (heading) {
@@ -104,7 +118,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
   const refreshViewed = useCallback(() => {
     fetchViewed()
       .then((resp) => setViewedIds(new Set(resp.ids)))
-      .catch(() => {/* ignore – non-critical */});
+      .catch(() => {
+        /* ignore – non-critical */
+      });
   }, []);
 
   useEffect(() => {
@@ -144,7 +160,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
           if (el instanceof HTMLElement) {
             el.focus();
           } else {
-            const section = testId.includes("packages:") ? "packages" : "configs";
+            const section = testId.includes("packages:")
+              ? "packages"
+              : "configs";
             const itemId = testId.replace("decision-item-", "");
             setActiveSection(section);
             pendingFocusItemRef.current = itemId;
@@ -168,7 +186,10 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
 
   function getItemTestIdFromOp(op: AnnotatedOp): string | null {
     if (op.op === "SetInclude") {
-      const t = op.target as { item_id: { kind: string; key: Record<string, string> }; include: boolean };
+      const t = op.target as {
+        item_id: { kind: string; key: Record<string, string> };
+        include: boolean;
+      };
       if (t.item_id.kind === "Package") {
         return `decision-item-packages:${t.item_id.key.name}.${t.item_id.key.arch}`;
       }
@@ -192,7 +213,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
     fetchOps()
       .then((ops) => {
         const lastActive = [...ops].reverse().find((o) => o.active);
-        undoFocusRef.current = lastActive ? getItemTestIdFromOp(lastActive) : null;
+        undoFocusRef.current = lastActive
+          ? getItemTestIdFromOp(lastActive)
+          : null;
         mutation.undo();
       })
       .catch(() => {
@@ -205,7 +228,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
     fetchOps()
       .then((ops) => {
         const firstInactive = ops.find((o) => !o.active);
-        undoFocusRef.current = firstInactive ? getItemTestIdFromOp(firstInactive) : null;
+        undoFocusRef.current = firstInactive
+          ? getItemTestIdFromOp(firstInactive)
+          : null;
         mutation.redo();
       })
       .catch(() => {
@@ -237,10 +262,12 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
     if (!itemId) return;
 
     requestAnimationFrame(() => {
-      const el = (
-        document.querySelector(`[data-testid="decision-item-${itemId}"]`) ??
-        document.querySelector(`[data-testid="context-item-${itemId}"]`)
-      ) as HTMLElement | null;
+      const el = (document.querySelector(
+        `[data-testid="decision-item-${itemId}"]`,
+      ) ??
+        document.querySelector(
+          `[data-testid="context-item-${itemId}"]`,
+        )) as HTMLElement | null;
       if (!el) return;
 
       pendingFocusItemRef.current = null;
@@ -248,7 +275,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
 
       const hiddenAncestor = el.closest("[hidden]");
       if (hiddenAncestor) {
-        const group = hiddenAncestor.closest("[data-testid^='attention-group-']");
+        const group = hiddenAncestor.closest(
+          "[data-testid^='attention-group-']",
+        );
         const toggle = group?.querySelector("button") as HTMLElement | null;
         toggle?.click();
         requestAnimationFrame(() => {
@@ -302,7 +331,8 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
             data-testid="initial-load-error"
           >
             <EmptyStateBody>
-              {initialLoadError.message || "Could not connect to the inspectah server."}
+              {initialLoadError.message ||
+                "Could not connect to the inspectah server."}
             </EmptyStateBody>
             <EmptyStateFooter>
               <Button
@@ -356,7 +386,9 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
               ref={hamburgerRef}
               type="button"
               className="inspectah-hamburger"
-              aria-label={sidebarOverlayOpen ? "Close navigation" : "Open navigation"}
+              aria-label={
+                sidebarOverlayOpen ? "Close navigation" : "Open navigation"
+              }
               aria-expanded={sidebarOverlayOpen}
               aria-controls="inspectah-sidebar-overlay"
               onClick={() => setSidebarOverlayOpen((prev) => !prev)}
@@ -366,7 +398,12 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
           ) : undefined
         }
       >
-        {({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => (
+        {({
+          sectionSearchOpen,
+          onSectionSearchClose,
+          filterClearCounter,
+          searchSlot,
+        }) => (
           <>
             {!isMobile && (
               <div className="inspectah-layout__sidebar">
@@ -382,14 +419,20 @@ function SingleHostApp({ healthFromRouter }: { healthFromRouter: import("./hooks
                 />
               </div>
             )}
-            <div className="inspectah-layout__main" ref={mainContentRef} tabIndex={-1}>
+            <div
+              className="inspectah-layout__main"
+              ref={mainContentRef}
+              tabIndex={-1}
+            >
               <MainContent
                 activeSection={activeSection}
                 loading={viewLoading}
                 viewData={view.data}
                 sections={sections.data}
                 onViewUpdate={() => view.invalidate()}
-                onMutationError={(err) => console.error("Mutation failed:", err.message)}
+                onMutationError={(err) =>
+                  console.error("Mutation failed:", err.message)
+                }
                 sectionSearchOpen={sectionSearchOpen}
                 onSectionSearchClose={onSectionSearchClose}
                 onViewedChange={refreshViewed}

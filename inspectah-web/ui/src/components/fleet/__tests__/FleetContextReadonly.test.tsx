@@ -38,10 +38,18 @@ function createStorageStub(): Storage {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
-    get length() { return Object.keys(store).length; },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
     key: (index: number) => Object.keys(store)[index] ?? null,
   };
 }
@@ -109,15 +117,28 @@ function makeViewWithReferenceSection(): FleetViewResponse {
           {
             item_id: { kind: "Service", key: { unit: "httpd.service" } },
             include: true,
-            triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
+            triage: {
+              bucket: "universal" as const,
+              prevalence: { count: 3, total: 3 },
+            },
             prevalence: { count: 3, total: 3 },
             source_repo: "",
             variants: {
               count: 2,
               selected: "aaa",
               options: [
-                { hash: "aaa", hosts: ["host1", "host2"], host_count: 2, selected: true },
-                { hash: "bbb", hosts: ["host3"], host_count: 1, selected: false },
+                {
+                  hash: "aaa",
+                  hosts: ["host1", "host2"],
+                  host_count: 2,
+                  selected: true,
+                },
+                {
+                  hash: "bbb",
+                  hosts: ["host3"],
+                  host_count: 1,
+                  selected: false,
+                },
               ],
             },
           },
@@ -160,7 +181,9 @@ describe("context section read-only behavior", () => {
 
     // The item has variants but is_decision_section is false,
     // so the variants button should show as readonly (span, not button)
-    const variantButton = itemRow.querySelector("button.fleet-item-row__variants");
+    const variantButton = itemRow.querySelector(
+      "button.fleet-item-row__variants",
+    );
     expect(variantButton).toBeNull(); // No clickable variant button
 
     // Click the row itself

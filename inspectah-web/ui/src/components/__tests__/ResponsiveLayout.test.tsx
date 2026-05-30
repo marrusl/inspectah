@@ -52,9 +52,10 @@ describe("Sidebar overlay mode", () => {
     );
 
     expect(screen.getByTestId("sidebar-backdrop")).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("Section navigation"),
-    ).toHaveAttribute("id", "inspectah-sidebar-overlay");
+    expect(screen.getByLabelText("Section navigation")).toHaveAttribute(
+      "id",
+      "inspectah-sidebar-overlay",
+    );
   });
 
   it("does not render backdrop when overlay=false", () => {
@@ -223,7 +224,9 @@ describe("Repo group header classification label", () => {
     );
 
     // Non-distro repos show a classification label
-    const classification = document.querySelector(".inspectah-repo-group-header__classification");
+    const classification = document.querySelector(
+      ".inspectah-repo-group-header__classification",
+    );
     expect(classification).toBeInTheDocument();
     expect(classification!.textContent).toContain("Third-party");
   });
@@ -242,7 +245,9 @@ describe("Repo group header classification label", () => {
     );
 
     // Distro repos have no classification label
-    const classification = document.querySelector(".inspectah-repo-group-header__classification");
+    const classification = document.querySelector(
+      ".inspectah-repo-group-header__classification",
+    );
     expect(classification).not.toBeInTheDocument();
   });
 
@@ -279,7 +284,9 @@ describe("Repo group header classification label", () => {
     );
 
     // The toggle wrapper should exist with the correct CSS class
-    const toggleWrapper = document.querySelector(".inspectah-repo-group-header__toggle");
+    const toggleWrapper = document.querySelector(
+      ".inspectah-repo-group-header__toggle",
+    );
     expect(toggleWrapper).toBeInTheDocument();
 
     // The header itself should have the class for CSS-based responsive wrapping

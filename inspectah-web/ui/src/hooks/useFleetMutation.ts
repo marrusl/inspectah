@@ -96,11 +96,17 @@ export function useFleetMutation(
       lastConfirmedView.current = fleetView;
       onViewUpdate(fleetView);
     } catch (err: unknown) {
-      setRefetchError(
-        err instanceof Error ? err.message : "Retry failed",
-      );
+      setRefetchError(err instanceof Error ? err.message : "Retry failed");
     }
   }, [onViewUpdate]);
 
-  return { mutate, undo, redo, isPending, refetchError, retry, lastConfirmedView };
+  return {
+    mutate,
+    undo,
+    redo,
+    isPending,
+    refetchError,
+    retry,
+    lastConfirmedView,
+  };
 }

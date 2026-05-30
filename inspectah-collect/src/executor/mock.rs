@@ -332,15 +332,21 @@ mod tests {
     #[test]
     fn test_mock_resolve_final_target_no_link() {
         let mock = MockExecutor::new();
-        let result = mock.resolve_final_target(Path::new("/etc/rhsm/rhsm.conf")).unwrap();
+        let result = mock
+            .resolve_final_target(Path::new("/etc/rhsm/rhsm.conf"))
+            .unwrap();
         assert_eq!(result, PathBuf::from("/etc/rhsm/rhsm.conf"));
     }
 
     #[test]
     fn test_mock_resolve_final_target_single_hop() {
-        let mock = MockExecutor::new()
-            .with_link("/etc/pki/entitlement/link.pem", "/etc/pki/entitlement/real.pem");
-        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/link.pem")).unwrap();
+        let mock = MockExecutor::new().with_link(
+            "/etc/pki/entitlement/link.pem",
+            "/etc/pki/entitlement/real.pem",
+        );
+        let result = mock
+            .resolve_final_target(Path::new("/etc/pki/entitlement/link.pem"))
+            .unwrap();
         assert_eq!(result, PathBuf::from("/etc/pki/entitlement/real.pem"));
     }
 
@@ -349,15 +355,18 @@ mod tests {
         let mock = MockExecutor::new()
             .with_link("/etc/pki/entitlement/a.pem", "/etc/pki/entitlement/b.pem")
             .with_link("/etc/pki/entitlement/b.pem", "/etc/shadow");
-        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/a.pem")).unwrap();
+        let result = mock
+            .resolve_final_target(Path::new("/etc/pki/entitlement/a.pem"))
+            .unwrap();
         assert_eq!(result, PathBuf::from("/etc/shadow"));
     }
 
     #[test]
     fn test_mock_resolve_final_target_relative() {
-        let mock = MockExecutor::new()
-            .with_link("/etc/pki/entitlement/link.pem", "../../shadow");
-        let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/link.pem")).unwrap();
+        let mock = MockExecutor::new().with_link("/etc/pki/entitlement/link.pem", "../../shadow");
+        let result = mock
+            .resolve_final_target(Path::new("/etc/pki/entitlement/link.pem"))
+            .unwrap();
         assert_eq!(result, PathBuf::from("/etc/shadow"));
     }
 

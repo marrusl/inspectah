@@ -2626,11 +2626,13 @@ mod tests {
         // vim depends on glibc (via libc.so.6 → glibc-2.34-60.el9.x86_64).
         assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
         // ncurses-libs is not in added_ids, so it should not appear.
-        assert!(!deps
-            .get("vim.x86_64")
-            .unwrap()
-            .iter()
-            .any(|d| d.contains("ncurses")));
+        assert!(
+            !deps
+                .get("vim.x86_64")
+                .unwrap()
+                .iter()
+                .any(|d| d.contains("ncurses"))
+        );
         // glibc has no deps in the added set (basesystem is not in added_ids).
         assert!(deps.get("glibc.x86_64").unwrap().is_empty());
     }

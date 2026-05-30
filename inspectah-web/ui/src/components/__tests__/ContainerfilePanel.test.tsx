@@ -103,9 +103,7 @@ describe("ContainerfilePanel", () => {
       />,
     );
 
-    await userEvent.click(
-      screen.getByLabelText("Expand Containerfile panel"),
-    );
+    await userEvent.click(screen.getByLabelText("Expand Containerfile panel"));
     expect(onToggle).toHaveBeenCalled();
   });
 
@@ -184,7 +182,9 @@ describe("ContainerfilePanel", () => {
     );
 
     // Skeletons render as spans with role="progressbar" in PatternFly
-    const skeletons = screen.getByRole("complementary").querySelectorAll(".pf-v6-c-skeleton");
+    const skeletons = screen
+      .getByRole("complementary")
+      .querySelectorAll(".pf-v6-c-skeleton");
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
@@ -271,7 +271,9 @@ describe("ContainerfilePanel change highlights", () => {
     );
 
     // Advance past scroll debounce + highlight activation
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
@@ -291,7 +293,9 @@ describe("ContainerfilePanel change highlights", () => {
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
-    const removingLines = codeEl!.querySelectorAll(".inspectah-cf-line--removing");
+    const removingLines = codeEl!.querySelectorAll(
+      ".inspectah-cf-line--removing",
+    );
     expect(addedLines.length).toBe(0);
     expect(removingLines.length).toBe(0);
   });
@@ -316,10 +320,14 @@ describe("ContainerfilePanel change highlights", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
-    const removingLines = codeEl!.querySelectorAll(".inspectah-cf-line--removing");
+    const removingLines = codeEl!.querySelectorAll(
+      ".inspectah-cf-line--removing",
+    );
     expect(removingLines.length).toBe(1);
     expect(removingLines[0].textContent).toContain("EXPOSE");
     expect(removingLines[0].getAttribute("aria-hidden")).toBe("true");
@@ -356,8 +364,12 @@ describe("ContainerfilePanel change highlights", () => {
       />,
     );
 
-    const tab = screen.getByRole("button", { name: /expand containerfile panel/i });
-    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(true);
+    const tab = screen.getByRole("button", {
+      name: /expand containerfile panel/i,
+    });
+    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(
+      true,
+    );
     expect(tab.getAttribute("aria-label")).toContain("pending changes");
   });
 
@@ -381,7 +393,9 @@ describe("ContainerfilePanel change highlights", () => {
       />,
     );
 
-    const liveRegion = screen.getByRole("complementary").querySelector("[aria-live='polite']");
+    const liveRegion = screen
+      .getByRole("complementary")
+      .querySelector("[aria-live='polite']");
     expect(liveRegion).toBeTruthy();
     expect(liveRegion!.textContent).toContain("1 line added");
   });
@@ -406,7 +420,9 @@ describe("ContainerfilePanel change highlights", () => {
       />,
     );
 
-    const liveRegion = screen.getByRole("complementary").querySelector("[aria-live='polite']");
+    const liveRegion = screen
+      .getByRole("complementary")
+      .querySelector("[aria-live='polite']");
     expect(liveRegion).toBeTruthy();
     expect(liveRegion!.textContent).toBe("");
   });
@@ -430,7 +446,9 @@ describe("ContainerfilePanel change highlights", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLine = codeEl!.querySelector(".inspectah-cf-line--added");
@@ -451,13 +469,29 @@ describe("ContainerfilePanel scroll behavior", () => {
     Element.prototype.scrollTo = scrollToMock;
 
     // Mock getBoundingClientRect to report the line as out of view
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      if (this.classList?.contains("inspectah-cf-panel__body")) {
-        return { top: 0, bottom: 300, left: 0, right: 400, width: 400, height: 300 } as DOMRect;
-      }
-      // Changed lines are below the visible area
-      return { top: 400, bottom: 420, left: 0, right: 400, width: 400, height: 20 } as DOMRect;
-    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.classList?.contains("inspectah-cf-panel__body")) {
+          return {
+            top: 0,
+            bottom: 300,
+            left: 0,
+            right: 400,
+            width: 400,
+            height: 300,
+          } as DOMRect;
+        }
+        // Changed lines are below the visible area
+        return {
+          top: 400,
+          bottom: 420,
+          left: 0,
+          right: 400,
+          width: 400,
+          height: 20,
+        } as DOMRect;
+      },
+    );
 
     // Default: no reduced motion preference
     Object.defineProperty(window, "matchMedia", {
@@ -500,7 +534,9 @@ describe("ContainerfilePanel scroll behavior", () => {
     );
 
     // Advance past the 150ms debounce
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     expect(scrollToMock).toHaveBeenCalled();
   });
@@ -525,20 +561,38 @@ describe("ContainerfilePanel scroll behavior", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     expect(scrollToMock).not.toHaveBeenCalled();
   });
 
   it("skips scroll when first changed line is already visible", () => {
     // Override getBoundingClientRect so the changed line is within the panel body
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      if (this.classList?.contains("inspectah-cf-panel__body")) {
-        return { top: 0, bottom: 500, left: 0, right: 400, width: 400, height: 500 } as DOMRect;
-      }
-      // Changed line is inside the visible area
-      return { top: 100, bottom: 120, left: 0, right: 400, width: 400, height: 20 } as DOMRect;
-    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.classList?.contains("inspectah-cf-panel__body")) {
+          return {
+            top: 0,
+            bottom: 500,
+            left: 0,
+            right: 400,
+            width: 400,
+            height: 500,
+          } as DOMRect;
+        }
+        // Changed line is inside the visible area
+        return {
+          top: 100,
+          bottom: 120,
+          left: 0,
+          right: 400,
+          width: 400,
+          height: 20,
+        } as DOMRect;
+      },
+    );
 
     const { rerender } = render(
       <ContainerfilePanel
@@ -558,7 +612,9 @@ describe("ContainerfilePanel scroll behavior", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     expect(scrollToMock).not.toHaveBeenCalled();
   });
@@ -596,7 +652,9 @@ describe("ContainerfilePanel scroll behavior", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     expect(scrollToMock).toHaveBeenCalledWith(
       expect.objectContaining({ behavior: "auto" }),
@@ -624,7 +682,9 @@ describe("ContainerfilePanel scroll behavior", () => {
     );
 
     // Advance only 50ms (less than 150ms debounce)
-    act(() => { vi.advanceTimersByTime(50); });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
 
     // Second change before debounce fires
     rerender(
@@ -637,7 +697,9 @@ describe("ContainerfilePanel scroll behavior", () => {
     );
 
     // Now advance past the debounce
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     // scrollIntoView should only have been called once (the debounced one)
     expect(scrollToMock).toHaveBeenCalledTimes(1);
@@ -654,9 +716,13 @@ describe("ContainerfilePanel reduced motion support", () => {
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: () => ({
-        matches: false, media: "", onchange: null,
-        addListener: () => {}, removeListener: () => {},
-        addEventListener: () => {}, removeEventListener: () => {},
+        matches: false,
+        media: "",
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
         dispatchEvent: () => false,
       }),
     });
@@ -699,14 +765,22 @@ describe("ContainerfilePanel reduced motion support", () => {
     );
 
     // Advance past scroll debounce (150ms) + reduced-motion activation (50ms)
-    act(() => { vi.advanceTimersByTime(250); });
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
 
     // Highlight should be present
-    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(1);
+    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(
+      1,
+    );
 
     // After 2s more, highlight class should be removed
-    act(() => { vi.advanceTimersByTime(2000); });
-    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(document.querySelectorAll(".inspectah-cf-line--added").length).toBe(
+      0,
+    );
 
     vi.useRealTimers();
   });
@@ -750,7 +824,9 @@ describe("ContainerfilePanel reduced motion support", () => {
 
     // In reduced-motion mode, the line is pruned immediately by the effect
     // so it never appears in the DOM with the removing class
-    expect(document.querySelectorAll(".inspectah-cf-line--removing").length).toBe(0);
+    expect(
+      document.querySelectorAll(".inspectah-cf-line--removing").length,
+    ).toBe(0);
 
     vi.useRealTimers();
   });
@@ -790,12 +866,28 @@ describe("ContainerfilePanel multi-line scroll targeting", () => {
     const querySelectorSpy = vi.spyOn(Element.prototype, "querySelector");
 
     // Mock getBoundingClientRect so changed lines are out of view
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      if (this.classList?.contains("inspectah-cf-panel__body")) {
-        return { top: 0, bottom: 300, left: 0, right: 400, width: 400, height: 300 } as DOMRect;
-      }
-      return { top: 400, bottom: 420, left: 0, right: 400, width: 400, height: 20 } as DOMRect;
-    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.classList?.contains("inspectah-cf-panel__body")) {
+          return {
+            top: 0,
+            bottom: 300,
+            left: 0,
+            right: 400,
+            width: 400,
+            height: 300,
+          } as DOMRect;
+        }
+        return {
+          top: 400,
+          bottom: 420,
+          left: 0,
+          right: 400,
+          width: 400,
+          height: 20,
+        } as DOMRect;
+      },
+    );
 
     // Start with several stable lines
     const baseline = [
@@ -839,7 +931,9 @@ describe("ContainerfilePanel multi-line scroll targeting", () => {
     );
 
     // Advance past scroll debounce (150ms) + scroll arrival delay (350ms)
-    act(() => { vi.advanceTimersByTime(600); });
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
 
     // The scroll logic uses querySelector("[data-line-id]") on the panel body,
     // which returns the first matching element in DOM order (topmost).
@@ -914,8 +1008,12 @@ describe("ContainerfilePanel collapse edge cases", () => {
 
     // The tab should NOT show the pending-changes indicator —
     // first content establishes baseline, it's not a "change"
-    const tab = screen.getByRole("button", { name: /expand containerfile panel/i });
-    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(false);
+    const tab = screen.getByRole("button", {
+      name: /expand containerfile panel/i,
+    });
+    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(
+      false,
+    );
     expect(tab.getAttribute("aria-label")).not.toContain("pending changes");
   });
 
@@ -962,7 +1060,9 @@ describe("ContainerfilePanel collapse edge cases", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     const codeEl = screen.getByRole("complementary").querySelector("code");
     const addedLines = codeEl!.querySelectorAll(".inspectah-cf-line--added");
@@ -982,7 +1082,10 @@ describe("ContainerfilePanel collapse edge cases", () => {
         onchange: null,
         addListener: () => {},
         removeListener: () => {},
-        addEventListener: (_event: string, handler: (e: MediaQueryListEvent) => void) => {
+        addEventListener: (
+          _event: string,
+          handler: (e: MediaQueryListEvent) => void,
+        ) => {
           if (query === "(max-width: 1279px)") {
             matchMediaHandler = handler;
           }
@@ -1013,11 +1116,15 @@ describe("ContainerfilePanel collapse edge cases", () => {
       />,
     );
 
-    act(() => { vi.advanceTimersByTime(200); });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
 
     // Verify highlights are active before collapse
     const codeEl = screen.getByRole("complementary").querySelector("code");
-    expect(codeEl!.querySelectorAll(".inspectah-cf-line--added").length).toBe(1);
+    expect(codeEl!.querySelectorAll(".inspectah-cf-line--added").length).toBe(
+      1,
+    );
 
     // Simulate viewport resize triggering auto-collapse
     expect(matchMediaHandler).not.toBeNull();
@@ -1041,7 +1148,9 @@ describe("ContainerfilePanel collapse edge cases", () => {
     // In collapsed state, the code element is not rendered,
     // so highlight classes are absent from the DOM
     const collapsedPanel = screen.getByRole("complementary");
-    expect(collapsedPanel.querySelector(".inspectah-cf-line--added")).toBeNull();
+    expect(
+      collapsedPanel.querySelector(".inspectah-cf-line--added"),
+    ).toBeNull();
     expect(collapsedPanel.querySelector("code")).toBeNull();
   });
 
@@ -1078,8 +1187,12 @@ describe("ContainerfilePanel collapse edge cases", () => {
       />,
     );
 
-    let tab = screen.getByRole("button", { name: /expand containerfile panel/i });
-    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(true);
+    let tab = screen.getByRole("button", {
+      name: /expand containerfile panel/i,
+    });
+    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(
+      true,
+    );
 
     // Content reverts to baseline while still collapsed — indicator should clear
     rerender(
@@ -1092,7 +1205,9 @@ describe("ContainerfilePanel collapse edge cases", () => {
     );
 
     tab = screen.getByRole("button", { name: /expand containerfile panel/i });
-    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(false);
+    expect(tab.classList.contains("inspectah-cf-panel__tab--has-changes")).toBe(
+      false,
+    );
     expect(tab.getAttribute("aria-label")).not.toContain("pending changes");
   });
 });

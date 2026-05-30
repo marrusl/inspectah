@@ -22,7 +22,8 @@ afterEach(() => {
 function makeSysctlTriage(): TriageTag {
   return {
     triage: { mode: "single_host" as const, site: null },
-    primary_reason: "sysctl_file_backed_override" as TriageTag["primary_reason"],
+    primary_reason:
+      "sysctl_file_backed_override" as TriageTag["primary_reason"],
     annotations: [],
   };
 }
@@ -35,7 +36,9 @@ function makeTunedTriage(): TriageTag {
   };
 }
 
-function makeSysctl(overrides: Partial<SysctlDecisionDto> = {}): SysctlDecisionDto {
+function makeSysctl(
+  overrides: Partial<SysctlDecisionDto> = {},
+): SysctlDecisionDto {
   return {
     key: "net.ipv4.ip_forward",
     runtime: "1",
@@ -47,7 +50,9 @@ function makeSysctl(overrides: Partial<SysctlDecisionDto> = {}): SysctlDecisionD
   };
 }
 
-function makeTuned(overrides: Partial<TunedDecisionDto> = {}): TunedDecisionDto {
+function makeTuned(
+  overrides: Partial<TunedDecisionDto> = {},
+): TunedDecisionDto {
   return {
     active_profile: "throughput-performance",
     custom_profiles: [],
@@ -89,31 +94,25 @@ describe("SystemTuningSection", () => {
     expect(screen.getByTestId("sysctl-section")).toBeInTheDocument();
     expect(screen.getByTestId("tuned-section")).toBeInTheDocument();
     // Divider present
-    expect(screen.getByTestId("system-tuning-section").querySelector("hr")).toBeTruthy();
+    expect(
+      screen.getByTestId("system-tuning-section").querySelector("hr"),
+    ).toBeTruthy();
   });
 
   it("renders only sysctls subsection when tuned is empty", () => {
-    render(
-      <SystemTuningSection
-        {...defaultProps}
-        sysctls={[makeSysctl()]}
-      />,
-    );
+    render(<SystemTuningSection {...defaultProps} sysctls={[makeSysctl()]} />);
     expect(screen.getByText("Sysctls")).toBeInTheDocument();
     expect(screen.queryByText("Tuned Profiles")).not.toBeInTheDocument();
     expect(screen.getByTestId("sysctl-section")).toBeInTheDocument();
     expect(screen.queryByTestId("tuned-section")).not.toBeInTheDocument();
     // No divider when only one subsection
-    expect(screen.getByTestId("system-tuning-section").querySelector("hr")).toBeFalsy();
+    expect(
+      screen.getByTestId("system-tuning-section").querySelector("hr"),
+    ).toBeFalsy();
   });
 
   it("renders only tuned subsection when sysctls is empty", () => {
-    render(
-      <SystemTuningSection
-        {...defaultProps}
-        tuned={[makeTuned()]}
-      />,
-    );
+    render(<SystemTuningSection {...defaultProps} tuned={[makeTuned()]} />);
     expect(screen.queryByText("Sysctls")).not.toBeInTheDocument();
     expect(screen.getByText("Tuned Profiles")).toBeInTheDocument();
     expect(screen.queryByTestId("sysctl-section")).not.toBeInTheDocument();

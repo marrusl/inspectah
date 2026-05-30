@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { Content, DescriptionList, DescriptionListGroup, DescriptionListTerm, DescriptionListDescription, Label } from "@patternfly/react-core";
+import {
+  Content,
+  DescriptionList,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  DescriptionListDescription,
+  Label,
+} from "@patternfly/react-core";
 import type { RefinedConfig, AttentionTag } from "../api/types";
 import { attentionLabelColor, formatReasonText } from "./attentionUtils";
 
@@ -16,10 +23,15 @@ function formatKind(kind: string): string {
 
 export function ConfigDetail({ config }: ConfigDetailProps) {
   const [showDiff, setShowDiff] = useState(false);
-  const hasDiff = config.entry.diff_against_rpm != null && config.entry.diff_against_rpm.length > 0;
+  const hasDiff =
+    config.entry.diff_against_rpm != null &&
+    config.entry.diff_against_rpm.length > 0;
 
   return (
-    <div data-testid="config-detail" style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}>
+    <div
+      data-testid="config-detail"
+      style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}
+    >
       <DescriptionList isHorizontal isCompact>
         <DescriptionListGroup>
           <DescriptionListTerm>Path</DescriptionListTerm>
@@ -48,12 +60,18 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
             <DescriptionListTerm>Attention</DescriptionListTerm>
             <DescriptionListDescription>
               {(config.attention ?? []).map((tag: AttentionTag, i: number) => (
-                <span key={i} style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}>
+                <span
+                  key={i}
+                  style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}
+                >
                   <Label color={attentionLabelColor(tag.level)}>
                     {formatReasonText(tag.reason, tag.detail)}
                   </Label>
                   {tag.detail && (
-                    <Content component="small" style={{ marginLeft: "var(--pf-t--global--spacer--xs)" }}>
+                    <Content
+                      component="small"
+                      style={{ marginLeft: "var(--pf-t--global--spacer--xs)" }}
+                    >
                       {tag.detail}
                     </Content>
                   )}
@@ -67,7 +85,13 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
             <DescriptionListTerm>Content Preview</DescriptionListTerm>
             <DescriptionListDescription>
               <Content component="small">
-                <pre style={{ maxHeight: "200px", overflow: "auto", whiteSpace: "pre-wrap" }}>
+                <pre
+                  style={{
+                    maxHeight: "200px",
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
                   {config.entry.content.length > 500
                     ? config.entry.content.slice(0, 500) + "..."
                     : config.entry.content}
@@ -108,7 +132,8 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
               style={{
                 marginTop: "var(--pf-t--global--spacer--xs)",
                 padding: "var(--pf-t--global--spacer--sm)",
-                background: "var(--pf-t--global--background--color--secondary--default)",
+                background:
+                  "var(--pf-t--global--background--color--secondary--default)",
                 borderRadius: "var(--pf-t--global--border--radius--small)",
                 fontSize: "var(--pf-t--global--font--size--body--sm)",
                 overflow: "auto",

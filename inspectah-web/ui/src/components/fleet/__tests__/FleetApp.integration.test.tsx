@@ -13,7 +13,14 @@
  * disables undo/redo when stats is null, and FleetApp passes stats={null}).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, within, fireEvent } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  act,
+  within,
+  fireEvent,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FleetApp } from "../../FleetApp";
 import type { FleetAppProps } from "../../FleetApp";
@@ -34,10 +41,18 @@ function createStorageStub(): Storage {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
-    get length() { return Object.keys(store).length; },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
     key: (index: number) => Object.keys(store)[index] ?? null,
   };
 }
@@ -81,7 +96,10 @@ function mockFleetItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
     item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     include: true,
-    triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
+    triage: {
+      bucket: "universal" as const,
+      prevalence: { count: 3, total: 3 },
+    },
     prevalence: { count: 3, total: 3 },
     source_repo: "appstream",
     ...overrides,
@@ -94,13 +112,21 @@ function mockConfigItem(
 ): FleetItem {
   return mockFleetItem({
     item_id: { kind: "Config", key: { path } },
-    triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
+    triage: {
+      bucket: "divergent" as const,
+      prevalence: { count: 2, total: 3 },
+    },
     prevalence: { count: 2, total: 3 },
     variants: {
       count: 2,
       selected: "aaa111",
       options: [
-        { hash: "aaa111", hosts: ["host1", "host2"], host_count: 2, selected: true },
+        {
+          hash: "aaa111",
+          hosts: ["host1", "host2"],
+          host_count: 2,
+          selected: true,
+        },
         { hash: "bbb222", hosts: ["host3"], host_count: 1, selected: false },
       ],
     },
@@ -169,13 +195,22 @@ function mockFleetViewResponse(
         display_name: "Packages",
         items: [
           mockFleetItem({
-            item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
+            item_id: {
+              kind: "Package",
+              key: { name: "httpd", arch: "x86_64" },
+            },
             prevalence: { count: 3, total: 3 },
           }),
           mockFleetItem({
-            item_id: { kind: "Package", key: { name: "nginx", arch: "x86_64" } },
+            item_id: {
+              kind: "Package",
+              key: { name: "nginx", arch: "x86_64" },
+            },
             prevalence: { count: 2, total: 3 },
-            triage: { bucket: "partial" as const, prevalence: { count: 2, total: 3 } },
+            triage: {
+              bucket: "partial" as const,
+              prevalence: { count: 2, total: 3 },
+            },
           }),
         ],
       }),
@@ -201,7 +236,14 @@ function mockFleetViewResponse(
       }),
     ],
     repo_groups: [
-      { section_id: "appstream", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
+      {
+        section_id: "appstream",
+        provenance: "verified" as const,
+        is_distro: true,
+        tier: "distro" as const,
+        package_count: 2,
+        enabled: true,
+      },
     ],
     repo_conflict_count: 0,
     ...overrides,
@@ -336,10 +378,16 @@ describe("FleetApp integration", () => {
       const sidebar = screen.getByTestId("fleet-sidebar");
 
       // Decision sections (packages, config_files) should show ack labels
-      expect(within(sidebar).getByTestId("ack-progress-packages")).toBeInTheDocument();
-      expect(within(sidebar).getByTestId("ack-progress-config_files")).toBeInTheDocument();
+      expect(
+        within(sidebar).getByTestId("ack-progress-packages"),
+      ).toBeInTheDocument();
+      expect(
+        within(sidebar).getByTestId("ack-progress-config_files"),
+      ).toBeInTheDocument();
       // Non-decision sections (services) should not
-      expect(within(sidebar).queryByTestId("ack-progress-services")).not.toBeInTheDocument();
+      expect(
+        within(sidebar).queryByTestId("ack-progress-services"),
+      ).not.toBeInTheDocument();
     });
 
     it("does not show ack labels when no actionable variants exist", async () => {
@@ -356,8 +404,12 @@ describe("FleetApp integration", () => {
 
       const sidebar = screen.getByTestId("fleet-sidebar");
       // totalCount is 0, so ackLabel returns null — no ack-progress testids
-      expect(within(sidebar).queryByTestId("ack-progress-packages")).not.toBeInTheDocument();
-      expect(within(sidebar).queryByTestId("ack-progress-config_files")).not.toBeInTheDocument();
+      expect(
+        within(sidebar).queryByTestId("ack-progress-packages"),
+      ).not.toBeInTheDocument();
+      expect(
+        within(sidebar).queryByTestId("ack-progress-config_files"),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -457,7 +509,9 @@ describe("FleetApp integration", () => {
       expect(screen.getByTestId("package-list")).toBeInTheDocument();
 
       // Retry button should be present
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /retry/i }),
+      ).toBeInTheDocument();
     });
 
     it("retry clears error and updates view on success", async () => {
@@ -505,19 +559,23 @@ describe("FleetApp integration", () => {
             display_name: "Packages",
             items: [
               mockFleetItem({
-                item_id: { kind: "Package", key: { name: "vim", arch: "x86_64" } },
+                item_id: {
+                  kind: "Package",
+                  key: { name: "vim", arch: "x86_64" },
+                },
               }),
               mockFleetItem({
-                item_id: { kind: "Package", key: { name: "emacs", arch: "x86_64" } },
+                item_id: {
+                  kind: "Package",
+                  key: { name: "emacs", arch: "x86_64" },
+                },
               }),
             ],
           }),
           mockFleetSection("config_files", {
             display_name: "Config Files",
             is_decision_section: true,
-            items: [
-              mockConfigItem("/etc/hosts"),
-            ],
+            items: [mockConfigItem("/etc/hosts")],
           }),
         ],
       });
@@ -566,14 +624,18 @@ describe("FleetApp integration", () => {
       await waitForContent();
 
       // Config Files should not be current initially
-      const configNav = screen.getByText("Config Files").closest("[aria-current]");
+      const configNav = screen
+        .getByText("Config Files")
+        .closest("[aria-current]");
       expect(configNav).toBeNull();
 
       // Click Config Files
       await userEvent.click(screen.getByText("Config Files"));
 
       // Now it should have aria-current
-      const activeConfig = screen.getByText("Config Files").closest("[aria-current]");
+      const activeConfig = screen
+        .getByText("Config Files")
+        .closest("[aria-current]");
       expect(activeConfig).toHaveAttribute("aria-current", "page");
     });
   });
@@ -620,7 +682,9 @@ describe("FleetApp integration", () => {
       renderFleetApp();
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to load fleet view/)).toBeInTheDocument();
+        expect(
+          screen.getByText(/Failed to load fleet view/),
+        ).toBeInTheDocument();
       });
       expect(screen.getByText("Connection refused")).toBeInTheDocument();
 
@@ -691,15 +755,32 @@ describe("FleetApp integration", () => {
       return mockFleetViewResponse({
         repo_conflict_count: 1,
         repo_groups: [
-          { section_id: "baseos", provenance: "verified" as const, is_distro: true, tier: "distro" as const, package_count: 2, enabled: true },
-          { section_id: "epel", provenance: "incomplete" as const, is_distro: false, tier: "third_party" as const, package_count: 1, enabled: true },
+          {
+            section_id: "baseos",
+            provenance: "verified" as const,
+            is_distro: true,
+            tier: "distro" as const,
+            package_count: 2,
+            enabled: true,
+          },
+          {
+            section_id: "epel",
+            provenance: "incomplete" as const,
+            is_distro: false,
+            tier: "third_party" as const,
+            package_count: 1,
+            enabled: true,
+          },
         ],
         sections: [
           mockFleetSection("packages", {
             display_name: "Packages",
             items: [
               mockFleetItem({
-                item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
+                item_id: {
+                  kind: "Package",
+                  key: { name: "httpd", arch: "x86_64" },
+                },
                 prevalence: { count: 3, total: 3 },
                 source_repo: "baseos",
                 repo_conflict: [
@@ -708,7 +789,10 @@ describe("FleetApp integration", () => {
                 ],
               }),
               mockFleetItem({
-                item_id: { kind: "Package", key: { name: "curl", arch: "x86_64" } },
+                item_id: {
+                  kind: "Package",
+                  key: { name: "curl", arch: "x86_64" },
+                },
                 prevalence: { count: 3, total: 3 },
                 source_repo: "baseos",
               }),
@@ -735,12 +819,16 @@ describe("FleetApp integration", () => {
 
       // Conflict popover trigger should be present on httpd row
       const httpdRow = screen.getByTestId("package-row-httpd.x86_64");
-      const trigger = within(httpdRow).getByRole("button", { name: /repo conflict/i });
+      const trigger = within(httpdRow).getByRole("button", {
+        name: /repo conflict/i,
+      });
       expect(trigger).toBeInTheDocument();
 
       // curl should not have a conflict trigger
       const curlRow = screen.getByTestId("package-row-curl.x86_64");
-      expect(within(curlRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+      expect(
+        within(curlRow).queryByRole("button", { name: /repo conflict/i }),
+      ).not.toBeInTheDocument();
 
       // Open popover and dismiss
       await userEvent.click(trigger);
@@ -748,17 +836,23 @@ describe("FleetApp integration", () => {
       await userEvent.click(dismissBtn);
 
       // Trigger should disappear after dismiss
-      expect(within(httpdRow).queryByRole("button", { name: /repo conflict/i })).not.toBeInTheDocument();
+      expect(
+        within(httpdRow).queryByRole("button", { name: /repo conflict/i }),
+      ).not.toBeInTheDocument();
 
       // RepoBar should show "Show 1 dismissed"
       const repoBar = screen.getByTestId("repo-bar");
-      const restoreBtn = within(repoBar).getByRole("button", { name: /show 1 dismissed/i });
+      const restoreBtn = within(repoBar).getByRole("button", {
+        name: /show 1 dismissed/i,
+      });
       expect(restoreBtn).toBeInTheDocument();
 
       // Click restore — popover trigger should reappear
       await userEvent.click(restoreBtn);
       await waitFor(() => {
-        expect(within(httpdRow).getByRole("button", { name: /repo conflict/i })).toBeInTheDocument();
+        expect(
+          within(httpdRow).getByRole("button", { name: /repo conflict/i }),
+        ).toBeInTheDocument();
       });
     });
   });

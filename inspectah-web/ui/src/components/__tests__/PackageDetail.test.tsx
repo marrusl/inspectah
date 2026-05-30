@@ -3,7 +3,9 @@ import { render, screen } from "@testing-library/react";
 import { PackageDetail } from "../PackageDetail";
 import type { RefinedPackage, VersionChangeEntry } from "../../api/types";
 
-function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}): RefinedPackage {
+function makePkg(
+  overrides: Partial<RefinedPackage["entry"]> = {},
+): RefinedPackage {
   return {
     entry: {
       name: "test-pkg",
@@ -18,7 +20,11 @@ function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}): RefinedPacka
       ...overrides,
     },
     attention: [],
-    triage: { triage: { mode: "single_host" as const, baseline: null }, primary_reason: "package_baseline_match" as const, annotations: [] },
+    triage: {
+      triage: { mode: "single_host" as const, baseline: null },
+      primary_reason: "package_baseline_match" as const,
+      annotations: [],
+    },
   };
 }
 
@@ -48,7 +54,9 @@ describe("PackageDetail version change", () => {
     );
     expect(screen.getByText("Version Change")).toBeInTheDocument();
     // host_version appears in both NEVRA and version change, so use getAllByText
-    expect(screen.getAllByText(/5\.2\.26-3\.el9/).length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText(/5\.2\.26-3\.el9/).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/5\.2\.26-4\.el9/)).toBeInTheDocument();
     expect(screen.getByText(/downgrade/i)).toBeInTheDocument();
   });
@@ -80,7 +88,9 @@ describe("PackageDetail version change", () => {
     // base epoch (1:) only appears in version change display
     expect(screen.getByText(/1:2\.34-100\.el9/)).toBeInTheDocument();
     // host epoch (2:) appears in both NEVRA and version change, so use getAllByText
-    expect(screen.getAllByText(/2:2\.34-100\.el9/).length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText(/2:2\.34-100\.el9/).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("does not show version change when null", () => {

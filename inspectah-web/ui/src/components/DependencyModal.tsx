@@ -45,9 +45,11 @@ export function DependencyModal({
             <li
               key={dep}
               style={{
-                padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+                padding:
+                  "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
                 fontFamily: "var(--pf-t--global--font--family--mono)",
-                borderBottom: "1px solid var(--pf-t--global--border--color--default)",
+                borderBottom:
+                  "1px solid var(--pf-t--global--border--color--default)",
               }}
             >
               {dep}

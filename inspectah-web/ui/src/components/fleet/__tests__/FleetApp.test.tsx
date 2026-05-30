@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { FleetApp } from "../../FleetApp";
 import type { FleetAppProps } from "../../FleetApp";
 import { FleetSidebar } from "../FleetSidebar";
-import type { FleetViewResponse, FleetHealthInfo, HealthResponse } from "../../../api/types";
+import type {
+  FleetViewResponse,
+  FleetHealthInfo,
+  HealthResponse,
+} from "../../../api/types";
 
 // Mock fleet-client
 const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
@@ -51,7 +55,9 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewResponse {
+function makeFleetView(
+  overrides: Partial<FleetViewResponse> = {},
+): FleetViewResponse {
   return {
     generation: 1,
     can_undo: false,
@@ -70,7 +76,10 @@ function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewRes
         is_decision_section: true,
         items: [
           {
-            item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
+            item_id: {
+              kind: "Package",
+              key: { name: "httpd", arch: "x86_64" },
+            },
             include: true,
             triage: { bucket: "divergent", prevalence: { count: 2, total: 3 } },
             prevalence: { count: 2, total: 3 },
@@ -96,7 +105,14 @@ function makeFleetView(overrides: Partial<FleetViewResponse> = {}): FleetViewRes
       },
     ],
     repo_groups: [
-      { section_id: "appstream", provenance: "verified", is_distro: true, tier: "distro", package_count: 1, enabled: true },
+      {
+        section_id: "appstream",
+        provenance: "verified",
+        is_distro: true,
+        tier: "distro",
+        package_count: 1,
+        enabled: true,
+      },
     ],
     repo_conflict_count: 0,
     ...overrides,
@@ -226,9 +242,15 @@ describe("FleetSidebar", () => {
       is_decision_section: true,
       items: [
         {
-          item_id: { kind: "Package" as const, key: { name: "httpd", arch: "x86_64" } },
+          item_id: {
+            kind: "Package" as const,
+            key: { name: "httpd", arch: "x86_64" },
+          },
           include: true,
-          triage: { bucket: "divergent" as const, prevalence: { count: 2, total: 3 } },
+          triage: {
+            bucket: "divergent" as const,
+            prevalence: { count: 2, total: 3 },
+          },
           prevalence: { count: 2, total: 3 },
           source_repo: "appstream",
         },
@@ -276,7 +298,9 @@ describe("FleetSidebar", () => {
       />,
     );
     // PF6 NavItem sets aria-current="page" on active item
-    const configItem = screen.getByText("Config Files").closest("[aria-current]");
+    const configItem = screen
+      .getByText("Config Files")
+      .closest("[aria-current]");
     expect(configItem).toHaveAttribute("aria-current", "page");
   });
 
@@ -304,10 +328,16 @@ describe("FleetSidebar", () => {
       />,
     );
     // Decision sections should show ack progress
-    expect(screen.getByTestId("ack-progress-packages")).toHaveTextContent("2/4 confirmed");
-    expect(screen.getByTestId("ack-progress-configs")).toHaveTextContent("2/4 confirmed");
+    expect(screen.getByTestId("ack-progress-packages")).toHaveTextContent(
+      "2/4 confirmed",
+    );
+    expect(screen.getByTestId("ack-progress-configs")).toHaveTextContent(
+      "2/4 confirmed",
+    );
     // Context sections should not show ack progress
-    expect(screen.queryByTestId("ack-progress-services")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("ack-progress-services"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows zone-based item counts for sections with zones", () => {

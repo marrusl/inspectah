@@ -1,4 +1,8 @@
-import type { SysctlDecisionDto, TunedDecisionDto, ViewResponse } from "../api/types";
+import type {
+  SysctlDecisionDto,
+  TunedDecisionDto,
+  ViewResponse,
+} from "../api/types";
 import { SysctlSection } from "./SysctlSection";
 import { TunedSection } from "./TunedSection";
 
@@ -40,7 +44,8 @@ export function SystemTuningSection({
               fontSize: "var(--pf-t--global--font--size--sm)",
               fontWeight: 600,
               opacity: 0.7,
-              padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
+              padding:
+                "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
               margin: 0,
             }}
           >
@@ -58,7 +63,8 @@ export function SystemTuningSection({
           style={{
             border: "none",
             borderTop: "1px solid var(--pf-t--global--border--color--default)",
-            margin: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
+            margin:
+              "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
           }}
         />
       )}
@@ -69,7 +75,8 @@ export function SystemTuningSection({
               fontSize: "var(--pf-t--global--font--size--sm)",
               fontWeight: 600,
               opacity: 0.7,
-              padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
+              padding:
+                "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
               margin: 0,
             }}
           >

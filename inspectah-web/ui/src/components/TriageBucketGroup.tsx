@@ -34,7 +34,13 @@ export interface TriageBucketGroupProps {
   children: React.ReactNode;
 }
 
-export function TriageBucketGroup({ level, count, forceExpanded, gridLabel, children }: TriageBucketGroupProps) {
+export function TriageBucketGroup({
+  level,
+  count,
+  forceExpanded,
+  gridLabel,
+  children,
+}: TriageBucketGroupProps) {
   // Collapsible section behavior:
   //   investigate + divergent/site (needs_review + informational): expanded by default
   //   partial + universal/baseline (routine): collapsed by default
@@ -49,7 +55,9 @@ export function TriageBucketGroup({ level, count, forceExpanded, gridLabel, chil
   const toggleText = `${label} (${count})`;
 
   // forceExpanded overrides user toggle; small sections always expand; user toggle controls otherwise
-  const effectiveExpanded = isEmpty ? false : forceExpanded || smallSection || isExpanded;
+  const effectiveExpanded = isEmpty
+    ? false
+    : forceExpanded || smallSection || isExpanded;
 
   return (
     <div
@@ -85,10 +93,13 @@ export function TriageBucketGroup({ level, count, forceExpanded, gridLabel, chil
         {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
         {toggleText}
       </button>
-      <div role="grid" aria-label={gridLabel ?? label} aria-rowcount={count} hidden={!effectiveExpanded}>
-        <div role="rowgroup">
-          {children}
-        </div>
+      <div
+        role="grid"
+        aria-label={gridLabel ?? label}
+        aria-rowcount={count}
+        hidden={!effectiveExpanded}
+      >
+        <div role="rowgroup">{children}</div>
       </div>
     </div>
   );

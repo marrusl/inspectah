@@ -14,10 +14,14 @@ export interface FleetItemRowProps {
 
 export function attentionDisplayLabel(level: string): string {
   switch (level) {
-    case "needs_review": return "Needs review";
-    case "informational": return "Info";
-    case "routine": return "Routine";
-    default: return level.replace(/_/g, " ");
+    case "needs_review":
+      return "Needs review";
+    case "informational":
+      return "Info";
+    case "routine":
+      return "Routine";
+    default:
+      return level.replace(/_/g, " ");
   }
 }
 
@@ -113,7 +117,10 @@ export function FleetItemRow({
       tabIndex={0}
     >
       {isDecisionSection && (
-        <div className="fleet-item-row__toggle" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fleet-item-row__toggle"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Switch
             id={`fleet-switch-${name}`}
             isChecked={item.include}
@@ -125,7 +132,9 @@ export function FleetItemRow({
 
       <div className="fleet-item-row__name">{name}</div>
 
-      <span className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}>
+      <span
+        className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}
+      >
         {count}/{total} hosts
       </span>
 
@@ -136,7 +145,13 @@ export function FleetItemRow({
           type="button"
           aria-expanded={isExpanded}
         >
-          {item.variants!.count} variants <span className={`fleet-item-row__variants-chevron${isExpanded ? " fleet-item-row__variants-chevron--expanded" : ""}`} aria-hidden="true">&#9656;</span>
+          {item.variants!.count} variants{" "}
+          <span
+            className={`fleet-item-row__variants-chevron${isExpanded ? " fleet-item-row__variants-chevron--expanded" : ""}`}
+            aria-hidden="true"
+          >
+            &#9656;
+          </span>
         </button>
       )}
       {hasVariants && !isDecisionSection && (
@@ -144,7 +159,6 @@ export function FleetItemRow({
           {item.variants!.count} variants
         </span>
       )}
-
     </div>
   );
 }

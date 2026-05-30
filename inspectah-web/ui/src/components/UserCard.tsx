@@ -36,7 +36,9 @@ export function UserCard({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [isHashing, setIsHashing] = useState(false);
-  const [passwordSet, setPasswordSet] = useState(user.password_choice === "new");
+  const [passwordSet, setPasswordSet] = useState(
+    user.password_choice === "new",
+  );
   const [passwordInputVisible, setPasswordInputVisible] = useState(
     user.password_choice === "new",
   );
@@ -113,10 +115,7 @@ export function UserCard({
   };
 
   return (
-    <div
-      data-testid={`user-card-${user.name}`}
-      style={cardStyle}
-    >
+    <div data-testid={`user-card-${user.name}`} style={cardStyle}>
       {/* Header row */}
       <div
         style={{
@@ -150,7 +149,9 @@ export function UserCard({
         {user.has_sudo && <Label color="orange">sudo</Label>}
         {(user.ssh_key_count ?? 0) > 0 && (
           <Label color="blue">
-            {user.ssh_key_count === 1 ? "1 SSH key" : `${user.ssh_key_count} SSH keys`}
+            {user.ssh_key_count === 1
+              ? "1 SSH key"
+              : `${user.ssh_key_count} SSH keys`}
           </Label>
         )}
         {user.has_subuid && <Label color="teal">subuid</Label>}
@@ -221,8 +222,7 @@ export function UserCard({
           style={{
             marginTop: "var(--pf-t--global--spacer--sm)",
             paddingTop: "var(--pf-t--global--spacer--sm)",
-            borderTop:
-              "1px solid var(--pf-t--global--border--color--default)",
+            borderTop: "1px solid var(--pf-t--global--border--color--default)",
           }}
         >
           {/* Strategy radio */}
@@ -516,8 +516,8 @@ export function UserCard({
                           marginTop: "6px",
                         }}
                       >
-                        Password is hashed in your browser. The plaintext
-                        never leaves this page.
+                        Password is hashed in your browser. The plaintext never
+                        leaves this page.
                       </div>
                     </div>
                   )}

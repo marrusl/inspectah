@@ -45,15 +45,21 @@ export function FleetBanner({
 
   // Filter items to the active section when specified
   const sectionItems = activeSection
-    ? actionable_variant_items.filter((item) => item.section_id === activeSection)
+    ? actionable_variant_items.filter(
+        (item) => item.section_id === activeSection,
+      )
     : actionable_variant_items;
 
   const otherSectionItems = activeSection
-    ? actionable_variant_items.filter((item) => item.section_id !== activeSection)
+    ? actionable_variant_items.filter(
+        (item) => item.section_id !== activeSection,
+      )
     : [];
 
   // Count unacked items within the visible set
-  const unackedSectionItems = sectionItems.filter((item) => !ackState.isAcked(item.item_id));
+  const unackedSectionItems = sectionItems.filter(
+    (item) => !ackState.isAcked(item.item_id),
+  );
 
   // Severity is scoped to the active section so color matches what the user sees
   const severity = activeSection
@@ -72,7 +78,9 @@ export function FleetBanner({
     {},
   );
 
-  const sectionLabel = activeSection ? sectionTag(activeSection).toLowerCase() : "items";
+  const sectionLabel = activeSection
+    ? sectionTag(activeSection).toLowerCase()
+    : "items";
   const unackedInSection = unackedSectionItems.length;
 
   const headline =
@@ -89,9 +97,7 @@ export function FleetBanner({
       data-severity={severity}
       role="status"
     >
-      <div className="fleet-banner__headline">
-        {headline}
-      </div>
+      <div className="fleet-banner__headline">{headline}</div>
 
       {unackedSectionItems.length > 0 && (
         <ul className="fleet-banner__items">
@@ -109,7 +115,10 @@ export function FleetBanner({
         <div className="fleet-banner__cross-section">
           Also:{" "}
           {Object.entries(otherSectionSummary)
-            .map(([tag, count]) => `${count} ${tag.toLowerCase()} variant${count !== 1 ? "s" : ""}`)
+            .map(
+              ([tag, count]) =>
+                `${count} ${tag.toLowerCase()} variant${count !== 1 ? "s" : ""}`,
+            )
             .join(", ")}
         </div>
       )}
@@ -136,9 +145,7 @@ function BannerItem({
 
   return (
     <li className="fleet-banner__item">
-      <span className="fleet-banner__item-tag">
-        [{tag}]
-      </span>
+      <span className="fleet-banner__item-tag">[{tag}]</span>
       <button
         type="button"
         className="fleet-banner__item-link"
@@ -148,7 +155,8 @@ function BannerItem({
         {name}
       </button>
       <span className="fleet-banner__item-count">
-        {" — "}{item.variant_count} variants
+        {" — "}
+        {item.variant_count} variants
       </span>
     </li>
   );

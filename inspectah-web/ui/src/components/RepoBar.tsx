@@ -26,8 +26,12 @@ export function RepoBar({
   const distroRepos = repos.filter((r) => r.is_distro);
   // Repos with unknown provenance (e.g. @commandline / locally installed) are
   // not toggleable — they represent packages installed outside any repo.
-  const nonToggleableRepos = repos.filter((r) => !r.is_distro && r.provenance === "unknown" && r.package_count > 0);
-  const toggleableRepos = repos.filter((r) => !r.is_distro && r.provenance !== "unknown");
+  const nonToggleableRepos = repos.filter(
+    (r) => !r.is_distro && r.provenance === "unknown" && r.package_count > 0,
+  );
+  const toggleableRepos = repos.filter(
+    (r) => !r.is_distro && r.provenance !== "unknown",
+  );
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
 
@@ -43,7 +47,7 @@ export function RepoBar({
     if (curr > prev) {
       const delta = curr - prev;
       setAnnouncement(
-        `${delta} ${delta === 1 ? "conflict" : "conflicts"} dismissed`
+        `${delta} ${delta === 1 ? "conflict" : "conflicts"} dismissed`,
       );
     } else if (curr < prev) {
       setAnnouncement("All conflicts restored");
@@ -58,7 +62,9 @@ export function RepoBar({
         <div key={repo.section_id} className="inspectah-repo-bar__row">
           <div className="inspectah-repo-bar__name">
             <span style={{ color: tierColors.distro }}>{repo.section_id}</span>
-            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+            <span className="inspectah-repo-bar__count">
+              {repo.package_count}
+            </span>
           </div>
           <span className="inspectah-repo-bar__always">always included</span>
         </div>
@@ -68,12 +74,18 @@ export function RepoBar({
         <div key={repo.section_id} className="inspectah-repo-bar__row">
           <div className="inspectah-repo-bar__name">
             <span style={{ color: tierColors.distro }}>
-              {repo.section_id === "@commandline" ? "Local / Manual installs" : repo.section_id}
+              {repo.section_id === "@commandline"
+                ? "Local / Manual installs"
+                : repo.section_id}
             </span>
-            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+            <span className="inspectah-repo-bar__count">
+              {repo.package_count}
+            </span>
           </div>
           <span className="inspectah-repo-bar__always">
-            {repo.section_id === "@commandline" ? "not included" : "always included"}
+            {repo.section_id === "@commandline"
+              ? "not included"
+              : "always included"}
           </span>
         </div>
       ))}
@@ -84,7 +96,9 @@ export function RepoBar({
             <span style={{ color: tierColors[repo.tier] ?? tierColors.distro }}>
               {repo.section_id}
             </span>
-            <span className="inspectah-repo-bar__count">{repo.package_count}</span>
+            <span className="inspectah-repo-bar__count">
+              {repo.package_count}
+            </span>
           </div>
           <Switch
             id={`repo-toggle-${repo.section_id}`}
@@ -100,19 +114,24 @@ export function RepoBar({
         <div className="inspectah-repo-bar__controls">
           {visibleConflicts > 0 && (
             <Label color="orange" isCompact aria-live="polite">
-              {visibleConflicts} {visibleConflicts === 1 ? "conflict" : "conflicts"}
+              {visibleConflicts}{" "}
+              {visibleConflicts === 1 ? "conflict" : "conflicts"}
             </Label>
           )}
-          {dismissedCount != null && dismissedCount > 0 && onRestoreDismissed && (
-            <Button
-              variant="link"
-              isInline
-              onClick={onRestoreDismissed}
-              style={{ fontSize: "var(--pf-t--global--font--size--body--sm)" }}
-            >
-              Show {dismissedCount} dismissed
-            </Button>
-          )}
+          {dismissedCount != null &&
+            dismissedCount > 0 &&
+            onRestoreDismissed && (
+              <Button
+                variant="link"
+                isInline
+                onClick={onRestoreDismissed}
+                style={{
+                  fontSize: "var(--pf-t--global--font--size--body--sm)",
+                }}
+              >
+                Show {dismissedCount} dismissed
+              </Button>
+            )}
         </div>
       )}
       <span

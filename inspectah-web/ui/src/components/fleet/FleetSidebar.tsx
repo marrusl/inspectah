@@ -51,10 +51,12 @@ export function FleetSidebar({
         aria-current={activeSection === section.id ? "page" : undefined}
         onClick={() => onSelect(section.id)}
       >
-        {section.display_name}{" "}
-        <Badge isRead>{sectionItemCount(section)}</Badge>
+        {section.display_name} <Badge isRead>{sectionItemCount(section)}</Badge>
         {ack && (
-          <span className="fleet-sidebar__ack-progress" data-testid={`ack-progress-${section.id}`}>
+          <span
+            className="fleet-sidebar__ack-progress"
+            data-testid={`ack-progress-${section.id}`}
+          >
             {ack}
           </span>
         )}
@@ -70,9 +72,7 @@ export function FleetSidebar({
     >
       {searchSlot}
       <Nav aria-label="Fleet sections">
-        <NavGroup title="Review">
-          {reviewSections.map(renderItem)}
-        </NavGroup>
+        <NavGroup title="Review">{reviewSections.map(renderItem)}</NavGroup>
         {referenceSections.length > 0 && (
           <NavGroup title="Reference">
             {referenceSections.map(renderItem)}

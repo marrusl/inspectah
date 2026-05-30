@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Button, Page, PageSection, EmptyState, EmptyStateBody, Spinner } from "@patternfly/react-core";
+import {
+  Button,
+  Page,
+  PageSection,
+  EmptyState,
+  EmptyStateBody,
+  Spinner,
+} from "@patternfly/react-core";
 import type {
   FleetHealthInfo,
   HealthResponse,
@@ -32,7 +39,13 @@ export interface FleetAppProps {
 }
 
 /** Toolbar indicator showing unacked variant count. */
-function AckProgress({ unackedCount, totalCount }: { unackedCount: number; totalCount: number }) {
+function AckProgress({
+  unackedCount,
+  totalCount,
+}: {
+  unackedCount: number;
+  totalCount: number;
+}) {
   if (totalCount === 0) return null;
   return (
     <span className="fleet-ack-progress" data-testid="ack-progress">
@@ -85,7 +98,9 @@ function itemIdKey(id: ItemId): string {
 }
 
 /** Build ReferenceSection[] from fleet sections for GlobalSearch indexing. */
-function buildFleetSearchSections(sections: FleetSection[]): ReferenceSection[] {
+function buildFleetSearchSections(
+  sections: FleetSection[],
+): ReferenceSection[] {
   return sections.map((s) => ({
     id: s.id,
     display_name: s.display_name,
@@ -118,20 +133,21 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     itemId: ItemId;
   } | null>(null);
   useEffect(() => {
-    fetchFleetView().then(setView).catch((e) => setError(e.message));
+    fetchFleetView()
+      .then(setView)
+      .catch((e) => setError(e.message));
   }, []);
 
-  const { mutate, undo, redo, isPending, refetchError, retry } = useFleetMutation(
-    setView,
-    (err) => setError(err.message),
-  );
+  const { mutate, undo, redo, isPending, refetchError, retry } =
+    useFleetMutation(setView, (err) => setError(err.message));
 
   // --- Divergent review tracking (session-layer state) ---
-  const [confirmedDivergentIds, setConfirmedDivergentIds] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [confirmedDivergentIds, setConfirmedDivergentIds] = useState<
+    Set<string>
+  >(() => new Set());
 
-  const actionableIds = view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
+  const actionableIds =
+    view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
   const ack = useVariantAck(fleet.label, fleet.merged_at, actionableIds);
   const diffHook = useFleetDiff();
 
@@ -163,7 +179,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Build a set of divergent item keys for fast membership checks
   const divergentKeySet = useMemo(() => {
     if (!view) return new Set<string>();
-    return new Set(allDivergentItems(view.sections).map((i) => itemIdKey(i.item_id)));
+    return new Set(
+      allDivergentItems(view.sections).map((i) => itemIdKey(i.item_id)),
+    );
   }, [view]);
 
   /** Mark a divergent item as confirmed in session state. */
@@ -201,7 +219,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const handleSelectVariant = useCallback(
     (itemId: ItemId, hash: string) => {
-      mutate({ op: "SelectVariant", target: { item_id: itemId, target: hash } });
+      mutate({
+        op: "SelectVariant",
+        target: { item_id: itemId, target: hash },
+      });
       confirmDivergent(itemId);
     },
     [mutate, confirmDivergent],
@@ -251,7 +272,10 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       name: itemDisplayName(item.item_id),
       source_repo: item.source_repo,
       include: item.include,
-      prevalence: { count: item.prevalence.count, total: item.prevalence.total },
+      prevalence: {
+        count: item.prevalence.count,
+        total: item.prevalence.total,
+      },
       repo_conflict: item.repo_conflict,
     }));
   }, [view]);
@@ -310,10 +334,15 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
             <EmptyStateBody>
               {error}
               <br />
-              <Button variant="link" onClick={() => {
-                setError(null);
-                fetchFleetView().then(setView).catch((e) => setError(e.message));
-              }}>
+              <Button
+                variant="link"
+                onClick={() => {
+                  setError(null);
+                  fetchFleetView()
+                    .then(setView)
+                    .catch((e) => setError(e.message));
+                }}
+              >
                 Retry
               </Button>
             </EmptyStateBody>
@@ -326,7 +355,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // view is guaranteed non-null past this point
   const fleetView = view!;
 
-  const activeFleetSection = fleetView.sections.find((s) => s.id === activeSection);
+  const activeFleetSection = fleetView.sections.find(
+    (s) => s.id === activeSection,
+  );
 
   const searchContextSections = buildFleetSearchSections(fleetView.sections);
 
@@ -347,13 +378,30 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
       }
       return acc;
     },
-    { totalPkg: 0, inclPkg: 0, exclPkg: 0, totalCfg: 0, inclCfg: 0, exclCfg: 0 },
+    {
+      totalPkg: 0,
+      inclPkg: 0,
+      exclPkg: 0,
+      totalCfg: 0,
+      inclCfg: 0,
+      exclCfg: 0,
+    },
   );
 
   const fleetStats: RefineStats = {
     sections: [
-      { kind: "package", total: fleetSectionCounts.totalPkg, included: fleetSectionCounts.inclPkg, excluded: fleetSectionCounts.exclPkg },
-      { kind: "config", total: fleetSectionCounts.totalCfg, included: fleetSectionCounts.inclCfg, excluded: fleetSectionCounts.exclCfg },
+      {
+        kind: "package",
+        total: fleetSectionCounts.totalPkg,
+        included: fleetSectionCounts.inclPkg,
+        excluded: fleetSectionCounts.exclPkg,
+      },
+      {
+        kind: "config",
+        total: fleetSectionCounts.totalCfg,
+        included: fleetSectionCounts.inclCfg,
+        excluded: fleetSectionCounts.exclCfg,
+      },
     ],
     needs_review_count: ack.unackedCount,
     ops_applied: 0,
@@ -370,9 +418,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   // Compute divergent review progress
   const totalDivergent = divergentKeySet.size;
-  const unconfirmedDivergent = totalDivergent - [...divergentKeySet].filter(
-    (key) => confirmedDivergentIds.has(key),
-  ).length;
+  const unconfirmedDivergent =
+    totalDivergent -
+    [...divergentKeySet].filter((key) => confirmedDivergentIds.has(key)).length;
 
   return (
     <div data-testid="fleet-app">
@@ -396,8 +444,14 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         onSearchNavigate={handleSearchNavigate}
         toolbarExtra={
           <>
-            <AckProgress unackedCount={ack.unackedCount} totalCount={ack.totalCount} />
-            <DivergentProgress unconfirmedCount={unconfirmedDivergent} totalCount={totalDivergent} />
+            <AckProgress
+              unackedCount={ack.unackedCount}
+              totalCount={ack.totalCount}
+            />
+            <DivergentProgress
+              unconfirmedCount={unconfirmedDivergent}
+              totalCount={totalDivergent}
+            />
           </>
         }
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
@@ -409,7 +463,12 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
         }}
         isFleetMode
       >
-        {({ sectionSearchOpen, onSectionSearchClose, filterClearCounter, searchSlot }) => {
+        {({
+          sectionSearchOpen,
+          onSectionSearchClose,
+          filterClearCounter,
+          searchSlot,
+        }) => {
           // Sync filterText reset with shell's filterClearCounter
           if (filterClearCounter !== filterClearRef.current) {
             filterClearRef.current = filterClearCounter;
@@ -418,84 +477,94 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
           }
 
           return (
-          <>
-          <div className="inspectah-layout__sidebar">
-            <FleetSidebar
-              sections={fleetView.sections}
-              activeSection={activeSection}
-              onSelect={setActiveSection}
-              ackState={ack}
-              searchSlot={searchSlot}
-            />
-          </div>
-          <div className="inspectah-layout__main fleet-content" data-testid="fleet-content">
-            <FleetBanner
-              summary={fleetView.summary}
-              ackState={ack}
-              onNavigate={handleBannerNavigate}
-              activeSection={activeSection}
-            />
-            {sectionSearchOpen && (
-              <div className="fleet-section-search" data-testid="fleet-section-search">
-                <input
-                  type="text"
-                  placeholder="Filter items..."
-                  autoFocus
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setFilterText("");
-                      onSectionSearchClose();
+            <>
+              <div className="inspectah-layout__sidebar">
+                <FleetSidebar
+                  sections={fleetView.sections}
+                  activeSection={activeSection}
+                  onSelect={setActiveSection}
+                  ackState={ack}
+                  searchSlot={searchSlot}
+                />
+              </div>
+              <div
+                className="inspectah-layout__main fleet-content"
+                data-testid="fleet-content"
+              >
+                <FleetBanner
+                  summary={fleetView.summary}
+                  ackState={ack}
+                  onNavigate={handleBannerNavigate}
+                  activeSection={activeSection}
+                />
+                {sectionSearchOpen && (
+                  <div
+                    className="fleet-section-search"
+                    data-testid="fleet-section-search"
+                  >
+                    <input
+                      type="text"
+                      placeholder="Filter items..."
+                      autoFocus
+                      value={filterText}
+                      onChange={(e) => setFilterText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          setFilterText("");
+                          onSectionSearchClose();
+                        }
+                      }}
+                      aria-label="Filter section items"
+                    />
+                  </div>
+                )}
+                {refetchError && (
+                  <div className="refetch-error" data-testid="refetch-error">
+                    {refetchError}
+                    <Button variant="link" onClick={retry}>
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                {activeSection === "packages" ? (
+                  <>
+                    <RepoBar
+                      repos={fleetView.repo_groups}
+                      onToggle={handleFleetRepoToggle}
+                      conflictCount={fleetView.repo_conflict_count}
+                      dismissedCount={dismissedCount}
+                      onRestoreDismissed={handleRestoreDismissed}
+                    />
+                    <PackageList
+                      mode="fleet"
+                      packages={fleetPackages}
+                      repoGroups={fleetView.repo_groups}
+                      onToggle={handleFleetPackageToggle}
+                      onRepoToggle={handleFleetRepoToggle}
+                      onDismissedCountChange={setDismissedCount}
+                      onRestoreDismissed={restoreDismissed}
+                    />
+                  </>
+                ) : (
+                  <FleetSectionContent
+                    section={activeFleetSection}
+                    filterText={filterText}
+                    isDecisionSection={
+                      activeFleetSection?.is_decision_section ?? false
                     }
-                  }}
-                  aria-label="Filter section items"
-                />
+                    onToggle={handleToggle}
+                    ack={ack}
+                    onExpandVariant={handleExpandVariant}
+                    onForceExpandVariant={handleForceExpandVariant}
+                    pendingNavTarget={pendingNavTarget}
+                    onNavTargetConsumed={handleNavTargetConsumed}
+                    expandedItemId={expandedItemId}
+                    onSelectVariant={handleSelectVariant}
+                    diffHook={diffHook}
+                  />
+                )}
               </div>
-            )}
-            {refetchError && (
-              <div className="refetch-error" data-testid="refetch-error">
-                {refetchError}
-                <Button variant="link" onClick={retry}>Retry</Button>
-              </div>
-            )}
-            {activeSection === "packages" ? (
-              <>
-                <RepoBar
-                  repos={fleetView.repo_groups}
-                  onToggle={handleFleetRepoToggle}
-                  conflictCount={fleetView.repo_conflict_count}
-                  dismissedCount={dismissedCount}
-                  onRestoreDismissed={handleRestoreDismissed}
-                />
-                <PackageList
-                  mode="fleet"
-                  packages={fleetPackages}
-                  repoGroups={fleetView.repo_groups}
-                  onToggle={handleFleetPackageToggle}
-                  onRepoToggle={handleFleetRepoToggle}
-                  onDismissedCountChange={setDismissedCount}
-                  onRestoreDismissed={restoreDismissed}
-                />
-              </>
-            ) : (
-              <FleetSectionContent
-                section={activeFleetSection}
-                filterText={filterText}
-                isDecisionSection={activeFleetSection?.is_decision_section ?? false}
-                onToggle={handleToggle}
-                ack={ack}
-                onExpandVariant={handleExpandVariant}
-                onForceExpandVariant={handleForceExpandVariant}
-                pendingNavTarget={pendingNavTarget}
-                onNavTargetConsumed={handleNavTargetConsumed}
-                expandedItemId={expandedItemId}
-                onSelectVariant={handleSelectVariant}
-                diffHook={diffHook}
-              />
-            )}
-          </div>
-          </>
+            </>
           );
         }}
       </AppShell>

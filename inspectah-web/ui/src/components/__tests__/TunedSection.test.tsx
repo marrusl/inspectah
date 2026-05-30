@@ -34,7 +34,9 @@ function makeTriage(bucket: "baseline" | "site" | "investigate"): TriageTag {
   };
 }
 
-function makeTuned(overrides: Partial<TunedDecisionDto> = {}): TunedDecisionDto {
+function makeTuned(
+  overrides: Partial<TunedDecisionDto> = {},
+): TunedDecisionDto {
   return {
     active_profile: "throughput-performance",
     custom_profiles: [],
@@ -81,7 +83,9 @@ describe("TunedSection", () => {
   it("renders empty state when no tuned profiles", () => {
     render(<TunedSection {...defaultProps} />);
     expect(screen.getByTestId("tuned-section")).toBeInTheDocument();
-    expect(screen.getByText(/no tuned profile selections/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/no tuned profile selections/i),
+    ).toBeInTheDocument();
   });
 
   it("renders tuned row with profile name", () => {

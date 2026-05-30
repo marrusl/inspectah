@@ -11,9 +11,11 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={vi.fn()}
-      />
+      />,
     );
-    expect(screen.getByRole("grid", { name: /sort controls/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("grid", { name: /sort controls/i }),
+    ).toBeInTheDocument();
     const headers = screen.getAllByRole("columnheader");
     expect(headers).toHaveLength(2);
   });
@@ -26,7 +28,7 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={vi.fn()}
-      />
+      />,
     );
     const headers = screen.getAllByRole("columnheader");
     expect(headers[0].textContent).toContain("▲");
@@ -43,7 +45,7 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={onSort}
-      />
+      />,
     );
     const headers = screen.getAllByRole("columnheader");
     const repoBtn = within(headers[1]).getByRole("button");
@@ -59,7 +61,7 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={vi.fn()}
-      />
+      />,
     );
     const headers = screen.getAllByRole("columnheader");
     expect(headers[0]).toHaveAttribute("aria-sort", "ascending");
@@ -74,10 +76,16 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={vi.fn()}
-      />
+      />,
     );
-    expect(screen.getByRole("button", { name: /sort by packages, currently ascending/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /sort by repo$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /sort by packages, currently ascending/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /sort by repo$/i }),
+    ).toBeInTheDocument();
   });
 
   it("grid wraps row with proper role structure", () => {
@@ -88,7 +96,7 @@ describe("SortHeader", () => {
         activeColumn="left"
         direction="asc"
         onSort={vi.fn()}
-      />
+      />,
     );
     const grid = screen.getByRole("grid");
     const row = within(grid).getByRole("row");

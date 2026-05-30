@@ -63,7 +63,11 @@ const mockView: ViewResponse = {
           detail: null,
         },
       ],
-      triage: { triage: { mode: "single_host" as const, investigate: null }, primary_reason: "package_user_added" as const, annotations: [] },
+      triage: {
+        triage: { mode: "single_host" as const, investigate: null },
+        primary_reason: "package_user_added" as const,
+        annotations: [],
+      },
     },
   ],
   config_files: [
@@ -88,10 +92,15 @@ const mockView: ViewResponse = {
           detail: "Modified from RPM default",
         },
       ],
-      triage: { triage: { mode: "single_host" as const, investigate: null }, primary_reason: "config_modified" as const, annotations: [] },
+      triage: {
+        triage: { mode: "single_host" as const, investigate: null },
+        primary_reason: "config_modified" as const,
+        annotations: [],
+      },
     },
   ],
-  containerfile_preview: "FROM registry.redhat.io/rhel9:latest\nRUN dnf install -y httpd",
+  containerfile_preview:
+    "FROM registry.redhat.io/rhel9:latest\nRUN dnf install -y httpd",
   stats: {
     sections: [
       { kind: "package", total: 10, included: 8, excluded: 2 },
@@ -105,7 +114,14 @@ const mockView: ViewResponse = {
   },
   generation: 1,
   repo_groups: [
-    { section_id: "appstream", provenance: "verified", is_distro: true, tier: "distro", package_count: 1, enabled: true },
+    {
+      section_id: "appstream",
+      provenance: "verified",
+      is_distro: true,
+      tier: "distro",
+      package_count: 1,
+      enabled: true,
+    },
   ],
   version_changes: [],
   service_states: [],
@@ -283,7 +299,9 @@ describe("GET endpoints", () => {
 
   describe("fetchViewed", () => {
     it("sends GET to /api/viewed and returns id list", async () => {
-      const viewedData = { ids: ["packages:httpd.x86_64", "services:sshd.service"] };
+      const viewedData = {
+        ids: ["packages:httpd.x86_64", "services:sshd.service"],
+      };
       mockFetchSuccess(viewedData);
       const result = await fetchViewed();
       const { url, init } = lastFetchCall();
@@ -406,7 +424,9 @@ describe("POST mutation endpoints", () => {
 
     it("does not throw on 204 No Content", async () => {
       mockFetchNoContent();
-      await expect(markViewed("services:sshd.service")).resolves.toBeUndefined();
+      await expect(
+        markViewed("services:sshd.service"),
+      ).resolves.toBeUndefined();
     });
   });
 

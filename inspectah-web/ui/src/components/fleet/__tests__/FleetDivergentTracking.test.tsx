@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FleetApp } from "../../FleetApp";
-import type { FleetViewResponse, FleetHealthInfo, HealthResponse, FleetItem } from "../../../api/types";
+import type {
+  FleetViewResponse,
+  FleetHealthInfo,
+  HealthResponse,
+  FleetItem,
+} from "../../../api/types";
 
 // Mock fleet-client
 const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();

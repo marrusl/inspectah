@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { computeDiff, parseSectionHeader, _resetIdCounter } from "../useContainerfileDiff";
+import {
+  computeDiff,
+  parseSectionHeader,
+  _resetIdCounter,
+} from "../useContainerfileDiff";
 
 beforeEach(() => {
   _resetIdCounter();
@@ -7,7 +11,10 @@ beforeEach(() => {
 
 describe("computeDiff", () => {
   it("returns all stable lines when strings are identical", () => {
-    const result = computeDiff("FROM ubi9\nRUN dnf install -y httpd\n", "FROM ubi9\nRUN dnf install -y httpd\n");
+    const result = computeDiff(
+      "FROM ubi9\nRUN dnf install -y httpd\n",
+      "FROM ubi9\nRUN dnf install -y httpd\n",
+    );
     expect(result.lines).toHaveLength(2);
     expect(result.lines.every((l) => l.state === "stable")).toBe(true);
     expect(result.addedCount).toBe(0);
@@ -20,8 +27,14 @@ describe("computeDiff", () => {
     const next = "FROM ubi9\nRUN dnf install -y httpd\n";
     const result = computeDiff(prev, next);
     expect(result.lines).toHaveLength(2);
-    expect(result.lines[0]).toMatchObject({ text: "FROM ubi9", state: "stable" });
-    expect(result.lines[1]).toMatchObject({ text: "RUN dnf install -y httpd", state: "added" });
+    expect(result.lines[0]).toMatchObject({
+      text: "FROM ubi9",
+      state: "stable",
+    });
+    expect(result.lines[1]).toMatchObject({
+      text: "RUN dnf install -y httpd",
+      state: "added",
+    });
     expect(result.addedCount).toBe(1);
     expect(result.removedCount).toBe(0);
     expect(result.hasChanges).toBe(true);
@@ -32,8 +45,14 @@ describe("computeDiff", () => {
     const next = "FROM ubi9\n";
     const result = computeDiff(prev, next);
     expect(result.lines).toHaveLength(2);
-    expect(result.lines[0]).toMatchObject({ text: "FROM ubi9", state: "stable" });
-    expect(result.lines[1]).toMatchObject({ text: "RUN dnf install -y httpd", state: "removing" });
+    expect(result.lines[0]).toMatchObject({
+      text: "FROM ubi9",
+      state: "stable",
+    });
+    expect(result.lines[1]).toMatchObject({
+      text: "RUN dnf install -y httpd",
+      state: "removing",
+    });
     expect(result.addedCount).toBe(0);
     expect(result.removedCount).toBe(1);
     expect(result.hasChanges).toBe(true);
@@ -47,9 +66,15 @@ describe("computeDiff", () => {
     expect(texts).toContain("FROM ubi9");
     expect(texts).toContain("RUN dnf install -y httpd");
     expect(texts).toContain("RUN dnf install -y nginx");
-    expect(result.lines.find((l) => l.text === "FROM ubi9")!.state).toBe("stable");
-    expect(result.lines.find((l) => l.text === "RUN dnf install -y httpd")!.state).toBe("removing");
-    expect(result.lines.find((l) => l.text === "RUN dnf install -y nginx")!.state).toBe("added");
+    expect(result.lines.find((l) => l.text === "FROM ubi9")!.state).toBe(
+      "stable",
+    );
+    expect(
+      result.lines.find((l) => l.text === "RUN dnf install -y httpd")!.state,
+    ).toBe("removing");
+    expect(
+      result.lines.find((l) => l.text === "RUN dnf install -y nginx")!.state,
+    ).toBe("added");
     expect(result.addedCount).toBe(1);
     expect(result.removedCount).toBe(1);
     expect(result.hasChanges).toBe(true);
@@ -65,7 +90,10 @@ describe("computeDiff", () => {
   });
 
   it("preserves IDs for unchanged lines across successive diffs", () => {
-    const first = computeDiff("FROM ubi9\nRUN echo hello\n", "FROM ubi9\nRUN echo hello\nCOPY . /app\n");
+    const first = computeDiff(
+      "FROM ubi9\nRUN echo hello\n",
+      "FROM ubi9\nRUN echo hello\nCOPY . /app\n",
+    );
     const fromFirstId = first.lines.find((l) => l.text === "FROM ubi9")!.id;
     const runFirstId = first.lines.find((l) => l.text === "RUN echo hello")!.id;
 
@@ -74,19 +102,27 @@ describe("computeDiff", () => {
       "FROM ubi9\nRUN echo hello\nCOPY . /app\nEXPOSE 8080\n",
       first.lines,
     );
-    expect(second.lines.find((l) => l.text === "FROM ubi9")!.id).toBe(fromFirstId);
-    expect(second.lines.find((l) => l.text === "RUN echo hello")!.id).toBe(runFirstId);
+    expect(second.lines.find((l) => l.text === "FROM ubi9")!.id).toBe(
+      fromFirstId,
+    );
+    expect(second.lines.find((l) => l.text === "RUN echo hello")!.id).toBe(
+      runFirstId,
+    );
   });
 
   it("preserves IDs for unchanged duplicate lines across successive diffs", () => {
     const content = "ENV FOO=bar\nRUN echo\nENV FOO=bar\n";
     const first = computeDiff(content, content);
-    const firstIds = first.lines.filter((l) => l.text === "ENV FOO=bar").map((l) => l.id);
+    const firstIds = first.lines
+      .filter((l) => l.text === "ENV FOO=bar")
+      .map((l) => l.id);
     expect(firstIds).toHaveLength(2);
     expect(firstIds[0]).not.toBe(firstIds[1]);
 
     const second = computeDiff(content, content, first.lines);
-    const secondIds = second.lines.filter((l) => l.text === "ENV FOO=bar").map((l) => l.id);
+    const secondIds = second.lines
+      .filter((l) => l.text === "ENV FOO=bar")
+      .map((l) => l.id);
     expect(secondIds).toEqual(firstIds);
   });
 
@@ -146,9 +182,13 @@ describe("computeDiff", () => {
 
     const d2 = computeDiff(v1, v2, d1.lines);
     // b should keep its ID
-    expect(d2.lines.find((l) => l.text === "b" && l.state === "stable")!.id).toBe(bId);
+    expect(
+      d2.lines.find((l) => l.text === "b" && l.state === "stable")!.id,
+    ).toBe(bId);
     // Surviving 'a' should get the second occurrence's ID
-    const survivingA = d2.lines.find((l) => l.text === "a" && l.state === "stable");
+    const survivingA = d2.lines.find(
+      (l) => l.text === "a" && l.state === "stable",
+    );
     expect(survivingA).toBeDefined();
     expect(survivingA!.id).toBe(aId1);
   });
@@ -185,10 +225,14 @@ describe("computeDiff", () => {
 
   it("handles entire section appearing", () => {
     const prev = "FROM ubi9\n";
-    const next = "FROM ubi9\nRUN dnf install -y httpd\nRUN dnf install -y nginx\nEXPOSE 80\nEXPOSE 443\n";
+    const next =
+      "FROM ubi9\nRUN dnf install -y httpd\nRUN dnf install -y nginx\nEXPOSE 80\nEXPOSE 443\n";
     const result = computeDiff(prev, next);
     expect(result.lines).toHaveLength(5);
-    expect(result.lines[0]).toMatchObject({ text: "FROM ubi9", state: "stable" });
+    expect(result.lines[0]).toMatchObject({
+      text: "FROM ubi9",
+      state: "stable",
+    });
     expect(result.lines.filter((l) => l.state === "added")).toHaveLength(4);
     expect(result.addedCount).toBe(4);
     expect(result.removedCount).toBe(0);
@@ -209,7 +253,9 @@ describe("parseSectionHeader", () => {
   });
 
   it("parses multi-word header", () => {
-    expect(parseSectionHeader("# === User Packages (5) ===")).toBe("User Packages");
+    expect(parseSectionHeader("# === User Packages (5) ===")).toBe(
+      "User Packages",
+    );
   });
 
   it("returns null for non-header lines", () => {
@@ -221,25 +267,29 @@ describe("parseSectionHeader", () => {
 
 describe("section header highlight suppression", () => {
   it("suppresses highlights when header count changes but section exists in both", () => {
-    const prev = [
-      "FROM ubi9",
-      "# === Packages (3) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-      "RUN dnf install -y curl",
-    ].join("\n") + "\n";
+    const prev =
+      [
+        "FROM ubi9",
+        "# === Packages (3) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+        "RUN dnf install -y curl",
+      ].join("\n") + "\n";
 
-    const next = [
-      "FROM ubi9",
-      "# === Packages (2) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-    ].join("\n") + "\n";
+    const next =
+      [
+        "FROM ubi9",
+        "# === Packages (2) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+      ].join("\n") + "\n";
 
     const result = computeDiff(prev, next);
 
     // The header should be stable (suppressed), not added/removing
-    const headerLine = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    const headerLine = result.lines.find((l) =>
+      l.text.startsWith("# === Packages"),
+    );
     expect(headerLine).toBeDefined();
     expect(headerLine!.state).toBe("stable");
     expect(headerLine!.text).toBe("# === Packages (2) ===");
@@ -261,31 +311,37 @@ describe("section header highlight suppression", () => {
   });
 
   it("highlights genuinely new section headers", () => {
-    const prev = [
-      "FROM ubi9",
-      "# === Packages (2) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-    ].join("\n") + "\n";
+    const prev =
+      [
+        "FROM ubi9",
+        "# === Packages (2) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+      ].join("\n") + "\n";
 
-    const next = [
-      "FROM ubi9",
-      "# === Packages (2) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-      "# === Services ===",
-      "RUN systemctl enable httpd",
-    ].join("\n") + "\n";
+    const next =
+      [
+        "FROM ubi9",
+        "# === Packages (2) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+        "# === Services ===",
+        "RUN systemctl enable httpd",
+      ].join("\n") + "\n";
 
     const result = computeDiff(prev, next);
 
     // Packages header should remain stable
-    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    const pkgHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Packages"),
+    );
     expect(pkgHeader).toBeDefined();
     expect(pkgHeader!.state).toBe("stable");
 
     // Services header is genuinely new — should be added
-    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    const svcHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Services"),
+    );
     expect(svcHeader).toBeDefined();
     expect(svcHeader!.state).toBe("added");
 
@@ -298,29 +354,33 @@ describe("section header highlight suppression", () => {
   });
 
   it("highlights genuinely removed section headers", () => {
-    const prev = [
-      "FROM ubi9",
-      "# === Packages (1) ===",
-      "RUN dnf install -y httpd",
-      "# === Services ===",
-      "RUN systemctl enable httpd",
-    ].join("\n") + "\n";
+    const prev =
+      [
+        "FROM ubi9",
+        "# === Packages (1) ===",
+        "RUN dnf install -y httpd",
+        "# === Services ===",
+        "RUN systemctl enable httpd",
+      ].join("\n") + "\n";
 
-    const next = [
-      "FROM ubi9",
-      "# === Packages (1) ===",
-      "RUN dnf install -y httpd",
-    ].join("\n") + "\n";
+    const next =
+      ["FROM ubi9", "# === Packages (1) ===", "RUN dnf install -y httpd"].join(
+        "\n",
+      ) + "\n";
 
     const result = computeDiff(prev, next);
 
     // Packages header should remain stable
-    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    const pkgHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Packages"),
+    );
     expect(pkgHeader).toBeDefined();
     expect(pkgHeader!.state).toBe("stable");
 
     // Services header should be removing (genuinely gone)
-    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    const svcHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Services"),
+    );
     expect(svcHeader).toBeDefined();
     expect(svcHeader!.state).toBe("removing");
 
@@ -328,32 +388,38 @@ describe("section header highlight suppression", () => {
   });
 
   it("handles count change and new section simultaneously", () => {
-    const prev = [
-      "FROM ubi9",
-      "# === Packages (3) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-      "RUN dnf install -y curl",
-    ].join("\n") + "\n";
+    const prev =
+      [
+        "FROM ubi9",
+        "# === Packages (3) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+        "RUN dnf install -y curl",
+      ].join("\n") + "\n";
 
-    const next = [
-      "FROM ubi9",
-      "# === Packages (2) ===",
-      "RUN dnf install -y httpd",
-      "RUN dnf install -y nginx",
-      "# === Services ===",
-      "RUN systemctl enable httpd",
-    ].join("\n") + "\n";
+    const next =
+      [
+        "FROM ubi9",
+        "# === Packages (2) ===",
+        "RUN dnf install -y httpd",
+        "RUN dnf install -y nginx",
+        "# === Services ===",
+        "RUN systemctl enable httpd",
+      ].join("\n") + "\n";
 
     const result = computeDiff(prev, next);
 
     // Packages header: count change suppressed
-    const pkgHeader = result.lines.find((l) => l.text.startsWith("# === Packages"));
+    const pkgHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Packages"),
+    );
     expect(pkgHeader).toBeDefined();
     expect(pkgHeader!.state).toBe("stable");
 
     // Services header: genuinely new, should highlight
-    const svcHeader = result.lines.find((l) => l.text.startsWith("# === Services"));
+    const svcHeader = result.lines.find((l) =>
+      l.text.startsWith("# === Services"),
+    );
     expect(svcHeader).toBeDefined();
     expect(svcHeader!.state).toBe("added");
 

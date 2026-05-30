@@ -15,7 +15,10 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
     item_id: configItemId,
     include: true,
-    triage: { bucket: "universal" as const, prevalence: { count: 3, total: 3 } },
+    triage: {
+      bucket: "universal" as const,
+      prevalence: { count: 3, total: 3 },
+    },
     prevalence: { count: 3, total: 3 },
     source_repo: "",
     variants: {
@@ -23,7 +26,12 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
       selected: "aaa111",
       options: [
         { hash: "aaa111", hosts: ["host-a"], host_count: 1, selected: true },
-        { hash: "bbb222", hosts: ["host-b", "host-c"], host_count: 2, selected: false },
+        {
+          hash: "bbb222",
+          hosts: ["host-b", "host-c"],
+          host_count: 2,
+          selected: false,
+        },
         { hash: "ccc333", hosts: ["host-d"], host_count: 1, selected: false },
       ],
     },
@@ -31,7 +39,9 @@ function makeItem(overrides?: Partial<FleetItem>): FleetItem {
   };
 }
 
-function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult {
+function makeAck(
+  overrides?: Partial<UseVariantAckResult>,
+): UseVariantAckResult {
   return {
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
@@ -44,7 +54,9 @@ function makeAck(overrides?: Partial<UseVariantAckResult>): UseVariantAckResult 
   };
 }
 
-function makeDiffHook(overrides?: Partial<UseFleetDiffResult>): UseFleetDiffResult {
+function makeDiffHook(
+  overrides?: Partial<UseFleetDiffResult>,
+): UseFleetDiffResult {
   return {
     fetchDiff: vi.fn(),
     diff: null,
@@ -116,7 +128,9 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /mark as reviewed/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /mark as reviewed/i }),
+    ).toBeInTheDocument();
   });
 
   it("calls ack.confirm when 'Mark as reviewed' clicked", async () => {
@@ -146,8 +160,12 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.getByTestId("variant-reviewed-indicator")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /mark as reviewed/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("variant-reviewed-indicator"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /mark as reviewed/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("calls ack.unconfirm when 'Reviewed' indicator clicked", async () => {
@@ -198,7 +216,9 @@ describe("VariantView", () => {
       />,
     );
 
-    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    const diffLinks = screen.getAllByRole("button", {
+      name: /diff vs selected/i,
+    });
     // Two non-selected variants should each have a link
     expect(diffLinks).toHaveLength(2);
   });
@@ -214,9 +234,13 @@ describe("VariantView", () => {
     );
 
     // Selected variant shows "Selected" indicator, not diff link
-    expect(screen.getByTestId("variant-selected-indicator")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("variant-selected-indicator"),
+    ).toBeInTheDocument();
     // Total diff links = number of non-selected variants (2)
-    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    const diffLinks = screen.getAllByRole("button", {
+      name: /diff vs selected/i,
+    });
     expect(diffLinks).toHaveLength(2);
   });
 
@@ -230,7 +254,9 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /^compare$/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^compare$/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows host count for each variant option", () => {
@@ -262,7 +288,9 @@ describe("VariantView", () => {
       />,
     );
 
-    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    const diffLinks = screen.getAllByRole("button", {
+      name: /diff vs selected/i,
+    });
     // Click first diff link (bbb222 row)
     await user.click(diffLinks[0]);
 
@@ -293,7 +321,9 @@ describe("VariantView", () => {
     // DiffDrawer not shown initially
     expect(screen.queryByTestId("diff-drawer")).not.toBeInTheDocument();
 
-    const diffLinks = screen.getAllByRole("button", { name: /diff vs selected/i });
+    const diffLinks = screen.getAllByRole("button", {
+      name: /diff vs selected/i,
+    });
     await user.click(diffLinks[0]);
 
     // DiffDrawer now visible with descriptive header
@@ -324,7 +354,9 @@ describe("VariantView", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /diff vs selected/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /diff vs selected/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("returns null for items without variants", () => {

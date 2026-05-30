@@ -27,7 +27,10 @@ function readPanelPref(): boolean {
 /** Compute initial panel state synchronously to avoid flash on narrow viewports. */
 function initialPanelOpen(): boolean {
   const savedOpen = readPanelPref();
-  if (typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches) {
+  if (
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 1279px)").matches
+  ) {
     return false;
   }
   return savedOpen;

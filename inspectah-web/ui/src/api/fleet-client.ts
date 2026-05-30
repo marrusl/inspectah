@@ -1,4 +1,8 @@
-import type { FleetViewResponse, FleetDiffRequest, FleetDiffResponse } from "./types";
+import type {
+  FleetViewResponse,
+  FleetDiffRequest,
+  FleetDiffResponse,
+} from "./types";
 import { ApiError } from "./types";
 
 // --- Internal helpers ---
@@ -30,6 +34,8 @@ export function fetchFleetView(): Promise<FleetViewResponse> {
   return getJson("/api/fleet/view");
 }
 
-export function fetchFleetDiff(req: FleetDiffRequest): Promise<FleetDiffResponse> {
+export function fetchFleetDiff(
+  req: FleetDiffRequest,
+): Promise<FleetDiffResponse> {
   return postJson("/api/fleet/diff", req);
 }

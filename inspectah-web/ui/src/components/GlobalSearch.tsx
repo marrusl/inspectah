@@ -1,4 +1,12 @@
-import { useState, useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
+import {
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+  useEffect,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
 import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
@@ -63,11 +71,15 @@ function itemName(item: DecisionItemKind): string {
 function itemSearchText(item: DecisionItemKind): string {
   if (item.type === "package") {
     const e = item.data.entry;
-    const reasons = (item.data.attention ?? []).map((a) => a.detail ?? "").join(" ");
+    const reasons = (item.data.attention ?? [])
+      .map((a) => a.detail ?? "")
+      .join(" ");
     return `${e.name} ${e.arch} ${e.version} ${e.source_repo} ${reasons}`.toLowerCase();
   }
   const e = item.data.entry;
-  const reasons = (item.data.attention ?? []).map((a) => a.detail ?? "").join(" ");
+  const reasons = (item.data.attention ?? [])
+    .map((a) => a.detail ?? "")
+    .join(" ");
   return `${e.path} ${e.kind} ${e.category} ${e.package ?? ""} ${reasons}`.toLowerCase();
 }
 
@@ -78,7 +90,10 @@ function itemSearchText(item: DecisionItemKind): string {
  * Ctrl+K focuses this input.
  */
 export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
-  function GlobalSearch({ packageItems, configItems, userDecisions, contextSections, onNavigate }, ref) {
+  function GlobalSearch(
+    { packageItems, configItems, userDecisions, contextSections, onNavigate },
+    ref,
+  ) {
     const [query, setQuery] = useState("");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -179,7 +194,10 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
           if (section.subsections) {
             for (const sub of section.subsections) {
               for (const ci of sub.items) {
-                map.set(`${section.id}:${ci.id}`, ci.searchable_text.toLowerCase());
+                map.set(
+                  `${section.id}:${ci.id}`,
+                  ci.searchable_text.toLowerCase(),
+                );
               }
             }
           }
@@ -307,7 +325,8 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
                   data-testid={`global-search-result-${idx}`}
                   onClick={() => handleSelect(result)}
                   style={{
-                    padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+                    padding:
+                      "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
                     cursor: "pointer",
                     background:
                       idx === selectedIndex
@@ -330,7 +349,13 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
                   >
                     {result.sectionLabel}
                   </span>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {result.title}
                   </span>
                 </div>

@@ -5,7 +5,7 @@ import { ExcludedZone } from "../ExcludedZone";
 describe("ExcludedZone", () => {
   it("renders nothing when never toggled", () => {
     const { container } = render(
-      <ExcludedZone packages={[]} hasEverToggled={false} />
+      <ExcludedZone packages={[]} hasEverToggled={false} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -28,9 +28,7 @@ describe("ExcludedZone", () => {
   });
 
   it("excluded count header has aria-live for dynamic announcements", () => {
-    const pkgs = [
-      { name: "nginx", repo: "epel" },
-    ];
+    const pkgs = [{ name: "nginx", repo: "epel" }];
     render(<ExcludedZone packages={pkgs} hasEverToggled={true} />);
     const header = screen.getByText(/excluded · 1 packages/i);
     expect(header).toHaveAttribute("aria-live", "polite");
@@ -99,7 +97,9 @@ describe("ExcludedZone", () => {
     fireEvent.click(expandBtn);
 
     // After expand, the button is still mounted (now "Hide") and retains focus
-    const collapseBtn = screen.getByRole("button", { name: /hide 55 excluded/i });
+    const collapseBtn = screen.getByRole("button", {
+      name: /hide 55 excluded/i,
+    });
     expect(collapseBtn).toHaveFocus();
   });
 

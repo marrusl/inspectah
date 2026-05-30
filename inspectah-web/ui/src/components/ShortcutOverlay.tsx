@@ -48,7 +48,11 @@ export interface ShortcutOverlayProps {
  * Modal overlay listing all keyboard shortcuts, organized by category.
  * Opened by pressing `?`, closed by `Escape` or `?` again.
  */
-export function ShortcutOverlay({ isOpen, onClose, extraShortcuts }: ShortcutOverlayProps) {
+export function ShortcutOverlay({
+  isOpen,
+  onClose,
+  extraShortcuts,
+}: ShortcutOverlayProps) {
   if (!isOpen) return null;
 
   // Merge extra shortcuts into the Global group
@@ -59,7 +63,10 @@ export function ShortcutOverlay({ isOpen, onClose, extraShortcuts }: ShortcutOve
               ...group,
               shortcuts: [
                 ...group.shortcuts,
-                ...extraShortcuts.map((s) => ({ keys: s.key, description: s.description })),
+                ...extraShortcuts.map((s) => ({
+                  keys: s.key,
+                  description: s.description,
+                })),
               ],
             }
           : group,
@@ -98,7 +105,8 @@ export function ShortcutOverlay({ isOpen, onClose, extraShortcuts }: ShortcutOve
                   <tr key={sc.keys}>
                     <td
                       style={{
-                        padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+                        padding:
+                          "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
                         fontFamily: "var(--pf-t--global--font--family--mono)",
                         fontSize: "var(--pf-t--global--font--size--sm)",
                         whiteSpace: "nowrap",
@@ -109,7 +117,8 @@ export function ShortcutOverlay({ isOpen, onClose, extraShortcuts }: ShortcutOve
                     </td>
                     <td
                       style={{
-                        padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+                        padding:
+                          "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
                       }}
                     >
                       {sc.description}
