@@ -1,5 +1,5 @@
 title: inspectah
-description: Migration analysis tool for package-mode to image-mode RHEL
+description: Migration analysis and image build tool for package-mode to image-mode RHEL
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 
 url: ""

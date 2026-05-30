@@ -249,8 +249,9 @@ model in action. From here:
 - **Review and refine findings** — use the refine UI to curate
   include/exclude decisions. See
   [How to Review and Refine](how-to/review-and-refine.md).
-- **Build a bootc image** — take the Containerfile and config tree
-  from your scan output and build with `podman build`. See
+- **Build a bootc image** — use `inspectah build` to build the image
+  directly from the scan tarball, or use `podman build` manually with
+  the generated Containerfile. See
   [How to Build a bootc Image](how-to/build-bootc-image.md).
 - **Aggregate a fleet** — scan multiple hosts and merge the results
   to find common patterns across your environment. See

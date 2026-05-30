@@ -44,10 +44,20 @@ for the full command reference.
 | `--no-baseline` | Skip baseline extraction. Produces degraded classification (no added/removed distinction). |
 | `--preserve-password-hashes` | Retain password hashes for users with `password_set` status. |
 | `--preserve-ssh-keys` | Retain full SSH `authorized_keys` content per user. |
-| `--acknowledge-sensitive` | Required for tarball export when preserve flags are used. Explicit operator acknowledgment. |
+| `--preserve-subscription` | Preserve RHEL subscription material for building on non-RHEL hosts. |
+| `--ack-sensitive` | Required for tarball export when preserve flags are used. Explicit operator acknowledgment. Alias: `--acknowledge-sensitive`. |
 | `--progress <MODE>` | Override progress display: `rich`, `plain`, or `flat`. |
 | `-v, --verbose` | Show sub-step detail for all inspectors. Conflicts with `--quiet`. |
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
+
+## CLI flags (build)
+
+| Flag | Description |
+|:-----|:------------|
+| `-t, --tag <TAG>` | Image tag (required). Must include a version, e.g., `myimage:v1`. |
+| `--dry-run` | Show the build command without executing it. |
+| `--keep-context` | Keep the extracted build context after build completes. |
+| `[-- <PODMAN_ARGS>...]` | Additional arguments to pass to `podman build`. |
 
 ## CLI flags (fleet aggregate)
 

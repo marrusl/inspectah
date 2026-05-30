@@ -6,7 +6,7 @@ nav_order: 1
 
 # inspectah
 
-inspectah scans package-mode Fedora, CentOS Stream, and RHEL hosts and generates the artifacts you need to migrate them to bootc image mode -- Containerfiles, package lists, config trees, and systemd service maps. It analyzes what is installed beyond the base image so you know exactly what to carry forward.
+inspectah scans package-mode Fedora, CentOS Stream, and RHEL hosts, generates the artifacts you need to migrate them to bootc image mode, and can build the resulting container image. It analyzes what is installed beyond the base image so you know exactly what to carry forward.
 
 ## Quick start
 
@@ -16,6 +16,9 @@ sudo inspectah scan
 
 # Refine the output interactively
 inspectah refine <snapshot.tar.gz>
+
+# Build the bootc image
+inspectah build <snapshot.tar.gz> --tag my-image:v1
 ```
 
 See [Getting Started](getting-started) for a full walkthrough.
@@ -62,6 +65,7 @@ The current CLI surface:
 | Command | Description |
 |---------|-------------|
 | `inspectah scan` | Scan the current system and produce a migration snapshot |
+| `inspectah build` | Build a bootc container image from a scan tarball |
 | `inspectah refine` | Interactively refine scan output and re-render artifacts |
 | `inspectah fleet init` | Initialize a fleet directory from host snapshots |
 | `inspectah fleet aggregate` | Aggregate snapshots into a fleet-wide specification |

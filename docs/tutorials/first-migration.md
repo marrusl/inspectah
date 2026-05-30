@@ -245,9 +245,18 @@ generated Containerfile and config tree.
 
 When you are done, stop the refine server with Ctrl-C in the terminal.
 
-## Step 7: Build with podman
+## Step 7: Build the image
 
-Extract the refined tarball and look at the generated Containerfile:
+The fastest way to build is with `inspectah build`:
+
+```bash
+inspectah build webserver01-20260527-091500.tar.gz --tag my-webserver:v1
+```
+
+This extracts the tarball, handles RHEL subscription cert mounting
+automatically (if needed), and runs `podman build` for you.
+
+To preview the generated Containerfile first, extract and inspect it:
 
 ```bash
 tar xzf webserver01-20260527-091500.tar.gz
@@ -276,21 +285,14 @@ COPY config/etc/cron.d/log-cleanup /etc/cron.d/log-cleanup
 RUN systemctl enable httpd.service certbot-renew.timer
 ```
 
-Build the image:
-
-```bash
-podman build -t my-webserver .
-```
-
-For CentOS Stream and Fedora images, this works directly. **For RHEL
-images**, you need valid entitlement certificates for the `dnf install`
-step. See [How to Build a bootc Image](../how-to/build-bootc-image.md)
-for full details on RHEL entitlement handling, multi-stage builds, and
-pushing to a registry.
+You can also build manually with `podman build -t my-webserver .` if you
+prefer. See [How to Build a bootc Image](../how-to/build-bootc-image.md)
+for full details on RHEL entitlement handling, cross-architecture builds,
+and pushing to a registry.
 
 ## What you accomplished
 
-You started with a running host and ended with a buildable Containerfile
+You started with a running host and ended with a bootc container image
 that captures only what matters — the packages, configs,
 and services that define your workload. Everything the base image
 already provides was subtracted automatically. Everything incidental
