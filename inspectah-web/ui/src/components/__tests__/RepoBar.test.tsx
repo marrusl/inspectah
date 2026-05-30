@@ -80,4 +80,44 @@ describe("RepoBar", () => {
     render(<RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={2} dismissedCount={1} onRestoreDismissed={vi.fn()} />);
     expect(screen.getByText("1 conflict")).toBeInTheDocument();
   });
+
+  it("announces when conflicts are dismissed", () => {
+    const { rerender } = render(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />
+    );
+    rerender(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={2} onRestoreDismissed={vi.fn()} />
+    );
+    const announcement = screen.getByTestId("repo-bar-announcement");
+    expect(announcement).toHaveTextContent("2 conflicts dismissed");
+  });
+
+  it("announces singular 'conflict dismissed' for one dismissal", () => {
+    const { rerender } = render(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />
+    );
+    rerender(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={1} onRestoreDismissed={vi.fn()} />
+    );
+    const announcement = screen.getByTestId("repo-bar-announcement");
+    expect(announcement).toHaveTextContent("1 conflict dismissed");
+  });
+
+  it("announces when all conflicts are restored", () => {
+    const { rerender } = render(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={3} onRestoreDismissed={vi.fn()} />
+    );
+    rerender(
+      <RepoBar repos={mockRepos} onToggle={vi.fn()} conflictCount={3} dismissedCount={0} onRestoreDismissed={vi.fn()} />
+    );
+    const announcement = screen.getByTestId("repo-bar-announcement");
+    expect(announcement).toHaveTextContent("All conflicts restored");
+  });
+
+  it("live region has assertive aria-live attribute", () => {
+    render(<RepoBar repos={mockRepos} onToggle={vi.fn()} />);
+    const announcement = screen.getByTestId("repo-bar-announcement");
+    expect(announcement).toHaveAttribute("aria-live", "assertive");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+  });
 });
