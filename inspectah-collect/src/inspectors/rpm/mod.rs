@@ -318,7 +318,41 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
-        // 3b. Source repo attribution per added package.
+        // 3b. Compute baseline_suppressed from ALL packages_added BEFORE
+        // filtering. This runs at the inspector level so it covers every
+        // package (leaf + auto), and survives degraded leaf classification.
+        let baseline_suppressed: Option<Vec<String>> = ctx.baseline_data.map(|bl| {
+            let mut suppressed: Vec<String> = packages_added
+                .iter()
+                .map(canonical_package_id)
+                .filter(|id| bl.packages.contains_key(id))
+                .collect();
+            suppressed.sort();
+            suppressed
+        });
+
+        // 3c. Build baseline_name_set and filter packages_added to the delta.
+        // Base-image packages come from known repos and their dep trees are
+        // resolved implicitly by DNF's --recursive --installed flag — querying
+        // them explicitly is pure waste (500 dnf invocations vs ~50).
+        let baseline_name_set: HashSet<String> = ctx
+            .baseline_data
+            .map(|b| b.packages.keys().cloned().collect())
+            .unwrap_or_default();
+        let pre_filter_count = packages_added.len();
+        if !baseline_name_set.is_empty() {
+            packages_added.retain(|p| !baseline_name_set.contains(&canonical_package_id(p)));
+        }
+        if packages_added.len() < pre_filter_count {
+            eprintln!(
+                "[timing] RPM baseline filter: {} -> {} packages (removed {} base-image packages)",
+                pre_filter_count,
+                packages_added.len(),
+                pre_filter_count - packages_added.len()
+            );
+        }
+
+        // 3d. Source repo attribution per added package (delta only).
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::ResolvingSourceRepos,
@@ -350,30 +384,13 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
-        // 4. Compute baseline_suppressed from ALL packages_added (leaf + auto).
-        // This runs at the inspector level so it covers every package, not just
-        // the leaf subset, and survives degraded leaf classification.
-        let baseline_suppressed: Option<Vec<String>> = ctx.baseline_data.map(|bl| {
-            let mut suppressed: Vec<String> = packages_added
-                .iter()
-                .map(canonical_package_id)
-                .filter(|id| bl.packages.contains_key(id))
-                .collect();
-            suppressed.sort();
-            suppressed
-        });
-
-        // 5. Classify leaf vs auto packages (subtract baseline so dep trees
-        //    only count genuinely new packages, not base-image residents).
+        // 4. Classify leaf vs auto packages (delta only — subtract baseline
+        //    so dep trees only count genuinely new packages).
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::ResolvingDepTree,
         });
         let step_start = Instant::now();
-        let baseline_name_set: HashSet<String> = ctx
-            .baseline_data
-            .map(|b| b.packages.keys().cloned().collect())
-            .unwrap_or_default();
         let leaf_classification = classify_leaf_auto(exec, &packages_added, &baseline_name_set);
         let dep_tree_outcome = if leaf_classification.leaf_packages.is_none() {
             StepOutcome::Degraded {
@@ -394,7 +411,7 @@ impl Inspector for RpmInspector {
             outcome: dep_tree_outcome,
         });
 
-        // 6. Collect supplementary data
+        // 5. Collect supplementary data
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::VerifyingIntegrity,
@@ -412,7 +429,7 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
-        // 7. Query file ownership for Wave 2 inspectors (sentinel format)
+        // 6. Query file ownership for Wave 2 inspectors (sentinel format)
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::MappingFileOwnership,
@@ -436,7 +453,7 @@ impl Inspector for RpmInspector {
             inspector_start.elapsed().as_secs_f64()
         );
 
-        // 8. Build baseline_package_names for downstream consumers
+        // 7. Build baseline_package_names for downstream consumers
         let baseline_package_names = ctx.baseline_data.map(|b| {
             let mut names: Vec<String> = b
                 .packages
@@ -449,7 +466,7 @@ impl Inspector for RpmInspector {
             names
         });
 
-        // 9. Build warnings
+        // 8. Build warnings
         let mut warnings = Vec::new();
         let no_baseline = ctx.baseline_data.is_none();
         if no_baseline {
@@ -469,7 +486,7 @@ impl Inspector for RpmInspector {
             });
         }
 
-        // 10. Build RpmSection
+        // 9. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -1044,14 +1061,21 @@ mod tests {
         let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
 
         if let SectionData::Rpm(rpm) = &output.section {
-            // All host packages stay in packages_added (same-EVR = Added, not BaseImageOnly)
-            assert_eq!(rpm.packages_added.len(), 4);
+            // Baseline packages (bash, vim-enhanced) are filtered out of
+            // packages_added — only the delta (httpd, tzdata) remains.
+            assert_eq!(rpm.packages_added.len(), 2);
             let added_names: Vec<&str> =
                 rpm.packages_added.iter().map(|p| p.name.as_str()).collect();
-            assert!(added_names.contains(&"bash"));
-            assert!(added_names.contains(&"vim-enhanced"));
             assert!(added_names.contains(&"httpd"));
             assert!(added_names.contains(&"tzdata"));
+            assert!(
+                !added_names.contains(&"bash"),
+                "bash is in baseline, should be filtered from packages_added"
+            );
+            assert!(
+                !added_names.contains(&"vim-enhanced"),
+                "vim-enhanced is in baseline, should be filtered from packages_added"
+            );
 
             // base_image_only: baseline packages NOT on host — both baseline
             // packages (bash, vim-enhanced) ARE on the host, so this is empty
@@ -1059,6 +1083,14 @@ mod tests {
                 rpm.base_image_only.is_empty(),
                 "all baseline packages are on host, so base_image_only should be empty"
             );
+
+            // baseline_suppressed should list the filtered-out packages
+            let suppressed = rpm
+                .baseline_suppressed
+                .as_ref()
+                .expect("baseline_suppressed should be Some");
+            assert!(suppressed.contains(&"bash.x86_64".to_string()));
+            assert!(suppressed.contains(&"vim-enhanced.x86_64".to_string()));
 
             // no_baseline should be false (we have baseline data)
             assert!(
