@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Button, Label, Switch } from "@patternfly/react-core";
 import type { RepoGroupInfo } from "../api/types";
 
@@ -29,6 +30,25 @@ export function RepoBar({
   const toggleableRepos = repos.filter((r) => !r.is_distro && r.provenance !== "unknown");
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
+
+  // Screen reader announcement for dismiss/restore actions
+  const [announcement, setAnnouncement] = useState("");
+  const prevDismissedRef = useRef(dismissedCount ?? 0);
+
+  useEffect(() => {
+    const prev = prevDismissedRef.current;
+    const curr = dismissedCount ?? 0;
+    prevDismissedRef.current = curr;
+
+    if (curr > prev) {
+      const delta = curr - prev;
+      setAnnouncement(
+        `${delta} ${delta === 1 ? "conflict" : "conflicts"} dismissed`
+      );
+    } else if (curr < prev) {
+      setAnnouncement("All conflicts restored");
+    }
+  }, [dismissedCount]);
 
   return (
     <div className="inspectah-repo-bar" data-testid="repo-bar">
@@ -95,6 +115,14 @@ export function RepoBar({
           )}
         </div>
       )}
+      <span
+        className="inspectah-sr-only"
+        aria-live="assertive"
+        aria-atomic="true"
+        data-testid="repo-bar-announcement"
+      >
+        {announcement}
+      </span>
     </div>
   );
 }
