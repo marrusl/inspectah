@@ -4,11 +4,9 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 ## ~~Build Output Streaming~~ (DONE — 2026-05-30)
 
-## Naming Consistency (Rust)
+## ~~Naming Consistency (Rust)~~ (DONE — 2026-05-30)
 
-- [ ] **ContextSection → ReferenceSection:** The `ContextSection` struct in `inspectah-web/src/handlers.rs` and the `normalize_for_context()` function use "context" where the UI says "Reference." Rename to `ReferenceSection` / `normalize_for_reference()`. Also update the `context_section()` helper and the API test in `api_test.rs`. Frontend type in `api/types.ts` should match.
-
-**Audit note (2026-05-30):** Verified NOT complete. `ContextSection` struct, `normalize_for_context()` function, and `context_section()` helper still exist in `handlers.rs`. TypeScript `ContextSection` interface still in `api/types.ts`. The completed item in the "Completed" section (dated 2026-05-26) only renamed frontend constants `DECISION_SECTIONS` → `REVIEW_SECTIONS` and `CONTEXT_SECTIONS` → `REFERENCE_SECTIONS` in `Sidebar.tsx`, but did not touch the Rust backend or TypeScript types.
+- [x] **ContextSection → ReferenceSection:** Renamed `ContextSection` → `ReferenceSection`, `normalize_for_context()` → `normalize_for_reference()`, and `context_section()` helper across Rust backend (handlers.rs, api_test.rs) and TypeScript types (api/types.ts). 18 files touched. *(commit 2d3f22d — 2026-05-30)*
 
 ## Repo Tier Model
 
@@ -22,9 +20,9 @@ Moved to Completed section.
 
 - [ ] **Sort toggle for Version Changes tab:** Add a sort control (alpha vs. status). Current sort is by direction (downgrades first, then upgrades). Add an alphabetical-by-name option. Default to status sort, let user toggle. Applies to both the reference section view and the package detail `VersionChangeEntry` list.
 
-## Port Fallback
+## ~~Port Fallback~~ (DONE — 2026-05-30)
 
-- [ ] **Auto-select alternate port when 8642 is in use:** `inspectah refine` should detect if port 8642 is occupied and automatically try the next port (8643, 8644, etc.). Print which port it bound to. Avoids the user having to manually kill stale processes.
+- [x] **Auto-select alternate port when 8642 is in use:** `inspectah refine` auto-retries ports 8643-8652 on AddrInUse error and prints which port it bound to. *(DONE — 2026-05-30, already implemented)*
 
 ## Git History Cleanup
 
@@ -46,21 +44,17 @@ Moved to Completed section.
 
 Moved to Completed section.
 
-## Containerfile Change Highlights — Review Followups (feature shipped 2026-05-26)
+## ~~Containerfile Change Highlights — Review Followups~~ (DONE — 2026-05-30)
 
-Deferred non-blocking items from the spec/plan review rounds. Address when touching nearby code.
-
-- [ ] **Scroll test coverage:** Add assertions that `scrollIntoView` is not called when the changed line is already visible, rapid successive updates honor the ~150ms debounce, and multi-line diffs target the topmost changed line.
-- [ ] **Edge-case baseline tests:** Add tests for first non-null content while initially collapsed (no dot, no announcement) and resize-driven auto-collapse while highlights are active (baseline captured, highlights cancelled).
-- [ ] **Collapsed pending-change auto-clear:** The dot indicator and `"pending changes"` aria-label should clear automatically if changes while collapsed cancel back to the `last seen` baseline before re-expand. The hook's `hasPendingChanges` already compares against `lastOpenContentRef`, so the behavior may already work — needs a test to prove it.
+- [x] **Scroll test coverage:** Added 5 tests: multi-line scroll targeting (topmost changed line), first-content-while-collapsed baseline (no dot, no announcement), expand-after-collapse baseline diffing, resize-driven auto-collapse (baseline captured, highlights cancelled), pending-change auto-clear. *(commit 0455af6 — 2026-05-30)*
 
 ## RepoBar Click-to-Filter (v2 backlog)
 
 - [ ] Repo names in the REPOSITORIES bar should be clickable. Clicking a repo name filters the package list to show only that repo's packages (or scrolls + highlights, lighter option). Render names as `<button>`, `cursor: pointer`, hover color shift to brand color, `aria-label="Jump to baseos packages (61)"`. Fern recommends scroll+highlight using existing `.inspectah-highlight` animation; Ember recommends filter-on-click as more useful for triage. Either way, distro repos gain their first interactive purpose beyond the "always included" label.
 
-## RepoBar Accessibility
+## ~~RepoBar Accessibility~~ (DONE — 2026-05-30)
 
-- [ ] RepoBar `aria-live` badge should announce dismiss/restore changes via a dedicated live-region message tied to the event, not just the static badge text. Currently the badge updates its visible count correctly, but the announcement is passive (relies on text mutation). A dedicated `aria-live` message ("1 conflict dismissed", "All conflicts restored") would be more reliable for screen readers. Flagged by Fern in round-2 review as important but non-blocking.
+- [x] RepoBar `aria-live` badge announces dismiss/restore changes via dedicated visually-hidden `aria-live="assertive"` span with explicit dismiss/restore messages. 4 tests added. *(commit 450ca18 — 2026-05-30)*
 
 ## Type `users_groups_decisions` (Playwright fixture validation prerequisite)
 
@@ -77,7 +71,7 @@ Deferred non-blocking items from the spec/plan review rounds. Address when touch
 Items flagged during code review. Reviewers approved at POC bar — these raise it to production bar.
 
 - [ ] **Planner-level ambient fallback test:** Current ambient proof tests cover the `detect_ambient_subscription_in()` helper and `should_use_subscription_mounts()`. Add a deterministic test at the `plan_and_execute()` level in `inspectah-pipeline/src/build/mod.rs` proving that incomplete ambient + complete tarball produces a build command with `-v` subscription mounts, and that complete ambient produces a build command without them.
-- [ ] **AbsolutePath branch direct proof:** `inspectah-pipeline/src/build/extract.rs::test_reject_absolute_path()` proves the safety property indirectly (via path traversal guard after prefix stripping). Either exercise the literal `ArchiveViolation::AbsolutePath` branch directly with a tar entry that survives prefix stripping with a leading `/`, or rename the test so its coverage claim matches what it actually proves.
+- [x] **AbsolutePath branch direct proof:** Test renamed from misleading `reject_path_traversal` → `reject_parent_dir_traversal`. Added real `reject_absolute_path` test exercising the literal `/` branch. *(commit b230af9 — 2026-05-30)*
 - [ ] **Symlink collector: `canonicalize()` vs lexical normalization:** The real executor uses `std::fs::canonicalize()` for `resolve_final_target()`, but the mock uses lexical chain-following. If intermediate directory symlinks matter in production subscription paths (unlikely but possible with custom subscription-manager configurations), the mock could miss divergence. Consider a filesystem-backed integration test using real symlink chains on a temp directory.
 
 ---
