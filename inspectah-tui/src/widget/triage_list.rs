@@ -13,7 +13,7 @@ use crate::theme::{ColorTier, Token};
 use crate::types::SectionId;
 
 /// Which triage group an item belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriageGroup {
     Investigate,
     Site,

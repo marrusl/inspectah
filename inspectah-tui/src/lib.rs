@@ -2,6 +2,7 @@ pub mod action;
 pub mod app;
 pub mod event;
 pub mod keys;
+pub mod screen;
 pub mod sections;
 pub mod theme;
 pub mod types;
