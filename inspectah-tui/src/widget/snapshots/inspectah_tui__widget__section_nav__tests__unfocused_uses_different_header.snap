@@ -1,0 +1,8 @@
+---
+source: inspectah-tui/src/widget/section_nav.rs
+expression: buffer_to_string(&buf)
+---
+ Sections
+1 Packages    142
+2 Configs      47
+3 Services     23
