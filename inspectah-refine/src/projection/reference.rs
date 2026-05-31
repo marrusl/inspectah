@@ -6,9 +6,12 @@ use inspectah_pipeline::render::service_intent::render_service_intent;
 
 use super::types::{
     ContainerMount, EmptyReason, RefAlternativeEntry, RefComposeItem, RefConfigSnippet,
-    RefContainers, RefDropInItem, RefFlatpakRefItem, RefKernelBoot, RefKernelModule,
-    RefOmittedService, RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem,
-    RefServiceWarning, RefServices, RefSysctlOverride, RefVersionChangeItem, RefVersionChanges,
+    RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule, RefFirewallZone,
+    RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefKernelModule, RefLvmVolume, RefMountPoint,
+    RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv, RefQuadletItem,
+    RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning, RefServices,
+    RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory, RefVersionChangeItem,
+    RefVersionChanges,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -410,6 +413,154 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
                 status: a.status.clone(),
             })
             .collect(),
+    }
+}
+
+/// Project network data from snapshot into reference format.
+///
+/// Extracts NM connections, firewall zones/direct rules, static routes,
+/// ip routes/rules, resolv provenance, hosts additions, and proxy env.
+pub fn project_ref_network(snap: &InspectionSnapshot) -> RefNetwork {
+    let net = match &snap.network {
+        Some(n) => n,
+        None => return RefNetwork::default(),
+    };
+
+    let connections = net
+        .connections
+        .iter()
+        .map(|c| RefNMConnection {
+            name: c.name.clone(),
+            conn_type: c.conn_type.clone(),
+            method: c.method.clone(),
+            path: c.path.clone(),
+        })
+        .collect();
+
+    let firewall_zones = net
+        .firewall_zones
+        .iter()
+        .map(|z| RefFirewallZone {
+            name: z.name.clone(),
+            path: z.path.clone(),
+            content: z.content.clone(),
+            services: z.services.clone(),
+            ports: z.ports.clone(),
+            rich_rules: z.rich_rules.clone(),
+        })
+        .collect();
+
+    let firewall_direct_rules = net
+        .firewall_direct_rules
+        .iter()
+        .map(|r| RefFirewallDirectRule {
+            ipv: r.ipv.clone(),
+            table: r.table.clone(),
+            chain: r.chain.clone(),
+            priority: r.priority.clone(),
+            args: r.args.clone(),
+        })
+        .collect();
+
+    let static_routes = net
+        .static_routes
+        .iter()
+        .map(|s| RefStaticRoute {
+            path: s.path.clone(),
+            name: s.name.clone(),
+        })
+        .collect();
+
+    let proxy_env = net
+        .proxy
+        .iter()
+        .map(|p| RefProxyEnv {
+            source: p.source.clone(),
+            line: p.line.clone(),
+        })
+        .collect();
+
+    RefNetwork {
+        connections,
+        firewall_zones,
+        firewall_direct_rules,
+        static_routes,
+        ip_routes: net.ip_routes.clone(),
+        ip_rules: net.ip_rules.clone(),
+        resolv_provenance: net.resolv_provenance.clone(),
+        hosts_additions: net.hosts_additions.clone(),
+        proxy_env,
+    }
+}
+
+/// Project storage data from snapshot into reference format.
+///
+/// Extracts fstab entries, mount points, LVM volumes, /var directories,
+/// and credential references.
+pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
+    let st = match &snap.storage {
+        Some(s) => s,
+        None => return RefStorage::default(),
+    };
+
+    let fstab_entries = st
+        .fstab_entries
+        .iter()
+        .map(|e| RefFstabEntry {
+            device: e.device.clone(),
+            mount_point: e.mount_point.clone(),
+            fstype: e.fstype.clone(),
+            options: e.options.clone(),
+        })
+        .collect();
+
+    let mount_points = st
+        .mount_points
+        .iter()
+        .map(|m| RefMountPoint {
+            target: m.target.clone(),
+            source: m.source.clone(),
+            fstype: m.fstype.clone(),
+            options: m.options.clone(),
+        })
+        .collect();
+
+    let lvm_volumes = st
+        .lvm_info
+        .iter()
+        .map(|v| RefLvmVolume {
+            vg_name: v.vg_name.clone(),
+            lv_name: v.lv_name.clone(),
+            lv_size: v.lv_size.clone(),
+        })
+        .collect();
+
+    let var_directories = st
+        .var_directories
+        .iter()
+        .map(|d| RefVarDirectory {
+            path: d.path.clone(),
+            size_estimate: d.size_estimate.clone(),
+            recommendation: d.recommendation.clone(),
+        })
+        .collect();
+
+    let credential_refs = st
+        .credential_refs
+        .iter()
+        .map(|c| RefCredentialRef {
+            credential_path: c.credential_path.clone(),
+            mount_point: c.mount_point.clone(),
+            source: c.source.clone(),
+        })
+        .collect();
+
+    RefStorage {
+        fstab_entries,
+        mount_points,
+        lvm_volumes,
+        var_directories,
+        credential_refs,
     }
 }
 
@@ -1310,5 +1461,469 @@ mod tests {
         assert!(result.custom_tuned_profiles.is_empty());
         assert_eq!(result.alternatives.len(), 1);
         assert_eq!(result.alternatives[0].status, "manual");
+    }
+
+    // ── project_ref_network tests ──────────────────────────────────
+
+    use inspectah_core::types::network::{
+        FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry, StaticRouteFile,
+    };
+
+    #[test]
+    fn test_no_network_returns_default() {
+        let snap = InspectionSnapshot {
+            network: None,
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert!(result.connections.is_empty());
+        assert!(result.firewall_zones.is_empty());
+        assert!(result.firewall_direct_rules.is_empty());
+        assert!(result.static_routes.is_empty());
+        assert!(result.ip_routes.is_empty());
+        assert!(result.ip_rules.is_empty());
+        assert!(result.resolv_provenance.is_empty());
+        assert!(result.hosts_additions.is_empty());
+        assert!(result.proxy_env.is_empty());
+    }
+
+    #[test]
+    fn test_empty_network_returns_default() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection::default()),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert!(result.connections.is_empty());
+        assert!(result.firewall_zones.is_empty());
+        assert!(result.firewall_direct_rules.is_empty());
+        assert!(result.static_routes.is_empty());
+        assert!(result.ip_routes.is_empty());
+        assert!(result.ip_rules.is_empty());
+        assert!(result.resolv_provenance.is_empty());
+        assert!(result.hosts_additions.is_empty());
+        assert!(result.proxy_env.is_empty());
+    }
+
+    #[test]
+    fn test_nm_connections_extracted() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                connections: vec![NMConnection {
+                    name: "eth0".into(),
+                    conn_type: "802-3-ethernet".into(),
+                    method: "auto".into(),
+                    path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.connections.len(), 1);
+        assert_eq!(result.connections[0].name, "eth0");
+        assert_eq!(result.connections[0].conn_type, "802-3-ethernet");
+        assert_eq!(result.connections[0].method, "auto");
+        assert_eq!(
+            result.connections[0].path,
+            "/etc/NetworkManager/system-connections/eth0.nmconnection"
+        );
+    }
+
+    #[test]
+    fn test_firewall_zones_extracted() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                firewall_zones: vec![FirewallZone {
+                    name: "public".into(),
+                    path: "/etc/firewalld/zones/public.xml".into(),
+                    content: "<zone>...</zone>".into(),
+                    services: vec!["ssh".into(), "http".into()],
+                    ports: vec!["8080/tcp".into()],
+                    rich_rules: vec!["rule family=ipv4 accept".into()],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.firewall_zones.len(), 1);
+        assert_eq!(result.firewall_zones[0].name, "public");
+        assert_eq!(result.firewall_zones[0].path, "/etc/firewalld/zones/public.xml");
+        assert_eq!(result.firewall_zones[0].services, vec!["ssh", "http"]);
+        assert_eq!(result.firewall_zones[0].ports, vec!["8080/tcp"]);
+        assert_eq!(
+            result.firewall_zones[0].rich_rules,
+            vec!["rule family=ipv4 accept"]
+        );
+    }
+
+    #[test]
+    fn test_firewall_direct_rules_extracted() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                firewall_direct_rules: vec![FirewallDirectRule {
+                    ipv: "ipv4".into(),
+                    table: "filter".into(),
+                    chain: "INPUT".into(),
+                    priority: "0".into(),
+                    args: "-p tcp --dport 443 -j ACCEPT".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.firewall_direct_rules.len(), 1);
+        assert_eq!(result.firewall_direct_rules[0].ipv, "ipv4");
+        assert_eq!(result.firewall_direct_rules[0].table, "filter");
+        assert_eq!(result.firewall_direct_rules[0].chain, "INPUT");
+        assert_eq!(result.firewall_direct_rules[0].priority, "0");
+        assert_eq!(
+            result.firewall_direct_rules[0].args,
+            "-p tcp --dport 443 -j ACCEPT"
+        );
+    }
+
+    #[test]
+    fn test_static_routes_and_scalars() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                static_routes: vec![StaticRouteFile {
+                    path: "/etc/sysconfig/network-scripts/route-eth0".into(),
+                    name: "eth0".into(),
+                }],
+                ip_routes: vec!["10.0.0.0/8 via 192.168.1.1".into()],
+                ip_rules: vec!["from 10.0.0.0/8 lookup custom".into()],
+                resolv_provenance: "NetworkManager".into(),
+                hosts_additions: vec!["192.168.1.100 myhost".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.static_routes.len(), 1);
+        assert_eq!(
+            result.static_routes[0].path,
+            "/etc/sysconfig/network-scripts/route-eth0"
+        );
+        assert_eq!(result.static_routes[0].name, "eth0");
+        assert_eq!(result.ip_routes, vec!["10.0.0.0/8 via 192.168.1.1"]);
+        assert_eq!(result.ip_rules, vec!["from 10.0.0.0/8 lookup custom"]);
+        assert_eq!(result.resolv_provenance, "NetworkManager");
+        assert_eq!(result.hosts_additions, vec!["192.168.1.100 myhost"]);
+    }
+
+    #[test]
+    fn test_proxy_env_extracted() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                proxy: vec![ProxyEntry {
+                    source: "/etc/profile.d/proxy.sh".into(),
+                    line: "export HTTP_PROXY=http://proxy:3128".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.proxy_env.len(), 1);
+        assert_eq!(result.proxy_env[0].source, "/etc/profile.d/proxy.sh");
+        assert_eq!(
+            result.proxy_env[0].line,
+            "export HTTP_PROXY=http://proxy:3128"
+        );
+    }
+
+    #[test]
+    fn test_full_network_roundtrip() {
+        let snap = InspectionSnapshot {
+            network: Some(NetworkSection {
+                connections: vec![NMConnection {
+                    name: "bond0".into(),
+                    conn_type: "bond".into(),
+                    method: "manual".into(),
+                    path: "/etc/NetworkManager/system-connections/bond0.nmconnection".into(),
+                    ..Default::default()
+                }],
+                firewall_zones: vec![FirewallZone {
+                    name: "internal".into(),
+                    path: "/etc/firewalld/zones/internal.xml".into(),
+                    content: "<zone>internal</zone>".into(),
+                    services: vec!["dns".into()],
+                    ports: Vec::new(),
+                    rich_rules: Vec::new(),
+                    ..Default::default()
+                }],
+                firewall_direct_rules: vec![FirewallDirectRule {
+                    ipv: "ipv6".into(),
+                    table: "mangle".into(),
+                    chain: "PREROUTING".into(),
+                    priority: "1".into(),
+                    args: "-j MARK --set-mark 1".into(),
+                    ..Default::default()
+                }],
+                static_routes: vec![StaticRouteFile {
+                    path: "/etc/sysconfig/network-scripts/route-bond0".into(),
+                    name: "bond0".into(),
+                }],
+                ip_routes: vec!["default via 10.0.0.1".into()],
+                ip_rules: vec!["from all lookup main".into()],
+                resolv_provenance: "systemd-resolved".into(),
+                hosts_additions: vec!["10.0.0.5 dbserver".into()],
+                proxy: vec![ProxyEntry {
+                    source: "/etc/environment".into(),
+                    line: "HTTPS_PROXY=http://proxy:3128".into(),
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_network(&snap);
+
+        assert_eq!(result.connections.len(), 1);
+        assert_eq!(result.connections[0].name, "bond0");
+        assert_eq!(result.firewall_zones.len(), 1);
+        assert_eq!(result.firewall_zones[0].services, vec!["dns"]);
+        assert_eq!(result.firewall_direct_rules.len(), 1);
+        assert_eq!(result.firewall_direct_rules[0].table, "mangle");
+        assert_eq!(result.static_routes.len(), 1);
+        assert_eq!(result.ip_routes.len(), 1);
+        assert_eq!(result.ip_rules.len(), 1);
+        assert_eq!(result.resolv_provenance, "systemd-resolved");
+        assert_eq!(result.hosts_additions.len(), 1);
+        assert_eq!(result.proxy_env.len(), 1);
+    }
+
+    // ── project_ref_storage tests ──────────────────────────────────
+
+    use inspectah_core::types::storage::{
+        CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, VarDirectory,
+    };
+
+    #[test]
+    fn test_no_storage_returns_default() {
+        let snap = InspectionSnapshot {
+            storage: None,
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert!(result.fstab_entries.is_empty());
+        assert!(result.mount_points.is_empty());
+        assert!(result.lvm_volumes.is_empty());
+        assert!(result.var_directories.is_empty());
+        assert!(result.credential_refs.is_empty());
+    }
+
+    #[test]
+    fn test_empty_storage_returns_default() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection::default()),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert!(result.fstab_entries.is_empty());
+        assert!(result.mount_points.is_empty());
+        assert!(result.lvm_volumes.is_empty());
+        assert!(result.var_directories.is_empty());
+        assert!(result.credential_refs.is_empty());
+    }
+
+    #[test]
+    fn test_fstab_entries_extracted() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                fstab_entries: vec![FstabEntry {
+                    device: "/dev/sda1".into(),
+                    mount_point: "/boot".into(),
+                    fstype: "xfs".into(),
+                    options: "defaults".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.fstab_entries.len(), 1);
+        assert_eq!(result.fstab_entries[0].device, "/dev/sda1");
+        assert_eq!(result.fstab_entries[0].mount_point, "/boot");
+        assert_eq!(result.fstab_entries[0].fstype, "xfs");
+        assert_eq!(result.fstab_entries[0].options, "defaults");
+    }
+
+    #[test]
+    fn test_mount_points_extracted() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                mount_points: vec![MountPoint {
+                    target: "/var/log".into(),
+                    source: "/dev/mapper/rhel-var_log".into(),
+                    fstype: "xfs".into(),
+                    options: "rw,relatime".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.mount_points.len(), 1);
+        assert_eq!(result.mount_points[0].target, "/var/log");
+        assert_eq!(result.mount_points[0].source, "/dev/mapper/rhel-var_log");
+        assert_eq!(result.mount_points[0].fstype, "xfs");
+        assert_eq!(result.mount_points[0].options, "rw,relatime");
+    }
+
+    #[test]
+    fn test_lvm_volumes_extracted() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                lvm_info: vec![LvmVolume {
+                    vg_name: "rhel".into(),
+                    lv_name: "root".into(),
+                    lv_size: "50G".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.lvm_volumes.len(), 1);
+        assert_eq!(result.lvm_volumes[0].vg_name, "rhel");
+        assert_eq!(result.lvm_volumes[0].lv_name, "root");
+        assert_eq!(result.lvm_volumes[0].lv_size, "50G");
+    }
+
+    #[test]
+    fn test_var_directories_extracted() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                var_directories: vec![VarDirectory {
+                    path: "/var/lib/pgsql".into(),
+                    size_estimate: "12G".into(),
+                    recommendation: "mount as separate volume".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.var_directories.len(), 1);
+        assert_eq!(result.var_directories[0].path, "/var/lib/pgsql");
+        assert_eq!(result.var_directories[0].size_estimate, "12G");
+        assert_eq!(
+            result.var_directories[0].recommendation,
+            "mount as separate volume"
+        );
+    }
+
+    #[test]
+    fn test_credential_refs_extracted() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                credential_refs: vec![CredentialRef {
+                    credential_path: "/etc/fstab.d/creds".into(),
+                    mount_point: "/mnt/secure".into(),
+                    source: "fstab".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.credential_refs.len(), 1);
+        assert_eq!(result.credential_refs[0].credential_path, "/etc/fstab.d/creds");
+        assert_eq!(result.credential_refs[0].mount_point, "/mnt/secure");
+        assert_eq!(result.credential_refs[0].source, "fstab");
+    }
+
+    #[test]
+    fn test_full_storage_roundtrip() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                fstab_entries: vec![
+                    FstabEntry {
+                        device: "/dev/mapper/rhel-root".into(),
+                        mount_point: "/".into(),
+                        fstype: "xfs".into(),
+                        options: "defaults".into(),
+                        ..Default::default()
+                    },
+                    FstabEntry {
+                        device: "UUID=abcd-1234".into(),
+                        mount_point: "/boot/efi".into(),
+                        fstype: "vfat".into(),
+                        options: "umask=0077".into(),
+                        ..Default::default()
+                    },
+                ],
+                mount_points: vec![MountPoint {
+                    target: "/".into(),
+                    source: "/dev/mapper/rhel-root".into(),
+                    fstype: "xfs".into(),
+                    options: "rw,seclabel,relatime".into(),
+                }],
+                lvm_info: vec![LvmVolume {
+                    vg_name: "rhel".into(),
+                    lv_name: "swap".into(),
+                    lv_size: "4G".into(),
+                }],
+                var_directories: vec![VarDirectory {
+                    path: "/var/log".into(),
+                    size_estimate: "2G".into(),
+                    recommendation: "keep on root".into(),
+                }],
+                credential_refs: vec![CredentialRef {
+                    credential_path: "/etc/cifs-creds".into(),
+                    mount_point: "/mnt/share".into(),
+                    source: "fstab".into(),
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.fstab_entries.len(), 2);
+        assert_eq!(result.fstab_entries[1].device, "UUID=abcd-1234");
+        assert_eq!(result.mount_points.len(), 1);
+        assert_eq!(result.mount_points[0].options, "rw,seclabel,relatime");
+        assert_eq!(result.lvm_volumes.len(), 1);
+        assert_eq!(result.lvm_volumes[0].lv_name, "swap");
+        assert_eq!(result.var_directories.len(), 1);
+        assert_eq!(result.var_directories[0].recommendation, "keep on root");
+        assert_eq!(result.credential_refs.len(), 1);
+        assert_eq!(result.credential_refs[0].credential_path, "/etc/cifs-creds");
     }
 }
