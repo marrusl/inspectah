@@ -402,6 +402,12 @@ pub struct RefinedTunedSelection {
     pub active_profile: String,
     pub custom_profiles: Vec<String>,
     pub triage: TriageTag,
+    #[serde(default = "default_include")]
+    pub include: bool,
+}
+
+fn default_include() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
