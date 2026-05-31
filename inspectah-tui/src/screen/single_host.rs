@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::TriageBucket;
+use inspectah_refine::types::{ItemId, TriageBucket};
 
 use crate::sections::{SECTION_ORDER, build_section_entries};
 use crate::theme::ColorTier;
@@ -20,8 +20,8 @@ use crate::widget::triage_list::{ListItem, TriageGroup, TriageListWidget};
 
 const SIDEBAR_WIDTH: u16 = 18;
 
-/// A raw item tuple: (name, detail, triage_group, include_state).
-type RawItem = (String, String, TriageGroup, Option<bool>);
+/// A raw item tuple: (name, detail, triage_group, include_state, item_id).
+type RawItem = (String, String, TriageGroup, Option<bool>, Option<ItemId>);
 
 pub struct SingleHostScreen;
 
@@ -146,7 +146,11 @@ pub fn build_list_items(
                         format!("{} ({})", pkg.entry.version, pkg.entry.source_repo)
                     };
                     let group = bucket_to_group(pkg.triage.bucket());
-                    (name, detail, group, Some(pkg.entry.include))
+                    let id = ItemId::Package {
+                        name: pkg.entry.name.clone(),
+                        arch: pkg.entry.arch.clone(),
+                    };
+                    (name, detail, group, Some(pkg.entry.include), Some(id))
                 })
                 .collect()
         }
@@ -158,7 +162,10 @@ pub fn build_list_items(
                     let name = cfg.entry.path.clone();
                     let detail = format!("{:?}", cfg.entry.category);
                     let group = bucket_to_group(cfg.triage.bucket());
-                    (name, detail, group, Some(cfg.entry.include))
+                    let id = ItemId::Config {
+                        path: cfg.entry.path.clone(),
+                    };
+                    (name, detail, group, Some(cfg.entry.include), Some(id))
                 })
                 .collect()
         }
@@ -208,6 +215,7 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
                     bucket,
                     item.3,
                     idx,
+                    item.4.clone(),
                 ));
             }
         }
@@ -235,7 +243,7 @@ mod tests {
 
     #[test]
     fn empty_items_produce_empty_grouped() {
-        let items: Vec<(String, String, TriageGroup, Option<bool>)> = Vec::new();
+        let items: Vec<RawItem> = Vec::new();
         let state = TuiState::new(14);
         let result = build_grouped_items(&items, &state, SectionId::Packages);
         assert!(result.is_empty());
@@ -243,24 +251,27 @@ mod tests {
 
     #[test]
     fn grouped_items_have_headers_then_items() {
-        let items = vec![
+        let items: Vec<RawItem> = vec![
             (
                 "httpd".to_string(),
                 "2.4".to_string(),
                 TriageGroup::Investigate,
                 Some(true),
+                None,
             ),
             (
                 "nginx".to_string(),
                 "1.24".to_string(),
                 TriageGroup::Investigate,
                 Some(false),
+                None,
             ),
             (
                 "bash".to_string(),
                 "5.2".to_string(),
                 TriageGroup::Baseline,
                 Some(true),
+                None,
             ),
         ];
         // Baseline (group_idx 2) is collapsed by default in TuiState::new.

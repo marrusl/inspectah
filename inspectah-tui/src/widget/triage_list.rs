@@ -9,6 +9,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::widgets::Widget;
 
+use inspectah_refine::types::ItemId;
+
 use crate::theme::{ColorTier, Token};
 use crate::types::SectionId;
 
@@ -49,6 +51,8 @@ pub struct ListItem {
     pub is_collapsed: bool,
     /// Number of items in this group (shown on header).
     pub group_count: usize,
+    /// Identity key for mutation operations (toggle, undo, redo).
+    pub item_id: Option<ItemId>,
 }
 
 impl ListItem {
@@ -59,6 +63,7 @@ impl ListItem {
         group: TriageGroup,
         included: Option<bool>,
         group_index: usize,
+        item_id: Option<ItemId>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -69,6 +74,7 @@ impl ListItem {
             group_index,
             is_collapsed: false,
             group_count: 0,
+            item_id,
         }
     }
 
@@ -83,6 +89,7 @@ impl ListItem {
             group_index: 0,
             is_collapsed: collapsed,
             group_count: count,
+            item_id: None,
         }
     }
 }
@@ -339,6 +346,7 @@ mod tests {
                 TriageGroup::Investigate,
                 Some(true),
                 0,
+                None,
             ),
             ListItem::item(
                 "nginx",
@@ -346,9 +354,17 @@ mod tests {
                 TriageGroup::Investigate,
                 Some(false),
                 1,
+                None,
             ),
             ListItem::header(TriageGroup::Baseline, 1, false),
-            ListItem::item("bash", "5.2.15-5.el9", TriageGroup::Baseline, Some(true), 0),
+            ListItem::item(
+                "bash",
+                "5.2.15-5.el9",
+                TriageGroup::Baseline,
+                Some(true),
+                0,
+                None,
+            ),
         ]
     }
 
@@ -379,6 +395,7 @@ mod tests {
                 TriageGroup::Investigate,
                 None,
                 0,
+                None,
             ),
         ];
         let widget = TriageListWidget::new(
