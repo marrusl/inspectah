@@ -1,5 +1,6 @@
 pub mod action;
 pub mod event;
+pub mod keys;
 pub mod theme;
 pub mod types;
 
