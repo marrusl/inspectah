@@ -28,6 +28,8 @@ pub struct RefineSession {
     ops: Vec<RefinementOp>,
     cursor: usize,
     cached_view: Option<RefinedView>,
+    cached_decisions: Option<crate::projection::DecisionProjection>,
+    cached_reference: std::sync::OnceLock<crate::projection::ReferenceProjection>,
     generation: u64,
     /// Tracks which context items the user has viewed in the UI.
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
@@ -336,6 +338,8 @@ impl RefineSession {
             ops: Vec::new(),
             cursor: 0,
             cached_view: None,
+            cached_decisions: None,
+            cached_reference: std::sync::OnceLock::new(),
             generation: 0,
             viewed: HashSet::new(),
             tarball_path: None,
@@ -444,8 +448,9 @@ impl RefineSession {
         // hash match guarantees identical snapshot baseline. This preserves
         // the full redo tail because we bypass apply() which truncates.
         session.ops = saved.ops;
-        session.cursor = saved.cursor;
+        session.cursor = saved.cursor.min(session.ops.len()); // clamp to valid range
         session.cached_view = None;
+        session.cached_decisions = None;
         session.recompute_view();
 
         // Single autosave to confirm restored state
@@ -494,6 +499,7 @@ impl RefineSession {
         self.cursor += 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
         Ok(())
@@ -506,6 +512,7 @@ impl RefineSession {
         self.cursor -= 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
         Ok(())
@@ -518,6 +525,7 @@ impl RefineSession {
         self.cursor += 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
         Ok(())
@@ -1901,6 +1909,23 @@ impl RefineSession {
             stats,
             generation: self.generation,
         });
+        self.cached_decisions = Some(crate::projection::project_decisions(self));
+    }
+
+    /// Returns the decision projection for the current session state.
+    /// Panics if called before `recompute_view()` has run.
+    pub fn decisions(&self) -> &crate::projection::DecisionProjection {
+        self.cached_decisions
+            .as_ref()
+            .expect("decisions projection is always computed after new() or mutation")
+    }
+
+    /// Returns the reference projection, computing it lazily on first access.
+    /// The reference projection is derived solely from the original snapshot
+    /// and is immutable across mutations.
+    pub fn reference(&self) -> &crate::projection::ReferenceProjection {
+        self.cached_reference
+            .get_or_init(|| crate::projection::project_reference(&self.original))
     }
 }
 
@@ -3301,5 +3326,168 @@ mod tests {
             !entries.iter().any(|e| e.starts_with("config/etc/tuned/")),
             "tuned profiles must NOT be under config/. entries: {entries:?}"
         );
+    }
+
+    // ── Projection cache tests ──────────────────────────────────────
+
+    #[test]
+    fn session_exposes_decisions_and_reference() {
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection::default()),
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("httpd".into()),
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                enabled_units: vec!["httpd.service".into()],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            ..Default::default()
+        };
+        let session = RefineSession::new(snap);
+
+        // decisions() should return without panic and contain the service
+        let dec = session.decisions();
+        assert_eq!(dec.service_states.len(), 1);
+        assert_eq!(dec.service_states[0].entry.unit, "httpd.service");
+
+        // reference() should return without panic
+        let _ref_proj = session.reference();
+    }
+
+    #[test]
+    fn decisions_invalidated_on_mutation() {
+        use inspectah_core::types::rpm::VersionChange;
+        use inspectah_core::types::rpm::VersionChangeDirection;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                    version: "1.24.0".into(),
+                    release: "1.el9".into(),
+                    include: true,
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                }],
+                version_changes: vec![
+                    VersionChange {
+                        name: "openssl".into(),
+                        arch: "x86_64".into(),
+                        host_version: "3.0.7".into(),
+                        base_version: "3.0.8".into(),
+                        host_epoch: "1".into(),
+                        base_epoch: "1".into(),
+                        direction: VersionChangeDirection::Downgrade,
+                    },
+                    VersionChange {
+                        name: "curl".into(),
+                        arch: "x86_64".into(),
+                        host_version: "8.1.0".into(),
+                        base_version: "8.0.0".into(),
+                        host_epoch: "0".into(),
+                        base_epoch: "0".into(),
+                        direction: VersionChangeDirection::Upgrade,
+                    },
+                ],
+                ..Default::default()
+            }),
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: false,
+                    owning_package: Some("httpd".into()),
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                enabled_units: vec!["httpd.service".into()],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let mut session = RefineSession::new(snap);
+
+        // Capture pre-mutation decisions
+        let dec_before = session.decisions().clone();
+        // httpd.service starts with include=false
+        assert!(
+            dec_before
+                .service_states
+                .iter()
+                .any(|s| s.entry.unit == "httpd.service" && !s.entry.include),
+            "httpd.service should start excluded"
+        );
+
+        // Capture reference pointer before mutation
+        let ref_before = session.reference() as *const crate::projection::ReferenceProjection;
+
+        // Mutate: flip httpd.service include false -> true
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+
+        // Decisions should have changed
+        let dec_after = session.decisions();
+        assert!(
+            dec_after
+                .service_states
+                .iter()
+                .any(|s| s.entry.unit == "httpd.service" && s.entry.include),
+            "httpd.service should now be included"
+        );
+
+        // Also mutate a package to change projected RPM state
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "nginx".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Reference should be pointer-identical (OnceLock, never recomputed)
+        let ref_after = session.reference() as *const crate::projection::ReferenceProjection;
+        assert!(
+            std::ptr::eq(ref_before as *const (), ref_after as *const ()),
+            "reference projection pointer must be stable across mutations"
+        );
+
+        // Verify reference field stability: version_changes should still
+        // have the same counts regardless of mutations
+        let ref_proj = session.reference();
+        assert_eq!(ref_proj.version_changes.downgrades.len(), 1);
+        assert_eq!(ref_proj.version_changes.upgrades.len(), 1);
+        assert_eq!(ref_proj.version_changes.downgrades[0].name, "openssl");
+        assert_eq!(ref_proj.version_changes.upgrades[0].name, "curl");
     }
 }

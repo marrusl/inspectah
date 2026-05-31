@@ -548,6 +548,7 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
             primary_reason: reason,
             annotations,
         },
+        include: kernel_boot.tuned_include,
     }]
 }
 
