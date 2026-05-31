@@ -17,9 +17,10 @@ wider terminals when available.
 
 ### In scope (v1)
 
-- Single-host triage: all section types (packages, repos, configs, services,
-  containers, users/groups, kernel/boot, network, SELinux, storage, scheduled
-  tasks)
+- Single-host triage: all section types (packages with embedded repo bar,
+  configs, services, containers, sysctls, tuned, users/groups, version
+  changes, kernel/boot, network, storage, scheduled tasks, non-RPM software,
+  SELinux)
 - Include/exclude toggling with undo/redo
 - Containerfile preview (toggle view)
 - Tarball export via `:export`
@@ -227,18 +228,21 @@ fn reference(&self) -> &ReferenceProjection {
 
 ```
 ┌─ Section Nav ───┬─ Item List ──────────────────────────────────┐
-│ 1 Packages  142 │ ▼ Investigate (12)                           │
-│ 2 Repos       8 │   ▸ mystery-pkg    1.0.0  (none)  [inv]     │
-│ 3 Configs    47 │   ...                                        │
-│ 4 Services   23 │ ▼ Site (130)                                 │
-│ 5 Containers  3 │   ● httpd          2.4.62 baseos  [site]    │
-│ 6 Users       5 │   ...                                        │
-│ 7 Kernel      2 │ ▶ Baseline (176) ── already in base image   │
-│ 8 Network     4 │                                              │
-│ 9 SELinux     1 │                                              │
+│ 1 Packages  142 │ ┌ Repo Bar ─────────────────────────────────┐│
+│ 2 Configs    47 │ │ baseos 88  appstream 54  epel 12  ...     ││
+│ 3 Services   23 │ └───────────────────────────────────────────┘│
+│ 4 Containers  3 │ ▼ Investigate (12)                           │
+│ 5 Sysctls     2 │   ▸ mystery-pkg    1.0.0  (none)  [inv]     │
+│ 6 Tuned       1 │   ...                                        │
+│ 7 Users       5 │ ▼ Site (130)                                 │
+│ ─────────────── │   ● httpd          2.4.62 baseos  [site]    │
+│ 8 Ver.Chg     4 │   ...                                        │
+│ 9 Kernel      2 │ ▶ Baseline (176) ── already in base image   │
+│   Network     4 │                                              │
 │   Storage     2 │                                              │
-│   Scheduled   3 │                                              │
-│                 │                                              │
+│   Sched.      3 │                                              │
+│   Non-RPM     1 │                                              │
+│   SELinux     1 │                                              │
 ├─ Stats ─────────┤                                              │
 │ 142 incl        │                                              │
 │ 176 excl        │                                              │
@@ -247,9 +251,28 @@ fn reference(&self) -> &ReferenceProjection {
  142 incl · 176 excl · 12 review · 47/142 reviewed · Containerfile: 3Δ
 ```
 
-- **Sidebar** (fixed 18 chars): section names with item counts, numbered 1-9.
-  Active section highlighted. Decision sections show triage counts; reference
+- **Sidebar** (fixed 18 chars): section names with item counts. Decision
+  sections appear first (numbered 1-7), followed by a separator line and
+  reference sections (numbered 8-9, then unnumbered overflow). Active
+  section highlighted. Decision sections show triage counts; reference
   sections show item counts with a `ref` badge. Stats summary below.
+
+  **Repo bar in Packages:** When the Packages section is active, the item
+  list renders a repo bar at the top (showing repo names with package
+  counts and toggle controls), followed by the package triage list below.
+  This matches the web UI's `RepoBar` component pattern — repos are part
+  of the package triage workflow, not a standalone section. Repo toggles
+  affect package visibility (excluding a repo hides its packages).
+
+  **Sidebar overflow (H5):** With 7 decision sections and 7-8 reference
+  sections, the sidebar may exceed the 1-9 jump range. Sections 1-9 are
+  directly jumpable via number keys. Sections beyond 9 are accessible via
+  `j/k` scrolling in the sidebar (when sidebar has focus) or via
+  `:section <name>` command. If the sidebar list exceeds the available
+  terminal height (terminal rows minus stats area minus 2 for borders),
+  the sidebar scrolls vertically, keeping the active section visible. A
+  scroll indicator (`▼` at bottom or `▲` at top) appears when more
+  sections exist outside the viewport.
 - **Item list** (remaining width): content depends on section type:
   - **Decision sections** — grouped by triage bucket (investigate → site →
     baseline). Baseline collapsed by default with header "already in base
@@ -262,8 +285,7 @@ fn reference(&self) -> &ReferenceProjection {
     to set operator expectations.
 - **Status bar** (bottom row): included/excluded/review counts (decision
   sections only), containerfile delta hint ("Containerfile: 3Δ"), active
-  search filter, reviewed progress ("47/142 reviewed"), autosave status
-  (warning indicator when degraded).
+  search filter, reviewed progress ("47/142 reviewed").
 - **Footer hints** (bottom row, shared with status bar): 4-5 keybinding
   hints. Hints adapt to section type — reference sections suppress
   Space/toggle hints. Full list behind `?`.
@@ -291,32 +313,44 @@ expands/collapses it.
 The shipped projection model splits sections into two categories. The TUI
 must respect this boundary — it is not a UI choice, it is a data contract.
 
-**Decision sections** (from `DecisionProjection` — mutable, togglable):
-- Packages (version_changes + baseline_summary)
-- Repos (repo_groups)
-- Configs (service_dropins + quadlets)
-- Services (service_states)
-- Sysctls (sysctls)
-- Tuned profiles (tuned)
-- Users/groups (users_groups)
+**Decision sections** (from `view()` and `decisions()` — mutable, togglable):
 
-**Reference sections** (from `ReferenceProjection` — immutable, read-only):
-- Services context (services: divergent, advisories, warnings, omitted)
-- Version changes context (version_changes: downgrades, upgrades)
-- Kernel/boot (kernel_boot: cmdline, modules, dracut, alternatives)
-- Network (network: connections, firewall, routes, proxy)
-- Storage (storage)
-- Scheduled tasks (scheduled_tasks)
-- Non-RPM software (non_rpm_software)
-- SELinux (selinux)
+| Sidebar entry | Items source | Stats source |
+|---|---|---|
+| Packages | `view().packages` (items), `decisions().repo_groups` (repo bar), `decisions().version_changes` + `decisions().baseline_summary` (context) | `view().stats.section(SectionKind::Package)` for packages, `view().stats.section(SectionKind::Repo)` for repo counts |
+| Configs | `view().config_files` | `view().stats.section(SectionKind::Config)` |
+| Services | `decisions().service_states`, `decisions().service_dropins` | `view().stats.section(SectionKind::Service)` |
+| Sysctls | `decisions().sysctls` | `view().stats.section(SectionKind::Sysctl)` |
+| Tuned | `decisions().tuned` | `view().stats.section(SectionKind::Tuned)` |
+| Users/groups | `decisions().users_groups` | `view().stats.section(SectionKind::User)` |
+
+Note: Packages and Configs are the only sections with items directly in
+`view()` (`RefinedView.packages`, `RefinedView.config_files`). All other
+decision section items come from `decisions()` (`DecisionProjection`).
+
+**Reference sections** (from `reference()` — immutable, read-only):
+
+| Sidebar entry | Items source | Count source |
+|---|---|---|
+| Version changes | `reference().version_changes` (downgrades, upgrades) | `.downgrades.len() + .upgrades.len()` |
+| Kernel/boot | `reference().kernel_boot` (cmdline, modules, dracut, alternatives) | sum of sub-Vec lengths |
+| Network | `reference().network` (connections, firewall, routes, proxy) | sum of sub-Vec lengths |
+| Storage | `reference().storage` (fstab, mounts, LVM, var dirs, credentials) | sum of sub-Vec lengths |
+| Scheduled tasks | `reference().scheduled_tasks` | `.len()` |
+| Non-RPM software | `reference().non_rpm_software` | `.len()` |
+| SELinux | `reference().selinux` | `.len()` |
 
 **Composite section — Containers:** Container items span both projections:
-- **Decision items** from `DecisionProjection`: `quadlets`
+- **Decision items** from `decisions()`: `quadlets`
   (toggleable quadlet units) and `flatpaks` (toggleable flatpak apps)
-- **Reference items** from `ReferenceProjection`: `containers.quadlets`
+- **Reference items** from `reference()`: `containers.quadlets`
   (read-only quadlet context), `containers.compose_files`,
   `containers.running_containers`, `containers.flatpaks` (read-only
   flatpak context)
+- **Stats:** Decision item counts from
+  `view().stats.section(SectionKind::Quadlet)` and
+  `view().stats.section(SectionKind::Flatpak)`. Reference item counts
+  from `reference().containers` sub-Vec lengths.
 
 The sidebar shows a single "Containers" entry. When the operator
 navigates to it, the item list renders both decision items (with
@@ -326,10 +360,21 @@ is a no-op) in a grouped layout. Decision items appear first under a
 This prevents the discoverability problem of scattering container-related
 items across distant sidebar entries.
 
+**Services dual presence:** Services appear in both projections:
+- **Decision:** `decisions().service_states` and
+  `decisions().service_dropins` — services with togglable
+  include/exclude.
+- **Reference:** `reference().services` — divergent services,
+  advisories, warnings, omitted services. Read-only context.
+
+The TUI renders both under the single "Services" sidebar entry. Decision
+items appear first (toggleable), followed by reference context (read-only,
+Space no-op). This mirrors the Containers composite pattern.
+
 The sidebar groups sections visually. Decision sections appear first
 (numbered 1-N), followed by a separator and reference sections.
-Containers appears as the last decision section (since it contains
-toggleable items) with its reference context inline. This matches the
+Containers and Services appear as decision sections (since they contain
+toggleable items) with their reference context inline. This matches the
 operator's mental model: "things I need to decide" above "things I need
 to understand."
 
@@ -434,6 +479,27 @@ concrete session APIs. This section pins those contracts.
 item, and reads `session.viewed_ids()` to get the full set. The reviewed
 count for a section is `viewed_ids().iter().filter(|k| k.starts_with(section_prefix)).count()`.
 
+`mark_viewed()` validates the section prefix against `VALID_SECTIONS`.
+The accepted prefixes are:
+
+- `packages`, `configs`, `services`, `containers`, `users_groups`,
+  `network`, `storage`, `scheduled_tasks`, `non_rpm_software`,
+  `kernel_boot`, `selinux`
+
+This covers all 11 sections that appear as sidebar entries. Note that
+`mark_viewed()` accepts both decision and reference section prefixes —
+the API is section-type-agnostic. However, the TUI only calls
+`mark_viewed()` for decision section items (the spec's reviewed tracking
+scope). Reference section items can be marked viewed through the API
+but the TUI does not invoke this path.
+
+**Not covered by `mark_viewed()`:** The following identifiers are NOT
+valid `mark_viewed()` prefixes: `repos` (repo controls are embedded in
+the packages section), `quadlets`, `flatpaks` (use `containers:`
+prefix), `sysctls`, `tuned`, `compose`, `version_changes`. Items in
+these categories must use their parent section prefix (e.g.,
+`containers:my-quadlet.container` for a quadlet item).
+
 **Search fields:** Cross-section search iterates the typed fields of
 each projection. For decision items: package name + arch, repo path,
 config path, service unit name, quadlet name, flatpak app ID, sysctl
@@ -443,14 +509,35 @@ container name/image, module name, etc.). The TUI builds a searchable
 index by extracting string fields from the projection structs — no
 intermediate `searchable_text` field.
 
-**Sidebar counts:** Section counts in the sidebar come from
-`view().stats` (`RefineStats`). `RefineStats.sections` is a
-`Vec<SectionStats>`, where each `SectionStats` has `kind: SectionKind`,
-`total`, `included`, and `excluded`. The sidebar renders `total` as the
-count for each decision section. Reference section counts come from the
-length of the corresponding `Vec` in `ReferenceProjection` (e.g.,
-`reference().containers.running_containers.len()`). The status bar's
-`needs_review_count` comes from `view().stats.needs_review_count`.
+**Sidebar counts:** Decision section counts come from
+`view().stats.section(kind)` where `kind` is the matching `SectionKind`
+variant. `RefineStats.sections` is a `Vec<SectionStats>`, where each
+`SectionStats` has `kind: SectionKind`, `total`, `included`, and
+`excluded`. The `SectionKind` variants with stats are: `Package`,
+`Config`, `Repo`, `User`, `Service`, `Quadlet`, `Flatpak`, `Sysctl`,
+`Tuned`, `ComposeContext`. The sidebar renders `total` as the count.
+
+Exact count sources per decision sidebar entry:
+
+| Sidebar entry | Count source |
+|---|---|
+| Packages | `view().stats.section(SectionKind::Package).total` |
+| Configs | `view().stats.section(SectionKind::Config).total` |
+| Services | `view().stats.section(SectionKind::Service).total` |
+| Containers | `view().stats.section(SectionKind::Quadlet).total + view().stats.section(SectionKind::Flatpak).total` |
+| Sysctls | `view().stats.section(SectionKind::Sysctl).total` |
+| Tuned | `view().stats.section(SectionKind::Tuned).total` |
+| Users | `view().stats.section(SectionKind::User).total` |
+
+Reference section counts come from the length of the corresponding
+`Vec` fields in `ReferenceProjection` (e.g.,
+`reference().scheduled_tasks.len()`). For composite reference sections
+(services, version changes, kernel/boot, network, storage, containers),
+the count is the sum of sub-Vec lengths (e.g.,
+`reference().version_changes.downgrades.len() + reference().version_changes.upgrades.len()`).
+
+The status bar's `needs_review_count` comes from
+`view().stats.needs_review_count`.
 
 ### Command mode (`:`)
 
@@ -463,6 +550,9 @@ Command line at bottom. Available commands:
 - `:stats` — show session statistics (per-section counts, review items,
   operations applied, baseline status, session metadata)
 - `:undo` / `:redo` — alternative to `u` / `Ctrl+r`
+- `:fresh` — discard current session and start fresh from the same
+  tarball. Clears all ops, resets cursor, clears viewed set. Next
+  autosave overwrites the sidecar.
 
 Tab-completion on command names and section names.
 
@@ -488,21 +578,28 @@ against the same snapshot.
 
 #### Autosave degradation
 
-`try_autosave()` handles two failure modes. The TUI must surface both in
-the status bar — stderr-only logging (the web server's approach) is not
-sufficient for an interactive terminal.
+`try_autosave()` is a private method on `RefineSession`. It handles two
+failure modes internally:
 
-**Transient failure** (e.g., temporary disk full, NFS hiccup): the session
-logs `"autosave: transient failure — {e}"` to stderr and retries on the
-next mutation. The status bar shows a brief warning flash:
-`⚠ autosave: retry pending`. The warning clears on the next successful
-save. No operator action required.
+**Transient failure** (e.g., temporary disk full, NFS hiccup): logs
+`"autosave: transient failure — {e}"` to stderr and retries on the next
+mutation.
 
 **Permanent degradation** (EROFS, EACCES — read-only filesystem or
-permission denied): the session sets `durability_degraded = true` and
-stops attempting further saves. The status bar shows a persistent warning:
-`⚠ autosave: disabled (read-only)`. This indicator remains for the rest
-of the session.
+permission denied): sets `durability_degraded = true` internally and
+stops attempting further saves. Logs
+`"autosave: permanently degraded — {e}"` to stderr.
+
+**TUI visibility:** The TUI has the same autosave visibility as the web
+UI — none. `try_autosave()` does not expose status to callers; failures
+are logged to stderr only. The TUI does not render autosave status
+indicators.
+
+> **Future work:** A session-facing autosave status API (e.g.,
+> `autosave_status() -> AutosaveStatus`) would enable TUI status-bar
+> indicators for degraded/retry states. This is deferred — the current
+> autosave behavior (invisible to the operator, failures logged to
+> stderr) is functional and matches the web UI.
 
 **Export while degraded:** Export is always available regardless of
 autosave state. The operator can still run `:export` to produce a tarball.
@@ -555,6 +652,18 @@ snapshot, `InspectionSnapshot::from_tarball()` fails before
 `resume_from()` is ever called. Same behavior as Branch 4: error message,
 clean terminal restore, non-zero exit.
 
+**Branch 6 — Voluntary fresh start (`--fresh` flag):**
+`inspectah tui --fresh <tarball>` skips `resume_from()` entirely and
+calls `new_with_tarball(snapshot, tarball)` directly. The existing
+sidecar file is not deleted — the next autosave will overwrite it. This
+lets the operator intentionally discard a valid saved session without
+manually deleting the sidecar file.
+
+The `:fresh` command provides the same behavior during a running session:
+it discards all ops, resets the cursor to 0, and clears the viewed set.
+This is equivalent to constructing a new session from the same snapshot.
+The next autosave writes a clean sidecar.
+
 ### Export safety
 
 The web handler gates export behind an `x-ack-sensitive` HTTP header when
@@ -565,7 +674,7 @@ When the operator runs `:export` and the session is sensitive:
 
 1. The command line area expands to a 3-row confirmation block:
    ```
-   ⚠ This session contains sensitive data (passwords, keys, or secrets).
+   ⚠ This session contains sensitive data.
      Exported artifacts will include this data in plain text.
      Proceed? [y/N]
    ```
@@ -573,10 +682,11 @@ When the operator runs `:export` and the session is sensitive:
    with "Export cancelled."
 3. Non-sensitive sessions export immediately with no prompt.
 
-The confirmation text mirrors `build_sensitivity_summary()` from the web
-handler — it explains *why* the session is sensitive, not just that it is.
-If the session has multiple sensitivity reasons (e.g., snapshot contains
-sensitive data AND user passwords detected), the prompt lists all reasons.
+`is_sensitive()` returns `bool` only — it does not provide a reason list
+or structured sensitivity summary. The prompt text is a static message,
+not dynamically generated from sensitivity reasons. The API checks
+`projected.sensitive_snapshot` and user password choices internally but
+does not expose which condition triggered.
 
 This is the TUI equivalent of the web's `x-ack-sensitive` header. The
 contract is: no sensitive data leaves the session without explicit operator
@@ -645,8 +755,8 @@ impl Token {
 | `TextMuted` | Metadata, secondary | Dark gray | Dim |
 | `DiffAdded` | Diff insertions | Green | `+` prefix |
 | `DiffRemoved` | Diff deletions | Red | `-` prefix |
-| `StatusIncluded` | Include indicator | Green | `●` |
-| `StatusExcluded` | Exclude indicator | Dim | `○` |
+| `StatusIncluded` | Include indicator | Green | `[+]` |
+| `StatusExcluded` | Exclude indicator | Dim | `[-]` |
 | `FocusBorder` | Focused panel border | Cyan | Bold border |
 | `FocusUnfocused` | Unfocused border | Dim | Normal border |
 | `FocusSelected` | Cursor / selection row | Reverse | Reverse + bold |
@@ -678,11 +788,14 @@ fn detect_tier() -> ColorTier {
 
 ### Non-color signals
 
-Every semantic meaning is paired with a non-color signal:
+Every semantic meaning is paired with a non-color signal. Triage state
+and include/exclude use distinct glyph sets to avoid ambiguity in
+monochrome mode:
 
 - Triage bucket: `▸` investigate, `●` site, `○` baseline + text tags
   (`[inv]`, `[site]`, `[base]`)
-- Include/exclude: `●` / `○`
+- Include/exclude: `[+]` included / `[-]` excluded (distinct from
+  triage glyphs `●`/`○`)
 - Content available: `▸` on items with inspectable content
 - Collapsed/expanded: `▶` / `▼`
 - Diff: `+` / `-` prefixes
@@ -759,13 +872,17 @@ rendering. Then snapshot each `DetailMode` variant once.
 
 Each section type gets at least one test verifying its list renders
 correctly and Enter opens the right detail mode. Decision sections
-(packages, repos, configs, services, sysctls, tuned, users) must verify
-triage bucket grouping and Space toggling. Reference sections
-(kernel/boot, network, storage, SELinux, scheduled tasks, non-RPM
-software) must verify read-only rendering and Space no-op. The
-Containers composite section must verify that decision items (quadlets,
-flatpaks) support Space toggling while reference items (running
-containers, compose files) are read-only.
+(packages, configs, services, sysctls, tuned, users) must verify triage
+bucket grouping and Space toggling. The Packages section must also verify
+repo bar rendering and repo toggle behavior. Reference sections
+(version changes, kernel/boot, network, storage, scheduled tasks,
+non-RPM software, SELinux) must verify read-only rendering and Space
+no-op. The Containers composite section must verify that decision items
+(quadlets, flatpaks) support Space toggling while reference items
+(running containers, compose files) are read-only. The Services
+composite section must verify decision items (service states, drop-ins)
+support toggling while reference context (divergent, advisories,
+warnings, omitted) is read-only.
 
 ### Focus and resize
 
@@ -879,22 +996,50 @@ Key decisions made during brainstorming, with rationale:
     session-managed caches with different invalidation strategies.
     (Tang, rev2)
 
-16. **Autosave degradation surfaces in status bar.** Transient failures
-    show a brief warning flash; permanent degradation (EROFS, EACCES)
-    shows a persistent indicator. Export remains available regardless.
-    No in-TUI recovery — operator fixes the filesystem and restarts.
-    (Tang, rev2)
+16. **Autosave degradation is invisible to the operator.** `try_autosave()`
+    is private and logs failures to stderr only — the TUI has no
+    session-facing API to observe autosave state. This matches the web
+    UI's behavior. Export remains available regardless. A future
+    `autosave_status()` API would enable status-bar indicators. (Tang,
+    rev3 — scaled back from rev2 status-bar promises)
 
-17. **Containers as composite sidebar section.** Decision items
-    (quadlets, flatpaks) and reference items (running containers,
-    compose files) appear under a single "Containers" sidebar entry
-    with "Triage" and "Context" subheaders. Prevents scattering
-    container-related items across distant sections. (Tang, rev2)
+17. **Composite sidebar sections for Containers and Services.** Decision
+    items and reference items appear under a single sidebar entry with
+    "Triage" and "Context" subheaders. Containers: decision quadlets +
+    flatpaks, reference running containers + compose files. Services:
+    decision service states + drop-ins, reference divergent + advisories +
+    warnings + omitted. Prevents scattering related items across distant
+    sections. (Tang, rev2; Services composite added rev3)
 
-18. **Explicit startup branches.** Five TUI entry paths mapped to
+18. **Explicit startup branches.** Six TUI entry paths mapped to
     `resume_from()` outcomes: fresh (no sidecar), resume (hash match),
     stale (hash mismatch, discard and start fresh), corrupt sidecar
-    (error + exit), tarball load failure (error + exit). (Tang, rev2)
+    (error + exit), tarball load failure (error + exit), voluntary fresh
+    start (`--fresh` flag). (Tang, rev2; Branch 6 added rev3)
+
+19. **Repos embedded in Packages, not standalone sidebar.** Repo controls
+    render as a bar at the top of the Packages section, matching the web
+    UI's `RepoBar.tsx` pattern. Repo toggles affect package visibility.
+    Repos do not appear as a separate sidebar entry. (Tang, rev3 — per
+    Fern finding that standalone repos breaks batch decision workflow)
+
+20. **Scrollable sidebar for overflow.** With 14+ sections (7 decision +
+    7 reference), the sidebar scrolls vertically when sections exceed
+    terminal height. Sections 1-9 are directly jumpable; overflow
+    sections are accessible via sidebar scrolling or `:section` command.
+    Scroll indicators (`▲`/`▼`) shown when content extends beyond
+    viewport. (Tang, rev3)
+
+21. **Distinct glyphs for triage state vs include/exclude.** Triage
+    bucket uses `▸`/`●`/`○` with text tags. Include/exclude uses
+    `[+]`/`[-]`. Prevents ambiguity in monochrome mode where `●` could
+    mean either "site triage" or "included." (Tang, rev3 — per Fern
+    finding on overloaded symbols)
+
+22. **`is_sensitive()` prompt is static text.** The export confirmation
+    prompt is a fixed message because `is_sensitive()` returns `bool`
+    only — no reason list or structured sensitivity summary is available
+    from the API. (Tang, rev3 — per Collins finding on API truth)
 
 ## Finding Traceability
 
@@ -914,3 +1059,12 @@ Mapping of review findings to their resolutions in this revision.
 | M1 | Mutation path not non-blocking | Medium | R2 | Tang | Replaced "no I/O" claim in Terminal hygiene with accurate description of autosave I/O (SHA-256 hash + sidecar write, sub-ms on SSDs). Cross-referenced autosave degradation. |
 | M2 | Identity contracts loose | Medium | R2 | Collins | Added "Identity contracts" subsection. Pinned reviewed item ID format (`"section:item_id"`), search fields (typed struct fields from projections), sidebar counts (`RefineStats.sections` + projection Vec lengths). |
 | M3 | Resume/fresh branches underspecified | Medium | R2 | Thorn | Added "Startup and session resume" subsection with five explicit branches: fresh, resume, stale, corrupt sidecar, tarball load failure. Each mapped to `resume_from()` return variant and operator-visible behavior. Decision 18. |
+| R3-H1 | Autosave status not observable | High | R3 | Tang, Thorn | Removed status-bar autosave indicators. `try_autosave()` is private, logs to stderr only. TUI has same visibility as web UI (none). Added "Future work" note for session-facing `autosave_status()` API. Decision 16 updated. |
+| R3-H2 | Reviewed-item contract disagrees with code | High | R3 | Tang, Thorn | Documented exact `VALID_SECTIONS` list (11 prefixes). Noted which sections are NOT valid `mark_viewed()` prefixes (repos, quadlets, flatpaks, sysctls, tuned, compose, version_changes). Items in those categories use parent section prefix. |
+| R3-H3 | Section-to-model mapping wrong | High | R3 | Collins | Rewrote section type mapping with exact backing data tables. Pinned every decision section to its `SectionKind` variant for stats and its `view()`/`decisions()` field for items. Packages and Configs are the only sections with items in `view()`. Added Services as composite section. |
+| R3-H4 | Repo workflow regresses | High | R3 | Fern | Removed Repos as standalone sidebar entry. Embedded repo bar at top of Packages section, matching web UI's `RepoBar.tsx` pattern. Updated layout diagram. Decision 19. |
+| R3-H5 | 80x24 navigation under-specified | High | R3 | Fern | Added sidebar overflow behavior: scrollable sidebar with `▲`/`▼` indicators when sections exceed terminal height. Sections 1-9 jumpable, overflow via `j/k` or `:section`. Decision 20. |
+| R3-M1 | Sidebar count contract overstates `view().stats` | Medium | R3 | Tang, Collins | Added exact count source table mapping each sidebar entry to its `SectionKind` variant or `Vec::len()`. Reference sections use sub-Vec length sums. |
+| R3-M2 | Voluntary fresh-session flow unspecified | Medium | R3 | Thorn | Added Branch 6 (`--fresh` flag) and `:fresh` command. Decision 18 updated. |
+| R3-M3 | Sensitive-export explanation lacks source | Medium | R3 | Collins | Scaled back export prompt to static text. `is_sensitive()` returns bool only, no reason list. Decision 22. |
+| R3-M4 | Non-color symbols overloaded | Medium | R3 | Fern | Changed include/exclude glyphs from `●`/`○` to `[+]`/`[-]`. Triage glyphs unchanged (`▸`/`●`/`○`). Decision 21. |
