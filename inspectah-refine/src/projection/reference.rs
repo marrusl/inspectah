@@ -594,7 +594,7 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(cj.source.clone())
             },
             content: None,
-            tags: vec!["cron".into()],
+            tags: vec!["cron".into(), cj.path.clone()],
         });
     }
 
@@ -705,12 +705,17 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             Some(item.path.clone())
         };
 
+        let mut tags = vec!["non-rpm".into()];
+        if !item.lang.is_empty() {
+            tags.push(item.lang.clone());
+        }
+
         items.push(GenericRefItem {
             id: item.name.clone(),
             key: item.name.clone(),
             summary: Some(subtitle),
             content: detail,
-            tags: vec!["non-rpm".into()],
+            tags,
         });
     }
 
@@ -735,7 +740,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             } else {
                 Some(ef.content.clone())
             },
-            tags: vec!["env-file".into()],
+            tags: vec!["env-file".into(), ef.path.clone()],
         });
     }
 
@@ -854,7 +859,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             } else {
                 Some(cf.content.clone())
             },
-            tags: vec!["audit-rule".into()],
+            tags: vec!["audit-rule".into(), cf.path.clone()],
         });
     }
 
@@ -873,7 +878,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             } else {
                 Some(cf.content.clone())
             },
-            tags: vec!["pam".into()],
+            tags: vec!["pam".into(), cf.path.clone()],
         });
     }
 
@@ -2310,7 +2315,7 @@ mod tests {
         assert_eq!(result[0].id, "/etc/cron.d/backup");
         assert_eq!(result[0].key, "backup");
         assert_eq!(result[0].summary, Some("file".into()));
-        assert_eq!(result[0].tags, vec!["cron"]);
+        assert_eq!(result[0].tags, vec!["cron", "/etc/cron.d/backup"]);
     }
 
     #[test]
@@ -2428,7 +2433,7 @@ mod tests {
 
         let result = project_ref_scheduled_tasks(&snap);
         assert_eq!(result.len(), 4);
-        assert_eq!(result[0].tags, vec!["cron"]);
+        assert_eq!(result[0].tags, vec!["cron", "/etc/cron.d/backup"]);
         assert_eq!(result[1].tags, vec!["timer"]);
         assert_eq!(result[2].tags, vec!["at"]);
         assert_eq!(result[3].tags, vec!["generated-timer"]);
@@ -2470,7 +2475,7 @@ mod tests {
         assert_eq!(result[0].key, "custom-app");
         assert_eq!(result[0].summary, Some("binary (high)".into()));
         assert_eq!(result[0].content, Some("/opt/app/bin".into()));
-        assert_eq!(result[0].tags, vec!["non-rpm"]);
+        assert_eq!(result[0].tags, vec!["non-rpm"]); // no lang set, so just non-rpm
     }
 
     #[test]
@@ -2530,7 +2535,7 @@ mod tests {
         assert_eq!(result[0].key, "myapp");
         assert_eq!(result[0].summary, Some("unowned".into()));
         assert_eq!(result[0].content, Some("KEY=value".into()));
-        assert_eq!(result[0].tags, vec!["env-file"]);
+        assert_eq!(result[0].tags, vec!["env-file", "/etc/sysconfig/myapp"]);
     }
 
     // ── project_ref_selinux tests ──────────────────────────────────
@@ -2674,7 +2679,10 @@ mod tests {
         assert_eq!(audit.key, "custom.rules");
         assert_eq!(audit.summary, Some("audit rule".into()));
         assert_eq!(audit.content, Some("-w /etc/shadow -p wa".into()));
-        assert_eq!(audit.tags, vec!["audit-rule"]);
+        assert_eq!(
+            audit.tags,
+            vec!["audit-rule", "etc/audit/rules.d/custom.rules"]
+        );
 
         let pam = result
             .iter()
@@ -2683,7 +2691,7 @@ mod tests {
         assert_eq!(pam.key, "custom-sshd");
         assert_eq!(pam.summary, Some("PAM config".into()));
         assert_eq!(pam.content, Some("auth required pam_unix.so".into()));
-        assert_eq!(pam.tags, vec!["pam"]);
+        assert_eq!(pam.tags, vec!["pam", "etc/pam.d/custom-sshd"]);
     }
 
     // ── project_reference orchestrator tests ───────────────────────
