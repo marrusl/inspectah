@@ -3,6 +3,7 @@ pub mod baseline_summary;
 pub mod classify;
 pub mod fleet;
 pub mod normalize;
+pub mod projection;
 pub mod repo_index;
 pub mod session;
 pub mod tarball;
