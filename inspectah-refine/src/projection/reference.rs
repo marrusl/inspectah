@@ -681,7 +681,11 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
     let mut items = Vec::new();
 
     for item in &nrpm.items {
-        let subtitle = format!("{} ({})", item.method, item.confidence);
+        let subtitle = if item.version.is_empty() {
+            format!("{} ({})", item.method, item.confidence)
+        } else {
+            format!("{} {} ({})", item.method, item.version, item.confidence)
+        };
         let detail = if !item.packages.is_empty() {
             let pkg_list: Vec<String> = item
                 .packages

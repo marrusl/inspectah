@@ -448,7 +448,7 @@ impl RefineSession {
         // hash match guarantees identical snapshot baseline. This preserves
         // the full redo tail because we bypass apply() which truncates.
         session.ops = saved.ops;
-        session.cursor = saved.cursor;
+        session.cursor = saved.cursor.min(session.ops.len()); // clamp to valid range
         session.cached_view = None;
         session.cached_decisions = None;
         session.recompute_view();
