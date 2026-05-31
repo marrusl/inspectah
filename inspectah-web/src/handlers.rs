@@ -3163,3 +3163,10 @@ mod tests {
         );
     }
 }
+
+/// Test-only re-export of the legacy `build_view_response` so the adapter
+/// equivalence test can compare its output against the original.
+#[cfg(test)]
+pub fn build_view_response_for_test(session: &RefineSession) -> ViewResponse {
+    build_view_response(session)
+}
