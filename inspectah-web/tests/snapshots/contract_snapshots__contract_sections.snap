@@ -1,0 +1,83 @@
+---
+source: inspectah-web/tests/contract_snapshots.rs
+assertion_line: 139
+expression: json
+---
+[
+  {
+    "display_name": "Services",
+    "id": "services",
+    "items": [
+      {
+        "detail": null,
+        "id": "httpd.service",
+        "searchable_text": "httpd.service enabled disable enable",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "title": "httpd.service"
+      }
+    ]
+  },
+  {
+    "display_name": "Version Changes",
+    "id": "version_changes",
+    "items": [
+      {
+        "detail": null,
+        "id": "openssl.x86_64",
+        "searchable_text": "openssl x86_64 upgrade",
+        "subtitle": "3.0.7-28.el9 → 3.0.7-27.el9 (upgrade)",
+        "title": "openssl.x86_64"
+      }
+    ]
+  },
+  {
+    "display_name": "Containers",
+    "id": "containers",
+    "items": [
+      {
+        "detail": "[Container]\nImage=quay.io/myorg/myapp:latest",
+        "id": "myapp.container",
+        "searchable_text": "myapp.container quay.io/myorg/myapp:latest /etc/containers/systemd/myapp.container",
+        "subtitle": "quay.io/myorg/myapp:latest",
+        "title": "myapp.container"
+      },
+      {
+        "detail": null,
+        "id": "abc123",
+        "searchable_text": "redis redis:7 running",
+        "subtitle": "redis:7 (running)",
+        "title": "redis"
+      }
+    ]
+  },
+  {
+    "display_name": "Network",
+    "id": "network",
+    "items": []
+  },
+  {
+    "display_name": "Storage",
+    "id": "storage",
+    "items": []
+  },
+  {
+    "display_name": "Scheduled Tasks",
+    "id": "scheduled_tasks",
+    "items": []
+  },
+  {
+    "display_name": "Non-RPM Software",
+    "id": "non_rpm_software",
+    "items": []
+  },
+  {
+    "display_name": "Kernel & Boot",
+    "id": "kernel_boot",
+    "items": []
+  },
+  {
+    "display_name": "Security & Access Control",
+    "id": "selinux",
+    "items": []
+  }
+]

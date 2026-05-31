@@ -2,6 +2,7 @@ pub mod assets;
 pub mod error;
 pub mod fleet_handlers;
 pub mod handlers;
+pub mod web_types;
 
 use axum::Router;
 use axum::http::{HeaderValue, Method, StatusCode};
