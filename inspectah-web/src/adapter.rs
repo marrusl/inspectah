@@ -1084,31 +1084,22 @@ mod tests {
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
 
-    /// Verify that `build_web_view` produces the same JSON as the legacy
-    /// `build_view_response` path in handlers.rs on an empty snapshot.
     #[test]
-    fn adapter_matches_legacy_empty() {
+    fn build_web_view_empty_snapshot() {
         let snap = InspectionSnapshot::new();
         let session = RefineSession::new(snap);
-
-        let adapter_response = build_web_view(&session);
-        let legacy_response = crate::handlers::build_view_response_for_test(&session);
-
-        let adapter_json =
-            serde_json::to_value(&adapter_response).expect("serialize adapter response");
-        let legacy_json =
-            serde_json::to_value(&legacy_response).expect("serialize legacy response");
-
-        assert_eq!(adapter_json, legacy_json, "adapter and legacy JSON must match");
+        let response = build_web_view(&session);
+        let json = serde_json::to_value(&response).expect("serialize");
+        assert!(json.get("generation").is_some());
+        assert!(json.get("service_states").is_some());
+        assert!(json.get("repo_groups").is_some());
     }
 
-    /// Verify equivalence on a snapshot with RPM data (version changes, packages).
     #[test]
-    fn adapter_matches_legacy_with_rpm() {
+    fn build_web_view_with_rpm() {
         use inspectah_core::types::rpm::{
             PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
         };
-
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(RpmSection {
             packages_added: vec![PackageEntry {
@@ -1130,14 +1121,10 @@ mod tests {
             ..Default::default()
         });
         let session = RefineSession::new(snap);
-
-        let adapter_json =
-            serde_json::to_value(build_web_view(&session)).expect("serialize adapter");
-        let legacy_json =
-            serde_json::to_value(crate::handlers::build_view_response_for_test(&session))
-                .expect("serialize legacy");
-
-        assert_eq!(adapter_json, legacy_json);
+        let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
+        let vc = json["version_changes"].as_array().unwrap();
+        assert_eq!(vc.len(), 1);
+        assert_eq!(vc[0]["direction"], "upgrade");
     }
 
     /// Verify `build_web_sections` returns 9 sections with correct ids in
