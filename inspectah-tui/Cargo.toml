@@ -17,4 +17,3 @@ libc = "0.2"
 [dev-dependencies]
 insta = { workspace = true }
 tempfile = { workspace = true }
-inspectah-refine = { path = "../inspectah-refine" }
