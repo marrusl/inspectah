@@ -7,6 +7,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::RefinementOp;
 
 use crate::action::Action;
 use crate::event::{Event, EventReader};
@@ -15,7 +16,7 @@ use crate::screen::Screen;
 use crate::screen::single_host::SingleHostScreen;
 use crate::sections::{self, SECTION_ORDER};
 use crate::theme::{ColorTier, detect_color_tier};
-use crate::types::{DetailMode, FocusTarget, TuiState};
+use crate::types::{DetailMode, FlashMessage, FocusTarget, TuiState};
 
 use crate::widget::triage_list::TriageGroup;
 
@@ -261,6 +262,34 @@ impl App {
                     } else {
                         self.state.detail_mode = DetailMode::InfoBar;
                     }
+                }
+            }
+
+            // Item toggling
+            Action::ToggleItem => {
+                let items = self.current_items();
+                if let Some(item) = items.get(self.state.cursor)
+                    && let Some(ref item_id) = item.item_id
+                {
+                    let new_include = !item.included.unwrap_or(true);
+                    let op = RefinementOp::SetInclude {
+                        item_id: item_id.clone(),
+                        include: new_include,
+                    };
+                    if let Err(e) = self.session.apply(op) {
+                        self.state.flash =
+                            Some(FlashMessage::new(format!("Toggle failed: {e}"), 3));
+                    }
+                }
+            }
+            Action::Undo => {
+                if let Err(e) = self.session.undo() {
+                    self.state.flash = Some(FlashMessage::new(format!("Undo: {e}"), 3));
+                }
+            }
+            Action::Redo => {
+                if let Err(e) = self.session.redo() {
+                    self.state.flash = Some(FlashMessage::new(format!("Redo: {e}"), 3));
                 }
             }
 
