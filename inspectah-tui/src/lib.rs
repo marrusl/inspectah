@@ -1,4 +1,5 @@
 pub mod action;
+pub mod theme;
 pub mod types;
 
 use inspectah_refine::session::RefineSession;
