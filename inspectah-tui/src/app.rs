@@ -13,8 +13,21 @@ use crate::event::{Event, EventReader};
 use crate::keys::map_key;
 use crate::screen::Screen;
 use crate::screen::single_host::SingleHostScreen;
+use crate::sections::{self, SECTION_ORDER};
 use crate::theme::{ColorTier, detect_color_tier};
-use crate::types::TuiState;
+use crate::types::{DetailMode, FocusTarget, TuiState};
+
+use crate::widget::triage_list::TriageGroup;
+
+/// Map a `TriageGroup` to its index in the canonical bucket order
+/// (Investigate=0, Site=1, Baseline=2), matching `collapsed_groups` keys.
+fn group_to_bucket_index(group: TriageGroup) -> usize {
+    match group {
+        TriageGroup::Investigate => 0,
+        TriageGroup::Site => 1,
+        TriageGroup::Baseline => 2,
+    }
+}
 
 /// RAII guard -- restores terminal on drop (including panics).
 struct TerminalGuard;
@@ -141,9 +154,132 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) {
-        if action == Action::Quit {
-            self.should_quit = true;
+        match action {
+            Action::Quit => self.should_quit = true,
+
+            // Navigation — focus-aware
+            Action::CursorDown => match self.state.focus {
+                FocusTarget::Sidebar => {
+                    let sections = sections::build_section_entries(&self.session);
+                    if self.state.active_section < sections.len() - 1 {
+                        self.state.section_cursors[self.state.active_section] = self.state.cursor;
+                        self.state.active_section += 1;
+                        self.state.cursor = self.state.section_cursors[self.state.active_section];
+                    }
+                }
+                FocusTarget::ItemList | FocusTarget::DetailPane => {
+                    let max = self.visible_item_count().saturating_sub(1);
+                    if self.state.cursor < max {
+                        self.state.cursor += 1;
+                    }
+                }
+            },
+            Action::CursorUp => match self.state.focus {
+                FocusTarget::Sidebar => {
+                    if self.state.active_section > 0 {
+                        self.state.section_cursors[self.state.active_section] = self.state.cursor;
+                        self.state.active_section -= 1;
+                        self.state.cursor = self.state.section_cursors[self.state.active_section];
+                    }
+                }
+                FocusTarget::ItemList | FocusTarget::DetailPane => {
+                    if self.state.cursor > 0 {
+                        self.state.cursor -= 1;
+                    }
+                }
+            },
+            Action::CursorTop => self.state.cursor = 0,
+            Action::CursorBottom => {
+                self.state.cursor = self.visible_item_count().saturating_sub(1);
+            }
+
+            // Focus
+            Action::FocusSidebar => self.state.focus = FocusTarget::Sidebar,
+            Action::FocusItems => self.state.focus = FocusTarget::ItemList,
+            Action::CycleFocus => {
+                self.state.focus = match self.state.focus {
+                    FocusTarget::Sidebar => FocusTarget::ItemList,
+                    FocusTarget::ItemList => {
+                        if self.state.detail_mode != DetailMode::None {
+                            FocusTarget::DetailPane
+                        } else {
+                            FocusTarget::Sidebar
+                        }
+                    }
+                    FocusTarget::DetailPane => FocusTarget::Sidebar,
+                };
+            }
+
+            // Section jump (1-9)
+            Action::JumpToSection(idx) => {
+                let sections = sections::build_section_entries(&self.session);
+                if idx < sections.len() {
+                    self.state.section_cursors[self.state.active_section] = self.state.cursor;
+                    self.state.active_section = idx;
+                    self.state.cursor = self.state.section_cursors[idx];
+                    self.state.focus = FocusTarget::ItemList;
+                }
+            }
+
+            // Group navigation
+            Action::NextGroup => {
+                let items = self.current_items();
+                if let Some((i, _)) = items
+                    .iter()
+                    .enumerate()
+                    .skip(self.state.cursor + 1)
+                    .find(|(_, item)| item.is_group_header)
+                {
+                    self.state.cursor = i;
+                }
+            }
+            Action::PrevGroup => {
+                let items = self.current_items();
+                if let Some((i, _)) = items
+                    .iter()
+                    .enumerate()
+                    .take(self.state.cursor)
+                    .rev()
+                    .find(|(_, item)| item.is_group_header)
+                {
+                    self.state.cursor = i;
+                }
+            }
+
+            // Group collapse/expand on Enter when on group header
+            Action::OpenDetail => {
+                let items = self.current_items();
+                if let Some(item) = items.get(self.state.cursor) {
+                    if item.is_group_header {
+                        let group_idx = group_to_bucket_index(item.group);
+                        let key = (self.state.active_section, group_idx);
+                        if self.state.collapsed_groups.contains(&key) {
+                            self.state.collapsed_groups.remove(&key);
+                        } else {
+                            self.state.collapsed_groups.insert(key);
+                        }
+                    } else {
+                        self.state.detail_mode = DetailMode::InfoBar;
+                    }
+                }
+            }
+
+            _ => {}
         }
+    }
+
+    /// Count of visible items in the current section (respecting collapsed groups).
+    fn visible_item_count(&self) -> usize {
+        self.current_items().len()
+    }
+
+    /// Build the flat list of items for the currently active section.
+    fn current_items(&self) -> Vec<crate::widget::triage_list::ListItem> {
+        let active_section_id = SECTION_ORDER
+            .get(self.state.active_section)
+            .copied()
+            .unwrap_or(crate::types::SectionId::Packages);
+        crate::screen::single_host::build_list_items(&self.session, active_section_id, &self.state)
     }
 
     fn render(&self, frame: &mut ratatui::Frame) {

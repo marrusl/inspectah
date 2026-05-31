@@ -123,8 +123,8 @@ fn bucket_to_group(bucket: TriageBucket) -> TriageGroup {
 /// Build `ListItem`s for the active section from session data.
 ///
 /// Only Packages and Configs are fully wired. Other sections return
-/// empty lists until Task 11 wires remaining section data.
-fn build_list_items(
+/// empty lists until remaining section data is wired.
+pub fn build_list_items(
     session: &RefineSession,
     section: SectionId,
     state: &TuiState,
