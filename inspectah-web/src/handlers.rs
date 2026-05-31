@@ -8,16 +8,13 @@ use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::{UserContainerfileStrategy, UserGroupDecision};
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
-use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::classify::{
     classify_containers, classify_services, classify_sysctls, classify_tuned,
 };
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{
-    RefinedView, RefinementOp, RepoProvenance, RepoTier, TriageTag, UserPasswordOp,
-};
-use serde::{Deserialize, Serialize};
+use inspectah_refine::types::{RefinementOp, RepoProvenance, UserPasswordOp};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -78,145 +75,7 @@ pub struct AppState {
     pub sections_cache: OnceLock<Vec<ReferenceSection>>,
 }
 
-// -- Reference section DTOs (presentation layer only) ---------------------
-
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct ReferenceSection {
-    pub id: String,
-    pub display_name: String,
-    pub items: Vec<ContextItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub subsections: Vec<ContextSubsection>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub empty_reason: Option<String>,
-}
-
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct ContextSubsection {
-    pub id: String,
-    pub display_name: String,
-    pub items: Vec<ContextItem>,
-}
-
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct ContextItem {
-    pub id: String,
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub detail: Option<String>,
-    pub searchable_text: String,
-}
-
-/// Create a `ReferenceSection` with empty subsections.
-fn reference_section(id: &str, display_name: &str, items: Vec<ContextItem>) -> ReferenceSection {
-    ReferenceSection {
-        id: id.to_string(),
-        display_name: display_name.to_string(),
-        items,
-        subsections: Vec::new(),
-        empty_reason: None,
-    }
-}
-
-// -- Repo group + view response DTOs --------------------------------------
-
-#[derive(Serialize, Clone, Debug)]
-pub struct RepoGroupInfo {
-    pub section_id: String,
-    pub provenance: RepoProvenance,
-    pub is_distro: bool,
-    pub tier: RepoTier,
-    pub package_count: usize,
-    pub enabled: bool,
-}
-
-/// A classified service state change, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct ServiceDecisionDto {
-    pub unit: String,
-    pub triage: TriageTag,
-    pub include: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owning_package: Option<String>,
-}
-
-/// A classified service drop-in override, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct DropInDecisionDto {
-    pub unit: String,
-    pub path: String,
-    pub triage: TriageTag,
-    pub include: bool,
-}
-
-/// A classified quadlet unit, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct QuadletDecisionDto {
-    pub path: String,
-    pub name: String,
-    pub image: String,
-    pub triage: TriageTag,
-    pub include: bool,
-}
-
-/// A classified flatpak app, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct FlatpakDecisionDto {
-    pub app_id: String,
-    pub remote: String,
-    pub branch: String,
-    pub triage: TriageTag,
-    pub include: bool,
-    pub lifecycle: String,
-}
-
-/// A classified sysctl override, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct SysctlDecisionDto {
-    pub key: String,
-    pub runtime: String,
-    pub default: String,
-    pub source: String,
-    pub triage: TriageTag,
-    pub include: bool,
-}
-
-/// A classified tuned profile selection, projected for the view response.
-#[derive(Serialize, Clone, Debug)]
-pub struct TunedDecisionDto {
-    pub active_profile: String,
-    pub custom_profiles: Vec<String>,
-    pub triage: TriageTag,
-    pub include: bool,
-}
-
-#[derive(Serialize)]
-pub struct ViewResponse {
-    #[serde(flatten)]
-    pub view: RefinedView,
-    pub repo_groups: Vec<RepoGroupInfo>,
-    pub baseline_summary: Option<BaselineSummary>,
-    pub version_changes: Vec<VersionChangeEntry>,
-    pub service_states: Vec<ServiceDecisionDto>,
-    pub service_dropins: Vec<DropInDecisionDto>,
-    pub quadlets: Vec<QuadletDecisionDto>,
-    pub flatpaks: Vec<FlatpakDecisionDto>,
-    pub sysctls: Vec<SysctlDecisionDto>,
-    pub tuned: Vec<TunedDecisionDto>,
-    pub users_groups_decisions: Vec<UserGroupDecision>,
-    pub session_is_sensitive: bool,
-}
-
-#[derive(Serialize)]
-pub struct VersionChangeEntry {
-    pub name: String,
-    pub arch: String,
-    pub host_version: String,
-    pub base_version: String,
-    pub host_epoch: String,
-    pub base_epoch: String,
-    pub direction: String,
-}
+pub use crate::web_types::*;
 
 // -- Viewed tracking request body -----------------------------------------
 
@@ -2070,6 +1929,7 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ReferenceSection {
 mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
+    use inspectah_refine::types::RepoTier;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::containers::{
         ComposeFile, ComposeService, ContainerSection, RunningContainer,
