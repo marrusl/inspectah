@@ -708,7 +708,7 @@ records items the UI explicitly marks via `mark_viewed()`.
 **Display:** The status bar shows a progress counter for the active
 decision section: `47/142 reviewed`. The sidebar shows a progress
 indicator next to each decision section — a filled bar or fraction.
-Reference sections do not track reviewed state.
+The TUI does not display reviewed progress for reference sections.
 
 **Persistence:** Reviewed state is stored in the session's `viewed`
 HashSet (in-memory). It resets on session restart. This is intentional —
@@ -716,9 +716,18 @@ reviewed state is a convenience for the current triage pass, not a
 durable record. The autosave covers mutation state (include/exclude
 decisions), not review progress.
 
-**Scope:** Reviewed tracking applies only to decision sections. Reference
-sections are informational context — there is no "you should look at all
-of these" expectation.
+**Scope:** The TUI calls `mark_viewed()` for decision section items
+only. Reference sections are informational context — there is no "you
+should look at all of these" expectation. The underlying API
+(`mark_viewed()`) validates against `VALID_SECTIONS` and accepts both
+decision and reference prefixes (see Identity contracts below for the
+exact list), but the TUI's usage is narrower than the API's acceptance.
+
+Two decision sections — `sysctls` and `tuned` — fall outside
+`VALID_SECTIONS` and cannot be passed to `mark_viewed()`. These sections
+are typically small enough that the operator sees all items without
+needing progress tracking; the TUI does not track reviewed state for
+them.
 
 ## Color & Terminal Compatibility
 
@@ -985,8 +994,12 @@ Key decisions made during brainstorming, with rationale:
 14. **Reviewed progress tracking.** Decision items are marked "reviewed"
     only when the operator opens detail view (Enter). Cursor-scrolling
     does not count. Progress shown in status bar and sidebar. Backed by
-    `session.viewed_ids()` HashSet. In-memory only, resets on restart.
-    (Tang, rev2 — tightened from rev1 cursor-contact semantics)
+    `session.mark_viewed()` with `VALID_SECTIONS` validation (11
+    prefixes). `sysctls` and `tuned` are decision sections outside
+    `VALID_SECTIONS` — the TUI does not track reviewed state for them.
+    In-memory only, resets on restart.
+    (Tang, rev2 — tightened from rev1 cursor-contact semantics; rev3 —
+    pinned to `VALID_SECTIONS` scope)
 
 15. **Three-layer session model.** `view()` returns `RefinedView` for the
     item list (packages, configs, stats). `decisions()` returns
@@ -1060,7 +1073,7 @@ Mapping of review findings to their resolutions in this revision.
 | M2 | Identity contracts loose | Medium | R2 | Collins | Added "Identity contracts" subsection. Pinned reviewed item ID format (`"section:item_id"`), search fields (typed struct fields from projections), sidebar counts (`RefineStats.sections` + projection Vec lengths). |
 | M3 | Resume/fresh branches underspecified | Medium | R2 | Thorn | Added "Startup and session resume" subsection with five explicit branches: fresh, resume, stale, corrupt sidecar, tarball load failure. Each mapped to `resume_from()` return variant and operator-visible behavior. Decision 18. |
 | R3-H1 | Autosave status not observable | High | R3 | Tang, Thorn | Removed status-bar autosave indicators. `try_autosave()` is private, logs to stderr only. TUI has same visibility as web UI (none). Added "Future work" note for session-facing `autosave_status()` API. Decision 16 updated. |
-| R3-H2 | Reviewed-item contract disagrees with code | High | R3 | Tang, Thorn | Documented exact `VALID_SECTIONS` list (11 prefixes). Noted which sections are NOT valid `mark_viewed()` prefixes (repos, quadlets, flatpaks, sysctls, tuned, compose, version_changes). Items in those categories use parent section prefix. |
+| R3-H2 | Reviewed-item contract disagrees with code | High | R3 | Tang, Thorn | Documented exact `VALID_SECTIONS` list (11 prefixes) in Identity contracts. Noted which sections are NOT valid `mark_viewed()` prefixes (repos, quadlets, flatpaks, sysctls, tuned, compose, version_changes). Items in those categories use parent section prefix. Updated "Reviewed progress" section: replaced blanket "decision sections only" claim with precise scope — TUI calls `mark_viewed()` for decision sections within `VALID_SECTIONS`; `sysctls`/`tuned` are decision sections outside that set; reference prefixes accepted by API but not invoked by TUI. Decision 14 updated. |
 | R3-H3 | Section-to-model mapping wrong | High | R3 | Collins | Rewrote section type mapping with exact backing data tables. Pinned every decision section to its `SectionKind` variant for stats and its `view()`/`decisions()` field for items. Packages and Configs are the only sections with items in `view()`. Added Services as composite section. |
 | R3-H4 | Repo workflow regresses | High | R3 | Fern | Removed Repos as standalone sidebar entry. Embedded repo bar at top of Packages section, matching web UI's `RepoBar.tsx` pattern. Updated layout diagram. Decision 19. |
 | R3-H5 | 80x24 navigation under-specified | High | R3 | Fern | Added sidebar overflow behavior: scrollable sidebar with `▲`/`▼` indicators when sections exceed terminal height. Sections 1-9 jumpable, overflow via `j/k` or `:section`. Decision 20. |
