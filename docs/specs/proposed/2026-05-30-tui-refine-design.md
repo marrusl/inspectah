@@ -101,9 +101,9 @@ inspectah-tui/
 3. On each event, `app.rs` maps key → `Action` via `keys.rs`, then either
    mutates `TuiState` or calls `RefineSession` methods (apply op, undo, redo,
    export). Mutations set a dirty flag.
-4. On each frame, `app.rs` calls `RefineSession::project()` only if dirty,
-   caching the `RefinedView`. Passes cached view + `TuiState` to the active
-   screen.
+4. On each frame, `app.rs` reads `session.decisions()` (recomputed if
+   dirty) and `session.reference()` (OnceLock, computed once). Passes
+   both projections + `TuiState` to the active screen.
 5. Screen composes widgets. Each widget receives the data slice it needs and
    renders to a `ratatui::Frame`. Widgets are stateless renderers.
 
@@ -121,7 +121,10 @@ enum Screen {
 impl Screen {
     fn handle_key(&mut self, key: KeyEvent, session: &mut RefineSession,
                   state: &mut TuiState) -> Action { ... }
-    fn render(&self, frame: &mut Frame, view: &RefinedView, state: &TuiState) { ... }
+    fn render(&self, frame: &mut Frame,
+              decisions: &DecisionProjection,
+              reference: &ReferenceProjection,
+              state: &TuiState) { ... }
 }
 ```
 
@@ -153,27 +156,36 @@ enum Action {
 }
 ```
 
-### View caching
+### Projection access
 
-`RefineSession::project()` walks the full session state. Calling it every
-frame wastes CPU, especially during resize/scroll events that don't change
-data. Cache the `RefinedView` and reproject only when the dirty flag is set
-(after any `RefineSession` mutation).
+`RefineSession` provides two projections with different caching strategies:
+
+- **`session.decisions()`** returns `&DecisionProjection`. Internally cached;
+  invalidated on every mutation (apply/undo/redo) and recomputed on next
+  access. The TUI calls this after any mutation to get updated decision state.
+- **`session.reference()`** returns `&ReferenceProjection`. Backed by
+  `OnceLock` — computed once on first access, never invalidated. Reference
+  data is immutable context that does not change during triage.
+- **`session.is_sensitive()`** returns `bool`. Checked before export.
+
+The TUI does NOT need its own view cache or dirty flag. The session's
+internal caching handles this. The old `project()` / `RefinedView` API no
+longer exists.
 
 ```rust
 struct App {
     session: RefineSession,
     state: TuiState,
-    view_cache: Option<RefinedView>,
-    dirty: bool,
 }
 
-fn view(&mut self) -> &RefinedView {
-    if self.dirty || self.view_cache.is_none() {
-        self.view_cache = Some(self.session.project());
-        self.dirty = false;
-    }
-    self.view_cache.as_ref().unwrap()
+// Decision data — always reflects current mutations
+fn decisions(&self) -> &DecisionProjection {
+    self.session.decisions()
+}
+
+// Reference data — immutable, computed once
+fn reference(&self) -> &ReferenceProjection {
+    self.session.reference()
 }
 ```
 
@@ -215,14 +227,24 @@ fn view(&mut self) -> &RefinedView {
 ```
 
 - **Sidebar** (fixed 18 chars): section names with item counts, numbered 1-9.
-  Active section highlighted. Stats summary below.
-- **Item list** (remaining width): grouped by triage bucket (investigate →
-  site → baseline). Baseline collapsed by default with header "already in
-  base image." Columns adapt to width — version and source truncate first.
-- **Status bar** (bottom row): included/excluded/review counts, containerfile
-  delta hint ("Containerfile: 3Δ"), active search filter.
+  Active section highlighted. Decision sections show triage counts; reference
+  sections show item counts with a `ref` badge. Stats summary below.
+- **Item list** (remaining width): content depends on section type:
+  - **Decision sections** — grouped by triage bucket (investigate → site →
+    baseline). Baseline collapsed by default with header "already in base
+    image." Columns adapt to width — version and source truncate first.
+    Space toggles include/exclude.
+  - **Reference sections** — flat or sub-grouped list of read-only context
+    items. No triage buckets, no include/exclude toggling. Items display
+    their typed data (e.g., service state, connection type, zone rules).
+    Space is a no-op. The section header reads "Reference — read-only context"
+    to set operator expectations.
+- **Status bar** (bottom row): included/excluded/review counts (decision
+  sections only), containerfile delta hint ("Containerfile: 3Δ"), active
+  search filter, viewed progress ("47/142 reviewed").
 - **Footer hints** (bottom row, shared with status bar): 4-5 keybinding
-  hints. Full list behind `?`.
+  hints. Hints adapt to section type — reference sections suppress
+  Space/toggle hints. Full list behind `?`.
 
 ### Containerfile toggle (`c`)
 
@@ -241,6 +263,37 @@ Items within each section are grouped by triage bucket:
 
 `{`/`}` jumps between group headers. `Enter` on a group header
 expands/collapses it.
+
+### Section type mapping
+
+The shipped projection model splits sections into two categories. The TUI
+must respect this boundary — it is not a UI choice, it is a data contract.
+
+**Decision sections** (from `DecisionProjection` — mutable, togglable):
+- Packages (version_changes + baseline_summary)
+- Repos (repo_groups)
+- Configs (service_dropins + quadlets)
+- Services (service_states)
+- Flatpaks (flatpaks)
+- Sysctls (sysctls)
+- Tuned profiles (tuned)
+- Users/groups (users_groups)
+
+**Reference sections** (from `ReferenceProjection` — immutable, read-only):
+- Services context (services: divergent, advisories, warnings, omitted)
+- Version changes context (version_changes: downgrades, upgrades)
+- Containers (containers: quadlets, compose, running, flatpaks)
+- Kernel/boot (kernel_boot: cmdline, modules, dracut, alternatives)
+- Network (network: connections, firewall, routes, proxy)
+- Storage (storage)
+- Scheduled tasks (scheduled_tasks)
+- Non-RPM software (non_rpm_software)
+- SELinux (selinux)
+
+The sidebar groups these visually. Decision sections appear first (numbered
+1-N), followed by a separator and reference sections. This matches the
+operator's mental model: "things I need to decide" above "things I need to
+understand."
 
 ### Detail views (type-aware)
 
@@ -268,8 +321,10 @@ The classification rule: if the item has inspectable text content (file body,
 diff, unit definition), fullscreen. If it's metadata, compact info bar.
 
 `f` from a compact info bar promotes to fullscreen. `n`/`p` steps through
-items in fullscreen. `Space` toggles include/exclude from within any detail
-view. `Esc` returns to the list at the same cursor position.
+items in fullscreen. In decision sections, `Space` toggles include/exclude
+from within any detail view. In reference sections, `Space` is a no-op
+(detail views are read-only context). `Esc` returns to the list at the same
+cursor position.
 
 ### Users section
 
@@ -297,7 +352,7 @@ overlays that dismiss on completion.
 |---|---|
 | `j/k` or `↑/↓` | Move cursor in list |
 | `h/l` or `←/→` | Switch sidebar ↔ items focus |
-| `Space` | Toggle include/exclude on focused item |
+| `Space` | Toggle include/exclude (decision sections only; no-op in reference) |
 | `Enter` | Open detail (compact or fullscreen, type-aware) |
 | `Esc` | Close detail / cancel search / back |
 | `n/p` | Next/prev item (in fullscreen detail) |
@@ -317,15 +372,24 @@ overlays that dismiss on completion.
 
 ### Search (`/`)
 
-Overlay at top of item list. Fuzzy filter within the active section. Results
-narrow in real time with count shown (`3/142 matches`). `Enter` jumps to
-selected match. `Esc` clears filter and restores full list.
+Overlay at top of item list. Cross-section fuzzy search across all sections
+(both decision and reference). Results narrow in real time with count and
+section attribution shown (`3 matches — Packages(2), Network(1)`). Each
+result row shows the section name, item name, and match context. `j/k`
+navigates the result list. `Enter` navigates to the matched item in its
+section (switching the active section if needed). `Esc` clears the search
+and restores the previous section and cursor position.
+
+This preserves the web UI's global discovery model — the operator can find
+an item without knowing which section it belongs to.
 
 ### Command mode (`:`)
 
 Command line at bottom. Available commands:
 
-- `:export [path]` — export tarball, prints path on completion
+- `:export [path]` — export tarball. If `session.is_sensitive()` returns
+  true, the TUI presents an interactive confirmation prompt before
+  proceeding (see Export safety below). Prints path on completion
 - `:section <name>` — jump to section by name
 - `:stats` — show session statistics (per-section counts, review items,
   operations applied, baseline status, session metadata)
@@ -350,6 +414,57 @@ color change.
 Inherits `inspectah-refine`'s existing autosave. Operations persisted
 automatically. Session resumes where it left off if TUI is restarted against
 the same snapshot.
+
+### Export safety
+
+The web handler gates export behind an `x-ack-sensitive` HTTP header when
+`session.is_sensitive()` is true. The TUI must enforce the same contract
+through an interactive prompt.
+
+When the operator runs `:export` and the session is sensitive:
+
+1. The command line area expands to a 3-row confirmation block:
+   ```
+   ⚠ This session contains sensitive data (passwords, keys, or secrets).
+     Exported artifacts will include this data in plain text.
+     Proceed? [y/N]
+   ```
+2. Only `y` or `Y` proceeds. Any other key (including Enter alone) cancels
+   with "Export cancelled."
+3. Non-sensitive sessions export immediately with no prompt.
+
+The confirmation text mirrors `build_sensitivity_summary()` from the web
+handler — it explains *why* the session is sensitive, not just that it is.
+If the session has multiple sensitivity reasons (e.g., snapshot contains
+sensitive data AND user passwords detected), the prompt lists all reasons.
+
+This is the TUI equivalent of the web's `x-ack-sensitive` header. The
+contract is: no sensitive data leaves the session without explicit operator
+acknowledgment.
+
+### Viewed/reviewed progress
+
+The TUI tracks which decision items the operator has viewed (scrolled
+through or opened detail for). This gives progress feedback during triage
+without requiring the operator to explicitly mark items as reviewed.
+
+**Tracking rule:** An item is marked "viewed" when:
+- The cursor rests on it for at least one render frame (scrolling past), OR
+- The operator opens its detail view (Enter)
+
+**Display:** The status bar shows a progress counter for the active
+decision section: `47/142 viewed`. The sidebar shows a progress indicator
+next to each decision section — a filled bar or fraction. Reference
+sections do not track viewed state.
+
+**Persistence:** Viewed state is stored in `TuiState` (in-memory). It
+resets on session restart. This is intentional — viewed state is a
+convenience for the current triage session, not a durable record. The
+autosave covers mutation state (include/exclude decisions), not UI state.
+
+**Scope:** Viewed tracking applies only to decision sections. Reference
+sections are informational context — there is no "you should look at all
+of these" expectation.
 
 ## Color & Terminal Compatibility
 
@@ -471,10 +586,20 @@ a fixed size, snapshot the output.
   `TuiState` reflects the change (cursor position, detail mode), verify
   widget renders the new state.
 - Undo/redo: apply ops, undo, verify TUI state (cursor, visible items) —
-  not re-verify that `RefinedView` rollback is correct (that's
+  not re-verify that `DecisionProjection` rollback is correct (that's
   `inspectah-refine`'s job).
-- Search: simulate `/httpd`, verify filter narrows list, Enter selects,
-  Esc clears.
+- Search: simulate `/httpd`, verify cross-section results with section
+  attribution, Enter navigates to correct section+item, Esc restores
+  previous section and cursor.
+- Export safety: simulate `:export` with sensitive session, verify
+  confirmation prompt appears. Verify `y` proceeds, `n`/Enter/Esc cancels.
+  Verify non-sensitive session exports immediately.
+- Viewed tracking: navigate through items, verify viewed count increments.
+  Open detail on an item, verify it is marked viewed. Verify reference
+  sections do not track viewed state.
+- Reference sections: verify Space is a no-op in reference sections.
+  Verify reference items render without triage bucket grouping.
+  Verify keybinding hints suppress toggle in reference context.
 
 ### Detail mode classification
 
@@ -484,9 +609,12 @@ rendering. Then snapshot each `DetailMode` variant once.
 
 ### Section coverage
 
-Each section type (packages, configs, services, containers, users, kernel,
-network, SELinux, storage, scheduled) gets at least one test verifying its
-triage list renders correctly and Enter opens the right detail mode.
+Each section type gets at least one test verifying its list renders
+correctly and Enter opens the right detail mode. Decision sections
+(packages, repos, configs, services, flatpaks, sysctls, tuned, users)
+must verify triage bucket grouping and Space toggling. Reference sections
+(containers, kernel/boot, network, storage, SELinux, scheduled tasks,
+non-RPM software) must verify read-only rendering and Space no-op.
 
 ### Focus and resize
 
@@ -504,9 +632,9 @@ triage list renders correctly and Enter opens the right detail mode.
 ### Key conflict / unhandled input
 
 - Verify keys valid in one context but meaningless in another (Space in
-  fullscreen detail, `/` during active search) are handled gracefully —
-  either no-op or sensible behavior, never crashes or silent state
-  corruption.
+  reference sections, Space in fullscreen detail, `/` during active search)
+  are handled gracefully — either no-op or sensible behavior, never crashes
+  or silent state corruption.
 
 ### Mouse events
 
@@ -550,8 +678,9 @@ Key decisions made during brainstorming, with rationale:
 6. **Enum dispatch over trait objects.** Two screen variants known at compile
    time. Exhaustive matching, no dynamic dispatch overhead. (Tang)
 
-7. **View caching with dirty flag.** `project()` is expensive. Cache the
-   `RefinedView`, reproject only after mutations. (Tang)
+7. **Session-managed projection caching.** `session.decisions()` caches
+   internally, invalidated on mutation. `session.reference()` uses OnceLock,
+   computed once. TUI does not maintain its own view cache. (Tang)
 
 8. **color-eyre before alt screen.** Panic handler must be installed before
    terminal state changes, or a panic between alt screen entry and handler
@@ -563,3 +692,37 @@ Key decisions made during brainstorming, with rationale:
 
 10. **signal-hook for SIGTSTP.** crossterm handles SIGWINCH but not suspend/
     resume signals. (Tang)
+
+11. **Decision vs reference section split.** The TUI respects the
+    `DecisionProjection` / `ReferenceProjection` boundary from the shipped
+    projection model. Decision sections offer include/exclude toggling;
+    reference sections are read-only context. Space is a no-op in reference
+    sections. This prevents the "everything is toggleable" confusion flagged
+    in review. (Tang, rev1)
+
+12. **Interactive export safety prompt.** Sensitive sessions require an
+    explicit `y` confirmation before export, mirroring the web handler's
+    `x-ack-sensitive` header contract. The TUI prompt explains *why* the
+    session is sensitive. Default is cancel (N). (Tang, rev1)
+
+13. **Cross-section search.** `/` searches all sections (decision and
+    reference), showing section attribution per result. This preserves the
+    web UI's global discovery model instead of narrowing to section-only
+    filtering. (Tang, rev1)
+
+14. **Viewed progress tracking.** Decision items are marked "viewed" on
+    cursor contact or detail open. Progress shown in status bar and sidebar.
+    In-memory only, resets on restart. Covers the reviewed-state regression
+    without adding explicit "mark as reviewed" friction. (Tang, rev1)
+
+## Finding Traceability
+
+Mapping of review findings to their resolutions in this revision.
+
+| # | Finding | Severity | Reviewer(s) | Resolution |
+|---|---------|----------|-------------|------------|
+| 1 | Export safety missing | High | Thorn | Added "Export safety" subsection under Interaction Model. Interactive `y/N` confirmation prompt when `session.is_sensitive()` is true. Mirrors web handler's `x-ack-sensitive` contract. Decision 12. |
+| 2 | Reviewed-state regression | High | Fern | Added "Viewed/reviewed progress" subsection. Cursor-contact and detail-open tracking with status bar counter (`47/142 viewed`). In-memory only, decision section scope. Decision 14. |
+| 3 | Decision vs reference blur | High | Fern, Collins | Added "Section type mapping" subsection listing all decision and reference sections. Updated sidebar, item list, keybindings, and detail view descriptions to distinguish behavior. Space no-op in reference sections. Decision 11. |
+| 4 | Search regression | Medium | Fern | Rewrote "Search (`/`)" subsection. Cross-section search with section attribution per result. Enter navigates to matched section+item. Decision 13. |
+| 5 | Update projection references | — | — | Replaced all `RefinedView`/`project()` references with `DecisionProjection`/`ReferenceProjection`/`decisions()`/`reference()`. Rewrote "Projection access" subsection (was "View caching"). Updated `Screen::render` signature. Decision 7 updated. |
