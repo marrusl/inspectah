@@ -1,17 +1,18 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_pipeline::render::service_intent::render_service_intent;
 
 use super::types::{
-    ContainerMount, EmptyReason, RefAlternativeEntry, RefComposeItem, RefConfigSnippet,
-    RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule, RefFirewallZone,
-    RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefKernelModule, RefLvmVolume, RefMountPoint,
-    RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv, RefQuadletItem,
-    RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning, RefServices,
-    RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory, RefVersionChangeItem,
-    RefVersionChanges,
+    ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem,
+    RefConfigSnippet, RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule,
+    RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefKernelModule,
+    RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
+    RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem,
+    RefServiceWarning, RefServices, RefStaticRoute, RefStorage, RefSysctlOverride,
+    RefVarDirectory, RefVersionChangeItem, RefVersionChanges, ReferenceProjection,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -564,11 +565,345 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
     }
 }
 
+/// Project scheduled tasks from snapshot into generic reference items.
+///
+/// Maps four task types to `GenericRefItem`:
+/// - **CronJob**: key = file basename, summary = source, tags = `["cron"]`
+/// - **SystemdTimer**: key = timer name, summary = on_calendar, content = description + exec_start, tags = `["timer"]`
+/// - **AtJob**: key = file name, summary = `user: command`, content = working_dir, tags = `["at"]`
+/// - **GeneratedTimerUnit**: key = unit name, summary = cron_expr, content = source_path + command, tags = `["generated-timer"]`
+fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
+    let sched = match &snap.scheduled_tasks {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+
+    for cj in &sched.cron_jobs {
+        let basename = Path::new(&cj.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| cj.path.clone());
+        items.push(GenericRefItem {
+            id: cj.path.clone(),
+            key: basename,
+            summary: if cj.source.is_empty() {
+                None
+            } else {
+                Some(cj.source.clone())
+            },
+            content: None,
+            tags: vec!["cron".into()],
+        });
+    }
+
+    for st in &sched.systemd_timers {
+        let mut content_parts = Vec::new();
+        if !st.description.is_empty() {
+            content_parts.push(st.description.clone());
+        }
+        if !st.exec_start.is_empty() {
+            content_parts.push(st.exec_start.clone());
+        }
+        items.push(GenericRefItem {
+            id: st.name.clone(),
+            key: st.name.clone(),
+            summary: if st.on_calendar.is_empty() {
+                None
+            } else {
+                Some(st.on_calendar.clone())
+            },
+            content: if content_parts.is_empty() {
+                None
+            } else {
+                Some(content_parts.join("\n"))
+            },
+            tags: vec!["timer".into()],
+        });
+    }
+
+    for aj in &sched.at_jobs {
+        items.push(GenericRefItem {
+            id: aj.file.clone(),
+            key: aj.file.clone(),
+            summary: Some(format!("{}: {}", aj.user, aj.command)),
+            content: if aj.working_dir.is_empty() {
+                None
+            } else {
+                Some(aj.working_dir.clone())
+            },
+            tags: vec!["at".into()],
+        });
+    }
+
+    for gtu in &sched.generated_timer_units {
+        let mut content_parts = Vec::new();
+        if !gtu.source_path.is_empty() {
+            content_parts.push(gtu.source_path.clone());
+        }
+        if !gtu.command.is_empty() {
+            content_parts.push(gtu.command.clone());
+        }
+        items.push(GenericRefItem {
+            id: gtu.name.clone(),
+            key: gtu.name.clone(),
+            summary: if gtu.cron_expr.is_empty() {
+                None
+            } else {
+                Some(gtu.cron_expr.clone())
+            },
+            content: if content_parts.is_empty() {
+                None
+            } else {
+                Some(content_parts.join("\n"))
+            },
+            tags: vec!["generated-timer".into()],
+        });
+    }
+
+    items
+}
+
+/// Project non-RPM software from snapshot into generic reference items.
+///
+/// Maps two item types to `GenericRefItem`:
+/// - **NonRpmItem**: key = name, summary = `method (confidence)`,
+///   content = path (+ pip packages if present), tags = `["non-rpm"]`
+/// - **ConfigFileEntry** (env_files): key = file basename, summary = kind label,
+///   content = file content, tags = `["env-file"]`
+fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
+    let nrpm = match &snap.non_rpm_software {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+
+    for item in &nrpm.items {
+        let subtitle = format!("{} ({})", item.method, item.confidence);
+        let detail = if !item.packages.is_empty() {
+            let pkg_list: Vec<String> = item
+                .packages
+                .iter()
+                .map(|p| {
+                    if p.version.is_empty() {
+                        p.name.clone()
+                    } else {
+                        format!("{}=={}", p.name, p.version)
+                    }
+                })
+                .collect();
+            Some(format!("{}\n{}", item.path, pkg_list.join(", ")))
+        } else if item.path.is_empty() {
+            None
+        } else {
+            Some(item.path.clone())
+        };
+
+        items.push(GenericRefItem {
+            id: item.name.clone(),
+            key: item.name.clone(),
+            summary: Some(subtitle),
+            content: detail,
+            tags: vec!["non-rpm".into()],
+        });
+    }
+
+    for ef in &nrpm.env_files {
+        let basename = Path::new(&ef.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| ef.path.clone());
+        let kind_str = match ef.kind {
+            inspectah_core::types::config::ConfigFileKind::RpmOwnedDefault => "rpm-default",
+            inspectah_core::types::config::ConfigFileKind::RpmOwnedModified => "rpm-modified",
+            inspectah_core::types::config::ConfigFileKind::Unowned => "unowned",
+            inspectah_core::types::config::ConfigFileKind::Orphaned => "orphaned",
+            inspectah_core::types::config::ConfigFileKind::BaselineMatch => "baseline-match",
+        };
+        items.push(GenericRefItem {
+            id: ef.path.clone(),
+            key: basename,
+            summary: Some(kind_str.to_string()),
+            content: if ef.content.is_empty() {
+                None
+            } else {
+                Some(ef.content.clone())
+            },
+            tags: vec!["env-file".into()],
+        });
+    }
+
+    items
+}
+
+/// Project security & access control data from snapshot into generic reference items.
+///
+/// Maps multiple SELinux-section subtypes to `GenericRefItem`:
+/// - **mode**: synthetic item with key `"SELinux mode"`, summary = mode string
+/// - **FIPS mode**: always emitted, summary = `"enabled"` / `"disabled"`
+/// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
+/// - **boolean_overrides**: key = boolean name, summary = value/state, tags = `["boolean"]`
+/// - **custom_modules**: key = module name, tags = `["module"]`
+/// - **fcontext_rules**: key = rule text, tags = `["fcontext"]`
+/// - **audit_rules** (CarryForwardFile): key = file basename, content = file content, tags = `["audit-rule"]`
+/// - **pam_configs** (CarryForwardFile): key = file basename, content = file content, tags = `["pam"]`
+fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
+    let se = match &snap.selinux {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+
+    // Mode
+    if !se.mode.is_empty() {
+        items.push(GenericRefItem {
+            id: "selinux_mode".into(),
+            key: "SELinux mode".into(),
+            summary: Some(se.mode.clone()),
+            content: None,
+            tags: vec!["mode".into()],
+        });
+    }
+
+    // FIPS mode — always emitted
+    {
+        let fips_label = if se.fips_mode { "enabled" } else { "disabled" };
+        items.push(GenericRefItem {
+            id: "fips_mode".into(),
+            key: "FIPS mode".into(),
+            summary: Some(fips_label.into()),
+            content: None,
+            tags: vec!["fips".into()],
+        });
+    }
+
+    // Port labels
+    for pl in &se.port_labels {
+        let id = format!("{}/{}", pl.protocol, pl.port);
+        items.push(GenericRefItem {
+            id: id.clone(),
+            key: id,
+            summary: Some(pl.label_type.clone()),
+            content: None,
+            tags: vec!["port-label".into()],
+        });
+    }
+
+    // Boolean overrides
+    for bo in &se.boolean_overrides {
+        let name = bo
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let value = bo
+            .get("value")
+            .or_else(|| bo.get("state"))
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        items.push(GenericRefItem {
+            id: name.clone(),
+            key: name,
+            summary: Some(value),
+            content: None,
+            tags: vec!["boolean".into()],
+        });
+    }
+
+    // Custom modules
+    for module in &se.custom_modules {
+        items.push(GenericRefItem {
+            id: module.clone(),
+            key: module.clone(),
+            summary: Some("custom module".into()),
+            content: None,
+            tags: vec!["module".into()],
+        });
+    }
+
+    // Fcontext rules
+    for rule in &se.fcontext_rules {
+        items.push(GenericRefItem {
+            id: rule.clone(),
+            key: rule.clone(),
+            summary: Some("fcontext".into()),
+            content: None,
+            tags: vec!["fcontext".into()],
+        });
+    }
+
+    // Audit rules (CarryForwardFile)
+    for cf in &se.audit_rules {
+        let basename = Path::new(&cf.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| cf.path.clone());
+        items.push(GenericRefItem {
+            id: cf.path.clone(),
+            key: basename,
+            summary: Some("audit rule".into()),
+            content: if cf.content.is_empty() {
+                None
+            } else {
+                Some(cf.content.clone())
+            },
+            tags: vec!["audit-rule".into()],
+        });
+    }
+
+    // PAM configs (CarryForwardFile)
+    for cf in &se.pam_configs {
+        let basename = Path::new(&cf.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| cf.path.clone());
+        items.push(GenericRefItem {
+            id: cf.path.clone(),
+            key: basename,
+            summary: Some("PAM config".into()),
+            content: if cf.content.is_empty() {
+                None
+            } else {
+                Some(cf.content.clone())
+            },
+            tags: vec!["pam".into()],
+        });
+    }
+
+    items
+}
+
+/// Build a complete reference projection from a snapshot.
+///
+/// Orchestrates all per-section extractors into a single `ReferenceProjection`.
+pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
+    ReferenceProjection {
+        services: project_ref_services(snap),
+        version_changes: project_ref_version_changes(snap),
+        containers: project_ref_containers(snap),
+        kernel_boot: project_ref_kernel_boot(snap),
+        network: project_ref_network(snap),
+        storage: project_ref_storage(snap),
+        scheduled_tasks: project_ref_scheduled_tasks(snap),
+        non_rpm_software: project_ref_non_rpm(snap),
+        selinux: project_ref_selinux(snap),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
     use inspectah_core::types::rpm::{RpmSection, VersionChange};
+    use inspectah_core::types::scheduled::{
+        AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+    };
+    use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
     use std::collections::HashMap;
 
     #[test]
@@ -1925,5 +2260,473 @@ mod tests {
         assert_eq!(result.var_directories[0].recommendation, "keep on root");
         assert_eq!(result.credential_refs.len(), 1);
         assert_eq!(result.credential_refs[0].credential_path, "/etc/cifs-creds");
+    }
+
+    // ── project_ref_scheduled_tasks tests ──────────────────────────
+
+    #[test]
+    fn test_no_scheduled_tasks_returns_empty() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: None,
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_empty_scheduled_tasks_returns_empty() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection::default()),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_cron_jobs_mapped() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                cron_jobs: vec![CronJob {
+                    path: "/etc/cron.d/backup".into(),
+                    source: "file".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "/etc/cron.d/backup");
+        assert_eq!(result[0].key, "backup");
+        assert_eq!(result[0].summary, Some("file".into()));
+        assert_eq!(result[0].tags, vec!["cron"]);
+    }
+
+    #[test]
+    fn test_systemd_timers_mapped() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                systemd_timers: vec![SystemdTimer {
+                    name: "logrotate.timer".into(),
+                    on_calendar: "daily".into(),
+                    exec_start: "/usr/sbin/logrotate".into(),
+                    description: "Rotate logs daily".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "logrotate.timer");
+        assert_eq!(result[0].key, "logrotate.timer");
+        assert_eq!(result[0].summary, Some("daily".into()));
+        assert!(result[0].content.as_ref().unwrap().contains("Rotate logs daily"));
+        assert!(result[0].content.as_ref().unwrap().contains("/usr/sbin/logrotate"));
+        assert_eq!(result[0].tags, vec!["timer"]);
+    }
+
+    #[test]
+    fn test_at_jobs_mapped() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                at_jobs: vec![AtJob {
+                    file: "at-job-42".into(),
+                    command: "/usr/local/bin/cleanup".into(),
+                    user: "root".into(),
+                    working_dir: "/tmp".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "at-job-42");
+        assert_eq!(result[0].key, "at-job-42");
+        assert_eq!(result[0].summary, Some("root: /usr/local/bin/cleanup".into()));
+        assert_eq!(result[0].content, Some("/tmp".into()));
+        assert_eq!(result[0].tags, vec!["at"]);
+    }
+
+    #[test]
+    fn test_generated_timer_units_mapped() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                generated_timer_units: vec![GeneratedTimerUnit {
+                    name: "backup.timer".into(),
+                    cron_expr: "0 2 * * *".into(),
+                    source_path: "/etc/cron.d/backup".into(),
+                    command: "/usr/local/bin/backup.sh".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "backup.timer");
+        assert_eq!(result[0].key, "backup.timer");
+        assert_eq!(result[0].summary, Some("0 2 * * *".into()));
+        assert!(result[0].content.as_ref().unwrap().contains("/etc/cron.d/backup"));
+        assert!(result[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("/usr/local/bin/backup.sh"));
+        assert_eq!(result[0].tags, vec!["generated-timer"]);
+    }
+
+    #[test]
+    fn test_mixed_scheduled_tasks() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                cron_jobs: vec![CronJob {
+                    path: "/etc/cron.d/backup".into(),
+                    source: "file".into(),
+                    ..Default::default()
+                }],
+                systemd_timers: vec![SystemdTimer {
+                    name: "logrotate.timer".into(),
+                    on_calendar: "daily".into(),
+                    ..Default::default()
+                }],
+                at_jobs: vec![AtJob {
+                    file: "at-42".into(),
+                    command: "echo hello".into(),
+                    user: "root".into(),
+                    ..Default::default()
+                }],
+                generated_timer_units: vec![GeneratedTimerUnit {
+                    name: "gen.timer".into(),
+                    cron_expr: "*/5 * * * *".into(),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_scheduled_tasks(&snap);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].tags, vec!["cron"]);
+        assert_eq!(result[1].tags, vec!["timer"]);
+        assert_eq!(result[2].tags, vec!["at"]);
+        assert_eq!(result[3].tags, vec!["generated-timer"]);
+    }
+
+    // ── project_ref_non_rpm tests ──────────────────────────────────
+
+    #[test]
+    fn test_no_non_rpm_returns_empty() {
+        let snap = InspectionSnapshot {
+            non_rpm_software: None,
+            ..Default::default()
+        };
+
+        let result = project_ref_non_rpm(&snap);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_non_rpm_items_mapped() {
+        let snap = InspectionSnapshot {
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "custom-app".into(),
+                    path: "/opt/app/bin".into(),
+                    method: "binary".into(),
+                    confidence: "high".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_non_rpm(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "custom-app");
+        assert_eq!(result[0].key, "custom-app");
+        assert_eq!(result[0].summary, Some("binary (high)".into()));
+        assert_eq!(result[0].content, Some("/opt/app/bin".into()));
+        assert_eq!(result[0].tags, vec!["non-rpm"]);
+    }
+
+    #[test]
+    fn test_non_rpm_with_pip_packages() {
+        let snap = InspectionSnapshot {
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "venv".into(),
+                    path: "/opt/venv".into(),
+                    method: "virtualenv".into(),
+                    confidence: "high".into(),
+                    packages: vec![
+                        PipPackage {
+                            name: "requests".into(),
+                            version: "2.28.0".into(),
+                        },
+                        PipPackage {
+                            name: "flask".into(),
+                            version: "".into(),
+                        },
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_non_rpm(&snap);
+
+        assert_eq!(result.len(), 1);
+        let content = result[0].content.as_ref().unwrap();
+        assert!(content.contains("/opt/venv"));
+        assert!(content.contains("requests==2.28.0"));
+        assert!(content.contains("flask"));
+    }
+
+    #[test]
+    fn test_non_rpm_env_files_mapped() {
+        let snap = InspectionSnapshot {
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![],
+                env_files: vec![ConfigFileEntry {
+                    path: "/etc/sysconfig/myapp".into(),
+                    kind: ConfigFileKind::Unowned,
+                    content: "KEY=value".into(),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_non_rpm(&snap);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "/etc/sysconfig/myapp");
+        assert_eq!(result[0].key, "myapp");
+        assert_eq!(result[0].summary, Some("unowned".into()));
+        assert_eq!(result[0].content, Some("KEY=value".into()));
+        assert_eq!(result[0].tags, vec!["env-file"]);
+    }
+
+    // ── project_ref_selinux tests ──────────────────────────────────
+
+    #[test]
+    fn test_no_selinux_returns_empty() {
+        let snap = InspectionSnapshot {
+            selinux: None,
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_selinux_mode_and_fips() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                mode: "enforcing".into(),
+                fips_mode: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        // mode + fips = 2 items
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "selinux_mode");
+        assert_eq!(result[0].key, "SELinux mode");
+        assert_eq!(result[0].summary, Some("enforcing".into()));
+        assert_eq!(result[1].id, "fips_mode");
+        assert_eq!(result[1].summary, Some("enabled".into()));
+    }
+
+    #[test]
+    fn test_selinux_fips_disabled() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                mode: "permissive".into(),
+                fips_mode: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let fips = result.iter().find(|i| i.id == "fips_mode").unwrap();
+        assert_eq!(fips.summary, Some("disabled".into()));
+    }
+
+    #[test]
+    fn test_selinux_port_labels() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                port_labels: vec![SelinuxPortLabel {
+                    protocol: "tcp".into(),
+                    port: "8080".into(),
+                    label_type: "http_port_t".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let port = result.iter().find(|i| i.id == "tcp/8080").unwrap();
+        assert_eq!(port.key, "tcp/8080");
+        assert_eq!(port.summary, Some("http_port_t".into()));
+        assert_eq!(port.tags, vec!["port-label"]);
+    }
+
+    #[test]
+    fn test_selinux_boolean_overrides() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                boolean_overrides: vec![serde_json::json!({
+                    "name": "httpd_can_network_connect",
+                    "state": true,
+                })],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let bool_item = result
+            .iter()
+            .find(|i| i.id == "httpd_can_network_connect")
+            .unwrap();
+        assert_eq!(bool_item.tags, vec!["boolean"]);
+        assert!(bool_item.summary.is_some());
+    }
+
+    #[test]
+    fn test_selinux_custom_modules() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                custom_modules: vec!["myapp".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let module = result.iter().find(|i| i.id == "myapp").unwrap();
+        assert_eq!(module.summary, Some("custom module".into()));
+        assert_eq!(module.tags, vec!["module"]);
+    }
+
+    #[test]
+    fn test_selinux_audit_rules_and_pam() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                audit_rules: vec![CarryForwardFile {
+                    path: "etc/audit/rules.d/custom.rules".into(),
+                    content: "-w /etc/shadow -p wa".into(),
+                }],
+                pam_configs: vec![CarryForwardFile {
+                    path: "etc/pam.d/custom-sshd".into(),
+                    content: "auth required pam_unix.so".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let audit = result
+            .iter()
+            .find(|i| i.id == "etc/audit/rules.d/custom.rules")
+            .unwrap();
+        assert_eq!(audit.key, "custom.rules");
+        assert_eq!(audit.summary, Some("audit rule".into()));
+        assert_eq!(audit.content, Some("-w /etc/shadow -p wa".into()));
+        assert_eq!(audit.tags, vec!["audit-rule"]);
+
+        let pam = result
+            .iter()
+            .find(|i| i.id == "etc/pam.d/custom-sshd")
+            .unwrap();
+        assert_eq!(pam.key, "custom-sshd");
+        assert_eq!(pam.summary, Some("PAM config".into()));
+        assert_eq!(pam.content, Some("auth required pam_unix.so".into()));
+        assert_eq!(pam.tags, vec!["pam"]);
+    }
+
+    // ── project_reference orchestrator tests ───────────────────────
+
+    #[test]
+    fn test_project_reference_empty_snapshot() {
+        let snap = InspectionSnapshot::default();
+
+        let result = project_reference(&snap);
+
+        assert!(result.scheduled_tasks.is_empty());
+        assert!(result.non_rpm_software.is_empty());
+        assert!(result.selinux.is_empty());
+    }
+
+    #[test]
+    fn test_project_reference_populates_all_generic_sections() {
+        let snap = InspectionSnapshot {
+            scheduled_tasks: Some(ScheduledTaskSection {
+                cron_jobs: vec![CronJob {
+                    path: "/etc/cron.d/test".into(),
+                    source: "file".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "app".into(),
+                    method: "binary".into(),
+                    confidence: "high".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            selinux: Some(SelinuxSection {
+                mode: "enforcing".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_reference(&snap);
+
+        assert_eq!(result.scheduled_tasks.len(), 1);
+        assert_eq!(result.non_rpm_software.len(), 1);
+        // selinux: mode + fips = 2
+        assert_eq!(result.selinux.len(), 2);
     }
 }
