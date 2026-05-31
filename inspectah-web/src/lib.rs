@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod assets;
 pub mod error;
 pub mod fleet_handlers;
