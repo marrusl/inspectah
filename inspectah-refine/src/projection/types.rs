@@ -123,7 +123,7 @@ pub struct RefVersionChangeItem {
     pub direction: VersionChangeDirection,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EmptyReason {
     NoBaseline,
     ZeroDrift,
