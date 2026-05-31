@@ -178,7 +178,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
 
 pub async fn get_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
-    let response = build_view_response(&session);
+    let response = crate::adapter::build_web_view(&session);
     Json(serde_json::to_value(&response).unwrap())
 }
 
@@ -405,7 +405,7 @@ pub async fn apply_op(
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(build_view_response(&session)).unwrap(),
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
 }
 
@@ -422,7 +422,7 @@ pub async fn undo(
     let mut session = state.session.lock().unwrap();
     session.undo().map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(build_view_response(&session)).unwrap(),
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
 }
 
@@ -439,7 +439,7 @@ pub async fn redo(
     let mut session = state.session.lock().unwrap();
     session.redo().map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(build_view_response(&session)).unwrap(),
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
 }
 
@@ -576,7 +576,7 @@ pub async fn user_strategy(
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(build_view_response(&session)).unwrap(),
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
 }
 
@@ -661,7 +661,7 @@ pub async fn user_password(
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(build_view_response(&session)).unwrap(),
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
 }
 
@@ -756,7 +756,7 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let sections = state.sections_cache.get_or_init(|| {
         let session = state.session.lock().unwrap();
-        normalize_for_reference(session.snapshot())
+        crate::adapter::build_web_sections(session.reference())
     });
     Json(sections.clone())
 }
