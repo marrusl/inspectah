@@ -11,6 +11,8 @@ use inspectah_refine::session::RefineSession;
 use crate::action::Action;
 use crate::event::{Event, EventReader};
 use crate::keys::map_key;
+use crate::screen::Screen;
+use crate::screen::single_host::SingleHostScreen;
 use crate::theme::{ColorTier, detect_color_tier};
 use crate::types::TuiState;
 
@@ -24,13 +26,18 @@ impl Drop for TerminalGuard {
     }
 }
 
-// Fields `session` and `tier` are wired in later phases (rendering, export).
+// Fields `tarball_path` and `pending_export_path` are wired in later phases (export).
 #[allow(dead_code)]
 pub struct App {
     session: RefineSession,
     state: TuiState,
     tier: ColorTier,
     should_quit: bool,
+    screen: Screen,
+    /// Tarball path for :fresh reload and export default path.
+    tarball_path: Option<std::path::PathBuf>,
+    /// Pending export path set by :export command.
+    pending_export_path: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -41,6 +48,9 @@ impl App {
             state: TuiState::new(section_count),
             tier: detect_color_tier(),
             should_quit: false,
+            screen: Screen::SingleHost(SingleHostScreen::new()),
+            tarball_path: None,
+            pending_export_path: None,
         }
     }
 
@@ -148,7 +158,7 @@ impl App {
             return;
         }
 
-        let msg = ratatui::widgets::Paragraph::new("inspectah tui -- press q to quit");
-        frame.render_widget(msg, area);
+        self.screen
+            .render(frame, &self.session, &self.state, self.tier);
     }
 }
