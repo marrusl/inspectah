@@ -1,0 +1,200 @@
+---
+source: inspectah-web/tests/contract_snapshots.rs
+expression: json
+---
+[
+  {
+    "display_name": "Services",
+    "id": "services",
+    "items": [
+      {
+        "detail": null,
+        "id": "httpd.service",
+        "searchable_text": "httpd.service enabled disable enable",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "title": "httpd.service"
+      }
+    ]
+  },
+  {
+    "display_name": "Version Changes",
+    "id": "version_changes",
+    "items": [
+      {
+        "detail": null,
+        "id": "openssl.x86_64",
+        "searchable_text": "openssl x86_64 upgrade",
+        "subtitle": "3.0.7-28.el9 → 3.0.7-27.el9 (upgrade)",
+        "title": "openssl.x86_64"
+      }
+    ]
+  },
+  {
+    "display_name": "Containers",
+    "id": "containers",
+    "items": [
+      {
+        "detail": "[Container]\nImage=quay.io/myorg/myapp:latest",
+        "id": "myapp.container",
+        "searchable_text": "myapp.container quay.io/myorg/myapp:latest /etc/containers/systemd/myapp.container",
+        "subtitle": "quay.io/myorg/myapp:latest",
+        "title": "myapp.container"
+      },
+      {
+        "detail": null,
+        "id": "abc123",
+        "searchable_text": "redis redis:7 running",
+        "subtitle": "redis:7 (running)",
+        "title": "redis"
+      }
+    ]
+  },
+  {
+    "display_name": "Network",
+    "id": "network",
+    "items": [
+      {
+        "detail": null,
+        "id": "eth0",
+        "searchable_text": "eth0 802-3-ethernet auto /etc/NetworkManager/system-connections/eth0.nmconnection",
+        "subtitle": "802-3-ethernet (auto)",
+        "title": "eth0"
+      },
+      {
+        "detail": null,
+        "id": "resolv_provenance",
+        "searchable_text": "NetworkManager",
+        "subtitle": "NetworkManager",
+        "title": "DNS resolver"
+      },
+      {
+        "detail": null,
+        "id": "10.0.0.50 app-server",
+        "searchable_text": "10.0.0.50 app-server",
+        "subtitle": "hosts",
+        "title": "10.0.0.50 app-server"
+      }
+    ]
+  },
+  {
+    "display_name": "Storage",
+    "id": "storage",
+    "items": [
+      {
+        "detail": "defaults",
+        "id": "/",
+        "searchable_text": "/dev/mapper/rhel-root / xfs defaults",
+        "subtitle": "/dev/mapper/rhel-root (xfs)",
+        "title": "/"
+      }
+    ]
+  },
+  {
+    "display_name": "Scheduled Tasks",
+    "id": "scheduled_tasks",
+    "items": [
+      {
+        "detail": null,
+        "id": "/etc/cron.d/logrotate",
+        "searchable_text": "logrotate file cron /etc/cron.d/logrotate",
+        "subtitle": "file",
+        "title": "logrotate"
+      }
+    ]
+  },
+  {
+    "display_name": "Non-RPM Software",
+    "id": "non_rpm_software",
+    "items": [
+      {
+        "detail": "/usr/local/bin/node\nexpress==4.18.2",
+        "id": "node",
+        "searchable_text": "node binary 20.11.0 (high) /usr/local/bin/node\nexpress==4.18.2 non-rpm javascript",
+        "subtitle": "binary 20.11.0 (high)",
+        "title": "node"
+      },
+      {
+        "detail": "NODE_ENV=production",
+        "id": "/etc/sysconfig/node-app",
+        "searchable_text": "node-app unowned NODE_ENV=production env-file /etc/sysconfig/node-app",
+        "subtitle": "unowned",
+        "title": "node-app"
+      }
+    ]
+  },
+  {
+    "display_name": "Kernel & Boot",
+    "id": "kernel_boot",
+    "items": [
+      {
+        "detail": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+        "id": "cmdline",
+        "searchable_text": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+        "subtitle": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+        "title": "Kernel cmdline"
+      },
+      {
+        "detail": "/etc/sysctl.d/k8s.conf",
+        "id": "net.ipv4.ip_forward",
+        "searchable_text": "net.ipv4.ip_forward 1 0 /etc/sysctl.d/k8s.conf",
+        "subtitle": "\"1\" (default: \"0\")",
+        "title": "net.ipv4.ip_forward"
+      },
+      {
+        "detail": "br_netfilter",
+        "id": "/etc/modules-load.d/br_netfilter.conf",
+        "searchable_text": "/etc/modules-load.d/br_netfilter.conf br_netfilter",
+        "subtitle": "modules-load.d",
+        "title": "br_netfilter.conf"
+      }
+    ]
+  },
+  {
+    "display_name": "Security & Access Control",
+    "id": "selinux",
+    "items": [
+      {
+        "detail": null,
+        "id": "selinux_mode",
+        "searchable_text": "SELinux mode enforcing mode",
+        "subtitle": "enforcing",
+        "title": "SELinux mode"
+      },
+      {
+        "detail": null,
+        "id": "fips_mode",
+        "searchable_text": "FIPS mode disabled fips",
+        "subtitle": "disabled",
+        "title": "FIPS mode"
+      },
+      {
+        "detail": null,
+        "id": "httpd_can_network_connect",
+        "searchable_text": "httpd_can_network_connect true boolean",
+        "subtitle": "true",
+        "title": "httpd_can_network_connect"
+      },
+      {
+        "detail": null,
+        "id": "myapp_policy",
+        "searchable_text": "myapp_policy custom module module",
+        "subtitle": "custom module",
+        "title": "myapp_policy"
+      },
+      {
+        "detail": "-w /etc/shadow -p wa -k shadow_changes",
+        "id": "etc/audit/rules.d/10-custom.rules",
+        "searchable_text": "10-custom.rules audit rule -w /etc/shadow -p wa -k shadow_changes audit-rule etc/audit/rules.d/10-custom.rules",
+        "subtitle": "audit rule",
+        "title": "10-custom.rules"
+      },
+      {
+        "detail": "auth required pam_google_authenticator.so",
+        "id": "etc/pam.d/sshd-custom",
+        "searchable_text": "sshd-custom PAM config auth required pam_google_authenticator.so pam etc/pam.d/sshd-custom",
+        "subtitle": "PAM config",
+        "title": "sshd-custom"
+      }
+    ]
+  }
+]
