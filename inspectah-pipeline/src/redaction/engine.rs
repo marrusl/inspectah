@@ -174,7 +174,7 @@ fn is_comment_line(content: &str, pos: usize) -> bool {
 fn collect_eligible_matches(
     pat: &SecretPattern,
     content: &str,
-    _path: Option<&str>,
+    path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     pat.regex
         .find_iter(content)
@@ -190,16 +190,23 @@ fn collect_eligible_matches(
 
             // Filter 2: skip Password matches whose value is a known
             // NSS/PAM false-positive token
-            if pat.finding_kind == FindingKind::Password {
-                if let Some(sep_pos) = text.find('=').or_else(|| text.find(':')) {
-                    let value = &text[sep_pos + 1..];
-                    if is_false_positive_value(value) {
-                        return None;
-                    }
+            if pat.finding_kind == FindingKind::Password
+                && let Some(sep_pos) = text.find('=').or_else(|| text.find(':'))
+            {
+                let value = &text[sep_pos + 1..];
+                if is_false_positive_value(value) {
+                    return None;
                 }
             }
 
-            // Filter 3 placeholder: shadow-path PasswordHash exclusion (Gap 2)
+            // Filter 3: skip PasswordHash matches when path is a shadow
+            // file — scan_shadow owns those with richer classification
+            if pat.finding_kind == FindingKind::PasswordHash
+                && let Some(p) = path
+                && (p.ends_with("/shadow") || p.ends_with("/shadow-"))
+            {
+                return None;
+            }
 
             let line_num = content[..start].lines().count() + 1;
 
@@ -2308,6 +2315,221 @@ mod tests {
             findings.len(),
             1,
             "real secret must still be detected even in pam.d path"
+        );
+    }
+
+    // --- PasswordHash pattern tests (Gap 2) ---
+
+    #[test]
+    fn test_password_hash_detected_in_htpasswd() {
+        let input = "admin:$6$rounds=5000$salt$hashvalue";
+        let findings = scan_content(input, "/etc/htpasswd");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "crypt hash must be detected in htpasswd"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_sha512() {
+        let input = "$6$salt$hashvalue";
+        let findings = scan_content(input, "/etc/kickstart.cfg");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "SHA-512 crypt hash must be detected"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_bcrypt() {
+        let input = "$2b$12$saltsaltsaltsaltsalt.hashhashhashhashhashhas";
+        let findings = scan_content(input, "/etc/app.conf");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(hash_findings.len(), 1, "bcrypt hash must be detected");
+    }
+
+    #[test]
+    fn test_password_hash_yescrypt() {
+        let input = "$y$j9T$saltsalt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/app.conf");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(hash_findings.len(), 1, "yescrypt hash must be detected");
+    }
+
+    #[test]
+    fn test_password_hash_excluded_from_shadow() {
+        // PasswordHash pattern must be excluded from shadow files —
+        // scan_shadow handles those with richer classification.
+        let input = "admin:$6$rounds=5000$salt$hashvalue:19000:0:99999:7:::";
+        let findings = scan_content(input, "/etc/shadow");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert!(
+            hash_findings.is_empty(),
+            "PasswordHash must be excluded from /etc/shadow (scan_shadow owns it)"
+        );
+        // But ShadowHash should still be detected
+        let shadow_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::ShadowHash))
+            .collect();
+        assert_eq!(
+            shadow_findings.len(),
+            1,
+            "ShadowHash must still be detected in /etc/shadow"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_excluded_from_shadow_backup() {
+        let input = "admin:$6$salt$hash:19000:0:99999:7:::";
+        let findings = scan_content(input, "/etc/shadow-");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert!(
+            hash_findings.is_empty(),
+            "PasswordHash must be excluded from /etc/shadow- (backup)"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_overlap_with_password_pattern() {
+        // password=$6$salt$hash should match both Password and PasswordHash,
+        // but dedup keeps the longer Password match (it includes the key prefix).
+        let input = "password=$6$rounds=5000$salt$hash";
+        let findings = scan_content(input, "/etc/kickstart.cfg");
+        // The Password pattern matches the whole `password=$6$rounds=5000$salt$hash`
+        // The PasswordHash pattern matches `$6$rounds=5000$salt$hash` (subset)
+        // Dedup should keep the longer one (Password)
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            password_findings.len(),
+            1,
+            "Password pattern (longer match) must survive dedup"
+        );
+        assert!(
+            hash_findings.is_empty(),
+            "PasswordHash (shorter subset) must be suppressed by dedup"
+        );
+    }
+
+    // --- PEM full-block matching tests (Gap 3) ---
+
+    #[test]
+    fn test_pem_rsa_private_key_full_block() {
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\nbase64data\n-----END RSA PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "full RSA private key block must be redacted, got: {result}"
+        );
+        // The entire block should be replaced with a single token
+        assert!(
+            !result.contains("BEGIN RSA PRIVATE KEY"),
+            "BEGIN marker must not survive redaction"
+        );
+    }
+
+    #[test]
+    fn test_pem_ec_private_key_full_block() {
+        let input = "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEE...\n-----END EC PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "EC private key block must be redacted"
+        );
+    }
+
+    #[test]
+    fn test_pem_openssh_private_key_full_block() {
+        let input = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1...\n-----END OPENSSH PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "OPENSSH private key block must be redacted"
+        );
+    }
+
+    #[test]
+    fn test_pem_certificate_full_block() {
+        let input = "-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgI...\nbase64data\n-----END CERTIFICATE-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_CERTIFICATE_"),
+            "certificate block must be redacted, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_pem_mixed_bundle() {
+        // Certificate + private key: both redacted independently.
+        let input = "-----BEGIN CERTIFICATE-----\ncertdata\n-----END CERTIFICATE-----\n-----BEGIN RSA PRIVATE KEY-----\nkeydata\n-----END RSA PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_CERTIFICATE_"),
+            "certificate block must be redacted in mixed bundle"
+        );
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "private key block must be redacted in mixed bundle"
+        );
+    }
+
+    #[test]
+    fn test_pem_header_only_no_match() {
+        // Header without END marker — must not match (avoids greedy consumption).
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nsome data but no end marker";
+        let findings = scan_content(input, "/etc/ssl/key.pem");
+        let key_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PrivateKey))
+            .collect();
+        assert!(
+            key_findings.is_empty(),
+            "header-only (no END marker) must not match"
+        );
+    }
+
+    #[test]
+    fn test_pem_adjacent_blocks() {
+        // Two private key blocks in sequence — each matched independently.
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nkey1\n-----END RSA PRIVATE KEY-----\n-----BEGIN RSA PRIVATE KEY-----\nkey2\n-----END RSA PRIVATE KEY-----";
+        let findings = scan_content(input, "/etc/ssl/keys.pem");
+        let key_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PrivateKey))
+            .collect();
+        assert_eq!(
+            key_findings.len(),
+            2,
+            "two adjacent key blocks must produce two findings"
         );
     }
 }

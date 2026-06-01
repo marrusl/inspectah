@@ -17,13 +17,41 @@ pub(crate) struct SecretPattern {
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
-        // PEM private key headers
+        // PEM private key blocks (full BEGIN...END matching with dotall)
         SecretPattern {
-            regex: Regex::new(r"-----BEGIN\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----").unwrap(),
+            regex: Regex::new(
+                r"(?s)-----BEGIN\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----.*?-----END\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+            )
+            .unwrap(),
             finding_kind: FindingKind::PrivateKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Remove private key or exclude file from snapshot",
+        },
+        // PEM certificate blocks (full BEGIN...END matching)
+        SecretPattern {
+            regex: Regex::new(
+                r"(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            )
+            .unwrap(),
+            finding_kind: FindingKind::Certificate,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            remediation: "Review whether certificate exposure is intended; check for adjacent private keys",
+        },
+        // Modular crypt password hashes ($1$, $2b$, $5$, $6$, $y$, etc.)
+        // anywhere in content. Shadow files are handled separately by
+        // scan_shadow, but hashes appear in htpasswd, kickstart, ansible,
+        // and other configs.
+        SecretPattern {
+            regex: Regex::new(
+                r"\$(?:1|2[aby]?|5|6|y|gy|7|sha1)\$(?:[A-Za-z0-9./+=]+\$){1,2}[A-Za-z0-9./+=]+",
+            )
+            .unwrap(),
+            finding_kind: FindingKind::PasswordHash,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            remediation: "Remove password hash or use a secrets manager",
         },
         // Generic password/credential in key=value config.
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
@@ -239,14 +267,15 @@ mod tests {
     #[test]
     fn test_pattern_count() {
         // Ensure all patterns compile and we have the expected count.
-        assert!(PATTERNS.len() >= 9, "expected at least 9 secret patterns");
+        // 9 original + Certificate + PasswordHash = 11
+        assert!(PATTERNS.len() >= 11, "expected at least 11 secret patterns");
     }
 
     // --- Expanded pattern coverage for KEY/CREDENTIAL surfaces ---
 
     #[test]
     fn test_credential_pattern_matches() {
-        let pat = &PATTERNS[1]; // Generic password/credential pattern
+        let pat = &PATTERNS[3]; // Generic password/credential pattern
         assert!(
             pat.regex.is_match("credential = s3cretValue"),
             "bare 'credential' must match"
@@ -259,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_compound_key_patterns_match() {
-        let pat = &PATTERNS[1];
+        let pat = &PATTERNS[3];
         assert!(
             pat.regex.is_match("private_key = abc123"),
             "private_key must match"
@@ -300,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_bare_key_does_not_match() {
-        let pat = &PATTERNS[1];
+        let pat = &PATTERNS[3];
         // Bare "key=value" must NOT match — too broad for config files
         assert!(
             !pat.regex.is_match("key = value"),
@@ -320,7 +349,7 @@ mod tests {
         assert!(findings.is_empty(), "not a shadow file");
 
         // But the generic pattern should match credential references
-        let pat = &PATTERNS[1];
+        let pat = &PATTERNS[3];
         // The full line won't match directly because Environment= prefix
         // pushes the credential= out. But the pattern WILL catch:
         let env_content = "credential = /etc/secrets/db.key";
