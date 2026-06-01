@@ -294,14 +294,16 @@ fn render_item_row(
     is_pure_reference: bool,
     ctx: &mut RowCtx<'_>,
 ) {
-    // Include/exclude indicator column (2 chars).
+    // Include/exclude indicator column (4 chars: "[+] " or "[-] " or "    ").
+    // Uses [+]/[-] per spec Decision 21 (distinct from triage glyphs).
+    let indicator_width: usize = 4;
     let indicator = if is_pure_reference {
-        "  "
+        "    "
     } else {
         match item.included {
-            Some(true) => "\u{25cf} ",  // ● included
-            Some(false) => "\u{25cb} ", // ○ excluded
-            None => "  ",               // reference item in composite section
+            Some(true) => "[+] ",
+            Some(false) => "[-] ",
+            None => "    ", // reference item in composite section
         }
     };
 
@@ -312,7 +314,7 @@ fn render_item_row(
     };
 
     // Name and detail share the remaining width.
-    let remaining = ctx.width.saturating_sub(2);
+    let remaining = ctx.width.saturating_sub(indicator_width);
     let (name_width, detail_width) = if remaining > 20 {
         let detail_w = remaining / 3;
         (remaining - detail_w, detail_w)
@@ -343,15 +345,16 @@ fn render_item_row(
     ctx.buf.set_string(ctx.x, ctx.y, indicator, indicator_style);
 
     // Write name, padded to its column.
+    let ind_u16 = indicator_width as u16;
     let name_padded = format!("{:<width$}", name_str, width = name_width);
     ctx.buf
-        .set_string(ctx.x + 2, ctx.y, &name_padded, name_style);
+        .set_string(ctx.x + ind_u16, ctx.y, &name_padded, name_style);
 
     // Write detail.
     if detail_width > 0 {
         let detail_padded = format!("{:<width$}", detail_str, width = detail_width);
         ctx.buf.set_string(
-            ctx.x + 2 + name_width as u16,
+            ctx.x + ind_u16 + name_width as u16,
             ctx.y,
             &detail_padded,
             detail_style,

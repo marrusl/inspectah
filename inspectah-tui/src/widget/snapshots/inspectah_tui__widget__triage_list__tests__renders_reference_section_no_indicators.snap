@@ -1,8 +1,7 @@
 ---
 source: inspectah-tui/src/widget/triage_list.rs
-assertion_line: 382
 expression: buffer_to_string(&buf)
 ---
 -- Ver.Chg --
 ▾ Investigate (1)
-  kernel-5.14.0      downgrade
+    kernel-5.14.0     downgra…
