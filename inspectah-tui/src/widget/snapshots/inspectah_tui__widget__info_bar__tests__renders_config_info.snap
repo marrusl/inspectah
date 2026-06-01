@@ -1,0 +1,8 @@
+---
+source: inspectah-tui/src/widget/info_bar.rs
+expression: buffer_to_string(&buf)
+---
+──────────────────────────────────────────────────
+ /etc/httpd/conf/httpd.conf
+  Kind: Modified
+  Category: Application

@@ -13,7 +13,8 @@ use inspectah_refine::types::{ItemId, TriageBucket};
 
 use crate::sections::{SECTION_ORDER, build_section_entries};
 use crate::theme::ColorTier;
-use crate::types::{FocusTarget, SectionId, TuiState};
+use crate::types::{DetailMode, FocusTarget, SectionId, TuiState};
+use crate::widget::info_bar::{InfoBarData, InfoBarWidget};
 use crate::widget::section_nav::SectionNavWidget;
 use crate::widget::status_bar::StatusBarWidget;
 use crate::widget::triage_list::{ListItem, TriageGroup, TriageListWidget};
@@ -81,6 +82,18 @@ impl SingleHostScreen {
             .copied()
             .unwrap_or(SectionId::Packages);
         let items = build_list_items(session, active_section_id, state);
+
+        // Split list area for info bar when active.
+        let (list_render_area, info_area) = if state.detail_mode == DetailMode::InfoBar {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(5), Constraint::Length(4)])
+                .split(list_area);
+            (split[0], Some(split[1]))
+        } else {
+            (list_area, None)
+        };
+
         let list_focused = state.focus == FocusTarget::ItemList;
         let list_widget = TriageListWidget::new(
             &items,
@@ -90,7 +103,14 @@ impl SingleHostScreen {
             tier,
             0, // scroll_offset -- wired in Task 11
         );
-        frame.render_widget(list_widget, list_area);
+        frame.render_widget(list_widget, list_render_area);
+
+        // --- Info bar ---
+        if let Some(info_area) = info_area
+            && let Some(data) = build_info_bar_data(session, state, &items)
+        {
+            frame.render_widget(InfoBarWidget::new(&data, tier), info_area);
+        }
 
         // --- Status bar ---
         let view = session.view();
@@ -174,6 +194,77 @@ pub fn build_list_items(
     };
 
     build_grouped_items(&raw_items, state, section)
+}
+
+/// Build info bar data for the currently selected item.
+///
+/// Extracts key-value fields based on section type. Packages show version,
+/// repo, and triage group. Configs show kind, category. Other sections
+/// fall back to name + detail.
+fn build_info_bar_data(
+    session: &RefineSession,
+    state: &TuiState,
+    items: &[ListItem],
+) -> Option<InfoBarData> {
+    let item = items.get(state.cursor)?;
+    if item.is_group_header {
+        return None;
+    }
+
+    let active_section_id = SECTION_ORDER
+        .get(state.active_section)
+        .copied()
+        .unwrap_or(SectionId::Packages);
+
+    let fields = match (active_section_id, &item.item_id) {
+        (SectionId::Packages, Some(ItemId::Package { name, arch })) => {
+            let view = session.view();
+            if let Some(pkg) = view
+                .packages
+                .iter()
+                .find(|p| p.entry.name == *name && p.entry.arch == *arch)
+            {
+                vec![
+                    ("Version".into(), pkg.entry.version.clone()),
+                    (
+                        "Repo".into(),
+                        if pkg.entry.source_repo.is_empty() {
+                            "unknown".into()
+                        } else {
+                            pkg.entry.source_repo.clone()
+                        },
+                    ),
+                    ("Triage".into(), format!("{:?}", pkg.triage.bucket())),
+                ]
+            } else {
+                vec![("Detail".into(), item.detail.clone())]
+            }
+        }
+        (SectionId::Configs, Some(ItemId::Config { path })) => {
+            let view = session.view();
+            if let Some(cfg) = view.config_files.iter().find(|c| c.entry.path == *path) {
+                vec![
+                    ("Kind".into(), format!("{:?}", cfg.entry.kind)),
+                    ("Category".into(), format!("{:?}", cfg.entry.category)),
+                ]
+            } else {
+                vec![("Detail".into(), item.detail.clone())]
+            }
+        }
+        _ => {
+            // Fallback for unwired sections.
+            if item.detail.is_empty() {
+                vec![]
+            } else {
+                vec![("Detail".into(), item.detail.clone())]
+            }
+        }
+    };
+
+    Some(InfoBarData {
+        name: item.name.clone(),
+        fields,
+    })
 }
 
 /// Group raw items by triage bucket with collapsible headers.
