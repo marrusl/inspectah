@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::redaction::patterns::{PATTERNS, scan_shadow};
+use crate::redaction::patterns::{PATTERNS, SecretPattern, scan_shadow};
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
@@ -109,6 +109,85 @@ impl CounterRegistry {
     }
 }
 
+/// A match that survived all eligibility filters.
+/// Contains byte offsets and the matched text, ready for replacement or finding generation.
+struct EligibleMatch {
+    start: usize,
+    end: usize,
+    text: String,
+    line_num: usize,
+}
+
+/// Collect regex matches from `content` for a single `pat`, filtering out:
+/// - (Gap 1, future) Matches on comment lines (# // ;)
+/// - (Gap 4, future) Password-pattern matches whose value is a known NSS/PAM token
+/// - (Gap 2, future) PasswordHash matches when `path` is a shadow file
+///
+/// This is the ONLY function that should call `pat.regex.find_iter()`.
+/// Callers must invoke this for EVERY pattern, merge the results into a
+/// single `Vec<(usize, EligibleMatch)>` (tagged with the pattern index),
+/// then run `dedup_overlapping_matches` on the merged list before
+/// processing matches.
+fn collect_eligible_matches(
+    pat: &SecretPattern,
+    content: &str,
+    _path: Option<&str>,
+) -> Vec<EligibleMatch> {
+    pat.regex
+        .find_iter(content)
+        .map(|mat| {
+            let start = mat.start();
+            let end = mat.end();
+            let line_num = content[..start].lines().count() + 1;
+
+            EligibleMatch {
+                start,
+                end,
+                text: mat.as_str().to_string(),
+                line_num,
+            }
+        })
+        .collect()
+}
+
+/// Remove matches that are entirely contained within a longer match.
+/// Input must be the combined matches from ALL patterns for a single content blob.
+/// Preserves the longer match when spans overlap. Ties broken by input order
+/// (earlier pattern in PATTERNS vec wins).
+fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
+    // Sort by start ascending, then by span length descending (longer first)
+    matches.sort_by(|a, b| {
+        a.1.start
+            .cmp(&b.1.start)
+            .then_with(|| (b.1.end - b.1.start).cmp(&(a.1.end - a.1.start)))
+    });
+    let mut keep = vec![true; matches.len()];
+    for i in 0..matches.len() {
+        if !keep[i] {
+            continue;
+        }
+        for j in (i + 1)..matches.len() {
+            if !keep[j] {
+                continue;
+            }
+            // If j is entirely within i's span, drop j
+            if matches[j].1.start >= matches[i].1.start && matches[j].1.end <= matches[i].1.end {
+                keep[j] = false;
+            }
+            // If j starts beyond i's end, no more overlaps possible
+            if matches[j].1.start >= matches[i].1.end {
+                break;
+            }
+        }
+    }
+    let mut idx = 0;
+    matches.retain(|_| {
+        let k = keep[idx];
+        idx += 1;
+        k
+    });
+}
+
 /// Apply pattern-based redaction to a string.
 /// Returns `Cow::Borrowed` if no findings — zero-copy for clean content.
 pub fn redact_string(content: &str) -> Cow<'_, str> {
@@ -128,24 +207,19 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     let mut result = content.to_string();
     let mut registry = CounterRegistry::default();
 
-    for pat in PATTERNS.iter() {
-        let kind_label = format!("{:?}", pat.finding_kind).to_lowercase();
-        // Collect matches first to avoid borrow issues.
-        let matches: Vec<(usize, usize, String)> = pat
-            .regex
-            .find_iter(&result)
-            .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-            .collect();
-
-        if !matches.is_empty() {
-            // Replace from end to start to preserve offsets.
-            let mut buf = result.clone();
-            for (start, end, matched) in matches.into_iter().rev() {
-                let token = registry.token_for(&kind_label, &matched);
-                buf.replace_range(start..end, &token);
-            }
-            result = buf;
+    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, &result, None) {
+            all_matches.push((idx, em));
         }
+    }
+    dedup_overlapping_matches(&mut all_matches);
+    // Sort descending by offset so replacements don't invalidate earlier offsets
+    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    for (pat_idx, em) in all_matches {
+        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+        let token = registry.token_for(&kind_label, &em.text);
+        result.replace_range(em.start..em.end, &token);
     }
 
     Cow::Owned(result)
@@ -251,25 +325,28 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
         findings.extend(scan_shadow(content, path));
     }
 
-    // Generic pattern matching
-    for pat in PATTERNS.iter() {
-        for mat in pat.regex.find_iter(content) {
-            // Find line number
-            let line_num = content[..mat.start()].lines().count() + 1;
-
-            findings.push(RedactionFinding {
-                path: path.to_string(),
-                source: "pattern".into(),
-                kind: RedactionKind::Inline,
-                pattern: format!("{:?}", pat.finding_kind).to_lowercase(),
-                remediation: pat.remediation.to_string(),
-                line: Some(line_num as i32),
-                replacement: None,
-                detection_method: pat.detection_method.clone(),
-                confidence: Some(pat.confidence),
-                finding_kind: Some(pat.finding_kind.clone()),
-            });
+    // Generic pattern matching — collect from all patterns, then dedup overlaps
+    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, content, Some(path)) {
+            all_matches.push((idx, em));
         }
+    }
+    dedup_overlapping_matches(&mut all_matches);
+    for (pat_idx, em) in all_matches {
+        let pat = &PATTERNS[pat_idx];
+        findings.push(RedactionFinding {
+            path: path.to_string(),
+            source: "pattern".into(),
+            kind: RedactionKind::Inline,
+            pattern: format!("{:?}", pat.finding_kind).to_lowercase(),
+            remediation: pat.remediation.to_string(),
+            line: Some(em.line_num as i32),
+            replacement: None,
+            detection_method: pat.detection_method.clone(),
+            confidence: Some(pat.confidence),
+            finding_kind: Some(pat.finding_kind.clone()),
+        });
     }
 
     findings
@@ -373,31 +450,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         for file in &mut config.files {
             let findings = scan_content(&file.content, &file.path);
             if !findings.is_empty() {
-                // Redact high-confidence findings inline
                 let mut content = file.content.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        // Find and replace pattern matches in content
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&file.path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 file.content = content;
                 all_findings.extend(findings);
@@ -411,28 +476,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&repo_file.content, &repo_file.path);
             if !findings.is_empty() {
                 let mut content = repo_file.content.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&repo_file.path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 repo_file.content = content;
                 all_findings.extend(findings);
@@ -444,28 +499,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&gpg_key.content, &gpg_key.path);
             if !findings.is_empty() {
                 let mut content = gpg_key.content.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&gpg_key.path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 gpg_key.content = content;
                 all_findings.extend(findings);
@@ -479,28 +524,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&drop_in.content, &drop_in.path);
             if !findings.is_empty() {
                 let mut content = drop_in.content.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&drop_in.path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 drop_in.content = content;
                 all_findings.extend(findings);
@@ -559,28 +594,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         let cmdline_findings = scan_content(&kernelboot.cmdline, "/proc/cmdline");
         if !cmdline_findings.is_empty() {
             let mut content = kernelboot.cmdline.clone();
-            for finding in &cmdline_findings {
-                if finding.confidence == Some(Confidence::High) {
-                    let kind_label = finding
-                        .finding_kind
-                        .as_ref()
-                        .map(|k| format!("{:?}", k).to_lowercase())
-                        .unwrap_or_else(|| "secret".to_string());
-                    if let Some(pat) = PATTERNS
-                        .iter()
-                        .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                    {
-                        let matches: Vec<(usize, usize, String)> = pat
-                            .regex
-                            .find_iter(&content)
-                            .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                            .collect();
-                        for (start, end, matched) in matches.into_iter().rev() {
-                            let token = registry.token_for(&kind_label, &matched);
-                            content.replace_range(start..end, &token);
-                        }
-                    }
+            let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+            for (idx, pat) in PATTERNS.iter().enumerate() {
+                for em in collect_eligible_matches(pat, &content, Some("/proc/cmdline")) {
+                    all_matches.push((idx, em));
                 }
+            }
+            dedup_overlapping_matches(&mut all_matches);
+            all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+            for (pat_idx, em) in all_matches {
+                let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                let token = registry.token_for(&kind_label, &em.text);
+                content.replace_range(em.start..em.end, &token);
             }
             kernelboot.cmdline = content;
             all_findings.extend(cmdline_findings);
@@ -598,27 +623,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(&snippet.content, &snippet.path);
                 if !findings.is_empty() {
                     let mut content = snippet.content.clone();
-                    for finding in &findings {
-                        if finding.confidence == Some(Confidence::High) {
-                            let kind_label = finding
-                                .finding_kind
-                                .as_ref()
-                                .map(|k| format!("{:?}", k).to_lowercase())
-                                .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS.iter().find(|p| {
-                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                            }) {
-                                let matches: Vec<(usize, usize, String)> = pat
-                                    .regex
-                                    .find_iter(&content)
-                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                    .collect();
-                                for (start, end, matched) in matches.into_iter().rev() {
-                                    let token = registry.token_for(&kind_label, &matched);
-                                    content.replace_range(start..end, &token);
-                                }
-                            }
+                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                    for (idx, pat) in PATTERNS.iter().enumerate() {
+                        for em in collect_eligible_matches(pat, &content, Some(&snippet.path)) {
+                            all_matches.push((idx, em));
                         }
+                    }
+                    dedup_overlapping_matches(&mut all_matches);
+                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                    for (pat_idx, em) in all_matches {
+                        let kind_label =
+                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                        let token = registry.token_for(&kind_label, &em.text);
+                        content.replace_range(em.start..em.end, &token);
                     }
                     snippet.content = content;
                     all_findings.extend(findings);
@@ -661,28 +678,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&unit.command, &unit.source_path);
             if !findings.is_empty() {
                 let mut content = unit.command.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&unit.source_path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 unit.command = content;
                 all_findings.extend(findings);
@@ -695,27 +702,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(&unit.service_content, &svc_path);
                 if !findings.is_empty() {
                     let mut content = unit.service_content.clone();
-                    for finding in &findings {
-                        if finding.confidence == Some(Confidence::High) {
-                            let kind_label = finding
-                                .finding_kind
-                                .as_ref()
-                                .map(|k| format!("{:?}", k).to_lowercase())
-                                .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS.iter().find(|p| {
-                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                            }) {
-                                let matches: Vec<(usize, usize, String)> = pat
-                                    .regex
-                                    .find_iter(&content)
-                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                    .collect();
-                                for (start, end, matched) in matches.into_iter().rev() {
-                                    let token = registry.token_for(&kind_label, &matched);
-                                    content.replace_range(start..end, &token);
-                                }
-                            }
+                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                    for (idx, pat) in PATTERNS.iter().enumerate() {
+                        for em in collect_eligible_matches(pat, &content, Some(&svc_path)) {
+                            all_matches.push((idx, em));
                         }
+                    }
+                    dedup_overlapping_matches(&mut all_matches);
+                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                    for (pat_idx, em) in all_matches {
+                        let kind_label =
+                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                        let token = registry.token_for(&kind_label, &em.text);
+                        content.replace_range(em.start..em.end, &token);
                     }
                     unit.service_content = content;
                     all_findings.extend(findings);
@@ -728,28 +727,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&at_job.command, &at_job.file);
             if !findings.is_empty() {
                 let mut content = at_job.command.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&at_job.file)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 at_job.command = content;
                 all_findings.extend(findings);
@@ -766,28 +755,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&timer.exec_start, &source_path);
             if !findings.is_empty() {
                 let mut content = timer.exec_start.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&source_path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 timer.exec_start = content;
                 all_findings.extend(findings);
@@ -808,27 +787,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(&timer.service_content, &svc_path);
                 if !findings.is_empty() {
                     let mut content = timer.service_content.clone();
-                    for finding in &findings {
-                        if finding.confidence == Some(Confidence::High) {
-                            let kind_label = finding
-                                .finding_kind
-                                .as_ref()
-                                .map(|k| format!("{:?}", k).to_lowercase())
-                                .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS.iter().find(|p| {
-                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                            }) {
-                                let matches: Vec<(usize, usize, String)> = pat
-                                    .regex
-                                    .find_iter(&content)
-                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                    .collect();
-                                for (start, end, matched) in matches.into_iter().rev() {
-                                    let token = registry.token_for(&kind_label, &matched);
-                                    content.replace_range(start..end, &token);
-                                }
-                            }
+                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                    for (idx, pat) in PATTERNS.iter().enumerate() {
+                        for em in collect_eligible_matches(pat, &content, Some(&svc_path)) {
+                            all_matches.push((idx, em));
                         }
+                    }
+                    dedup_overlapping_matches(&mut all_matches);
+                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                    for (pat_idx, em) in all_matches {
+                        let kind_label =
+                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                        let token = registry.token_for(&kind_label, &em.text);
+                        content.replace_range(em.start..em.end, &token);
                     }
                     timer.service_content = content;
                     all_findings.extend(findings);
@@ -864,28 +835,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let findings = scan_content(&env_file.content, &env_file.path);
             if !findings.is_empty() {
                 let mut content = env_file.content.clone();
-                for finding in &findings {
-                    if finding.confidence == Some(Confidence::High) {
-                        let kind_label = finding
-                            .finding_kind
-                            .as_ref()
-                            .map(|k| format!("{:?}", k).to_lowercase())
-                            .unwrap_or_else(|| "secret".to_string());
-                        if let Some(pat) = PATTERNS
-                            .iter()
-                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
-                        {
-                            let matches: Vec<(usize, usize, String)> = pat
-                                .regex
-                                .find_iter(&content)
-                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                .collect();
-                            for (start, end, matched) in matches.into_iter().rev() {
-                                let token = registry.token_for(&kind_label, &matched);
-                                content.replace_range(start..end, &token);
-                            }
-                        }
+                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                for (idx, pat) in PATTERNS.iter().enumerate() {
+                    for em in collect_eligible_matches(pat, &content, Some(&env_file.path)) {
+                        all_matches.push((idx, em));
                     }
+                }
+                dedup_overlapping_matches(&mut all_matches);
+                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                for (pat_idx, em) in all_matches {
+                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                    let token = registry.token_for(&kind_label, &em.text);
+                    content.replace_range(em.start..em.end, &token);
                 }
                 env_file.content = content;
                 all_findings.extend(findings);
@@ -911,27 +872,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(&item.git_remote, &item.path);
                 if !findings.is_empty() {
                     let mut content = item.git_remote.clone();
-                    for finding in &findings {
-                        if finding.confidence == Some(Confidence::High) {
-                            let kind_label = finding
-                                .finding_kind
-                                .as_ref()
-                                .map(|k| format!("{:?}", k).to_lowercase())
-                                .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS.iter().find(|p| {
-                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                            }) {
-                                let matches: Vec<(usize, usize, String)> = pat
-                                    .regex
-                                    .find_iter(&content)
-                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-                                    .collect();
-                                for (start, end, matched) in matches.into_iter().rev() {
-                                    let token = registry.token_for(&kind_label, &matched);
-                                    content.replace_range(start..end, &token);
-                                }
-                            }
+                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+                    for (idx, pat) in PATTERNS.iter().enumerate() {
+                        for em in collect_eligible_matches(pat, &content, Some(&item.path)) {
+                            all_matches.push((idx, em));
                         }
+                    }
+                    dedup_overlapping_matches(&mut all_matches);
+                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+                    for (pat_idx, em) in all_matches {
+                        let kind_label =
+                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+                        let token = registry.token_for(&kind_label, &em.text);
+                        content.replace_range(em.start..em.end, &token);
                     }
                     item.git_remote = content;
                     all_findings.extend(findings);
@@ -1941,6 +1894,104 @@ mod tests {
         assert!(
             users[0].get("ssh_keys").is_none(),
             "SSH keys field must be removed without preserve flag"
+        );
+    }
+
+    // --- Dedup overlap regression tests ---
+
+    #[test]
+    fn test_dedup_jdbc_url_password_overlap() {
+        // JDBC URL with password param: Password pattern matches the
+        // `password=s3cret` substring, JdbcPassword matches the entire URL.
+        // Dedup should keep only the longer JdbcPassword match.
+        let input = "jdbc:postgresql://host:5432/db?user=admin&password=s3cret";
+        let findings = scan_content(input, "/etc/app.conf");
+        let jdbc_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::JdbcPassword))
+            .collect();
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert_eq!(
+            jdbc_findings.len(),
+            1,
+            "JDBC URL must produce exactly one JdbcPassword finding"
+        );
+        assert_eq!(
+            password_findings.len(),
+            0,
+            "Password finding must be suppressed by longer JdbcPassword match"
+        );
+    }
+
+    #[test]
+    fn test_dedup_jdbc_url_redaction() {
+        // The JDBC URL should be redacted as a single token, not double-redacted.
+        let input = "jdbc:postgresql://host:5432/db?user=admin&password=s3cret";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_JDBCPASSWORD_"),
+            "JDBC URL must be redacted with JdbcPassword token, got: {result}"
+        );
+        // The Password pattern's shorter match should NOT produce a separate token
+        assert!(
+            !result.contains("REDACTED_PASSWORD_"),
+            "Password token must not appear when JdbcPassword subsumes it, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_dedup_standalone_password_unchanged() {
+        // Standalone password=s3cret (no JDBC context) should still produce
+        // a Password finding — dedup only drops subsets, not standalone matches.
+        let input = "password=s3cret";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].finding_kind, Some(FindingKind::Password));
+    }
+
+    #[test]
+    fn test_dedup_jdbc_url_without_password() {
+        // JDBC URL without password param — no Password or JdbcPassword findings.
+        let input = "jdbc:postgresql://host:5432/db?user=admin";
+        let findings = scan_content(input, "/etc/app.conf");
+        let relevant: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| {
+                f.finding_kind == Some(FindingKind::Password)
+                    || f.finding_kind == Some(FindingKind::JdbcPassword)
+            })
+            .collect();
+        assert!(
+            relevant.is_empty(),
+            "JDBC URL without password must not produce Password/JdbcPassword findings"
+        );
+    }
+
+    #[test]
+    fn test_dedup_preserves_non_overlapping_matches() {
+        // Two independent secrets on different lines — both must survive dedup.
+        let input = "password=secret1\napi_key=secret2";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(
+            findings.len(),
+            2,
+            "non-overlapping matches must both survive dedup"
+        );
+    }
+
+    #[test]
+    fn test_eligible_match_line_numbers() {
+        // Verify line numbers are computed correctly by collect_eligible_matches.
+        let input = "clean line\npassword=s3cret\nanother clean line";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].line,
+            Some(2),
+            "password on second line must report line 2"
         );
     }
 }
