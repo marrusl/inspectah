@@ -19,6 +19,10 @@ pub struct RefineArgs {
     /// Start a fresh session, discarding any saved progress
     #[arg(long)]
     pub fresh: bool,
+
+    /// Use terminal UI instead of web browser
+    #[arg(long)]
+    pub tui: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +156,13 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
             return Ok(());
         }
     };
+
+    if args.tui {
+        let tarball_path = Some(args.tarball.clone());
+        inspectah_tui::run_tui(session, tarball_path).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        return Ok(());
+    }
+
     let is_dirty_on_exit = {
         let state = Arc::new(inspectah_web::handlers::AppState {
             session: Arc::new(Mutex::new(session)),

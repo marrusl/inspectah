@@ -6,6 +6,7 @@ members = [
     "inspectah-cli",
     "inspectah-web",
     "inspectah-refine",
+    "inspectah-tui",
 ]
 resolver = "2"
 
