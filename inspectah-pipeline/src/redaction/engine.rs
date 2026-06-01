@@ -244,6 +244,18 @@ fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
             if matches[j].1.start >= matches[i].1.start && matches[j].1.end <= matches[i].1.end {
                 keep[j] = false;
             }
+            // Partial overlap: j starts inside i but extends past i's end.
+            // Keep the longer match, drop the shorter one.
+            else if matches[j].1.start < matches[i].1.end && matches[j].1.end > matches[i].1.end {
+                let len_i = matches[i].1.end - matches[i].1.start;
+                let len_j = matches[j].1.end - matches[j].1.start;
+                if len_i >= len_j {
+                    keep[j] = false;
+                } else {
+                    keep[i] = false;
+                    break; // i is dropped, stop comparing against it
+                }
+            }
             // If j starts beyond i's end, no more overlaps possible
             if matches[j].1.start >= matches[i].1.end {
                 break;
@@ -256,6 +268,30 @@ fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
         idx += 1;
         k
     });
+
+    // Safety net: assert no partial overlaps survive.
+    // Current patterns only produce subset overlaps, but a future pattern
+    // addition could introduce a partial overlap that corrupts content
+    // during descending-offset replacement. Catch it at test time.
+    #[cfg(debug_assertions)]
+    {
+        for i in 0..matches.len() {
+            for j in (i + 1)..matches.len() {
+                debug_assert!(
+                    matches[j].1.start >= matches[i].1.end
+                        || matches[i].1.start >= matches[j].1.end,
+                    "partial overlap detected between patterns {} and {} \
+                     (spans {}..{} and {}..{})",
+                    matches[i].0,
+                    matches[j].0,
+                    matches[i].1.start,
+                    matches[i].1.end,
+                    matches[j].1.start,
+                    matches[j].1.end,
+                );
+            }
+        }
+    }
 }
 
 /// Apply pattern-based redaction to a string.
@@ -2530,6 +2566,121 @@ mod tests {
             key_findings.len(),
             2,
             "two adjacent key blocks must produce two findings"
+        );
+    }
+
+    // --- S2: PasswordHash coverage for remaining algorithm IDs ---
+
+    #[test]
+    fn test_password_hash_md5() {
+        let input = "$1$salt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/htpasswd");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "MD5 crypt hash ($1$) must be detected"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_sha256() {
+        let input = "$5$rounds=5000$salt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/htpasswd");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "SHA-256 crypt hash ($5$) must be detected"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_scrypt() {
+        let input = "$7$C6..../....$salt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/app.conf");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(hash_findings.len(), 1, "scrypt hash ($7$) must be detected");
+    }
+
+    #[test]
+    fn test_password_hash_sha1() {
+        let input = "$sha1$40000$salt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/app.conf");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "SHA-1 crypt hash ($sha1$) must be detected"
+        );
+    }
+
+    #[test]
+    fn test_password_hash_gost_yescrypt() {
+        let input = "$gy$j9T$saltsalt$hashhashhashhashhashha";
+        let findings = scan_content(input, "/etc/app.conf");
+        let hash_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::PasswordHash))
+            .collect();
+        assert_eq!(
+            hash_findings.len(),
+            1,
+            "gost-yescrypt hash ($gy$) must be detected"
+        );
+    }
+
+    // --- S3: PEM edge cases — CRLF line endings and no trailing newline ---
+
+    #[test]
+    fn test_pem_crlf_line_endings() {
+        let input = "-----BEGIN RSA PRIVATE KEY-----\r\nMIIEpAIBAAKCAQEA...\r\nbase64data\r\n-----END RSA PRIVATE KEY-----\r\n";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "PEM block with CRLF line endings must be redacted, got: {result}"
+        );
+        assert!(
+            !result.contains("BEGIN RSA PRIVATE KEY"),
+            "BEGIN marker must not survive CRLF PEM redaction"
+        );
+    }
+
+    #[test]
+    fn test_pem_no_trailing_newline() {
+        let input = "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEE...\n-----END EC PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "PEM block without trailing newline must be redacted, got: {result}"
+        );
+    }
+
+    // --- S4: DSA private key type ---
+
+    #[test]
+    fn test_pem_dsa_private_key_full_block() {
+        let input = "-----BEGIN DSA PRIVATE KEY-----\nMIIBugIBAAKBgQ...\nbase64data\n-----END DSA PRIVATE KEY-----";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_PRIVATEKEY_"),
+            "DSA private key block must be redacted, got: {result}"
+        );
+        assert!(
+            !result.contains("BEGIN DSA PRIVATE KEY"),
+            "BEGIN marker must not survive DSA key redaction"
         );
     }
 }
