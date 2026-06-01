@@ -16,8 +16,9 @@ use crate::screen::Screen;
 use crate::screen::single_host::SingleHostScreen;
 use crate::sections::{self, SECTION_ORDER};
 use crate::theme::{ColorTier, detect_color_tier};
-use crate::types::{DetailMode, FlashMessage, FocusTarget, TuiState};
+use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, TuiState};
 
+use crate::widget::help_screen::HelpScreenWidget;
 use crate::widget::triage_list::TriageGroup;
 
 /// Map a `TriageGroup` to its index in the canonical bucket order
@@ -302,6 +303,11 @@ impl App {
                 self.state.detail_scroll = 0;
             }
 
+            // Close help overlay
+            Action::CloseDetail if self.state.input_mode == InputMode::Help => {
+                self.state.input_mode = InputMode::Normal;
+            }
+
             // Close detail view
             Action::CloseDetail if self.state.detail_mode != DetailMode::None => {
                 self.state.detail_mode = DetailMode::None;
@@ -309,6 +315,15 @@ impl App {
                 if self.state.focus == FocusTarget::DetailPane {
                     self.state.focus = FocusTarget::ItemList;
                 }
+            }
+
+            // Help overlay
+            Action::ShowHelp => {
+                self.state.input_mode = if self.state.input_mode == InputMode::Help {
+                    InputMode::Normal
+                } else {
+                    InputMode::Help
+                };
             }
 
             // Item toggling
@@ -371,5 +386,10 @@ impl App {
 
         self.screen
             .render(frame, &self.session, &self.state, self.tier);
+
+        // Overlay: help screen
+        if self.state.input_mode == InputMode::Help {
+            frame.render_widget(HelpScreenWidget::new(self.tier), area);
+        }
     }
 }
