@@ -443,6 +443,10 @@ impl App {
                 }
             }
 
+            Action::ToggleContainerfile => {
+                self.state.show_containerfile = !self.state.show_containerfile;
+            }
+
             _ => {}
         }
     }

@@ -14,6 +14,7 @@ use inspectah_refine::types::{ItemId, TriageBucket};
 use crate::sections::{SECTION_ORDER, build_section_entries};
 use crate::theme::ColorTier;
 use crate::types::{DetailMode, FocusTarget, SectionId, TuiState};
+use crate::widget::containerfile::ContainerfileWidget;
 use crate::widget::detail_view::{DetailContentType, DetailData, DetailViewWidget};
 use crate::widget::info_bar::{InfoBarData, InfoBarWidget};
 use crate::widget::section_nav::SectionNavWidget;
@@ -63,54 +64,25 @@ impl SingleHostScreen {
         let main_area = vertical[0];
         let status_area = vertical[1];
 
-        // Horizontal split: sidebar (fixed width) + item list (remaining).
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(20)])
-            .split(main_area);
-
-        let sidebar_area = horizontal[0];
-        let list_area = horizontal[1];
-
-        // --- Sidebar ---
+        // --- Build section data (needed for both layouts and status bar) ---
         let entries = build_section_entries(session);
-        let sidebar_focused = state.focus == FocusTarget::Sidebar;
-        let sidebar = SectionNavWidget::new(
-            &entries,
-            state.active_section,
-            sidebar_focused,
-            tier,
-            state.sidebar_scroll,
-        );
-        frame.render_widget(sidebar, sidebar_area);
-
-        // --- Triage list / Detail view ---
         let active_section_id = SECTION_ORDER
             .get(state.active_section)
             .copied()
             .unwrap_or(SectionId::Packages);
         let items = build_list_items(session, active_section_id, state);
 
-        // Fullscreen detail replaces the item list entirely.
-        if state.detail_mode == DetailMode::Fullscreen {
-            if let Some(data) = build_detail_data(session, state, &items) {
-                frame.render_widget(
-                    DetailViewWidget::new(&data, state.detail_scroll, tier),
-                    list_area,
-                );
-            }
-        } else {
-            // Split list area for info bar when active.
-            let (list_render_area, info_area) = if state.detail_mode == DetailMode::InfoBar {
-                let split = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(5), Constraint::Length(4)])
-                    .split(list_area);
-                (split[0], Some(split[1]))
-            } else {
-                (list_area, None)
-            };
+        // --- Containerfile toggle: hide sidebar, split 50/50 ---
+        if state.show_containerfile {
+            let halves = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(main_area);
 
+            let list_area = halves[0];
+            let cf_area = halves[1];
+
+            // Left: triage list.
             let list_focused = state.focus == FocusTarget::ItemList;
             let list_widget = TriageListWidget::new(
                 &items,
@@ -118,15 +90,73 @@ impl SingleHostScreen {
                 active_section_id,
                 list_focused,
                 tier,
-                0, // scroll_offset -- wired in Task 11
+                0,
             );
-            frame.render_widget(list_widget, list_render_area);
+            frame.render_widget(list_widget, list_area);
 
-            // --- Info bar ---
-            if let Some(info_area) = info_area
-                && let Some(data) = build_info_bar_data(session, state, &items)
-            {
-                frame.render_widget(InfoBarWidget::new(&data, tier), info_area);
+            // Right: containerfile preview.
+            let view = session.view();
+            let cf_widget = ContainerfileWidget::new(&view.containerfile_preview, tier);
+            frame.render_widget(cf_widget, cf_area);
+        } else {
+            // --- Default layout: sidebar + item list ---
+            let horizontal = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(20)])
+                .split(main_area);
+
+            let sidebar_area = horizontal[0];
+            let list_area = horizontal[1];
+
+            // --- Sidebar ---
+            let sidebar_focused = state.focus == FocusTarget::Sidebar;
+            let sidebar = SectionNavWidget::new(
+                &entries,
+                state.active_section,
+                sidebar_focused,
+                tier,
+                state.sidebar_scroll,
+            );
+            frame.render_widget(sidebar, sidebar_area);
+
+            // --- Triage list / Detail view ---
+            // Fullscreen detail replaces the item list entirely.
+            if state.detail_mode == DetailMode::Fullscreen {
+                if let Some(data) = build_detail_data(session, state, &items) {
+                    frame.render_widget(
+                        DetailViewWidget::new(&data, state.detail_scroll, tier),
+                        list_area,
+                    );
+                }
+            } else {
+                // Split list area for info bar when active.
+                let (list_render_area, info_area) = if state.detail_mode == DetailMode::InfoBar {
+                    let split = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Min(5), Constraint::Length(4)])
+                        .split(list_area);
+                    (split[0], Some(split[1]))
+                } else {
+                    (list_area, None)
+                };
+
+                let list_focused = state.focus == FocusTarget::ItemList;
+                let list_widget = TriageListWidget::new(
+                    &items,
+                    state.cursor,
+                    active_section_id,
+                    list_focused,
+                    tier,
+                    0, // scroll_offset -- wired in Task 11
+                );
+                frame.render_widget(list_widget, list_render_area);
+
+                // --- Info bar ---
+                if let Some(info_area) = info_area
+                    && let Some(data) = build_info_bar_data(session, state, &items)
+                {
+                    frame.render_widget(InfoBarWidget::new(&data, tier), info_area);
+                }
             }
         }
 
