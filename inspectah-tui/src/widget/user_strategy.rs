@@ -51,11 +51,15 @@ impl UserEntry {
     }
 
     /// Cycle to the next password choice variant.
+    ///
+    /// Only cycles between `None` and `Preserve`. `New` requires a
+    /// password hash that the TUI cannot prompt for, so it is excluded
+    /// from the cycle. If the current choice is `New` (set externally),
+    /// cycle back to `None`.
     pub fn next_password_choice(&self) -> UserPasswordChoice {
         match self.password_choice {
             UserPasswordChoice::None => UserPasswordChoice::Preserve,
-            UserPasswordChoice::Preserve => UserPasswordChoice::New,
-            UserPasswordChoice::New => UserPasswordChoice::None,
+            UserPasswordChoice::Preserve | UserPasswordChoice::New => UserPasswordChoice::None,
         }
     }
 }
@@ -340,6 +344,7 @@ mod tests {
 
     #[test]
     fn next_password_choice_cycles() {
+        // None -> Preserve -> None (New excluded from TUI cycle).
         let entry = UserEntry {
             username: "t".to_string(),
             uid: 1,
@@ -356,8 +361,9 @@ mod tests {
             has_password: true,
             password_choice: UserPasswordChoice::Preserve,
         };
-        assert_eq!(entry2.next_password_choice(), UserPasswordChoice::New);
+        assert_eq!(entry2.next_password_choice(), UserPasswordChoice::None);
 
+        // New (set externally) cycles back to None.
         let entry3 = UserEntry {
             username: "t".to_string(),
             uid: 1,

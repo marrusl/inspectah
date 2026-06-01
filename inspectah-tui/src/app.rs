@@ -333,9 +333,11 @@ impl App {
                             UserPasswordChoice::Preserve => UserPasswordOp::Preserve {
                                 username: entry.username.clone(),
                             },
-                            UserPasswordChoice::New => UserPasswordOp::New {
+                            // New is excluded from TUI cycling (requires hash input),
+                            // but handle the variant exhaustively in case it's set
+                            // externally (e.g., session loaded from web UI).
+                            UserPasswordChoice::New => UserPasswordOp::None {
                                 username: entry.username.clone(),
-                                hash: None,
                             },
                         });
                         if let Err(e) = self.session.apply(op) {
