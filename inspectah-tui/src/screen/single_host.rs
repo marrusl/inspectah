@@ -214,8 +214,11 @@ fn bucket_to_group(bucket: TriageBucket) -> TriageGroup {
 
 /// Build `ListItem`s for the active section from session data.
 ///
-/// Only Packages and Configs are fully wired. Other sections return
-/// empty lists until remaining section data is wired.
+/// Decision sections (Packages, Configs, Services, Containers, Sysctls,
+/// Tuned) produce grouped items with triage buckets and toggle state.
+/// Reference sections (VerChanges, KernelBoot, Network, Storage,
+/// ScheduledTasks, NonRpmSoftware, SELinux) produce flat lists.
+/// Users returns empty — rendered by `UserStrategyWidget` instead.
 pub fn build_list_items(
     session: &RefineSession,
     section: SectionId,
@@ -278,8 +281,607 @@ pub fn build_list_items(
                 })
                 .collect()
         }
-        // Other sections -- empty until wired in Task 11.
-        _ => Vec::new(),
+        // ── Decision sections ─────────────────────────────────────
+        SectionId::Services => {
+            let decisions = session.decisions();
+            let reference = session.reference();
+            let mut items: Vec<RawItem> = Vec::new();
+
+            // Decision: service state changes (togglable).
+            for svc in &decisions.service_states {
+                let name = svc.entry.unit.clone();
+                let detail = format!("{:?}", svc.entry.current_state);
+                let group = bucket_to_group(svc.triage.bucket());
+                let id = ItemId::Service {
+                    unit: svc.entry.unit.clone(),
+                };
+                items.push((
+                    name,
+                    detail,
+                    group,
+                    Some(svc.entry.include),
+                    Some(id),
+                    false,
+                ));
+            }
+
+            // Decision: service drop-ins (togglable).
+            for di in &decisions.service_dropins {
+                let name = format!("{} (drop-in)", di.entry.unit);
+                let detail = di.entry.path.clone();
+                let group = bucket_to_group(di.triage.bucket());
+                let id = ItemId::DropIn {
+                    path: di.entry.path.clone(),
+                };
+                let has_content = !di.entry.content.is_empty();
+                items.push((
+                    name,
+                    detail,
+                    group,
+                    Some(di.entry.include),
+                    Some(id),
+                    has_content,
+                ));
+            }
+
+            // Reference: services sub-collections (read-only, no toggle).
+            let rs = &reference.services;
+            for s in &rs.divergent {
+                items.push((
+                    s.unit.clone(),
+                    "divergent".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for s in &rs.preset_matched_with_dropins {
+                items.push((
+                    s.unit.clone(),
+                    "preset+dropins".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for s in &rs.preset_unknown_enabled {
+                items.push((
+                    s.unit.clone(),
+                    "unknown (enabled)".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for s in &rs.preset_unknown_disabled {
+                items.push((
+                    s.unit.clone(),
+                    "unknown (disabled)".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for s in &rs.standalone_dropins {
+                items.push((
+                    s.unit.clone(),
+                    format!("drop-in: {}", s.path),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    !s.content.is_empty(),
+                ));
+            }
+            for s in &rs.omitted {
+                items.push((
+                    s.unit.clone(),
+                    format!("omitted: {}", s.reason),
+                    TriageGroup::Baseline,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for a in &rs.advisories {
+                items.push((
+                    a.unit.clone(),
+                    format!("advisory ({})", a.owning_package),
+                    TriageGroup::Investigate,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for w in &rs.warnings {
+                items.push((
+                    w.unit.clone(),
+                    format!("warning: {}", w.message),
+                    TriageGroup::Investigate,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            items
+        }
+        SectionId::Containers => {
+            let decisions = session.decisions();
+            let reference = session.reference();
+            let mut items: Vec<RawItem> = Vec::new();
+
+            // Decision: quadlets (togglable).
+            for q in &decisions.quadlets {
+                let name = q.entry.name.clone();
+                let detail = q.entry.image.clone();
+                let group = bucket_to_group(q.triage.bucket());
+                let id = ItemId::Quadlet {
+                    path: q.entry.path.clone(),
+                };
+                let has_content = !q.entry.content.is_empty();
+                items.push((
+                    name,
+                    detail,
+                    group,
+                    Some(q.entry.include),
+                    Some(id),
+                    has_content,
+                ));
+            }
+
+            // Decision: flatpaks (togglable).
+            for f in &decisions.flatpaks {
+                let name = f.entry.app_id.clone();
+                let detail = format!("{}/{}", f.entry.origin, f.entry.branch);
+                let group = bucket_to_group(f.triage.bucket());
+                let id = ItemId::Flatpak {
+                    app_id: f.entry.app_id.clone(),
+                    remote: f.entry.remote.clone(),
+                    branch: f.entry.branch.clone(),
+                };
+                items.push((name, detail, group, Some(f.entry.include), Some(id), false));
+            }
+
+            // Reference: running containers (read-only).
+            let rc = &reference.containers;
+            for c in &rc.running_containers {
+                items.push((
+                    c.name.clone(),
+                    format!("{} ({})", c.image, c.status),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            // Reference: compose files (read-only).
+            for cf in &rc.compose_files {
+                let svc_names: Vec<&str> = cf.services.iter().map(|s| s.service.as_str()).collect();
+                items.push((
+                    cf.path.clone(),
+                    svc_names.join(", "),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            items
+        }
+        SectionId::Sysctls => {
+            let decisions = session.decisions();
+            decisions
+                .sysctls
+                .iter()
+                .map(|s| {
+                    let name = s.entry.key.clone();
+                    let detail = format!("{} (source: {})", s.entry.runtime, s.entry.source);
+                    let group = bucket_to_group(s.triage.bucket());
+                    let id = ItemId::Sysctl {
+                        key: s.entry.key.clone(),
+                    };
+                    (name, detail, group, Some(s.entry.include), Some(id), false)
+                })
+                .collect()
+        }
+        SectionId::Tuned => {
+            let decisions = session.decisions();
+            decisions
+                .tuned
+                .iter()
+                .map(|t| {
+                    let name = t.active_profile.clone();
+                    let detail = if t.custom_profiles.is_empty() {
+                        "standard profile".into()
+                    } else {
+                        format!("custom: {}", t.custom_profiles.join(", "))
+                    };
+                    let group = bucket_to_group(t.triage.bucket());
+                    let id = ItemId::TunedSelection {
+                        profile: t.active_profile.clone(),
+                    };
+                    (name, detail, group, Some(t.include), Some(id), false)
+                })
+                .collect()
+        }
+        // Users section is rendered by UserStrategyWidget, not the triage list.
+        SectionId::Users => Vec::new(),
+
+        // ── Reference sections (flat list, no toggle) ────────────
+        SectionId::VerChanges => {
+            let reference = session.reference();
+            let vc = &reference.version_changes;
+            let mut items: Vec<RawItem> = Vec::new();
+            for v in &vc.downgrades {
+                let name = format!("{}.{}", v.name, v.arch);
+                let detail = format!("{} -> {} (downgrade)", v.host_version, v.base_version);
+                items.push((name, detail, TriageGroup::Investigate, None, None, false));
+            }
+            for v in &vc.upgrades {
+                let name = format!("{}.{}", v.name, v.arch);
+                let detail = format!("{} -> {} (upgrade)", v.host_version, v.base_version);
+                items.push((name, detail, TriageGroup::Site, None, None, false));
+            }
+            items
+        }
+        SectionId::KernelBoot => {
+            let reference = session.reference();
+            let kb = &reference.kernel_boot;
+            let mut items: Vec<RawItem> = Vec::new();
+
+            if let Some(ref cmdline) = kb.cmdline {
+                items.push((
+                    "cmdline".into(),
+                    cmdline.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    true,
+                ));
+            }
+            if let Some(ref grub) = kb.grub_defaults {
+                items.push((
+                    "grub defaults".into(),
+                    grub.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    true,
+                ));
+            }
+            if let Some(ref tuned) = kb.tuned_active {
+                items.push((
+                    "tuned active".into(),
+                    tuned.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            if let Some(ref locale) = kb.locale {
+                items.push((
+                    "locale".into(),
+                    locale.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            if let Some(ref tz) = kb.timezone {
+                items.push((
+                    "timezone".into(),
+                    tz.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for s in &kb.sysctl_overrides {
+                items.push((
+                    s.key.clone(),
+                    format!("{} (default: {})", s.runtime, s.default),
+                    TriageGroup::Site,
+                    None,
+                    Some(ItemId::Sysctl { key: s.key.clone() }),
+                    false,
+                ));
+            }
+            for m in &kb.non_default_modules {
+                items.push((
+                    m.name.clone(),
+                    format!("size: {}, used by: {}", m.size, m.used_by),
+                    TriageGroup::Site,
+                    None,
+                    Some(ItemId::KernelModule {
+                        name: m.name.clone(),
+                    }),
+                    false,
+                ));
+            }
+            for c in &kb.modules_load_d {
+                items.push((
+                    c.path.clone(),
+                    "modules-load.d".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    !c.content.is_empty(),
+                ));
+            }
+            for c in &kb.modprobe_d {
+                items.push((
+                    c.path.clone(),
+                    "modprobe.d".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    !c.content.is_empty(),
+                ));
+            }
+            for c in &kb.dracut_conf {
+                items.push((
+                    c.path.clone(),
+                    "dracut.conf".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    !c.content.is_empty(),
+                ));
+            }
+            for c in &kb.custom_tuned_profiles {
+                items.push((
+                    c.path.clone(),
+                    "tuned profile".into(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    !c.content.is_empty(),
+                ));
+            }
+            for a in &kb.alternatives {
+                items.push((
+                    a.name.clone(),
+                    format!("{} ({})", a.path, a.status),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            items
+        }
+        SectionId::Network => {
+            let reference = session.reference();
+            let net = &reference.network;
+            let mut items: Vec<RawItem> = Vec::new();
+
+            for c in &net.connections {
+                items.push((
+                    c.name.clone(),
+                    format!("{} ({})", c.conn_type, c.method),
+                    TriageGroup::Site,
+                    None,
+                    Some(ItemId::NMConnection {
+                        path: c.path.clone(),
+                    }),
+                    false,
+                ));
+            }
+            for z in &net.firewall_zones {
+                items.push((
+                    z.name.clone(),
+                    format!("zone ({})", z.path),
+                    TriageGroup::Site,
+                    None,
+                    Some(ItemId::FirewallZone {
+                        path: z.path.clone(),
+                    }),
+                    !z.content.is_empty(),
+                ));
+            }
+            for r in &net.firewall_direct_rules {
+                items.push((
+                    format!("{}/{}", r.table, r.chain),
+                    format!("ipv{} prio={}", r.ipv, r.priority),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for r in &net.static_routes {
+                items.push((
+                    r.name.clone(),
+                    r.path.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for route in &net.ip_routes {
+                items.push((
+                    "ip route".into(),
+                    route.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for rule in &net.ip_rules {
+                items.push((
+                    "ip rule".into(),
+                    rule.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            if !net.resolv_provenance.is_empty() {
+                items.push((
+                    "resolv.conf".into(),
+                    net.resolv_provenance.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for h in &net.hosts_additions {
+                items.push((
+                    "/etc/hosts".into(),
+                    h.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for p in &net.proxy_env {
+                items.push((
+                    "proxy".into(),
+                    format!("{}: {}", p.source, p.line),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            items
+        }
+        SectionId::Storage => {
+            let reference = session.reference();
+            let st = &reference.storage;
+            let mut items: Vec<RawItem> = Vec::new();
+
+            for f in &st.fstab_entries {
+                items.push((
+                    f.mount_point.clone(),
+                    format!("{} ({} {})", f.device, f.fstype, f.options),
+                    TriageGroup::Site,
+                    None,
+                    Some(ItemId::Fstab {
+                        mount_point: f.mount_point.clone(),
+                    }),
+                    false,
+                ));
+            }
+            for m in &st.mount_points {
+                items.push((
+                    m.target.clone(),
+                    format!("{} ({} {})", m.source, m.fstype, m.options),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for lv in &st.lvm_volumes {
+                items.push((
+                    format!("{}/{}", lv.vg_name, lv.lv_name),
+                    lv.lv_size.clone(),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for d in &st.var_directories {
+                items.push((
+                    d.path.clone(),
+                    format!("{} — {}", d.size_estimate, d.recommendation),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+            for cr in &st.credential_refs {
+                items.push((
+                    cr.credential_path.clone(),
+                    format!("{} ({})", cr.mount_point, cr.source),
+                    TriageGroup::Site,
+                    None,
+                    None,
+                    false,
+                ));
+            }
+
+            items
+        }
+        SectionId::ScheduledTasks => {
+            let reference = session.reference();
+            reference
+                .scheduled_tasks
+                .iter()
+                .map(|t| {
+                    let detail = t.summary.as_deref().unwrap_or("").to_string();
+                    let has_content = t.content.is_some();
+                    (
+                        t.key.clone(),
+                        detail,
+                        TriageGroup::Site,
+                        None,
+                        None,
+                        has_content,
+                    )
+                })
+                .collect()
+        }
+        SectionId::NonRpmSoftware => {
+            let reference = session.reference();
+            reference
+                .non_rpm_software
+                .iter()
+                .map(|s| {
+                    let detail = s.summary.as_deref().unwrap_or("").to_string();
+                    let has_content = s.content.is_some();
+                    let id = ItemId::NonRpm {
+                        name: s.key.clone(),
+                    };
+                    (
+                        s.key.clone(),
+                        detail,
+                        TriageGroup::Site,
+                        None,
+                        Some(id),
+                        has_content,
+                    )
+                })
+                .collect()
+        }
+        SectionId::SELinux => {
+            let reference = session.reference();
+            reference
+                .selinux
+                .iter()
+                .map(|s| {
+                    let detail = s.summary.as_deref().unwrap_or("").to_string();
+                    let has_content = s.content.is_some();
+                    (
+                        s.key.clone(),
+                        detail,
+                        TriageGroup::Site,
+                        None,
+                        None,
+                        has_content,
+                    )
+                })
+                .collect()
+        }
     };
 
     build_grouped_items(&raw_items, state, section)
