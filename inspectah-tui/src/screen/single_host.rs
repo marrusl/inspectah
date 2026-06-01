@@ -179,8 +179,24 @@ impl SingleHostScreen {
             .map(|e| (e.included, e.excluded))
             .unwrap_or((0, 0));
 
+        // Count reviewed items for this section (items whose viewed key
+        // starts with the section's prefix).
+        let (reviewed, total_reviewable) = if let Some(prefix) = active_section_id.viewed_prefix() {
+            let prefix_colon = format!("{prefix}:");
+            let reviewed = session
+                .viewed_ids()
+                .iter()
+                .filter(|id| id.starts_with(&prefix_colon))
+                .count();
+            let total = items.iter().filter(|i| !i.is_group_header).count();
+            (reviewed, total)
+        } else {
+            (0, 0)
+        };
+
         let status = StatusBarWidget::new(tier)
             .stats(included, excluded, stats.needs_review_count)
+            .reviewed_progress(reviewed, total_reviewable)
             .decision_section(active_section_id.is_decision())
             .flash(state.flash.as_ref());
         frame.render_widget(status, status_area);
