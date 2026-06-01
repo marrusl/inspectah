@@ -159,12 +159,11 @@ impl App {
                     signal_hook::consts::SIGCONT => {
                         let _ = terminal::enable_raw_mode();
                         let _ = execute!(io::stdout(), EnterAlternateScreen, cursor::Hide);
-                        // SAFETY: Restoring the default SIGTSTP handler so a subsequent
-                        // Ctrl+Z will suspend again. `libc::signal` is safe for this
-                        // well-defined signal number on all POSIX systems.
-                        unsafe {
-                            libc::signal(libc::SIGTSTP, libc::SIG_DFL);
-                        }
+                        // signal-hook's sigaction-based SIGTSTP handler persists
+                        // across suspend/resume -- no need to re-register it here.
+                        // The SIGTSTP handler resets to SIG_DFL before raise() (so
+                        // the process actually suspends), and signal-hook restores
+                        // our handler automatically on return from the signal.
                     }
                     _ => {}
                 }
