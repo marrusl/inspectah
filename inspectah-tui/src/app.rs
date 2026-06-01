@@ -112,6 +112,10 @@ impl App {
         }
     }
 
+    pub fn set_tarball_path(&mut self, path: std::path::PathBuf) {
+        self.tarball_path = Some(path);
+    }
+
     pub fn run(mut self) -> color_eyre::Result<()> {
         // 1. Install color-eyre BEFORE alt screen (ignore if already installed)
         let _ = color_eyre::install();
