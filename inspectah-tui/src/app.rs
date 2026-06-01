@@ -19,6 +19,7 @@ use crate::theme::{ColorTier, detect_color_tier};
 use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, TuiState};
 
 use crate::widget::help_screen::HelpScreenWidget;
+use crate::widget::search::{self, SearchResult, SearchWidget};
 use crate::widget::triage_list::TriageGroup;
 
 /// Map a `TriageGroup` to its index in the canonical bucket order
@@ -53,6 +54,10 @@ pub struct App {
     tarball_path: Option<std::path::PathBuf>,
     /// Pending export path set by :export command.
     pending_export_path: Option<std::path::PathBuf>,
+    /// Current search results (populated in real-time as user types).
+    search_results: Vec<SearchResult>,
+    /// Currently selected index in search results.
+    search_selected: usize,
 }
 
 impl App {
@@ -66,6 +71,8 @@ impl App {
             screen: Screen::SingleHost(SingleHostScreen::new()),
             tarball_path: None,
             pending_export_path: None,
+            search_results: Vec::new(),
+            search_selected: 0,
         }
     }
 
@@ -158,6 +165,18 @@ impl App {
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.should_quit = true,
+
+            // Search-mode cursor movement (must precede unconditional arms).
+            Action::CursorDown
+                if self.state.input_mode == InputMode::Search
+                    && !self.search_results.is_empty() =>
+            {
+                self.search_selected =
+                    (self.search_selected + 1).min(self.search_results.len() - 1);
+            }
+            Action::CursorUp if self.state.input_mode == InputMode::Search => {
+                self.search_selected = self.search_selected.saturating_sub(1);
+            }
 
             // Navigation — focus-aware
             Action::CursorDown => match self.state.focus {
@@ -326,6 +345,45 @@ impl App {
                 };
             }
 
+            // Search overlay
+            Action::EnterSearch => {
+                self.state.input_mode = InputMode::Search;
+                self.state.search_query.clear();
+                self.search_results.clear();
+                self.search_selected = 0;
+            }
+            Action::InputChar(ch) if self.state.input_mode == InputMode::Search => {
+                self.state.search_query.push(ch);
+                self.search_results =
+                    search::search_all_sections(&self.session, &self.state.search_query);
+                self.search_selected = 0;
+            }
+            Action::InputBackspace if self.state.input_mode == InputMode::Search => {
+                self.state.search_query.pop();
+                self.search_results =
+                    search::search_all_sections(&self.session, &self.state.search_query);
+                self.search_selected = 0;
+            }
+            Action::SubmitInput if self.state.input_mode == InputMode::Search => {
+                if let Some(result) = self.search_results.get(self.search_selected) {
+                    // Find the section index for the result's section_id.
+                    if let Some(idx) = SECTION_ORDER.iter().position(|&s| s == result.section_id) {
+                        self.state.section_cursors[self.state.active_section] = self.state.cursor;
+                        self.state.active_section = idx;
+                        self.state.cursor = 0;
+                        self.state.focus = FocusTarget::ItemList;
+                    }
+                }
+                self.state.input_mode = InputMode::Normal;
+                self.state.search_query.clear();
+                self.search_results.clear();
+            }
+            Action::CancelInput if self.state.input_mode == InputMode::Search => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.search_query.clear();
+                self.search_results.clear();
+            }
+
             // Item toggling
             Action::ToggleItem => {
                 let items = self.current_items();
@@ -390,6 +448,19 @@ impl App {
         // Overlay: help screen
         if self.state.input_mode == InputMode::Help {
             frame.render_widget(HelpScreenWidget::new(self.tier), area);
+        }
+
+        // Overlay: search
+        if self.state.input_mode == InputMode::Search {
+            frame.render_widget(
+                SearchWidget::new(
+                    &self.state.search_query,
+                    &self.search_results,
+                    self.search_selected,
+                    self.tier,
+                ),
+                area,
+            );
         }
     }
 }
