@@ -447,8 +447,20 @@ impl App {
                     if let Some(idx) = SECTION_ORDER.iter().position(|&s| s == result.section_id) {
                         self.state.section_cursors[self.state.active_section] = self.state.cursor;
                         self.state.active_section = idx;
-                        self.state.cursor = 0;
                         self.state.focus = FocusTarget::ItemList;
+
+                        // Navigate to the specific matching item within the section.
+                        let target_name = result.name.clone();
+                        let section_items = crate::screen::single_host::build_list_items(
+                            &self.session,
+                            result.section_id,
+                            &self.state,
+                        );
+                        let item_cursor = section_items
+                            .iter()
+                            .position(|item| !item.is_group_header && item.name == target_name)
+                            .unwrap_or(0);
+                        self.state.cursor = item_cursor;
                     }
                 }
                 self.state.input_mode = InputMode::Normal;
