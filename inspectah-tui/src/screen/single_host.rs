@@ -912,10 +912,10 @@ pub fn build_list_items(
     let mut result = build_grouped_items(&raw_items, state, section);
 
     // Packages section: prepend a repo bar summary line above the triage groups.
-    if section == SectionId::Packages {
-        if let Some(repo_line) = build_repo_bar_line(session) {
-            result.insert(0, ListItem::repo_bar(repo_line));
-        }
+    if section == SectionId::Packages
+        && let Some(repo_line) = build_repo_bar_line(session)
+    {
+        result.insert(0, ListItem::repo_bar(repo_line));
     }
 
     result
