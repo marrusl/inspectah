@@ -658,6 +658,10 @@ impl App {
                     match inspectah_refine::tarball::from_tarball(tarball) {
                         Ok(fresh) => {
                             self.session = fresh;
+                            // Restore tarball path on the new session so autosave keeps working.
+                            if let Some(ref path) = self.tarball_path {
+                                self.session.set_tarball_path(path.clone());
+                            }
                             self.state = TuiState::new(14);
                             self.state.flash =
                                 Some(FlashMessage::new("Session reset from tarball", 3));
