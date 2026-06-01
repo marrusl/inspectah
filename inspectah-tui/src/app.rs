@@ -18,6 +18,7 @@ use crate::sections::{self, SECTION_ORDER};
 use crate::theme::{ColorTier, detect_color_tier};
 use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, TuiState};
 
+use crate::widget::command_line::{self, CommandLineWidget};
 use crate::widget::help_screen::HelpScreenWidget;
 use crate::widget::search::{self, SearchResult, SearchWidget};
 use crate::widget::triage_list::TriageGroup;
@@ -384,6 +385,36 @@ impl App {
                 self.search_results.clear();
             }
 
+            // Command mode
+            Action::EnterCommand => {
+                self.state.input_mode = InputMode::Command;
+                self.state.command_input.clear();
+            }
+            Action::InputChar(ch) if self.state.input_mode == InputMode::Command => {
+                self.state.command_input.push(ch);
+            }
+            Action::InputBackspace if self.state.input_mode == InputMode::Command => {
+                self.state.command_input.pop();
+            }
+            Action::TabComplete if self.state.input_mode == InputMode::Command => {
+                if let Some(completed) = command_line::complete(&self.state.command_input) {
+                    self.state.command_input = completed;
+                }
+            }
+            Action::SubmitInput if self.state.input_mode == InputMode::Command => {
+                self.execute_command();
+                // Some commands (e.g. :search) switch to a different input mode;
+                // only reset to Normal if still in Command mode.
+                if self.state.input_mode == InputMode::Command {
+                    self.state.input_mode = InputMode::Normal;
+                }
+                self.state.command_input.clear();
+            }
+            Action::CancelInput if self.state.input_mode == InputMode::Command => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.command_input.clear();
+            }
+
             // Item toggling
             Action::ToggleItem => {
                 let items = self.current_items();
@@ -430,6 +461,109 @@ impl App {
         crate::screen::single_host::build_list_items(&self.session, active_section_id, &self.state)
     }
 
+    /// Execute a parsed command from command mode.
+    fn execute_command(&mut self) {
+        let input = self.state.command_input.clone();
+        let Some((cmd, args)) = command_line::parse_command(&input) else {
+            return;
+        };
+
+        match cmd {
+            "export" => {
+                // Placeholder -- wired in Task 20.
+                self.state.flash = Some(FlashMessage::new("Export: not yet implemented", 3));
+            }
+            "save" => {
+                // Placeholder -- wired in Task 20.
+                self.state.flash = Some(FlashMessage::new("Save: not yet implemented", 3));
+            }
+            "search" => {
+                // Switch to search mode with the args as initial query.
+                self.state.input_mode = InputMode::Search;
+                self.state.search_query = args.to_string();
+                self.search_results =
+                    search::search_all_sections(&self.session, &self.state.search_query);
+                self.search_selected = 0;
+            }
+            "section" => {
+                let target = args.trim().to_lowercase();
+                if target.is_empty() {
+                    self.state.flash = Some(FlashMessage::new("Usage: :section <name>", 3));
+                } else {
+                    // Find section by prefix match on label.
+                    let sections = sections::build_section_entries(&self.session);
+                    if let Some(idx) = SECTION_ORDER
+                        .iter()
+                        .position(|s| s.label().to_lowercase().starts_with(&target))
+                    {
+                        if idx < sections.len() {
+                            self.state.section_cursors[self.state.active_section] =
+                                self.state.cursor;
+                            self.state.active_section = idx;
+                            self.state.cursor = self.state.section_cursors[idx];
+                            self.state.focus = FocusTarget::ItemList;
+                        }
+                    } else {
+                        self.state.flash = Some(FlashMessage::new(
+                            format!("Unknown section: {}", args.trim()),
+                            3,
+                        ));
+                    }
+                }
+            }
+            "stats" => {
+                let view = self.session.view();
+                let s = &view.stats;
+                let msg = format!(
+                    "ops: {} | undo: {} | redo: {} | review: {}",
+                    s.ops_applied,
+                    if s.can_undo { "yes" } else { "no" },
+                    if s.can_redo { "yes" } else { "no" },
+                    s.needs_review_count,
+                );
+                self.state.flash = Some(FlashMessage::new(msg, 5));
+            }
+            "undo" => {
+                if let Err(e) = self.session.undo() {
+                    self.state.flash = Some(FlashMessage::new(format!("Undo: {e}"), 3));
+                }
+            }
+            "redo" => {
+                if let Err(e) = self.session.redo() {
+                    self.state.flash = Some(FlashMessage::new(format!("Redo: {e}"), 3));
+                }
+            }
+            "fresh" => {
+                if let Some(ref tarball) = self.tarball_path {
+                    // Delete the sidecar session file and reload from tarball.
+                    let sidecar = inspectah_refine::autosave::session_file_path(tarball);
+                    let _ = std::fs::remove_file(&sidecar);
+                    match inspectah_refine::tarball::from_tarball(tarball) {
+                        Ok(fresh) => {
+                            self.session = fresh;
+                            self.state = TuiState::new(14);
+                            self.state.flash =
+                                Some(FlashMessage::new("Session reset from tarball", 3));
+                        }
+                        Err(e) => {
+                            self.state.flash =
+                                Some(FlashMessage::new(format!("Fresh reload failed: {e}"), 5));
+                        }
+                    }
+                } else {
+                    self.state.flash =
+                        Some(FlashMessage::new("No tarball path -- cannot reload", 3));
+                }
+            }
+            "quit" => {
+                self.should_quit = true;
+            }
+            _ => {
+                self.state.flash = Some(FlashMessage::new(format!("Unknown command: {cmd}"), 3));
+            }
+        }
+    }
+
     fn render(&self, frame: &mut ratatui::Frame) {
         let area = frame.area();
 
@@ -460,6 +594,21 @@ impl App {
                     self.tier,
                 ),
                 area,
+            );
+        }
+
+        // Overlay: command line (renders in the status bar row)
+        if self.state.input_mode == InputMode::Command {
+            let status_area = ratatui::layout::Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
+            let comp = command_line::complete(&self.state.command_input);
+            frame.render_widget(
+                CommandLineWidget::new(&self.state.command_input, comp.as_deref(), self.tier),
+                status_area,
             );
         }
     }
