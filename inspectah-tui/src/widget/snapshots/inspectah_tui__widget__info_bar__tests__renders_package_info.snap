@@ -1,0 +1,9 @@
+---
+source: inspectah-tui/src/widget/info_bar.rs
+expression: buffer_to_string(&buf)
+---
+──────────────────────────────────────────────────
+ httpd.x86_64
+  Version: 2.4.62
+  Repo: rhel-9-appstream
+  Reason: User-added package

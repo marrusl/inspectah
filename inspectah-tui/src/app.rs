@@ -265,6 +265,14 @@ impl App {
                 }
             }
 
+            // Close detail view
+            Action::CloseDetail if self.state.detail_mode != DetailMode::None => {
+                self.state.detail_mode = DetailMode::None;
+                if self.state.focus == FocusTarget::DetailPane {
+                    self.state.focus = FocusTarget::ItemList;
+                }
+            }
+
             // Item toggling
             Action::ToggleItem => {
                 let items = self.current_items();
