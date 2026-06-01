@@ -6,7 +6,7 @@ use inspectah_core::types::redaction::{
 };
 use regex::Regex;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SecretPattern, scan_shadow};
@@ -118,6 +118,40 @@ struct EligibleMatch {
     line_num: usize,
 }
 
+/// Known non-secret values that appear after `password:` or `passwd:`
+/// in NSS, PAM, and similar config files. Checked case-insensitively.
+static FALSE_POSITIVE_VALUES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "files",
+        "compat",
+        "sss",
+        "ldap",
+        "nis",
+        "hesiod",
+        "systemd",
+        "nisplus",
+        "winbind",
+        "required",
+        "sufficient",
+        "optional",
+        "include",
+        "substack",
+        "pam_unix.so",
+        "pam_sss.so",
+        "pam_deny.so",
+        "pam_permit.so",
+        "pam_env.so",
+        "requisite",
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Returns true if `value` is a known NSS/PAM token, not a real secret.
+fn is_false_positive_value(value: &str) -> bool {
+    FALSE_POSITIVE_VALUES.contains(value.trim().to_lowercase().as_str())
+}
+
 /// Returns true if the match at `pos` falls on a comment line.
 /// A comment line is one whose trimmed content (before `pos`) starts
 /// with `#`, `//`, or `;`.
@@ -154,7 +188,16 @@ fn collect_eligible_matches(
                 return None;
             }
 
-            // Filter 2 placeholder: false-positive value filtering (Gap 4)
+            // Filter 2: skip Password matches whose value is a known
+            // NSS/PAM false-positive token
+            if pat.finding_kind == FindingKind::Password {
+                if let Some(sep_pos) = text.find('=').or_else(|| text.find(':')) {
+                    let value = &text[sep_pos + 1..];
+                    if is_false_positive_value(value) {
+                        return None;
+                    }
+                }
+            }
 
             // Filter 3 placeholder: shadow-path PasswordHash exclusion (Gap 2)
 
@@ -2143,6 +2186,128 @@ mod tests {
         assert!(
             !result.contains("REDACTED_"),
             "no redaction token should appear in commented content"
+        );
+    }
+
+    // --- False-positive value filtering tests (Gap 4) ---
+
+    #[test]
+    fn test_nsswitch_false_positive_no_finding() {
+        // `passwd: files sss` — the regex fires on `passwd:` with `:` separator,
+        // but `files` is a known false positive.
+        let input = "passwd: files sss";
+        let findings = scan_content(input, "/etc/nsswitch.conf");
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert!(
+            password_findings.is_empty(),
+            "NSS token 'files' must be filtered as false positive"
+        );
+    }
+
+    #[test]
+    fn test_nss_token_via_equals() {
+        let input = "password=files";
+        let findings = scan_content(input, "/etc/nsswitch.conf");
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert!(
+            password_findings.is_empty(),
+            "password=files must be filtered (value 'files' is false positive)"
+        );
+    }
+
+    #[test]
+    fn test_pam_token_via_colon() {
+        let input = "password: sufficient";
+        let findings = scan_content(input, "/etc/pam.d/system-auth");
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert!(
+            password_findings.is_empty(),
+            "password: sufficient must be filtered (value 'sufficient' is false positive)"
+        );
+    }
+
+    #[test]
+    fn test_pam_module_via_equals() {
+        let input = "password=pam_unix.so";
+        let findings = scan_content(input, "/etc/security/custom.conf");
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert!(
+            password_findings.is_empty(),
+            "password=pam_unix.so must be filtered as false positive"
+        );
+    }
+
+    #[test]
+    fn test_real_password_not_filtered() {
+        let input = "password=s3cret";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(
+            findings.len(),
+            1,
+            "real password value must NOT be filtered"
+        );
+        assert_eq!(findings[0].finding_kind, Some(FindingKind::Password));
+    }
+
+    #[test]
+    fn test_mixed_false_positive_and_real_via_redact() {
+        // First line has false-positive value, second has a real secret.
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/config".to_string(),
+                content: "passwd: files\ndb_password=real".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let content = &snapshot.config.as_ref().unwrap().files[0].content;
+        assert!(
+            content.starts_with("passwd: files\n"),
+            "false-positive line must be untouched, got: {content}"
+        );
+        assert!(
+            content.contains("REDACTED_"),
+            "real password line must be redacted, got: {content}"
+        );
+    }
+
+    #[test]
+    fn test_false_positive_case_insensitive() {
+        let input = "password: FILES";
+        let findings = scan_content(input, "/etc/nsswitch.conf");
+        let password_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::Password))
+            .collect();
+        assert!(
+            password_findings.is_empty(),
+            "case-insensitive false positive check must filter 'FILES'"
+        );
+    }
+
+    #[test]
+    fn test_real_secret_in_pam_path() {
+        // A real secret in a pam.d path should still be redacted —
+        // the false-positive filter checks VALUE, not path.
+        let input = "password=actualpass123";
+        let findings = scan_content(input, "/etc/pam.d/custom");
+        assert_eq!(
+            findings.len(),
+            1,
+            "real secret must still be detected even in pam.d path"
         );
     }
 }
