@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-30)
+## Current Status (2026-05-31)
 
 | Phase | Status |
 |-------|--------|
@@ -42,6 +42,8 @@
 | Fleet Spec 2: Refine | DONE (2026-05-30) |
 | Unified Package/Repo Management | DONE (2026-05-30) |
 | Docs Overhaul | DONE (2026-05-30) |
+| TUI Refine (inspectah refine --tui) | SHIPPED (2026-05-31) |
+| Export Tarball Naming Fix | DONE (2026-05-31) |
 
 ## Roadmap to CLI Cutover
 
@@ -106,16 +108,32 @@
     ↓
 ✅ Docs Overhaul (2026-05-30)
     ↓
+✅ TUI Refine — terminal UI for refine workflow (32 commits, 60 tests, 2026-05-31)
+    ↓
+✅ Export Tarball Naming Fix — named subdirectory + input-derived filename (2026-05-31)
+    ↓
 Config Content Editor (inline editing of config files in refine view — needs spec)
     ↓
 Fleet Spec 3: Architect (cross-role hierarchy, possibly multi-phase)
     ↓
 CLI Cutover: Rust binary becomes primary `inspectah` command
     ↓
-Post-cutover: TUI, build command
+Post-cutover: build command
 ```
 
 ## Shipped Work
+
+### TUI Refine (SHIPPED — 2026-05-31)
+
+**Status:** Merged to `rust`. Terminal interface for the refine workflow, invoked via `inspectah refine --tui <tarball>`.
+
+New crate `inspectah-tui`: 6,150 lines across 38 files, 60 tests. Keyboard-driven triage at 80×24 over SSH. Features: 14-section sidebar, grouped triage list with [+]/[-] indicators, info bar and fullscreen detail with diff highlighting, cross-section search, command mode (:export, :fresh, :section, :stats, :undo/:redo), containerfile preview toggle, user strategy cycling, reviewed progress tracking, SIGTSTP/SIGCONT suspend/resume, session resume.
+
+Also fixed export tarballs: now extract into a named subdirectory (`-refined` suffix) instead of spilling into cwd. Applies to both web and TUI export paths.
+
+### Export Tarball Naming Fix (DONE — 2026-05-31)
+
+Refine export tarballs now use input-derived naming (`foo-refined.tar.gz`) and extract into a named subdirectory. Previously used flat extraction and generic filename. Affects both web and TUI export paths.
 
 ### Playwright E2E Testing Expansion (SHIPPED — 2026-05-27)
 
@@ -298,5 +316,5 @@ Rust binary becomes primary `inspectah` command. Go binary deprecated.
 - Architect v2 (multi-artifact decomposition)
 - ~~Remove Go source tree~~ (DONE — 2026-05-24)
 - ~~Documentation overhaul~~ (DONE — 2026-05-30)
-- TUI mode
+- ~~TUI mode~~ (SHIPPED — 2026-05-31)
 - `inspectah build` command

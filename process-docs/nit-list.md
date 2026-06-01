@@ -74,6 +74,18 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [x] **AbsolutePath branch direct proof:** Test renamed from misleading `reject_path_traversal` → `reject_parent_dir_traversal`. Added real `reject_absolute_path` test exercising the literal `/` branch. *(commit b230af9 — 2026-05-30)*
 - [ ] **Symlink collector: `canonicalize()` vs lexical normalization:** The real executor uses `std::fs::canonicalize()` for `resolve_final_target()`, but the mock uses lexical chain-following. If intermediate directory symlinks matter in production subscription paths (unlikely but possible with custom subscription-manager configurations), the mock could miss divergence. Consider a filesystem-backed integration test using real symlink chains on a temp directory.
 
+## TUI: Remaining Section Coverage Gaps
+
+- [ ] **Composite section rendering depth:** Services and Containers composite sections render all sub-collections but group headers could be more descriptive (e.g., show sub-collection labels like "Divergent services", "Preset-unknown enabled")
+- [ ] **Repo toggle from TUI:** Repo bar is display-only in TUI. Web UI supports toggling entire repos. Wire `SetInclude { ItemId::Repo }` to a TUI keybind (e.g., `R` on the repo bar line)
+
+## TUI: Quality Items (from Thorn CP1/CP2)
+
+- [ ] **Unicode width handling:** `truncate()` in triage_list.rs uses byte length as proxy for display width. CJK/emoji characters may under-truncate. Consider `unicode-width` crate for accurate column measurement.
+- [ ] **FlashMessage tests:** No tests for FlashMessage time-based expiry behavior. Add `flash_not_expired_immediately` and `flash_expired_after_zero_duration`.
+- [ ] **Baseline group index constant:** `TuiState::new()` hardcodes `2` for baseline group. Define `const BASELINE_GROUP_INDEX: usize = 2;`.
+- [ ] **Help mode key mapping test:** No test for Help mode in keys.rs. Add coverage for Esc/q/? → CloseDetail.
+
 ---
 
 ## Completed
