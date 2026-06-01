@@ -1215,6 +1215,7 @@ dependencies = [
  "inspectah-core",
  "inspectah-pipeline",
  "inspectah-refine",
+ "inspectah-tui",
  "inspectah-web",
  "libc",
  "open",
