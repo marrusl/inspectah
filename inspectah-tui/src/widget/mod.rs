@@ -1,3 +1,4 @@
+pub mod command_line;
 pub mod detail_view;
 pub mod help_screen;
 pub mod info_bar;
