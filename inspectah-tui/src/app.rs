@@ -6,17 +6,18 @@ use crossterm::{cursor, execute};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use inspectah_core::types::users::UserPasswordChoice;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::RefinementOp;
+use inspectah_refine::types::{RefinementOp, UserPasswordOp};
 
 use crate::action::Action;
 use crate::event::{Event, EventReader};
 use crate::keys::map_key;
 use crate::screen::Screen;
-use crate::screen::single_host::SingleHostScreen;
+use crate::screen::single_host::{SingleHostScreen, build_user_entries};
 use crate::sections::{self, SECTION_ORDER};
 use crate::theme::{ColorTier, detect_color_tier};
-use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, TuiState};
+use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, SectionId, TuiState};
 
 use crate::widget::command_line::{self, CommandLineWidget};
 use crate::widget::help_screen::HelpScreenWidget;
@@ -278,24 +279,52 @@ impl App {
 
             // Group collapse/expand on Enter when on group header,
             // or open detail view for items.
+            // Users section: Enter cycles password choice instead.
             Action::OpenDetail => {
-                let items = self.current_items();
-                if let Some(item) = items.get(self.state.cursor) {
-                    if item.is_group_header {
-                        let group_idx = group_to_bucket_index(item.group);
-                        let key = (self.state.active_section, group_idx);
-                        if self.state.collapsed_groups.contains(&key) {
-                            self.state.collapsed_groups.remove(&key);
-                        } else {
-                            self.state.collapsed_groups.insert(key);
+                let active_section_id = SECTION_ORDER
+                    .get(self.state.active_section)
+                    .copied()
+                    .unwrap_or(SectionId::Packages);
+                if active_section_id == SectionId::Users {
+                    let entries = build_user_entries(&self.session);
+                    if let Some(entry) = entries.get(self.state.cursor) {
+                        let next = entry.next_password_choice();
+                        let op = RefinementOp::UserPassword(match next {
+                            UserPasswordChoice::None => UserPasswordOp::None {
+                                username: entry.username.clone(),
+                            },
+                            UserPasswordChoice::Preserve => UserPasswordOp::Preserve {
+                                username: entry.username.clone(),
+                            },
+                            UserPasswordChoice::New => UserPasswordOp::New {
+                                username: entry.username.clone(),
+                                hash: None,
+                            },
+                        });
+                        if let Err(e) = self.session.apply(op) {
+                            self.state.flash =
+                                Some(FlashMessage::new(format!("Password toggle: {e}"), 3));
                         }
-                    } else if item.has_content {
-                        // Items with rich content open in fullscreen.
-                        self.state.detail_mode = DetailMode::Fullscreen;
-                        self.state.detail_scroll = 0;
-                    } else {
-                        // Items without content get the info bar.
-                        self.state.detail_mode = DetailMode::InfoBar;
+                    }
+                } else {
+                    let items = self.current_items();
+                    if let Some(item) = items.get(self.state.cursor) {
+                        if item.is_group_header {
+                            let group_idx = group_to_bucket_index(item.group);
+                            let key = (self.state.active_section, group_idx);
+                            if self.state.collapsed_groups.contains(&key) {
+                                self.state.collapsed_groups.remove(&key);
+                            } else {
+                                self.state.collapsed_groups.insert(key);
+                            }
+                        } else if item.has_content {
+                            // Items with rich content open in fullscreen.
+                            self.state.detail_mode = DetailMode::Fullscreen;
+                            self.state.detail_scroll = 0;
+                        } else {
+                            // Items without content get the info bar.
+                            self.state.detail_mode = DetailMode::InfoBar;
+                        }
                     }
                 }
             }
@@ -415,20 +444,38 @@ impl App {
                 self.state.command_input.clear();
             }
 
-            // Item toggling
+            // Item toggling -- Users section cycles strategy instead of include/exclude.
             Action::ToggleItem => {
-                let items = self.current_items();
-                if let Some(item) = items.get(self.state.cursor)
-                    && let Some(ref item_id) = item.item_id
-                {
-                    let new_include = !item.included.unwrap_or(true);
-                    let op = RefinementOp::SetInclude {
-                        item_id: item_id.clone(),
-                        include: new_include,
-                    };
-                    if let Err(e) = self.session.apply(op) {
-                        self.state.flash =
-                            Some(FlashMessage::new(format!("Toggle failed: {e}"), 3));
+                let active_section_id = SECTION_ORDER
+                    .get(self.state.active_section)
+                    .copied()
+                    .unwrap_or(SectionId::Packages);
+                if active_section_id == SectionId::Users {
+                    let entries = build_user_entries(&self.session);
+                    if let Some(entry) = entries.get(self.state.cursor) {
+                        let op = RefinementOp::UserStrategy {
+                            username: entry.username.clone(),
+                            strategy: entry.next_strategy(),
+                        };
+                        if let Err(e) = self.session.apply(op) {
+                            self.state.flash =
+                                Some(FlashMessage::new(format!("Strategy toggle: {e}"), 3));
+                        }
+                    }
+                } else {
+                    let items = self.current_items();
+                    if let Some(item) = items.get(self.state.cursor)
+                        && let Some(ref item_id) = item.item_id
+                    {
+                        let new_include = !item.included.unwrap_or(true);
+                        let op = RefinementOp::SetInclude {
+                            item_id: item_id.clone(),
+                            include: new_include,
+                        };
+                        if let Err(e) = self.session.apply(op) {
+                            self.state.flash =
+                                Some(FlashMessage::new(format!("Toggle failed: {e}"), 3));
+                        }
                     }
                 }
             }

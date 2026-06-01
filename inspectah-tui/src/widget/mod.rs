@@ -7,3 +7,4 @@ pub mod search;
 pub mod section_nav;
 pub mod status_bar;
 pub mod triage_list;
+pub mod user_strategy;

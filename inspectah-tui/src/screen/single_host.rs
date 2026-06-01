@@ -20,6 +20,7 @@ use crate::widget::info_bar::{InfoBarData, InfoBarWidget};
 use crate::widget::section_nav::SectionNavWidget;
 use crate::widget::status_bar::StatusBarWidget;
 use crate::widget::triage_list::{ListItem, TriageGroup, TriageListWidget};
+use crate::widget::user_strategy::{UserEntry, UserStrategyWidget};
 
 const SIDEBAR_WIDTH: u16 = 18;
 
@@ -119,9 +120,16 @@ impl SingleHostScreen {
             );
             frame.render_widget(sidebar, sidebar_area);
 
+            // --- Users section: specialized strategy view ---
+            if active_section_id == SectionId::Users {
+                let user_entries = build_user_entries(session);
+                let list_focused = state.focus == FocusTarget::ItemList;
+                let user_widget =
+                    UserStrategyWidget::new(&user_entries, state.cursor, list_focused, tier);
+                frame.render_widget(user_widget, list_area);
             // --- Triage list / Detail view ---
             // Fullscreen detail replaces the item list entirely.
-            if state.detail_mode == DetailMode::Fullscreen {
+            } else if state.detail_mode == DetailMode::Fullscreen {
                 if let Some(data) = build_detail_data(session, state, &items) {
                     frame.render_widget(
                         DetailViewWidget::new(&data, state.detail_scroll, tier),
@@ -497,6 +505,29 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
     }
 
     result
+}
+
+/// Build user entries from session decisions for the UserStrategyWidget.
+pub fn build_user_entries(session: &RefineSession) -> Vec<UserEntry> {
+    session
+        .decisions()
+        .users_groups
+        .iter()
+        .map(|u| {
+            let has_password = u
+                .password_status
+                .as_deref()
+                .map(|s| s == "password_set")
+                .unwrap_or(false);
+            UserEntry {
+                username: u.name.clone(),
+                uid: u.uid,
+                strategy: u.containerfile_strategy.clone(),
+                has_password,
+                password_choice: u.password_choice.clone(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
