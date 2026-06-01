@@ -8,7 +8,7 @@ use ratatui::backend::CrosstermBackend;
 
 use inspectah_core::types::users::UserPasswordChoice;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinementOp, UserPasswordOp};
+use inspectah_refine::types::{ItemId, RefinementOp, UserPasswordOp};
 
 use crate::action::Action;
 use crate::event::{Event, EventReader};
@@ -31,6 +31,41 @@ fn group_to_bucket_index(group: TriageGroup) -> usize {
         TriageGroup::Investigate => 0,
         TriageGroup::Site => 1,
         TriageGroup::Baseline => 2,
+    }
+}
+
+/// Derive the item-level key portion for `mark_viewed()`.
+///
+/// The full viewed ID is `"{prefix}:{item_key}"` where prefix comes from
+/// `SectionId::viewed_prefix()` and item_key is this function's output.
+fn item_id_to_viewed_key(item_id: &ItemId) -> String {
+    match item_id {
+        ItemId::Package { name, arch } => format!("{name}.{arch}"),
+        ItemId::Repo { path } => path.clone(),
+        ItemId::ModuleStream { module_stream } => module_stream.clone(),
+        ItemId::VersionLock { name_arch } => name_arch.clone(),
+        ItemId::Config { path } => path.clone(),
+        ItemId::Service { unit } => unit.clone(),
+        ItemId::DropIn { path } => path.clone(),
+        ItemId::Quadlet { path } => path.clone(),
+        ItemId::Compose { path } => path.clone(),
+        ItemId::Flatpak {
+            app_id,
+            remote,
+            branch,
+        } => format!("{app_id}/{remote}/{branch}"),
+        ItemId::NMConnection { path } => path.clone(),
+        ItemId::FirewallZone { path } => path.clone(),
+        ItemId::KernelModule { name } => name.clone(),
+        ItemId::Sysctl { key } => key.clone(),
+        ItemId::TunedSelection { profile } => profile.clone(),
+        ItemId::CronJob { path } => path.clone(),
+        ItemId::SystemdTimer { name } => name.clone(),
+        ItemId::AtJob { file } => file.clone(),
+        ItemId::GeneratedTimer { name } => name.clone(),
+        ItemId::SelinuxPort { protocol_port } => protocol_port.clone(),
+        ItemId::Fstab { mount_point } => mount_point.clone(),
+        ItemId::NonRpm { name } => name.clone(),
     }
 }
 
@@ -323,6 +358,16 @@ impl App {
                         } else {
                             // Items without content get the info bar.
                             self.state.detail_mode = DetailMode::InfoBar;
+                        }
+                        // Mark item as viewed if the section supports tracking.
+                        if let Some(ref item_id) = item.item_id
+                            && let Some(prefix) = active_section_id.viewed_prefix()
+                        {
+                            let key = item_id_to_viewed_key(item_id);
+                            if !key.is_empty() {
+                                let viewed_id = format!("{prefix}:{key}");
+                                let _ = self.session.mark_viewed(&viewed_id);
+                            }
                         }
                     }
                 }
