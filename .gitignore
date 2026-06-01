@@ -44,6 +44,7 @@ cmd/inspectah/inspector.test
 !/inspectah-cli/
 !/inspectah-web/
 !/inspectah-refine/
+!/inspectah-tui/
 
 # UI build artifacts (inspectah-web)
 inspectah-web/ui/node_modules/

@@ -2038,41 +2038,20 @@ pub fn render_refine_export(
         r#"{"$schema":"http://json-schema.org/draft-07/schema#","title":"InspectionSnapshot","description":"Phase 7 placeholder","type":"object"}"#,
     )?;
 
-    // 7. Create flat tarball (no prefix subdirectory)
-    create_flat_tarball(out, tarball_path)?;
-
-    Ok(())
-}
-
-/// Create a flat tarball (no prefix directory) from a source directory.
-fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), RefineError> {
-    let f = std::fs::File::create(tarball_path)?;
-    let gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
-    let mut tar = tar::Builder::new(gz);
-
-    let mut paths: Vec<_> = walkdir::WalkDir::new(source_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path() != source_dir)
-        .map(|e| e.into_path())
-        .collect();
-    paths.sort();
-
-    for path in &paths {
-        let rel = path
-            .strip_prefix(source_dir)
-            .map_err(|e| RefineError::TarballError(e.to_string()))?;
-        if path.is_dir() {
-            tar.append_dir(rel, path)
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
-        } else {
-            tar.append_path_with_name(path, rel)
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
-        }
-    }
-
-    tar.finish()
+    // 7. Create tarball with a top-level directory matching the output stem.
+    //    e.g. "foo-refined.tar.gz" → prefix "foo-refined", so extraction
+    //    produces foo-refined/Containerfile, foo-refined/config/, etc.
+    let stem = tarball_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = stem
+        .strip_suffix(".tar.gz")
+        .or_else(|| stem.strip_suffix(".tgz"))
+        .unwrap_or(&stem);
+    inspectah_pipeline::render::tarball::create_tarball(out, tarball_path, prefix)
         .map_err(|e| RefineError::TarballError(e.to_string()))?;
+
     Ok(())
 }
 
@@ -3255,27 +3234,29 @@ mod tests {
             .filter_map(|e| e.path().ok().map(|p| p.to_string_lossy().to_string()))
             .collect();
 
-        // Promoted roots must appear in the tarball
+        // Tarball uses "export" as the top-level prefix (from "export.tar.gz").
+        // Promoted roots must appear in the tarball under that prefix.
         assert!(
-            entries.iter().any(|e| e.starts_with("drop-ins/")),
+            entries.iter().any(|e| e.starts_with("export/drop-ins/")),
             "tarball must contain drop-ins/ root. entries: {entries:?}"
         );
         assert!(
             entries
                 .iter()
-                .any(|e| e == "quadlet/myapp.container" || e == "quadlet/myapp.container/"),
+                .any(|e| e == "export/quadlet/myapp.container"
+                    || e == "export/quadlet/myapp.container/"),
             "tarball must contain quadlet/myapp.container. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.starts_with("flatpak/")),
+            entries.iter().any(|e| e.starts_with("export/flatpak/")),
             "tarball must contain flatpak/ root. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.starts_with("sysctl/")),
+            entries.iter().any(|e| e.starts_with("export/sysctl/")),
             "tarball must contain sysctl/ root. entries: {entries:?}"
         );
         assert!(
-            entries.iter().any(|e| e.starts_with("tuned/")),
+            entries.iter().any(|e| e.starts_with("export/tuned/")),
             "tarball must contain tuned/ root. entries: {entries:?}"
         );
 
@@ -3313,17 +3294,19 @@ mod tests {
         assert!(
             !entries
                 .iter()
-                .any(|e| e.starts_with("config/etc/systemd/system/httpd.service.d/")),
+                .any(|e| e.starts_with("export/config/etc/systemd/system/httpd.service.d/")),
             "drop-ins must NOT be under config/. entries: {entries:?}"
         );
         assert!(
             !entries
                 .iter()
-                .any(|e| e.starts_with("config/etc/containers/systemd/")),
+                .any(|e| e.starts_with("export/config/etc/containers/systemd/")),
             "quadlets must NOT be under config/. entries: {entries:?}"
         );
         assert!(
-            !entries.iter().any(|e| e.starts_with("config/etc/tuned/")),
+            !entries
+                .iter()
+                .any(|e| e.starts_with("export/config/etc/tuned/")),
             "tuned profiles must NOT be under config/. entries: {entries:?}"
         );
     }
