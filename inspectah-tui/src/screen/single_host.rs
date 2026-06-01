@@ -212,6 +212,31 @@ fn bucket_to_group(bucket: TriageBucket) -> TriageGroup {
     }
 }
 
+/// Build a repo bar summary string from `decisions().repo_groups`.
+///
+/// Returns a compact line like `"Repos: rhel-9-baseos(120) appstream(45)"`,
+/// or `None` if there are no repo groups.
+fn build_repo_bar_line(session: &RefineSession) -> Option<String> {
+    let decisions = session.decisions();
+    if decisions.repo_groups.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = decisions
+        .repo_groups
+        .iter()
+        .map(|rg| {
+            let label = if rg.section_id.is_empty() {
+                "(none)"
+            } else {
+                &rg.section_id
+            };
+            let toggle = if rg.enabled { "+" } else { "-" };
+            format!("[{toggle}]{label}({})", rg.package_count)
+        })
+        .collect();
+    Some(format!("Repos: {}", parts.join("  ")))
+}
+
 /// Build `ListItem`s for the active section from session data.
 ///
 /// Decision sections (Packages, Configs, Services, Containers, Sysctls,
@@ -884,7 +909,16 @@ pub fn build_list_items(
         }
     };
 
-    build_grouped_items(&raw_items, state, section)
+    let mut result = build_grouped_items(&raw_items, state, section);
+
+    // Packages section: prepend a repo bar summary line above the triage groups.
+    if section == SectionId::Packages {
+        if let Some(repo_line) = build_repo_bar_line(session) {
+            result.insert(0, ListItem::repo_bar(repo_line));
+        }
+    }
+
+    result
 }
 
 /// Build info bar data for the currently selected item.

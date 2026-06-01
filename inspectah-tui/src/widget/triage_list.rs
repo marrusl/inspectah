@@ -55,6 +55,8 @@ pub struct ListItem {
     pub item_id: Option<ItemId>,
     /// Whether this item has rich content (diff, unit file) for fullscreen detail.
     pub has_content: bool,
+    /// True if this row is the repo bar summary (Packages section only).
+    pub is_repo_bar: bool,
 }
 
 impl ListItem {
@@ -78,6 +80,7 @@ impl ListItem {
             group_count: 0,
             item_id,
             has_content: false,
+            is_repo_bar: false,
         }
     }
 
@@ -101,6 +104,7 @@ impl ListItem {
             group_count: 0,
             item_id,
             has_content: true,
+            is_repo_bar: false,
         }
     }
 
@@ -117,6 +121,24 @@ impl ListItem {
             group_count: count,
             item_id: None,
             has_content: false,
+            is_repo_bar: false,
+        }
+    }
+
+    /// Create a repo bar summary row (Packages section only).
+    pub fn repo_bar(text: impl Into<String>) -> Self {
+        Self {
+            name: text.into(),
+            detail: String::new(),
+            group: TriageGroup::Investigate,
+            included: None,
+            is_group_header: false,
+            group_index: 0,
+            is_collapsed: false,
+            group_count: 0,
+            item_id: None,
+            has_content: false,
+            is_repo_bar: true,
         }
     }
 }
@@ -208,7 +230,9 @@ impl Widget for TriageListWidget<'_> {
                 tier: self.tier,
             };
 
-            if item.is_group_header {
+            if item.is_repo_bar {
+                render_repo_bar(item, is_cursor, &mut ctx);
+            } else if item.is_group_header {
                 render_group_header(item, is_cursor, &mut ctx);
             } else {
                 render_item_row(item, is_cursor, is_pure_reference, &mut ctx);
@@ -248,6 +272,18 @@ fn render_group_header(item: &ListItem, is_cursor: bool, ctx: &mut RowCtx<'_>) {
         group_style
     };
 
+    ctx.buf.set_string(ctx.x, ctx.y, &padded, style);
+}
+
+/// Render the repo bar summary row (informational, non-toggleable).
+fn render_repo_bar(item: &ListItem, is_cursor: bool, ctx: &mut RowCtx<'_>) {
+    let text = truncate(&item.name, ctx.width);
+    let padded = format!("{:<width$}", text, width = ctx.width);
+    let style = if is_cursor {
+        Token::FocusSelected.style(ctx.tier)
+    } else {
+        Token::TextMuted.style(ctx.tier)
+    };
     ctx.buf.set_string(ctx.x, ctx.y, &padded, style);
 }
 
