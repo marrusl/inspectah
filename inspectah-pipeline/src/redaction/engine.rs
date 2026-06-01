@@ -118,8 +118,17 @@ struct EligibleMatch {
     line_num: usize,
 }
 
+/// Returns true if the match at `pos` falls on a comment line.
+/// A comment line is one whose trimmed content (before `pos`) starts
+/// with `#`, `//`, or `;`.
+fn is_comment_line(content: &str, pos: usize) -> bool {
+    let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = content[line_start..pos].trim_start();
+    prefix.starts_with('#') || prefix.starts_with("//") || prefix.starts_with(';')
+}
+
 /// Collect regex matches from `content` for a single `pat`, filtering out:
-/// - (Gap 1, future) Matches on comment lines (# // ;)
+/// - Matches on comment lines (# // ;)
 /// - (Gap 4, future) Password-pattern matches whose value is a known NSS/PAM token
 /// - (Gap 2, future) PasswordHash matches when `path` is a shadow file
 ///
@@ -135,17 +144,28 @@ fn collect_eligible_matches(
 ) -> Vec<EligibleMatch> {
     pat.regex
         .find_iter(content)
-        .map(|mat| {
+        .filter_map(|mat| {
             let start = mat.start();
             let end = mat.end();
+            let text = mat.as_str();
+
+            // Filter 1: skip matches on comment lines
+            if is_comment_line(content, start) {
+                return None;
+            }
+
+            // Filter 2 placeholder: false-positive value filtering (Gap 4)
+
+            // Filter 3 placeholder: shadow-path PasswordHash exclusion (Gap 2)
+
             let line_num = content[..start].lines().count() + 1;
 
-            EligibleMatch {
+            Some(EligibleMatch {
                 start,
                 end,
-                text: mat.as_str().to_string(),
+                text: text.to_string(),
                 line_num,
-            }
+            })
         })
         .collect()
 }
@@ -1992,6 +2012,137 @@ mod tests {
             findings[0].line,
             Some(2),
             "password on second line must report line 2"
+        );
+    }
+
+    // --- Comment-line filtering tests (Gap 1) ---
+
+    #[test]
+    fn test_comment_hash_not_redacted_via_redact() {
+        // Hash-commented line must be preserved through the full redact() path.
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/config".to_string(),
+                content: "# password=old_value\npassword=real".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let content = &snapshot.config.as_ref().unwrap().files[0].content;
+        assert!(
+            content.starts_with("# password=old_value\n"),
+            "comment line must be untouched, got: {content}"
+        );
+        assert!(
+            content.contains("REDACTED_"),
+            "non-comment line must be redacted, got: {content}"
+        );
+        // Only one finding — the non-comment line
+        let findings: Vec<&RedactionFinding> = snapshot
+            .redactions
+            .iter()
+            .filter(|f| f.source == "pattern")
+            .collect();
+        assert_eq!(
+            findings.len(),
+            1,
+            "only the non-comment line should produce a finding"
+        );
+    }
+
+    #[test]
+    fn test_comment_semicolon_preserved() {
+        let input = "; token=example\ntoken=secret";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(
+            findings.len(),
+            1,
+            "semicolon-commented match must be filtered"
+        );
+        assert_eq!(findings[0].line, Some(2));
+    }
+
+    #[test]
+    fn test_comment_cstyle_preserved() {
+        let input = "// api_key=docs_example\napi_key=live";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(
+            findings.len(),
+            1,
+            "C-style commented match must be filtered"
+        );
+        assert_eq!(findings[0].line, Some(2));
+    }
+
+    #[test]
+    fn test_inline_comment_still_redacted() {
+        // Comment marker mid-line is NOT a comment line — must still redact.
+        let input = "password=secret # old was foo";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(
+            findings.len(),
+            1,
+            "inline comment (mid-line #) must still produce a finding"
+        );
+    }
+
+    #[test]
+    fn test_indented_comment_filtered() {
+        let input = "  # password=old";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert!(
+            findings.is_empty(),
+            "indented comment must be filtered (trimmed prefix starts with #)"
+        );
+    }
+
+    #[test]
+    fn test_first_line_comment_filtered() {
+        // First line with no preceding newline must be handled.
+        let input = "# secret=abc";
+        let findings = scan_content(input, "/etc/app.conf");
+        assert!(findings.is_empty(), "first-line comment must be filtered");
+    }
+
+    #[test]
+    fn test_mixed_comment_and_real_via_redact() {
+        // Full redact() path: comment line untouched, real line mutated.
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/config".to_string(),
+                content: "# password=old\npassword=real".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let content = &snapshot.config.as_ref().unwrap().files[0].content;
+        // Line 1 must be byte-identical to input
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "# password=old", "comment line must survive");
+        assert!(
+            lines[1].contains("REDACTED_"),
+            "real line must be redacted, got: {}",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn test_comment_filtering_in_redact_string() {
+        // redact_string() uses collect_eligible_matches, so comments
+        // should be filtered. The fast-path is_match still triggers a
+        // clone (wasted but harmless), so the result is Owned but
+        // content-identical to input.
+        let input = "# password=old_value";
+        let result = redact_string(input);
+        assert_eq!(
+            &*result, input,
+            "commented-only content must not be modified by redact_string"
+        );
+        assert!(
+            !result.contains("REDACTED_"),
+            "no redaction token should appear in commented content"
         );
     }
 }
