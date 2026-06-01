@@ -305,7 +305,7 @@ pub async fn export_tarball(
     })?;
 
     // Snapshot state under the lock, then release before expensive work.
-    let (projected, _generation, sensitive, original_includes) = {
+    let (projected, _generation, sensitive, original_includes, export_filename) = {
         let session = state.session.lock().unwrap();
         if req.generation != session.generation() {
             return Err(AppError(
@@ -326,11 +326,21 @@ pub async fn export_tarball(
                     .collect()
             })
             .unwrap_or_default();
+        // Derive download filename from hostname in the snapshot.
+        let hostname = session
+            .snapshot()
+            .meta
+            .get("hostname")
+            .and_then(|v| v.as_str())
+            .unwrap_or("inspectah");
+        let sanitized = inspectah_pipeline::render::tarball::sanitize_hostname(hostname);
+        let filename = format!("inspectah-{sanitized}-refined.tar.gz");
         (
             session.snapshot_projected(),
             session.generation(),
             session.is_sensitive(),
             orig_inc,
+            filename,
         )
     };
     // Lock is released here.
@@ -354,10 +364,11 @@ pub async fn export_tarball(
     }
 
     // Expensive render + tar work happens outside the lock via spawn_blocking.
+    let dl_name = export_filename.clone();
     let bytes = tokio::task::spawn_blocking(
         move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
-            let tarball_path = tempdir.path().join("inspectah-refine-output.tar.gz");
+            let tarball_path = tempdir.path().join(&dl_name);
             inspectah_refine::session::render_refine_export(
                 &projected,
                 &tarball_path,
@@ -374,13 +385,17 @@ pub async fn export_tarball(
     })?
     .map_err(AppError)?;
 
+    let disposition = format!("attachment; filename=\"{export_filename}\"");
     Ok((
         StatusCode::OK,
         [
-            (axum::http::header::CONTENT_TYPE, "application/gzip"),
             (
-                axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"inspectah-refine-output.tar.gz\"",
+                axum::http::header::CONTENT_TYPE.as_str(),
+                "application/gzip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION.as_str(),
+                disposition,
             ),
         ],
         bytes,
@@ -620,13 +635,10 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
     Json(json!({ "ids": ids }))
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
-    use inspectah_refine::types::RepoTier;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::containers::{
         ComposeFile, ComposeService, ContainerSection, RunningContainer,
@@ -638,6 +650,7 @@ mod tests {
     use inspectah_core::types::selinux::SelinuxSection;
     use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
     use inspectah_core::types::warnings::{Warning, WarningSeverity};
+    use inspectah_refine::types::RepoTier;
 
     fn empty_snapshot() -> InspectionSnapshot {
         InspectionSnapshot::new()

@@ -596,7 +596,19 @@ impl App {
         match cmd {
             "export" | "save" => {
                 let path = if args.trim().is_empty() {
-                    std::path::PathBuf::from("./inspectah-export.tar.gz")
+                    // Derive export name from input tarball:
+                    //   input "foo.tar.gz" → "foo-refined.tar.gz"
+                    // Falls back to a generic name when no input path is set.
+                    if let Some(ref tp) = self.tarball_path {
+                        let stem = tp.file_name().unwrap_or_default().to_string_lossy();
+                        let base = stem
+                            .strip_suffix(".tar.gz")
+                            .or_else(|| stem.strip_suffix(".tgz"))
+                            .unwrap_or(&stem);
+                        std::path::PathBuf::from(format!("./{base}-refined.tar.gz"))
+                    } else {
+                        std::path::PathBuf::from("./inspectah-refined.tar.gz")
+                    }
                 } else {
                     std::path::PathBuf::from(args.trim())
                 };
