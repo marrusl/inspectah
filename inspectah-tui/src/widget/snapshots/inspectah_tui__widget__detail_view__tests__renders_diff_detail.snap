@@ -1,0 +1,16 @@
+---
+source: inspectah-tui/src/widget/detail_view.rs
+expression: buffer_to_string(&buf)
+---
+●   /etc/httpd/conf/httpd.conf             3 of 12
+──────────────────────────────────────────────────
+--- a/etc/httpd.conf
++++ b/etc/httpd.conf
+@@ -10,3 +10,3 @@
+ ServerRoot "/etc/httpd"
+-Listen 80
++Listen 8080
+ ServerAdmin root@localhost
+
+
+n:next  p:prev  Esc:close  j/k:scroll

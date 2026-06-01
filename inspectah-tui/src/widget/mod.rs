@@ -1,3 +1,4 @@
+pub mod detail_view;
 pub mod info_bar;
 pub mod section_nav;
 pub mod status_bar;

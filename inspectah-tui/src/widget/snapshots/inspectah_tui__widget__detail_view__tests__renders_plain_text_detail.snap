@@ -1,0 +1,12 @@
+---
+source: inspectah-tui/src/widget/detail_view.rs
+expression: buffer_to_string(&buf)
+---
+○   httpd.x86_64                            1 of 5
+──────────────────────────────────────────────────
+Version: 2.4.62
+Repo: rhel-9-appstream
+Arch: x86_64
+
+
+n:next  p:prev  Esc:close  j/k:scroll

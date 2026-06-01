@@ -72,6 +72,8 @@ pub struct TuiState {
     pub section_cursors: Vec<usize>,
     /// Sidebar scroll offset (for overflow).
     pub sidebar_scroll: usize,
+    /// Scroll offset for fullscreen detail view content.
+    pub detail_scroll: u16,
 }
 
 impl TuiState {
@@ -94,6 +96,7 @@ impl TuiState {
             collapsed_groups: collapsed,
             section_cursors: vec![0; section_count],
             sidebar_scroll: 0,
+            detail_scroll: 0,
         }
     }
 }

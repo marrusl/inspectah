@@ -14,6 +14,7 @@ use inspectah_refine::types::{ItemId, TriageBucket};
 use crate::sections::{SECTION_ORDER, build_section_entries};
 use crate::theme::ColorTier;
 use crate::types::{DetailMode, FocusTarget, SectionId, TuiState};
+use crate::widget::detail_view::{DetailContentType, DetailData, DetailViewWidget};
 use crate::widget::info_bar::{InfoBarData, InfoBarWidget};
 use crate::widget::section_nav::SectionNavWidget;
 use crate::widget::status_bar::StatusBarWidget;
@@ -21,8 +22,15 @@ use crate::widget::triage_list::{ListItem, TriageGroup, TriageListWidget};
 
 const SIDEBAR_WIDTH: u16 = 18;
 
-/// A raw item tuple: (name, detail, triage_group, include_state, item_id).
-type RawItem = (String, String, TriageGroup, Option<bool>, Option<ItemId>);
+/// A raw item tuple: (name, detail, triage_group, include_state, item_id, has_content).
+type RawItem = (
+    String,
+    String,
+    TriageGroup,
+    Option<bool>,
+    Option<ItemId>,
+    bool,
+);
 
 pub struct SingleHostScreen;
 
@@ -76,40 +84,50 @@ impl SingleHostScreen {
         );
         frame.render_widget(sidebar, sidebar_area);
 
-        // --- Triage list ---
+        // --- Triage list / Detail view ---
         let active_section_id = SECTION_ORDER
             .get(state.active_section)
             .copied()
             .unwrap_or(SectionId::Packages);
         let items = build_list_items(session, active_section_id, state);
 
-        // Split list area for info bar when active.
-        let (list_render_area, info_area) = if state.detail_mode == DetailMode::InfoBar {
-            let split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(5), Constraint::Length(4)])
-                .split(list_area);
-            (split[0], Some(split[1]))
+        // Fullscreen detail replaces the item list entirely.
+        if state.detail_mode == DetailMode::Fullscreen {
+            if let Some(data) = build_detail_data(session, state, &items) {
+                frame.render_widget(
+                    DetailViewWidget::new(&data, state.detail_scroll, tier),
+                    list_area,
+                );
+            }
         } else {
-            (list_area, None)
-        };
+            // Split list area for info bar when active.
+            let (list_render_area, info_area) = if state.detail_mode == DetailMode::InfoBar {
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(5), Constraint::Length(4)])
+                    .split(list_area);
+                (split[0], Some(split[1]))
+            } else {
+                (list_area, None)
+            };
 
-        let list_focused = state.focus == FocusTarget::ItemList;
-        let list_widget = TriageListWidget::new(
-            &items,
-            state.cursor,
-            active_section_id,
-            list_focused,
-            tier,
-            0, // scroll_offset -- wired in Task 11
-        );
-        frame.render_widget(list_widget, list_render_area);
+            let list_focused = state.focus == FocusTarget::ItemList;
+            let list_widget = TriageListWidget::new(
+                &items,
+                state.cursor,
+                active_section_id,
+                list_focused,
+                tier,
+                0, // scroll_offset -- wired in Task 11
+            );
+            frame.render_widget(list_widget, list_render_area);
 
-        // --- Info bar ---
-        if let Some(info_area) = info_area
-            && let Some(data) = build_info_bar_data(session, state, &items)
-        {
-            frame.render_widget(InfoBarWidget::new(&data, tier), info_area);
+            // --- Info bar ---
+            if let Some(info_area) = info_area
+                && let Some(data) = build_info_bar_data(session, state, &items)
+            {
+                frame.render_widget(InfoBarWidget::new(&data, tier), info_area);
+            }
         }
 
         // --- Status bar ---
@@ -170,7 +188,14 @@ pub fn build_list_items(
                         name: pkg.entry.name.clone(),
                         arch: pkg.entry.arch.clone(),
                     };
-                    (name, detail, group, Some(pkg.entry.include), Some(id))
+                    (
+                        name,
+                        detail,
+                        group,
+                        Some(pkg.entry.include),
+                        Some(id),
+                        false,
+                    )
                 })
                 .collect()
         }
@@ -185,7 +210,17 @@ pub fn build_list_items(
                     let id = ItemId::Config {
                         path: cfg.entry.path.clone(),
                     };
-                    (name, detail, group, Some(cfg.entry.include), Some(id))
+                    // Configs have diff content available for fullscreen detail.
+                    let has_content =
+                        cfg.entry.diff_against_rpm.is_some() || !cfg.entry.content.is_empty();
+                    (
+                        name,
+                        detail,
+                        group,
+                        Some(cfg.entry.include),
+                        Some(id),
+                        has_content,
+                    )
                 })
                 .collect()
         }
@@ -267,6 +302,114 @@ fn build_info_bar_data(
     })
 }
 
+/// Build fullscreen detail data for the currently selected item.
+///
+/// For configs: shows diff content (or raw content if no diff available).
+/// For packages: shows a key-value plain text summary.
+/// Other sections fall back to a plain text summary.
+fn build_detail_data(
+    session: &RefineSession,
+    state: &TuiState,
+    items: &[ListItem],
+) -> Option<DetailData> {
+    let item = items.get(state.cursor)?;
+    if item.is_group_header {
+        return None;
+    }
+
+    let active_section_id = SECTION_ORDER
+        .get(state.active_section)
+        .copied()
+        .unwrap_or(SectionId::Packages);
+
+    // Position string (1-indexed, excluding headers).
+    let item_index = items
+        .iter()
+        .take(state.cursor + 1)
+        .filter(|i| !i.is_group_header)
+        .count();
+    let total_items = items.iter().filter(|i| !i.is_group_header).count();
+    let position = format!("{} of {}", item_index, total_items);
+
+    match (active_section_id, &item.item_id) {
+        (SectionId::Configs, Some(ItemId::Config { path })) => {
+            let view = session.view();
+            if let Some(cfg) = view.config_files.iter().find(|c| c.entry.path == *path) {
+                let (content, content_type) = if let Some(ref diff) = cfg.entry.diff_against_rpm {
+                    (diff.clone(), DetailContentType::Diff)
+                } else if !cfg.entry.content.is_empty() {
+                    (cfg.entry.content.clone(), DetailContentType::PlainText)
+                } else {
+                    (
+                        "(no content available)".into(),
+                        DetailContentType::PlainText,
+                    )
+                };
+                Some(DetailData {
+                    title: cfg.entry.path.clone(),
+                    content,
+                    content_type,
+                    include: Some(cfg.entry.include),
+                    position,
+                })
+            } else {
+                None
+            }
+        }
+        (SectionId::Packages, Some(ItemId::Package { name, arch })) => {
+            let view = session.view();
+            if let Some(pkg) = view
+                .packages
+                .iter()
+                .find(|p| p.entry.name == *name && p.entry.arch == *arch)
+            {
+                let content = format!(
+                    "Name: {}\nVersion: {}\nArch: {}\nRepo: {}\nTriage: {:?}\nInclude: {}",
+                    pkg.entry.name,
+                    pkg.entry.version,
+                    pkg.entry.arch,
+                    if pkg.entry.source_repo.is_empty() {
+                        "unknown"
+                    } else {
+                        &pkg.entry.source_repo
+                    },
+                    pkg.triage.bucket(),
+                    pkg.entry.include,
+                );
+                Some(DetailData {
+                    title: item.name.clone(),
+                    content,
+                    content_type: DetailContentType::PlainText,
+                    include: Some(pkg.entry.include),
+                    position,
+                })
+            } else {
+                None
+            }
+        }
+        _ => {
+            // Fallback plain text for other sections.
+            if item.detail.is_empty() {
+                Some(DetailData {
+                    title: item.name.clone(),
+                    content: "(no detail available)".into(),
+                    content_type: DetailContentType::PlainText,
+                    include: item.included,
+                    position,
+                })
+            } else {
+                Some(DetailData {
+                    title: item.name.clone(),
+                    content: format!("Detail: {}", item.detail),
+                    content_type: DetailContentType::PlainText,
+                    include: item.included,
+                    position,
+                })
+            }
+        }
+    }
+}
+
 /// Group raw items by triage bucket with collapsible headers.
 ///
 /// The canonical bucket order is Investigate, Site, Baseline.
@@ -300,14 +443,25 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
 
         if !is_collapsed {
             for (idx, item) in group_items.iter().enumerate() {
-                result.push(ListItem::item(
-                    item.0.clone(),
-                    item.1.clone(),
-                    bucket,
-                    item.3,
-                    idx,
-                    item.4.clone(),
-                ));
+                if item.5 {
+                    result.push(ListItem::item_with_content(
+                        item.0.clone(),
+                        item.1.clone(),
+                        bucket,
+                        item.3,
+                        idx,
+                        item.4.clone(),
+                    ));
+                } else {
+                    result.push(ListItem::item(
+                        item.0.clone(),
+                        item.1.clone(),
+                        bucket,
+                        item.3,
+                        idx,
+                        item.4.clone(),
+                    ));
+                }
             }
         }
     }
@@ -349,6 +503,7 @@ mod tests {
                 TriageGroup::Investigate,
                 Some(true),
                 None,
+                false,
             ),
             (
                 "nginx".to_string(),
@@ -356,6 +511,7 @@ mod tests {
                 TriageGroup::Investigate,
                 Some(false),
                 None,
+                false,
             ),
             (
                 "bash".to_string(),
@@ -363,6 +519,7 @@ mod tests {
                 TriageGroup::Baseline,
                 Some(true),
                 None,
+                false,
             ),
         ];
         // Baseline (group_idx 2) is collapsed by default in TuiState::new.

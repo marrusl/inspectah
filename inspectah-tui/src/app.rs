@@ -168,6 +168,10 @@ impl App {
                         self.state.cursor = self.state.section_cursors[self.state.active_section];
                     }
                 }
+                FocusTarget::DetailPane if self.state.detail_mode == DetailMode::Fullscreen => {
+                    // Scroll detail content down.
+                    self.state.detail_scroll = self.state.detail_scroll.saturating_add(1);
+                }
                 FocusTarget::ItemList | FocusTarget::DetailPane => {
                     let max = self.visible_item_count().saturating_sub(1);
                     if self.state.cursor < max {
@@ -182,6 +186,10 @@ impl App {
                         self.state.active_section -= 1;
                         self.state.cursor = self.state.section_cursors[self.state.active_section];
                     }
+                }
+                FocusTarget::DetailPane if self.state.detail_mode == DetailMode::Fullscreen => {
+                    // Scroll detail content up.
+                    self.state.detail_scroll = self.state.detail_scroll.saturating_sub(1);
                 }
                 FocusTarget::ItemList | FocusTarget::DetailPane => {
                     if self.state.cursor > 0 {
@@ -247,7 +255,8 @@ impl App {
                 }
             }
 
-            // Group collapse/expand on Enter when on group header
+            // Group collapse/expand on Enter when on group header,
+            // or open detail view for items.
             Action::OpenDetail => {
                 let items = self.current_items();
                 if let Some(item) = items.get(self.state.cursor) {
@@ -259,15 +268,44 @@ impl App {
                         } else {
                             self.state.collapsed_groups.insert(key);
                         }
+                    } else if item.has_content {
+                        // Items with rich content open in fullscreen.
+                        self.state.detail_mode = DetailMode::Fullscreen;
+                        self.state.detail_scroll = 0;
                     } else {
+                        // Items without content get the info bar.
                         self.state.detail_mode = DetailMode::InfoBar;
                     }
                 }
             }
 
+            // Promote info bar to fullscreen detail.
+            Action::PromoteDetail if self.state.detail_mode == DetailMode::InfoBar => {
+                self.state.detail_mode = DetailMode::Fullscreen;
+                self.state.detail_scroll = 0;
+            }
+
+            // Navigate to next item while in detail mode.
+            Action::DetailNext if self.state.detail_mode != DetailMode::None => {
+                let max = self.visible_item_count().saturating_sub(1);
+                if self.state.cursor < max {
+                    self.state.cursor += 1;
+                    self.state.detail_scroll = 0;
+                }
+            }
+
+            // Navigate to previous item while in detail mode.
+            Action::DetailPrev
+                if self.state.detail_mode != DetailMode::None && self.state.cursor > 0 =>
+            {
+                self.state.cursor -= 1;
+                self.state.detail_scroll = 0;
+            }
+
             // Close detail view
             Action::CloseDetail if self.state.detail_mode != DetailMode::None => {
                 self.state.detail_mode = DetailMode::None;
+                self.state.detail_scroll = 0;
                 if self.state.focus == FocusTarget::DetailPane {
                     self.state.focus = FocusTarget::ItemList;
                 }

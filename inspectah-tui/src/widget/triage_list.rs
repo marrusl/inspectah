@@ -53,6 +53,8 @@ pub struct ListItem {
     pub group_count: usize,
     /// Identity key for mutation operations (toggle, undo, redo).
     pub item_id: Option<ItemId>,
+    /// Whether this item has rich content (diff, unit file) for fullscreen detail.
+    pub has_content: bool,
 }
 
 impl ListItem {
@@ -75,6 +77,30 @@ impl ListItem {
             is_collapsed: false,
             group_count: 0,
             item_id,
+            has_content: false,
+        }
+    }
+
+    /// Create a regular item row with rich content available for fullscreen detail.
+    pub fn item_with_content(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        included: Option<bool>,
+        group_index: usize,
+        item_id: Option<ItemId>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included,
+            is_group_header: false,
+            group_index,
+            is_collapsed: false,
+            group_count: 0,
+            item_id,
+            has_content: true,
         }
     }
 
@@ -90,6 +116,7 @@ impl ListItem {
             is_collapsed: collapsed,
             group_count: count,
             item_id: None,
+            has_content: false,
         }
     }
 }
