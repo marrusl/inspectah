@@ -44,7 +44,6 @@ impl Drop for TerminalGuard {
     }
 }
 
-// Fields `tarball_path` and `pending_export_path` are wired in later phases (export).
 #[allow(dead_code)]
 pub struct App {
     session: RefineSession,
@@ -494,6 +493,19 @@ impl App {
                 self.state.show_containerfile = !self.state.show_containerfile;
             }
 
+            // Export confirmation (y/N)
+            Action::ConfirmYes if self.state.input_mode == InputMode::Confirm => {
+                if let Some(path) = self.pending_export_path.take() {
+                    self.do_export(&path);
+                }
+                self.state.input_mode = InputMode::Normal;
+            }
+            Action::ConfirmNo if self.state.input_mode == InputMode::Confirm => {
+                self.pending_export_path = None;
+                self.state.input_mode = InputMode::Normal;
+                self.state.flash = Some(FlashMessage::new("Export cancelled.", 3));
+            }
+
             _ => {}
         }
     }
@@ -520,13 +532,18 @@ impl App {
         };
 
         match cmd {
-            "export" => {
-                // Placeholder -- wired in Task 20.
-                self.state.flash = Some(FlashMessage::new("Export: not yet implemented", 3));
-            }
-            "save" => {
-                // Placeholder -- wired in Task 20.
-                self.state.flash = Some(FlashMessage::new("Save: not yet implemented", 3));
+            "export" | "save" => {
+                let path = if args.trim().is_empty() {
+                    std::path::PathBuf::from("./inspectah-export.tar.gz")
+                } else {
+                    std::path::PathBuf::from(args.trim())
+                };
+                if self.session.is_sensitive() {
+                    self.pending_export_path = Some(path);
+                    self.state.input_mode = InputMode::Confirm;
+                } else {
+                    self.do_export(&path);
+                }
             }
             "search" => {
                 // Switch to search mode with the args as initial query.
@@ -615,6 +632,22 @@ impl App {
         }
     }
 
+    /// Perform the actual tarball export to `path`.
+    fn do_export(&mut self, path: &std::path::Path) {
+        let generation = self.session.generation();
+        match self.session.export_tarball(path, generation) {
+            Ok(()) => {
+                self.state.flash = Some(FlashMessage::new(
+                    format!("Exported: {}", path.display()),
+                    5,
+                ));
+            }
+            Err(e) => {
+                self.state.flash = Some(FlashMessage::new(format!("Export failed: {e}"), 5));
+            }
+        }
+    }
+
     fn render(&self, frame: &mut ratatui::Frame) {
         let area = frame.area();
 
@@ -661,6 +694,42 @@ impl App {
                 CommandLineWidget::new(&self.state.command_input, comp.as_deref(), self.tier),
                 status_area,
             );
+        }
+
+        // Overlay: export confirmation prompt (3-row warning block at bottom)
+        if self.state.input_mode == InputMode::Confirm {
+            use ratatui::style::{Color, Style};
+            use ratatui::text::{Line, Span};
+            use ratatui::widgets::{Block, Borders, Paragraph};
+
+            let confirm_height = 5u16; // 3 text lines + 2 border rows
+            let confirm_area = ratatui::layout::Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(confirm_height),
+                width: area.width,
+                height: confirm_height.min(area.height),
+            };
+            let warning_style = Style::default().fg(Color::Yellow);
+            let text = vec![
+                Line::from(Span::styled(
+                    " This session contains sensitive data.",
+                    warning_style,
+                )),
+                Line::from(Span::styled(
+                    " Exported artifacts will include this data in plain text.",
+                    warning_style,
+                )),
+                Line::from(Span::styled(
+                    " Proceed? [y/N]",
+                    Style::default().fg(Color::White),
+                )),
+            ];
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" Export Warning ");
+            let paragraph = Paragraph::new(text).block(block);
+            frame.render_widget(paragraph, confirm_area);
         }
     }
 }
