@@ -428,11 +428,12 @@ pub fn write_config_tree(
             let _ = std::fs::write(quadlet_dir.join(&u.name), &u.content);
         }
 
-        // Flatpak manifest and provisioning service
+        // Flatpak manifest and provisioning service — single-host snapshots
+        // treat all flatpaks as included (same principle as quadlets above).
         let included_flatpaks: Vec<_> = containers
             .flatpak_apps
             .iter()
-            .filter(|app| app.include)
+            .filter(|app| app.include || is_single_host)
             .collect();
         if !included_flatpaks.is_empty() {
             let flatpak_dir = output_dir.join("flatpak");
@@ -1328,8 +1329,17 @@ mod tests {
 
     #[test]
     fn test_excluded_flatpak_not_materialized() {
-        // Flatpak with include=false must not produce any output
+        // Fleet context: explicit include=false is honored (prevalence-based).
+        // Single-host snapshots override include=false for flatpaks.
         let mut snap = InspectionSnapshot::new();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec![],
+            merged_at: String::new(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
         snap.containers = Some(ContainerSection {
             flatpak_apps: vec![FlatpakApp {
                 app_id: "org.example.Excluded".to_string(),

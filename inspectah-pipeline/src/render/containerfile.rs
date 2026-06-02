@@ -895,7 +895,11 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         .iter()
         .filter(|u| u.include || is_single_host)
         .count();
-    let included_flatpaks: usize = containers.flatpak_apps.iter().filter(|a| a.include).count();
+    let included_flatpaks: usize = containers
+        .flatpak_apps
+        .iter()
+        .filter(|a| a.include || is_single_host)
+        .count();
 
     if included_quadlets == 0 && included_flatpaks == 0 {
         return lines;
@@ -2318,6 +2322,16 @@ mod tests {
     fn test_excluded_flatpak_generates_no_containerfile_output() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
         let mut snap = InspectionSnapshot::new();
+        // Fleet context: explicit include=false is honored (prevalence-based).
+        // Single-host snapshots override include=false for flatpaks.
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec![],
+            merged_at: String::new(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
         snap.containers = Some(ContainerSection {
             flatpak_apps: vec![FlatpakApp {
                 app_id: "org.example.Excluded".into(),

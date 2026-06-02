@@ -332,20 +332,87 @@ impl RefineSession {
 
         // Single-host defaults: in single-host mode everything the user
         // configured is assumed intentional — there's no fleet consensus
-        // to compare against. Set include=true for quadlets and tuned
-        // profile. Fleet mode keeps its prevalence-based logic above.
+        // to compare against. Set include=true for items whose serde
+        // default is false/None and whose only exclusion reason would be
+        // fleet prevalence.
+        //
+        // NOT included here:
+        // - Packages: handled by normalize_package_defaults (tier-based)
+        // - Config files: handled by normalize_config_defaults (tier-based)
+        // - Services/drop-ins: collector sets include=true, then
+        //   normalize_incompatible_services excludes image-incompatible
+        //   units — those exclusions are intentional and must be preserved
+        // - Repo files/GPG keys: include set at collection time based on
+        //   content analysis (is_default_repo, valid PGP content)
+        //
+        // Fleet mode keeps its prevalence-based logic above.
         if matches!(refine_mode, RefineMode::SingleHost) {
-            // Quadlets
+            // Containers (quadlets, compose files, flatpak apps)
             if let Some(ref mut containers) = snapshot.containers {
                 for quadlet in &mut containers.quadlet_units {
                     quadlet.include = true;
                 }
+                for compose in &mut containers.compose_files {
+                    compose.include = true;
+                }
+                for flatpak in &mut containers.flatpak_apps {
+                    flatpak.include = true;
+                }
             }
-            // Tuned profile (stock or custom — all intentional in single-host)
-            if let Some(ref mut kb) = snapshot.kernel_boot
-                && !kb.tuned_active.is_empty()
-            {
-                kb.tuned_include = true;
+
+            // Kernel/boot: sysctl overrides, loaded modules, tuned profile
+            if let Some(ref mut kb) = snapshot.kernel_boot {
+                for sysctl in &mut kb.sysctl_overrides {
+                    sysctl.include = true;
+                }
+                for module in &mut kb.loaded_modules {
+                    module.include = true;
+                }
+                // Tuned profile (stock or custom — all intentional in single-host)
+                if !kb.tuned_active.is_empty() {
+                    kb.tuned_include = true;
+                }
+            }
+
+            // Scheduled tasks (cron jobs and generated timer units)
+            if let Some(ref mut sched) = snapshot.scheduled_tasks {
+                for cron in &mut sched.cron_jobs {
+                    cron.include = true;
+                }
+                for timer in &mut sched.generated_timer_units {
+                    timer.include = true;
+                }
+            }
+
+            // SELinux port labels
+            if let Some(ref mut selinux) = snapshot.selinux {
+                for port in &mut selinux.port_labels {
+                    port.include = true;
+                }
+            }
+
+            // Network (connections and firewall zones)
+            if let Some(ref mut network) = snapshot.network {
+                for conn in &mut network.connections {
+                    conn.include = Some(true);
+                }
+                for zone in &mut network.firewall_zones {
+                    zone.include = true;
+                }
+            }
+
+            // Non-RPM software
+            if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
+                for item in &mut nonrpm.items {
+                    item.include = true;
+                }
+            }
+
+            // Storage (fstab entries)
+            if let Some(ref mut storage) = snapshot.storage {
+                for entry in &mut storage.fstab_entries {
+                    entry.include = Some(true);
+                }
             }
         }
 
