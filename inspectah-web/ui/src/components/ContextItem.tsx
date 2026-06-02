@@ -8,7 +8,7 @@ export interface ContextItemProps {
 
 export function ContextItem({ item }: ContextItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const hasDetail = item.detail !== null && item.detail.trim().length > 0;
+  const hasDetail = item.detail != null && item.detail.trim().length > 0;
 
   const handleToggle = useCallback(() => {
     setIsExpanded((prev) => !prev);
@@ -39,7 +39,7 @@ export function ContextItem({ item }: ContextItemProps) {
         </div>
         {hasDetail && (
           <button
-            onClick={handleToggle}
+            onClick={(e) => { e.stopPropagation(); handleToggle(); }}
             aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
             aria-expanded={isExpanded}
             className="inspectah-decision-row__expand-btn"
