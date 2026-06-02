@@ -291,9 +291,9 @@ The "0/11 confirmed" counter on every fleet Review section is opaque — confirm
 
 A "clean export" option in the export modal that strips working-state files from the tarball, leaving only buildable output. The current export already respects toggles — excluded configs and packages are omitted from the Containerfile and config tree. But it also includes `snapshot.json` (full inspection data), `secrets-review.md`, `session.json` (autosave), and variant metadata. A clean export drops those, producing a tarball you can hand directly to a build pipeline. Wording TBD (clean / final / production). Could be a toggle in the existing modal or a second button.
 
-### Heuristic Redaction Enhancements (MEDIUM — parity with Go)
+### ~~Heuristic Redaction Enhancements~~ (DONE — 2026-06-02)
 
-Rust redaction pipeline needs parity with Go's heuristic redaction capabilities. Go has pattern-based redaction for passwords, API keys, tokens, and connection strings embedded in config files. Rust currently handles explicit redaction but lacks the heuristic detection layer. Needs spec.
+Rust redaction pipeline now has parity with Go's heuristic detection layer. Shipped in v0.8.5-alpha.1: PasswordHash pattern matching, PEM block detection, false-positive filtering for non-secret patterns, and comment-line filtering to avoid redacting documentation.
 
 ### Tier 2 Section Promotion (MEDIUM — after Tier 1)
 
