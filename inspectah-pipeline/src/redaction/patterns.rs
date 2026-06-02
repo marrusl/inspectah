@@ -12,6 +12,11 @@ pub(crate) struct SecretPattern {
     pub confidence: Confidence,
     /// Human-readable remediation advice.
     pub remediation: &'static str,
+    /// Optional replacement template using capture-group references (`${1}`,
+    /// `${3}`, etc.). When set, the engine replaces only the password portion
+    /// (capture group 2) with the redaction token while preserving URL structure.
+    /// When `None`, the engine replaces the entire match.
+    pub replacement_template: Option<&'static str>,
 }
 
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
@@ -27,6 +32,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Remove private key or exclude file from snapshot",
+            replacement_template: None,
         },
         // PEM certificate blocks (full BEGIN...END matching)
         SecretPattern {
@@ -38,6 +44,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Review whether certificate exposure is intended; check for adjacent private keys",
+            replacement_template: None,
         },
         // Modular crypt password hashes ($1$, $2b$, $5$, $6$, $y$, etc.)
         // anywhere in content. Shadow files are handled separately by
@@ -52,6 +59,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Remove password hash or use a secrets manager",
+            replacement_template: None,
         },
         // Generic password/credential in key=value config.
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
@@ -67,6 +75,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             confidence: Confidence::High,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
+            replacement_template: None,
         },
         // AWS access key ID (AKIA...)
         SecretPattern {
@@ -75,6 +84,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Rotate the AWS access key and use IAM roles",
+            replacement_template: None,
         },
         // JDBC connection string with password
         SecretPattern {
@@ -83,30 +93,38 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use connection pooling with externalized credentials",
+            replacement_template: None,
         },
-        // PostgreSQL connection URI with password
+        // PostgreSQL connection URI with password.
+        // Capture groups: (scheme://user:)(password)(@)
+        // The replacement template preserves the scheme prefix and @ delimiter.
         SecretPattern {
-            regex: Regex::new(r"postgres(?:ql)?://[^:]+:[^@]+@").unwrap(),
+            regex: Regex::new(r"(postgres(?:ql)?://[^:]+:)([^@]+)(@)").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
+            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
-        // MongoDB connection URI with password
+        // MongoDB connection URI with password.
+        // Capture groups: (scheme://user:)(password)(@)
         SecretPattern {
-            regex: Regex::new(r"mongodb(?:\+srv)?://[^:]+:[^@]+@").unwrap(),
+            regex: Regex::new(r"(mongodb(?:\+srv)?://[^:]+:)([^@]+)(@)").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use environment variables for MongoDB credentials",
+            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
-        // Redis connection URI with password
+        // Redis connection URI with password.
+        // Capture groups: (redis://:)(password)(@)
         SecretPattern {
-            regex: Regex::new(r"redis://:[^@]+@").unwrap(),
+            regex: Regex::new(r"(redis://:)([^@]+)(@)").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use environment variables for Redis credentials",
+            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
         // WireGuard private key (base64, 44 chars including trailing =)
         SecretPattern {
@@ -115,6 +133,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Regenerate WireGuard keys and use wg-quick with externalized key files",
+            replacement_template: None,
         },
         // WiFi PSK in wpa_supplicant or NetworkManager config
         SecretPattern {
@@ -123,6 +142,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use 802.1X or externalize WiFi credentials",
+            replacement_template: None,
         },
     ]
 });

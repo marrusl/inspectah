@@ -116,6 +116,9 @@ struct EligibleMatch {
     end: usize,
     text: String,
     line_num: usize,
+    /// Captured groups for patterns with `replacement_template`.
+    /// Groups 1 and 3 are preserved, group 2 is the secret to redact.
+    captures: Option<(String, String, String)>,
 }
 
 /// Known non-secret values that appear after `password:` or `passwd:`
@@ -176,6 +179,41 @@ fn collect_eligible_matches(
     content: &str,
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
+    // When the pattern has a replacement template, use captures_iter to
+    // extract the capture groups alongside the match offsets.
+    if pat.replacement_template.is_some() {
+        return pat
+            .regex
+            .captures_iter(content)
+            .filter_map(|caps| {
+                let mat = caps.get(0)?;
+                let start = mat.start();
+                let end = mat.end();
+                let text = mat.as_str();
+
+                if is_comment_line(content, start) {
+                    return None;
+                }
+
+                let line_num = content[..start].lines().count() + 1;
+
+                let captures = Some((
+                    caps.get(1).map_or("", |m| m.as_str()).to_string(),
+                    caps.get(2).map_or("", |m| m.as_str()).to_string(),
+                    caps.get(3).map_or("", |m| m.as_str()).to_string(),
+                ));
+
+                Some(EligibleMatch {
+                    start,
+                    end,
+                    text: text.to_string(),
+                    line_num,
+                    captures,
+                })
+            })
+            .collect();
+    }
+
     pat.regex
         .find_iter(content)
         .filter_map(|mat| {
@@ -215,6 +253,7 @@ fn collect_eligible_matches(
                 end,
                 text: text.to_string(),
                 line_num,
+                captures: None,
             })
         })
         .collect()
@@ -294,6 +333,28 @@ fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
     }
 }
 
+/// Build the replacement string for a matched secret.
+///
+/// For patterns with `replacement_template` (connection-string URIs), preserves
+/// URL structure by replacing only the password portion (capture group 2) with
+/// the redaction token while keeping the scheme prefix and `@` delimiter.
+///
+/// For patterns without a template, replaces the entire match with the token.
+fn build_replacement(
+    pat: &SecretPattern,
+    em: &EligibleMatch,
+    registry: &mut CounterRegistry,
+    kind_label: &str,
+) -> String {
+    if pat.replacement_template.is_some()
+        && let Some((ref prefix, ref secret, ref suffix)) = em.captures
+    {
+        let token = registry.token_for(kind_label, secret);
+        return format!("{prefix}{token}{suffix}");
+    }
+    registry.token_for(kind_label, &em.text)
+}
+
 /// Apply pattern-based redaction to a string.
 /// Returns `Cow::Borrowed` if no findings — zero-copy for clean content.
 pub fn redact_string(content: &str) -> Cow<'_, str> {
@@ -329,8 +390,8 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let token = registry.token_for(&kind_label, &em.text);
-        result.replace_range(em.start..em.end, &token);
+        let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+        result.replace_range(em.start..em.end, &replacement);
     }
 
     Cow::Owned(result)
@@ -572,8 +633,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 file.content = content;
                 all_findings.extend(findings);
@@ -597,8 +658,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 repo_file.content = content;
                 all_findings.extend(findings);
@@ -620,8 +681,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 gpg_key.content = content;
                 all_findings.extend(findings);
@@ -645,8 +706,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 drop_in.content = content;
                 all_findings.extend(findings);
@@ -799,8 +860,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 unit.command = content;
                 all_findings.extend(findings);
@@ -848,8 +909,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 at_job.command = content;
                 all_findings.extend(findings);
@@ -876,8 +937,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 timer.exec_start = content;
                 all_findings.extend(findings);
@@ -978,8 +1039,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let token = registry.token_for(&kind_label, &em.text);
-                    content.replace_range(em.start..em.end, &token);
+                    let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    content.replace_range(em.start..em.end, &replacement);
                 }
                 env_file.content = content;
                 all_findings.extend(findings);
@@ -2720,6 +2781,169 @@ mod tests {
         assert!(
             !result.contains("BEGIN DSA PRIVATE KEY"),
             "BEGIN marker must not survive DSA key redaction"
+        );
+    }
+
+    // --- Connection-string URI redaction tests ---
+    // These patterns must preserve URL structure: scheme://user:REDACTED@host
+
+    #[test]
+    fn test_mongodb_uri_preserves_structure() {
+        let input = "MONGODB_URL=mongodb://admin:s3cret@mongo.internal:27017/admin";
+        let result = redact_string(input);
+        assert!(
+            !result.contains("s3cret"),
+            "password must be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("mongodb://admin:REDACTED_MONGODBPASSWORD_1@mongo.internal:27017/admin"),
+            "URL structure (scheme, user, @, host) must be preserved, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_mongodb_srv_uri_preserves_structure() {
+        let input = "mongodb+srv://appuser:hunter2@cluster0.example.net/mydb";
+        let result = redact_string(input);
+        assert!(
+            !result.contains("hunter2"),
+            "password must be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("mongodb+srv://appuser:REDACTED_MONGODBPASSWORD_1@cluster0.example.net"),
+            "mongodb+srv URL structure must be preserved, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_postgres_uri_preserves_structure() {
+        let input = "DATABASE_URL=postgresql://dbuser:s3cretPass@db.example.com:5432/mydb";
+        let result = redact_string(input);
+        assert!(
+            !result.contains("s3cretPass"),
+            "password must be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("postgresql://dbuser:REDACTED_POSTGRESPASSWORD_1@db.example.com:5432"),
+            "PostgreSQL URL structure must be preserved, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_postgres_short_scheme_preserves_structure() {
+        let input = "postgres://user:secret@localhost/db";
+        let result = redact_string(input);
+        assert!(
+            !result.contains("secret"),
+            "password must be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("postgres://user:REDACTED_POSTGRESPASSWORD_1@localhost"),
+            "postgres:// short scheme must be preserved, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_redis_uri_preserves_structure() {
+        let input = "REDIS_URL=redis://:authpass@redis.internal:6379/0";
+        let result = redact_string(input);
+        assert!(
+            !result.contains("authpass"),
+            "password must be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("redis://:REDACTED_REDISPASSWORD_1@redis.internal:6379"),
+            "Redis URL structure must be preserved, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_deterministic_tokens() {
+        // Same password in two different URIs → same token number
+        let input = "mongodb://u1:shared@host1\nmongodb://u2:shared@host2";
+        let result = redact_string(input);
+        // Both "shared" passwords map to the same token
+        let count = result.matches("REDACTED_MONGODBPASSWORD_1").count();
+        assert_eq!(
+            count, 2,
+            "identical password values must produce the same token, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_different_passwords_different_tokens() {
+        let input = "mongodb://u1:pass1@host1\nmongodb://u2:pass2@host2";
+        let result = redact_string(input);
+        assert!(
+            result.contains("REDACTED_MONGODBPASSWORD_1"),
+            "first password must get token 1, got: {result}"
+        );
+        assert!(
+            result.contains("REDACTED_MONGODBPASSWORD_2"),
+            "second password must get token 2, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_in_snapshot_redact() {
+        // Full redact() path: connection string in a config file
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/db.conf".to_string(),
+                content: "MONGO=mongodb://admin:s3cret@mongo:27017/db\nPG=postgresql://u:pass@pg:5432/db\nREDIS=redis://:tok@redis:6379\n".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let content = &snapshot.config.as_ref().unwrap().files[0].content;
+
+        // Passwords must be gone
+        assert!(!content.contains("s3cret"), "mongo password must be redacted");
+        assert!(!content.contains(":pass@"), "postgres password must be redacted");
+        assert!(!content.contains(":tok@"), "redis password must be redacted");
+
+        // URL structure must be preserved
+        assert!(
+            content.contains("@mongo:27017"),
+            "mongo host must be preserved, got: {content}"
+        );
+        assert!(
+            content.contains("@pg:5432"),
+            "postgres host must be preserved, got: {content}"
+        );
+        assert!(
+            content.contains("@redis:6379"),
+            "redis host must be preserved, got: {content}"
+        );
+
+        // Scheme prefixes must be preserved
+        assert!(
+            content.contains("mongodb://admin:"),
+            "mongo scheme+user must be preserved, got: {content}"
+        );
+        assert!(
+            content.contains("postgresql://u:"),
+            "postgres scheme+user must be preserved, got: {content}"
+        );
+        assert!(
+            content.contains("redis://:"),
+            "redis scheme must be preserved, got: {content}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_scan_content_findings() {
+        let input = "mongodb://admin:s3cret@mongo:27017/db";
+        let findings = scan_content(input, "/etc/app.conf");
+        let mongo_findings: Vec<&RedactionFinding> = findings
+            .iter()
+            .filter(|f| f.finding_kind == Some(FindingKind::MongodbPassword))
+            .collect();
+        assert_eq!(
+            mongo_findings.len(),
+            1,
+            "MongoDB URI must produce exactly one finding"
         );
     }
 }
