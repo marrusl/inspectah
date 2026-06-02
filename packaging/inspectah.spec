@@ -30,9 +30,13 @@ cargo build --release -p inspectah-cli
 
 %install
 install -Dpm 0755 target/release/inspectah %{buildroot}%{_bindir}/inspectah
-install -Dpm 0644 completions/inspectah.bash %{buildroot}%{_datadir}/bash-completion/completions/inspectah
-install -Dpm 0644 completions/inspectah.zsh %{buildroot}%{_datadir}/zsh/site-functions/_inspectah
-install -Dpm 0644 completions/inspectah.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/inspectah.fish
+# Generate shell completions from the binary itself
+mkdir -p %{buildroot}%{_datadir}/bash-completion/completions
+mkdir -p %{buildroot}%{_datadir}/zsh/site-functions
+mkdir -p %{buildroot}%{_datadir}/fish/vendor_completions.d
+target/release/inspectah completions bash > %{buildroot}%{_datadir}/bash-completion/completions/inspectah
+target/release/inspectah completions zsh > %{buildroot}%{_datadir}/zsh/site-functions/_inspectah
+target/release/inspectah completions fish > %{buildroot}%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %files
 %license LICENSE

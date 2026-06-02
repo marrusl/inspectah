@@ -27,6 +27,12 @@ enum Commands {
     Build(commands::build::BuildArgs),
     /// Print version, commit, and build date
     Version,
+    /// Generate shell completions
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate for
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() {
@@ -81,6 +87,14 @@ fn main() {
         },
         Commands::Version => {
             commands::version::print_version();
+        }
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "inspectah",
+                &mut std::io::stdout(),
+            );
         }
     }
 }

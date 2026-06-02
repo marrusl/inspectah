@@ -12,6 +12,7 @@ inspectah-web = { path = "../inspectah-web" }
 inspectah-refine = { path = "../inspectah-refine" }
 inspectah-tui = { path = "../inspectah-tui" }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 anyhow = "1"
 libc = "0.2"
 tempfile = "3"
