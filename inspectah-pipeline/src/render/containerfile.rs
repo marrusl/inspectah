@@ -885,10 +885,15 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return lines,
     };
 
+    // Single-host snapshots (no fleet_meta) treat all quadlets as included
+    // by default — everything the user configured is assumed intentional.
+    // Fleet snapshots respect the prevalence-based include flags set during merge.
+    let is_single_host = snap.fleet_meta.is_none();
+
     let included_quadlets: usize = containers
         .quadlet_units
         .iter()
-        .filter(|u| u.include)
+        .filter(|u| u.include || is_single_host)
         .count();
     let included_flatpaks: usize = containers.flatpak_apps.iter().filter(|a| a.include).count();
 
@@ -1057,8 +1062,12 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into());
     }
 
-    // Tuned — gated on include
-    if kb.tuned_include && !kb.tuned_active.is_empty() {
+    // Tuned — gated on include. Single-host snapshots (no fleet_meta)
+    // treat tuned as included when a profile is active, matching the
+    // normalization in RefineSession::new() for the refine path.
+    let tuned_included =
+        kb.tuned_include || (snap.fleet_meta.is_none() && !kb.tuned_active.is_empty());
+    if tuned_included && !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
             if !kb.tuned_custom_profiles.is_empty() {
@@ -2227,6 +2236,16 @@ mod tests {
     fn test_excluded_quadlet_generates_no_containerfile_output() {
         use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
         let mut snap = InspectionSnapshot::new();
+        // Fleet context: explicit include=false is honored (prevalence-based).
+        // Single-host snapshots override include=false for quadlets.
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec![],
+            merged_at: String::new(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
         snap.containers = Some(ContainerSection {
             quadlet_units: vec![QuadletUnit {
                 name: "excluded.container".into(),
@@ -2244,6 +2263,54 @@ mod tests {
         assert!(
             !output.contains("Container Workloads"),
             "excluded quadlet must NOT produce Container Workloads section"
+        );
+    }
+
+    #[test]
+    fn test_single_host_quadlet_included_by_default() {
+        use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+        let mut snap = InspectionSnapshot::new();
+        // No fleet_meta => single-host snapshot. Quadlets should be
+        // included even though the include flag defaults to false.
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                name: "app.container".into(),
+                content: "[Container]\nImage=quay.io/test:latest".into(),
+                include: false, // raw default from deserialization
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("COPY quadlet/"),
+            "single-host quadlet must produce COPY quadlet/ line"
+        );
+        assert!(
+            output.contains("Container Workloads"),
+            "single-host quadlet must produce Container Workloads section"
+        );
+    }
+
+    #[test]
+    fn test_single_host_tuned_included_by_default() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snap = InspectionSnapshot::new();
+        // No fleet_meta => single-host snapshot. Tuned should be
+        // included when tuned_active is set, regardless of tuned_include flag.
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "virtual-guest".into(),
+            tuned_include: false, // raw default from deserialization
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("tuned"),
+            "single-host tuned must produce tuned output"
+        );
+        assert!(
+            output.contains("RUN systemctl enable tuned.service"),
+            "single-host tuned must enable tuned.service"
         );
     }
 
@@ -2476,6 +2543,16 @@ mod tests {
     fn test_containerfile_tuned_excluded_no_output() {
         use inspectah_core::types::kernelboot::KernelBootSection;
         let mut snap = InspectionSnapshot::new();
+        // Fleet context: explicit tuned_include=false is honored.
+        // Single-host snapshots override to included when tuned_active is set.
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec![],
+            merged_at: String::new(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "virtual-guest".into(),
             tuned_include: false,

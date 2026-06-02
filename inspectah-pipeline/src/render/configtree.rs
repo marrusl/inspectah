@@ -311,8 +311,11 @@ pub fn write_config_tree(
             }
         }
         // Custom tuned profiles — written to tuned/ (promoted root),
-        // not config/. Only when tuned is included.
-        if kb.tuned_include {
+        // not config/. Single-host snapshots (no fleet_meta) treat tuned
+        // as included when a profile is active.
+        let tuned_included =
+            kb.tuned_include || (snap.fleet_meta.is_none() && !kb.tuned_active.is_empty());
+        if tuned_included {
             for tp in &kb.tuned_custom_profiles {
                 if !tp.path.is_empty() {
                     let rel = tp.path.trim_start_matches('/');
@@ -412,10 +415,12 @@ pub fn write_config_tree(
         }
     }
 
-    // Quadlet units
+    // Quadlet units — single-host snapshots (no fleet_meta) treat all
+    // quadlets as included by default.
+    let is_single_host = snap.fleet_meta.is_none();
     if let Some(ref containers) = snap.containers {
         for u in &containers.quadlet_units {
-            if !u.include || u.name.is_empty() || u.content.is_empty() {
+            if (!u.include && !is_single_host) || u.name.is_empty() || u.content.is_empty() {
                 continue;
             }
             let quadlet_dir = output_dir.join("quadlet");
@@ -1267,8 +1272,17 @@ mod tests {
 
     #[test]
     fn test_excluded_quadlet_not_in_quadlet_dir() {
-        // Quadlet with include=false must not be materialized anywhere
+        // Quadlet with include=false must not be materialized in fleet mode.
+        // Single-host snapshots override include=false for quadlets.
         let mut snap = InspectionSnapshot::new();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec![],
+            merged_at: String::new(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
         snap.containers = Some(ContainerSection {
             quadlet_units: vec![QuadletUnit {
                 path: "/etc/containers/systemd/excluded.container".to_string(),
@@ -1285,6 +1299,30 @@ mod tests {
         assert!(
             !dir.path().join("quadlet/excluded.container").exists(),
             "excluded quadlet must NOT be written to quadlet/"
+        );
+    }
+
+    #[test]
+    fn test_single_host_quadlet_materialized_by_default() {
+        // Single-host snapshots (no fleet_meta) materialize quadlets
+        // even when include=false (the raw serde default).
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                path: "/etc/containers/systemd/app.container".to_string(),
+                name: "app.container".to_string(),
+                content: "[Container]\nImage=quay.io/test:latest".to_string(),
+                include: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert!(
+            dir.path().join("quadlet/app.container").exists(),
+            "single-host quadlet must be written to quadlet/"
         );
     }
 
