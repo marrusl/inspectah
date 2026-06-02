@@ -7,7 +7,7 @@ TARBALL  := $(NAME)-$(VERSION).tar.gz
 RPMBUILD := $(HOME)/rpmbuild
 
 srpm:
-	dnf install -y git rpm-build cargo rust nodejs
+	dnf install -y git rpm-build cargo rust nodejs npm
 	mkdir -p $(RPMBUILD)/SOURCES $(RPMBUILD)/SPECS $(RPMBUILD)/SRPMS
 
 	# Extract source tree into a staging directory
