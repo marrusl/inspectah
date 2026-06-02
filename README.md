@@ -19,7 +19,7 @@ ls -lh *.tar.gz
 tar tzf hostname-*.tar.gz | head -20
 ```
 
-The tarball contains a `Containerfile`, `config/` tree, `audit-report.md`, and an interactive HTML dashboard. Extract it and build the image with `podman build`.
+The tarball contains a `Containerfile`, `config/` tree, `audit-report.md`, and an interactive HTML dashboard. Run `inspectah build <tarball> <tag>` to build the image, or extract and use `podman build` directly.
 
 ## Installation
 
@@ -50,7 +50,7 @@ inspectah follows a four-step workflow:
 3. **Triage** — Generate migration artifacts: Containerfile, config tree, audit report, secrets review
 4. **Refine** (optional) — Edit findings in an interactive browser dashboard and re-render artifacts
 
-**inspectah does NOT build images** — it generates the artifacts you need to build one yourself. After running `inspectah scan`, you get a tarball with a `Containerfile` and `config/` tree. Extract it and run `podman build` to create the bootc image.
+inspectah can orchestrate the build via `inspectah build <tarball> <tag>` (runs `podman build` under the hood) or you can extract the tarball and build manually.
 
 The baseline comparison is critical: inspectah extracts the target base image to determine what's already there, so it only includes the delta in your migration artifacts. Without baseline extraction (e.g., `--no-baseline`), all packages and configs are assumed user-added.
 
