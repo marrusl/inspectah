@@ -29,6 +29,9 @@ cmd/inspectah/inspectah-linux-*
 cmd/inspectah/inspectah-darwin-*
 cmd/inspectah/inspector.test
 
+# Session files (refine autosave)
+.inspectah-session-*
+
 # Scan output tarballs
 *.tar.gz
 !tests/**/fixtures/**/*.tar.gz
