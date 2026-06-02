@@ -59,7 +59,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // forms only — bare "key=" is too broad for config files).
         SecretPattern {
             regex: Regex::new(
-                r"(?i)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
+                r"(?i)\b(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,

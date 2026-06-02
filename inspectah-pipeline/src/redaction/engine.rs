@@ -320,6 +320,11 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
         }
     }
     dedup_overlapping_matches(&mut all_matches);
+    if all_matches.is_empty() {
+        // Regex matched but all hits were filtered (comment lines, false
+        // positives, etc.) — no actual redaction needed.
+        return Cow::Borrowed(content);
+    }
     // Sort descending by offset so replacements don't invalidate earlier offsets
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
@@ -915,6 +920,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     }
 
     // Scan SELinux audit rules and PAM configs for secrets.
+    // Commented lines still need redaction — secrets in comments are
+    // still secrets in the file.
     if let Some(ref mut selinux) = snapshot.selinux {
         for rule in &mut selinux.audit_rules {
             let redacted = redact_string(&rule.content);
@@ -922,6 +929,26 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(&rule.content, "audit_rules");
                 all_findings.extend(findings);
                 rule.content = new_val.clone();
+            } else {
+                // Multi-line content may have comment lines with secrets.
+                let mut lines: Vec<String> = rule.content.lines().map(String::from).collect();
+                let mut changed = false;
+                for line in &mut lines {
+                    if let Some(body) = line.strip_prefix('#') {
+                        let body_trimmed = body.trim_start();
+                        let prefix_len = line.len() - body_trimmed.len();
+                        let body_redacted = redact_string(body_trimmed);
+                        if let Cow::Owned(ref new_body) = body_redacted {
+                            let findings = scan_content(body_trimmed, "audit_rules");
+                            all_findings.extend(findings);
+                            *line = format!("{}{}", &line[..prefix_len], new_body);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    rule.content = lines.join("\n");
+                }
             }
         }
         for pam in &mut selinux.pam_configs {
@@ -1000,6 +1027,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     }
 
     // Scan sudoers rules for secrets via generic pattern pass.
+    // Commented rules (# prefix) still need redaction — a commented-out
+    // password is still a secret in the file.
     if let Some(ref mut users) = snapshot.users_groups {
         for rule in &mut users.sudoers_rules {
             let redacted = redact_string(rule);
@@ -1007,6 +1036,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let findings = scan_content(rule, "/etc/sudoers");
                 all_findings.extend(findings);
                 *rule = new_val.clone();
+            } else if let Some(body) = rule.strip_prefix('#') {
+                // Comment-line filter skipped this — retry on the body.
+                let body_trimmed = body.trim_start();
+                let prefix_len = rule.len() - body_trimmed.len();
+                let body_redacted = redact_string(body_trimmed);
+                if let Cow::Owned(ref new_body) = body_redacted {
+                    let findings = scan_content(body_trimmed, "/etc/sudoers");
+                    all_findings.extend(findings);
+                    *rule = format!("{}{}", &rule[..prefix_len], new_body);
+                }
             }
         }
     }
