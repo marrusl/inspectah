@@ -1,3 +1,4 @@
+use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
@@ -27,6 +28,35 @@ fn test_snapshot() -> InspectionSnapshot {
             },
         ],
         ..Default::default()
+    });
+    // Provide baseline data so normalize_package_defaults classifies both
+    // packages as Baseline (include=true) rather than Investigate
+    // (include=false), keeping exclude ops effective.
+    let mut packages = std::collections::HashMap::new();
+    packages.insert(
+        "httpd".into(),
+        BaselinePackageEntry {
+            name: "httpd".into(),
+            epoch: None,
+            version: "2.4.57".into(),
+            release: "5.el9".into(),
+            arch: "x86_64".into(),
+        },
+    );
+    packages.insert(
+        "glibc".into(),
+        BaselinePackageEntry {
+            name: "glibc".into(),
+            epoch: None,
+            version: "2.34".into(),
+            release: "83.el9".into(),
+            arch: "x86_64".into(),
+        },
+    );
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages,
+        extracted_at: "2024-01-01T00:00:00Z".into(),
     });
     snap
 }

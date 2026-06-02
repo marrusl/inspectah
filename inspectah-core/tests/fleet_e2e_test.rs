@@ -247,11 +247,12 @@ fn test_e2e_validation_mixed_architecture() {
     with_rpms(&mut s1, &["httpd"]);
 
     let mut s2 = make_rich_snap("host-b", "9.4");
-    s2.meta.insert(
-        "architecture".to_string(),
-        serde_json::Value::String("aarch64".into()),
-    );
     with_rpms(&mut s2, &["httpd"]);
+    // Override RPM arch to aarch64 — extract_architecture infers from
+    // package arch fields, not the meta map.
+    for pkg in &mut s2.rpm.as_mut().unwrap().packages_added {
+        pkg.arch = "aarch64".into();
+    }
 
     let result = merge_snapshots(vec![s1, s2], None);
     assert!(result.is_err(), "mixed architectures should fail");
