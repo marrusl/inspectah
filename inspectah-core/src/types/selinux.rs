@@ -28,8 +28,8 @@ pub struct CarryForwardFile {
 
 /// Security & access control section (SELinux, FIPS, PAM, audit rules).
 ///
-/// Display name: "Security & Access Control". The JSON key remains
-/// `"selinux"` for backward compatibility with existing snapshots.
+/// Display name: "Security & Access Control". The JSON key is `"selinux"`
+/// because that is what the collectors emit.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxSection {
     #[serde(default)]

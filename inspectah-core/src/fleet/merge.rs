@@ -779,7 +779,7 @@ where
 ///
 /// `baseline_host_idx` identifies which sorted host's baseline-bearing fields
 /// to use (e.g. `baseline_package_names`, `base_image`, `no_baseline`).
-/// When `None`, falls back to first-host behavior for backward compat.
+/// When `None`, no baseline is selected and baseline fields use defaults.
 ///
 /// Returns `(merged_section, repo_conflicts)` where `repo_conflicts` maps
 /// `name.arch` identity keys to the distinct repos with host counts, only
