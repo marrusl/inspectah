@@ -910,7 +910,11 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         );
         body.push("RUN systemctl enable flatpak-provision.service".into());
     }
-    lines.extend(section("Container Workloads", body));
+    let total_workloads = included_quadlets + included_flatpaks;
+    lines.extend(section(
+        &format!("Container Workloads ({total_workloads})"),
+        body,
+    ));
     lines
 }
 
