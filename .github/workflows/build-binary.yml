@@ -3,7 +3,7 @@ name: Build binary
 on:
   workflow_dispatch:
   push:
-    branches: [rust]
+    branches: [main]
     paths:
       - 'inspectah-*/src/**'
       - 'inspectah-*/Cargo.toml'
