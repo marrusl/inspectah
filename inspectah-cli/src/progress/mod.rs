@@ -195,14 +195,19 @@ impl ProgressSink for TerminalProgress {
 mod tests {
     use super::*;
 
-    // SAFETY: These tests manipulate process-global env vars. They are
-    // inherently racy when run in parallel, but Rust's test harness runs
-    // them on separate threads and the env vars are unique enough to
-    // avoid cross-contamination in practice. The `unsafe` blocks are
-    // required by edition 2024.
+    // SAFETY: These tests manipulate process-global env vars (`set_var` /
+    // `remove_var`). Rust runs tests on separate threads, so concurrent
+    // mutations race. We serialize all env-touching tests through a single
+    // mutex so that only one test owns the process environment at a time.
+    // The `unsafe` blocks are required by edition 2024.
+
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_mode_detection_cli_flag_overrides_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // CLI flag should win even when env is set.
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "flat") };
         let mode = detect_mode(Some(&ProgressMode::Rich));
@@ -212,6 +217,7 @@ mod tests {
 
     #[test]
     fn test_mode_detection_env_overrides_tty() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Env var should override TTY auto-detection.
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "plain") };
         let mode = detect_mode(None);
@@ -221,6 +227,7 @@ mod tests {
 
     #[test]
     fn test_mode_detection_env_flat() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "flat") };
         let mode = detect_mode(None);
         unsafe { std::env::remove_var("INSPECTAH_PROGRESS") };
@@ -229,6 +236,7 @@ mod tests {
 
     #[test]
     fn test_mode_detection_env_unknown_defaults_rich() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "unknown_value") };
         let mode = detect_mode(None);
         unsafe { std::env::remove_var("INSPECTAH_PROGRESS") };
@@ -237,6 +245,7 @@ mod tests {
 
     #[test]
     fn test_use_color_respects_no_color() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Without NO_COLOR, should return true.
         unsafe { std::env::remove_var("NO_COLOR") };
         assert!(use_color());
