@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           inspectah
-Version:        0.8.3~alpha.1
+Version:        0.8.5~beta.1
 Release:        1%{?dist}
 Summary:        Inspect package-mode hosts and produce bootc image artifacts
 
@@ -30,11 +30,17 @@ cargo build --release -p inspectah-cli
 
 %install
 install -Dpm 0755 target/release/inspectah %{buildroot}%{_bindir}/inspectah
+install -Dpm 0644 completions/inspectah.bash %{buildroot}%{_datadir}/bash-completion/completions/inspectah
+install -Dpm 0644 completions/inspectah.zsh %{buildroot}%{_datadir}/zsh/site-functions/_inspectah
+install -Dpm 0644 completions/inspectah.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/inspectah
+%{_datadir}/bash-completion/completions/inspectah
+%{_datadir}/zsh/site-functions/_inspectah
+%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %changelog
 %autochangelog
