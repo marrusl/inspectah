@@ -170,8 +170,15 @@ impl Inspector for ConfigInspector {
                     if rpm_va_paths.contains(&abs_path) {
                         continue;
                     }
-                    // Skip RPM-owned (not modified)
+                    // Skip RPM-owned (not modified).
+                    // Also resolve symlinks: a file discovered at
+                    // /etc/ssl/certs/ca-bundle.crt may be a symlink to
+                    // /etc/pki/tls/certs/ca-bundle.crt — RPM owns the
+                    // target path, not the symlink path.
                     if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
+                        continue;
+                    }
+                    if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
                         continue;
                     }
                     // Skip excluded unowned
@@ -290,6 +297,26 @@ fn classify_rpm_va_kind(flags: &str) -> ConfigFileKind {
         ConfigFileKind::RpmOwnedModified
     } else {
         ConfigFileKind::RpmOwnedDefault
+    }
+}
+
+/// Symlink-aware RPM ownership check.
+///
+/// If the file at `path` is a symlink, resolves the full chain and checks
+/// whether the *target* path is RPM-owned. This catches cases like
+/// `/etc/ssl/certs/ca-bundle.crt` -> `/etc/pki/tls/certs/ca-bundle.crt`
+/// where RPM owns the target but not the symlink path.
+///
+/// Returns `false` if the path is not a symlink or resolution fails.
+fn is_rpm_owned_via_symlink(exec: &dyn Executor, rpm_state: &RpmState, path: &str) -> bool {
+    // Only check paths that are actually symlinks.
+    if exec.read_link(Path::new(path)).is_err() {
+        return false;
+    }
+    if let Ok(resolved) = exec.resolve_final_target(Path::new(path)) {
+        rpm_state.is_rpm_owned(&resolved)
+    } else {
+        false
     }
 }
 
@@ -418,6 +445,9 @@ fn detect_orphaned_configs(
                 continue;
             }
             if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
+                continue;
+            }
+            if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
                 continue;
             }
             if rpm_va_paths.contains(&abs_path) {
@@ -1333,5 +1363,154 @@ mod tests {
             )
         });
         assert!(has_metric, "should emit ConfigsModified metric");
+    }
+
+    // ---- Symlink-aware ownership tests ----
+
+    #[test]
+    fn test_is_rpm_owned_via_symlink_resolves_to_owned_path() {
+        // /etc/ssl/certs/ca-bundle.crt -> /etc/pki/tls/certs/ca-bundle.crt
+        // RPM owns the target, not the symlink.
+        let exec = MockExecutor::new()
+            .with_link("/etc/ssl/certs/ca-bundle.crt", "/etc/pki/tls/certs/ca-bundle.crt");
+
+        let rpm_state = rpm_state_with_va_and_owned(
+            vec![],
+            vec!["/etc/pki/tls/certs/ca-bundle.crt"],
+            vec![PackageEntry {
+                name: "ca-certificates".into(),
+                version: "2023.2.60".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            }],
+        );
+
+        assert!(
+            is_rpm_owned_via_symlink(&exec, &rpm_state, "/etc/ssl/certs/ca-bundle.crt"),
+            "symlink to RPM-owned path should be detected as owned"
+        );
+    }
+
+    #[test]
+    fn test_is_rpm_owned_via_symlink_not_a_symlink() {
+        // Regular file, not a symlink — should return false
+        let exec = MockExecutor::new()
+            .with_file("/etc/httpd/conf/httpd.conf", "ServerRoot /etc/httpd");
+
+        let rpm_state = rpm_state_with_va_and_owned(
+            vec![],
+            vec!["/etc/httpd/conf/httpd.conf"],
+            vec![PackageEntry {
+                name: "httpd".into(),
+                version: "2.4.57".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            }],
+        );
+
+        assert!(
+            !is_rpm_owned_via_symlink(&exec, &rpm_state, "/etc/httpd/conf/httpd.conf"),
+            "non-symlink should not trigger symlink ownership check"
+        );
+    }
+
+    #[test]
+    fn test_is_rpm_owned_via_symlink_resolves_to_unowned() {
+        // Symlink to a path that is also not RPM-owned
+        let exec = MockExecutor::new()
+            .with_link("/etc/custom/link.conf", "/etc/custom/real.conf");
+
+        let rpm_state = empty_rpm_state();
+
+        assert!(
+            !is_rpm_owned_via_symlink(&exec, &rpm_state, "/etc/custom/link.conf"),
+            "symlink to unowned path should return false"
+        );
+    }
+
+    #[test]
+    fn test_symlinked_dir_files_not_in_unowned_output() {
+        // Integration test: /etc/httpd/modules is a directory symlink to
+        // /usr/lib64/httpd/modules. Files under it should NOT appear as
+        // unowned in the inspector output.
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["httpd"])
+            .with_dir("/etc/httpd", vec!["conf", "modules"])
+            .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
+            // modules dir is a symlink outside /etc
+            .with_dir("/etc/httpd/modules", vec!["mod_ssl.so", "mod_proxy.so"])
+            .with_link("/etc/httpd/modules", "/usr/lib64/httpd/modules")
+            .with_file("/etc/httpd/conf/httpd.conf", "ServerRoot /etc/httpd")
+            .with_file("/etc/httpd/modules/mod_ssl.so", "<binary>")
+            .with_file("/etc/httpd/modules/mod_proxy.so", "<binary>")
+            .with_command(
+                "rpm -Va",
+                ExecResult {
+                    stdout: "S.5....T.  c /etc/httpd/conf/httpd.conf\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1, // dnf not available
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = rpm_state_with_va_and_owned(
+            vec![RpmVaEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                flags: "S.5....T.".into(),
+                package: Some("httpd".into()),
+            }],
+            vec!["/etc/httpd/conf/httpd.conf"],
+            vec![PackageEntry {
+                name: "httpd".into(),
+                version: "2.4.57".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            }],
+        );
+
+        let ctx = InspectionContext {
+            source_system: &test_source_system(),
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let inspector = ConfigInspector::new();
+        let progress = NullProgress;
+        let result = inspector.inspect(&ctx, &progress);
+
+        let section = match result {
+            Ok(output) => match output.section {
+                SectionData::Config(s) => s,
+                _ => panic!("expected Config section"),
+            },
+            Err(InspectorError::Degraded { partial, .. }) => match partial.section {
+                SectionData::Config(s) => s,
+                _ => panic!("expected Config section"),
+            },
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+
+        // httpd.conf should be captured as modified
+        assert!(
+            section.files.iter().any(|f| f.path.contains("httpd.conf")),
+            "httpd.conf should be in output"
+        );
+
+        // .so files should NOT appear — the directory symlink is skipped
+        assert!(
+            !section.files.iter().any(|f| f.path.contains("mod_ssl")),
+            "mod_ssl.so should not appear (directory symlink outside /etc)"
+        );
+        assert!(
+            !section.files.iter().any(|f| f.path.contains("mod_proxy")),
+            "mod_proxy.so should not appear (directory symlink outside /etc)"
+        );
     }
 }

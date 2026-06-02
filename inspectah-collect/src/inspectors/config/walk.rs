@@ -113,11 +113,10 @@ const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
     "/etc/tuned/active_profile",
     "/etc/tuned/profile_mode",
     "/etc/tuned/bootcmdline",
-    // CA bundle symlinks — these are RPM-owned by ca-certificates but the
-    // ownership check fails because rpm reports the canonical path
-    // (/etc/pki/tls/certs/), not the symlink path (/etc/ssl/certs/).
-    "/etc/ssl/certs/ca-bundle.crt",
-    "/etc/ssl/certs/ca-bundle.trust.crt",
+    // NOTE: CA bundle symlinks (/etc/ssl/certs/ca-bundle.crt etc.) were
+    // previously excluded here because RPM owns the canonical path
+    // (/etc/pki/tls/certs/) not the symlink path. These are now handled
+    // by the symlink-aware ownership check in is_rpm_owned_via_symlink().
 ];
 
 /// Glob patterns for system-generated files (fnmatch-style).
@@ -398,6 +397,13 @@ fn walk_recursive_inner(
             Ok(_) => {
                 // It's a directory — recurse if not a skip dir
                 if !SKIP_DIR_NAMES.contains(&name.as_str()) {
+                    // Skip directory symlinks that resolve outside root.
+                    // Example: /etc/httpd/modules -> /usr/lib64/httpd/modules
+                    // Files under these are RPM-owned binaries accessed via
+                    // a compat symlink — not user-modified config.
+                    if is_symlink_outside_root(exec, &child_path, root) {
+                        continue;
+                    }
                     walk_recursive_inner(exec, root, &child_rel, files, degraded_reasons);
                 }
             }
@@ -409,6 +415,28 @@ fn walk_recursive_inner(
                 files.push(child_rel);
             }
         }
+    }
+}
+
+/// Returns `true` if `path` is a symlink whose resolved target is outside `root`.
+///
+/// Public for testing; primary consumer is `walk_recursive_inner`.
+///
+/// Used to skip directory symlinks like `/etc/httpd/modules` ->
+/// `/usr/lib64/httpd/modules` where the entire subtree consists of
+/// RPM-owned binaries, not user-modifiable config files.
+pub fn is_symlink_outside_root(exec: &dyn Executor, path: &str, root: &str) -> bool {
+    // Only check paths that are actually symlinks.
+    if exec.read_link(Path::new(path)).is_err() {
+        return false;
+    }
+    // Resolve the full chain to get the final target.
+    if let Ok(resolved) = exec.resolve_final_target(Path::new(path)) {
+        let resolved_str = resolved.to_string_lossy();
+        !resolved_str.starts_with(root)
+    } else {
+        // Dangling or broken symlink — skip it (nothing useful to collect).
+        true
     }
 }
 
@@ -576,9 +604,16 @@ mod tests {
     }
 
     #[test]
-    fn test_ca_bundle_symlinks_excluded() {
-        assert!(is_excluded_unowned("/etc/ssl/certs/ca-bundle.crt"));
-        assert!(is_excluded_unowned("/etc/ssl/certs/ca-bundle.trust.crt"));
+    fn test_ca_bundle_symlinks_not_statically_excluded() {
+        // CA bundle symlinks are no longer statically excluded — they are
+        // handled by the symlink-aware ownership check in the config
+        // inspector (is_rpm_owned_via_symlink). The canonical paths under
+        // /etc/pki/tls/certs/ are still glob-excluded.
+        assert!(!is_excluded_unowned("/etc/ssl/certs/ca-bundle.crt"));
+        assert!(!is_excluded_unowned("/etc/ssl/certs/ca-bundle.trust.crt"));
+        // But the canonical paths ARE excluded via the pki glob
+        assert!(is_excluded_unowned("/etc/pki/tls/certs/ca-bundle.crt"));
+        assert!(is_excluded_unowned("/etc/pki/tls/certs/ca-bundle.trust.crt"));
     }
 
     #[test]
@@ -600,5 +635,121 @@ mod tests {
         let paths = dhcp_connection_paths(&exec);
         assert_eq!(paths.len(), 1);
         assert!(paths[0].contains("eth0.nmconnection"));
+    }
+
+    // ---- Symlink-aware directory skipping tests ----
+
+    #[test]
+    fn test_is_symlink_outside_root_true() {
+        // /etc/httpd/modules -> /usr/lib64/httpd/modules (outside /etc)
+        let exec = MockExecutor::new()
+            .with_link("/etc/httpd/modules", "/usr/lib64/httpd/modules");
+        assert!(is_symlink_outside_root(&exec, "/etc/httpd/modules", "/etc"));
+    }
+
+    #[test]
+    fn test_is_symlink_outside_root_false_within_etc() {
+        // /etc/foo/link -> /etc/foo/real (stays within /etc)
+        let exec = MockExecutor::new()
+            .with_link("/etc/foo/link", "/etc/foo/real");
+        assert!(!is_symlink_outside_root(&exec, "/etc/foo/link", "/etc"));
+    }
+
+    #[test]
+    fn test_is_symlink_outside_root_not_a_symlink() {
+        // Regular directory, not a symlink
+        let exec = MockExecutor::new()
+            .with_dir("/etc/httpd/conf", vec!["httpd.conf"]);
+        assert!(!is_symlink_outside_root(&exec, "/etc/httpd/conf", "/etc"));
+    }
+
+    #[test]
+    fn test_is_symlink_outside_root_dangling() {
+        // Dangling symlink — target doesn't exist, resolve fails
+        let exec = MockExecutor::new()
+            .with_link("/etc/broken", "/nonexistent/path");
+        // Dangling link should be treated as outside (skipped)
+        assert!(is_symlink_outside_root(&exec, "/etc/broken", "/etc"));
+    }
+
+    #[test]
+    fn test_walk_etc_skips_directory_symlink_outside_root() {
+        // /etc/httpd/modules is a symlink to /usr/lib64/httpd/modules.
+        // The walker should skip the entire subtree.
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["httpd"])
+            .with_dir("/etc/httpd", vec!["conf", "modules"])
+            .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
+            // modules is a directory (read_dir succeeds) but also a symlink
+            .with_dir("/etc/httpd/modules", vec!["mod_ssl.so", "mod_proxy.so"])
+            .with_link("/etc/httpd/modules", "/usr/lib64/httpd/modules");
+
+        let files = walk_etc_recursive(&exec, "/etc").unwrap();
+
+        // httpd.conf should be found (regular file in regular dir)
+        assert!(
+            files.iter().any(|f| f == "httpd/conf/httpd.conf"),
+            "should find httpd.conf"
+        );
+        // .so files under the symlinked dir should NOT be found
+        assert!(
+            !files.iter().any(|f| f.contains("mod_ssl.so")),
+            "should skip mod_ssl.so under symlinked modules dir"
+        );
+        assert!(
+            !files.iter().any(|f| f.contains("mod_proxy.so")),
+            "should skip mod_proxy.so under symlinked modules dir"
+        );
+    }
+
+    #[test]
+    fn test_walk_etc_follows_directory_symlink_within_root() {
+        // /etc/foo/link -> /etc/foo/real (stays within /etc)
+        // Should still recurse into it.
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["foo"])
+            .with_dir("/etc/foo", vec!["link"])
+            .with_dir("/etc/foo/link", vec!["config.conf"])
+            .with_link("/etc/foo/link", "/etc/foo/real");
+
+        let files = walk_etc_recursive(&exec, "/etc").unwrap();
+        assert!(
+            files.iter().any(|f| f == "foo/link/config.conf"),
+            "should find config.conf under within-root symlinked dir"
+        );
+    }
+
+    #[test]
+    fn test_walk_etc_skips_multiple_external_symlinks() {
+        // Common RHEL symlinks: modules, logs, run all point outside /etc
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["httpd"])
+            .with_dir("/etc/httpd", vec!["conf", "modules", "logs", "run"])
+            .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
+            .with_dir("/etc/httpd/modules", vec!["mod_ssl.so"])
+            .with_dir("/etc/httpd/logs", vec!["access_log"])
+            .with_dir("/etc/httpd/run", vec!["httpd.pid"])
+            .with_link("/etc/httpd/modules", "/usr/lib64/httpd/modules")
+            .with_link("/etc/httpd/logs", "/var/log/httpd")
+            .with_link("/etc/httpd/run", "/run/httpd");
+
+        let files = walk_etc_recursive(&exec, "/etc").unwrap();
+
+        assert!(
+            files.iter().any(|f| f == "httpd/conf/httpd.conf"),
+            "should find httpd.conf"
+        );
+        assert!(
+            !files.iter().any(|f| f.contains("mod_ssl")),
+            "should skip files under modules symlink"
+        );
+        assert!(
+            !files.iter().any(|f| f.contains("access_log")),
+            "should skip files under logs symlink"
+        );
+        assert!(
+            !files.iter().any(|f| f.contains("httpd.pid")),
+            "should skip files under run symlink"
+        );
     }
 }
