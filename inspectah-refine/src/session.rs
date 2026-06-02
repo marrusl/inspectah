@@ -330,6 +330,25 @@ impl RefineSession {
             }
         }
 
+        // Single-host defaults: in single-host mode everything the user
+        // configured is assumed intentional — there's no fleet consensus
+        // to compare against. Set include=true for quadlets and tuned
+        // profile. Fleet mode keeps its prevalence-based logic above.
+        if matches!(refine_mode, RefineMode::SingleHost) {
+            // Quadlets
+            if let Some(ref mut containers) = snapshot.containers {
+                for quadlet in &mut containers.quadlet_units {
+                    quadlet.include = true;
+                }
+            }
+            // Tuned profile (stock or custom — all intentional in single-host)
+            if let Some(ref mut kb) = snapshot.kernel_boot
+                && !kb.tuned_active.is_empty()
+            {
+                kb.tuned_include = true;
+            }
+        }
+
         let mut session = Self {
             original: snapshot,
             repo_index,
@@ -3472,5 +3491,83 @@ mod tests {
         assert_eq!(ref_proj.version_changes.upgrades.len(), 1);
         assert_eq!(ref_proj.version_changes.downgrades[0].name, "openssl");
         assert_eq!(ref_proj.version_changes.upgrades[0].name, "curl");
+    }
+
+    // ── Single-host default normalization tests ───────────────────────
+
+    #[test]
+    fn single_host_quadlets_default_to_included() {
+        let mut snap = test_snapshot();
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![
+                QuadletUnit {
+                    path: "/etc/containers/systemd/app.container".into(),
+                    name: "app.container".into(),
+                    include: false, // collector default
+                    ..Default::default()
+                },
+                QuadletUnit {
+                    path: "/etc/containers/systemd/db.container".into(),
+                    name: "db.container".into(),
+                    include: false, // collector default
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let projected = session.snapshot_projected();
+        let containers = projected.containers.as_ref().unwrap();
+
+        for q in &containers.quadlet_units {
+            assert!(
+                q.include,
+                "single-host quadlet '{}' must default to included",
+                q.name
+            );
+        }
+    }
+
+    #[test]
+    fn single_host_tuned_defaults_to_included() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+
+        let mut snap = test_snapshot();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "virtual-guest".into(),
+            tuned_include: false, // collector excludes stock profiles
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let projected = session.snapshot_projected();
+        let kb = projected.kernel_boot.as_ref().unwrap();
+
+        assert!(
+            kb.tuned_include,
+            "single-host tuned profile must default to included"
+        );
+    }
+
+    #[test]
+    fn single_host_tuned_empty_stays_excluded() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+
+        let mut snap = test_snapshot();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: String::new(),
+            tuned_include: false,
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let projected = session.snapshot_projected();
+        let kb = projected.kernel_boot.as_ref().unwrap();
+
+        assert!(
+            !kb.tuned_include,
+            "empty tuned_active must stay excluded even in single-host mode"
+        );
     }
 }
