@@ -92,7 +92,7 @@ describe("ExportDialog", () => {
       />,
     );
 
-    expect(screen.getByText("Context sections")).toBeInTheDocument();
+    expect(screen.getByText("Reference sections")).toBeInTheDocument();
     expect(screen.getByText(/cannot be toggled/)).toBeInTheDocument();
   });
 

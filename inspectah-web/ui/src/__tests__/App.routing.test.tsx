@@ -104,8 +104,10 @@ describe("App router", () => {
     // fetchSections must NEVER have been called either
     expect(mockFetchSections).not.toHaveBeenCalled();
 
-    // FleetApp's own fetch was called
-    expect(mockFetchFleetView).toHaveBeenCalled();
+    // FleetApp's own fetch was called (fires in a useEffect after mount)
+    await waitFor(() => {
+      expect(mockFetchFleetView).toHaveBeenCalled();
+    });
   });
 
   it("renders SingleHostApp when health has no fleet field", async () => {
