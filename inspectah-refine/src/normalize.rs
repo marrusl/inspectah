@@ -173,9 +173,9 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
 
 /// Exclude systemd services incompatible with immutable /usr.
 ///
-/// Walks `services.state_changes` and sets `include = false` on units
-/// listed in `INCOMPATIBLE_SERVICES`. Also removes those units from
-/// `services.enabled_units`.
+/// Walks `services.state_changes` and sets `include = false`, `locked = true`
+/// on units listed in `INCOMPATIBLE_SERVICES`. Also locks any drop-ins
+/// belonging to those units and removes the units from `services.enabled_units`.
 pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     let services = match snapshot.services.as_mut() {
         Some(s) => s,
@@ -184,10 +184,21 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 
     let incompatible_units: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|e| e.unit).collect();
 
+    // Lock incompatible services
     for sc in &mut services.state_changes {
         if incompatible_units.contains(&sc.unit.as_str()) {
             sc.include = false;
+            sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
+        }
+    }
+
+    // Lock drop-ins owned by incompatible services
+    for di in &mut services.drop_ins {
+        if incompatible_units.contains(&di.unit.as_str()) {
+            di.include = false;
+            di.locked = true;
+            di.attention_reason = Some("parent service image-mode incompatible".to_string());
         }
     }
 
@@ -235,7 +246,7 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 
     /// Helper: build a snapshot with a ServiceSection.
     fn snap_with_services(
@@ -353,6 +364,72 @@ mod tests {
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
         assert!(!services.state_changes[0].include);
+    }
+
+    #[test]
+    fn incompatible_service_is_locked() {
+        let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
+        normalize_incompatible_services(&mut snap);
+        let svc = &snap.services.as_ref().unwrap().state_changes[0];
+        assert!(!svc.include);
+        assert!(svc.locked);
+        assert_eq!(
+            svc.attention_reason.as_deref(),
+            Some("service-image-mode-incompatible")
+        );
+    }
+
+    #[test]
+    fn incompatible_service_dropin_is_locked() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection {
+                state_changes: vec![sc("dnf-makecache.service", true)],
+                drop_ins: vec![SystemdDropIn {
+                    unit: "dnf-makecache.service".into(),
+                    path: "/etc/systemd/system/dnf-makecache.service.d/override.conf".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        // Service itself locked
+        assert!(!services.state_changes[0].include);
+        assert!(services.state_changes[0].locked);
+        // Drop-in also locked
+        assert!(!services.drop_ins[0].include);
+        assert!(services.drop_ins[0].locked);
+        assert_eq!(
+            services.drop_ins[0].attention_reason.as_deref(),
+            Some("parent service image-mode incompatible")
+        );
+    }
+
+    #[test]
+    fn unrelated_dropin_not_locked() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection {
+                state_changes: vec![sc("httpd.service", true)],
+                drop_ins: vec![SystemdDropIn {
+                    unit: "httpd.service".into(),
+                    path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert!(services.drop_ins[0].include);
+        assert!(!services.drop_ins[0].locked);
+        assert!(services.drop_ins[0].attention_reason.is_none());
     }
 
     #[test]
