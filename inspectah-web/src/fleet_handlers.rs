@@ -710,8 +710,8 @@ fn build_fleet_sections(
             }
         }
 
-        // Flatpaks: no fleet field, so no variant detection or prevalence.
-        // Each flatpak is a standalone decision item with lifecycle badge.
+        // Flatpaks: standalone decision items with fleet prevalence from
+        // the merge layer's per-entry FleetPrevalence.
         for f in &flatpaks {
             let item_id = ItemId::Flatpak {
                 app_id: f.entry.app_id.clone(),
@@ -724,7 +724,7 @@ fn build_fleet_sections(
                 locked: f.entry.locked,
                 attention_reason: None,
                 triage: build_triage_dto(&f.triage, None, ctx),
-                prevalence: fleet_prevalence_dto(None, ctx),
+                prevalence: fleet_prevalence_dto(f.entry.fleet.as_ref(), ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -808,15 +808,14 @@ fn build_fleet_sections(
             .map(|kb| kb.tuned_include)
             .unwrap_or(false);
         // Tuned is a scalar merged via most_prevalent_scalar; no per-item
-        // FleetPrevalence exists. Use kernel_boot section host count as the
-        // best available prevalence (all hosts with kernel_boot data contributed
-        // to the tuned_active selection).
-        let kb_host_count = ctx
-            .fleet_meta
-            .section_host_counts
-            .get("kernel_boot")
-            .copied()
-            .unwrap_or(0) as u32;
+        // FleetPrevalence exists. Derive prevalence from tuned_include:
+        // - tuned_include=true means the merge layer proved universality
+        //   (is_scalar_universal), so count == total_hosts.
+        // - tuned_include=false means the profile is NOT universal (or is
+        //   a stock profile). We lack the exact winner count from the merge
+        //   layer, so show 0 to avoid the false "N/N hosts" display.
+        let total = ctx.total_hosts as u32;
+        let tuned_prevalence_count = if tuned_include { total } else { 0 };
         let items: Vec<FleetItem> = tuned_selections
             .iter()
             .map(|t| {
@@ -830,8 +829,8 @@ fn build_fleet_sections(
                     attention_reason: None,
                     triage: build_triage_dto(&t.triage, None, ctx),
                     prevalence: FleetPrevalenceDto {
-                        count: kb_host_count,
-                        total: ctx.total_hosts as u32,
+                        count: tuned_prevalence_count,
+                        total,
                     },
                     variants: None,
                     source_repo: String::new(),
@@ -1541,6 +1540,167 @@ mod tests {
             items[0].include,
             "fleet handler must use stored include value (true), \
              not recompute from prevalence (which would be false for 2/5 hosts)"
+        );
+    }
+
+    #[test]
+    fn fleet_flatpak_prevalence_plumbed() {
+        use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_refine::session::RefineSession;
+
+        let app = FlatpakApp {
+            app_id: "org.gnome.Calculator".into(),
+            origin: "flathub".into(),
+            branch: "stable".into(),
+            include: true,
+            remote: "flathub".into(),
+            fleet: Some(FleetPrevalence {
+                count: 2,
+                total: 3,
+                hosts: vec!["host-a".into(), "host-b".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            containers: Some(ContainerSection {
+                flatpak_apps: vec![app],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session = RefineSession::new(snap.clone());
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let sections = build_fleet_sections(&session, &snap, &ctx);
+
+        let container_section = sections
+            .iter()
+            .find(|s| s.id == "containers")
+            .expect("containers section must exist");
+
+        let items = container_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        let flatpak_item = items
+            .iter()
+            .find(|i| matches!(&i.item_id, ItemId::Flatpak { app_id, .. } if app_id == "org.gnome.Calculator"))
+            .expect("flatpak item must exist");
+
+        assert_eq!(
+            flatpak_item.prevalence.count, 2,
+            "flatpak prevalence count must come from fleet data, not be zero"
+        );
+        assert_eq!(flatpak_item.prevalence.total, 3);
+    }
+
+    #[test]
+    fn fleet_tuned_prevalence_reflects_universality() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        use inspectah_refine::session::RefineSession;
+
+        // Tuned profile is universal (tuned_include=true) across 3 hosts.
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "my-custom-profile".into(),
+                tuned_include: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session = RefineSession::new(snap.clone());
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::from([
+                    ("kernel_boot".into(), 3),
+                ]),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let sections = build_fleet_sections(&session, &snap, &ctx);
+
+        let tuned_section = sections
+            .iter()
+            .find(|s| s.id == "tuned")
+            .expect("tuned section must exist");
+
+        let items = tuned_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        assert_eq!(items.len(), 1);
+        // Universal profile: count must equal total.
+        assert_eq!(items[0].prevalence.count, 3);
+        assert_eq!(items[0].prevalence.total, 3);
+
+        // Now test non-universal: tuned_include=false means profile is NOT
+        // on all hosts. The section_host_counts["kernel_boot"] = 3 but the
+        // profile is only on 2 hosts (not universal).
+        let snap_partial = InspectionSnapshot {
+            schema_version: 1,
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "my-custom-profile".into(),
+                tuned_include: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session_partial = RefineSession::new(snap_partial.clone());
+
+        let sections_partial = build_fleet_sections(&session_partial, &snap_partial, &ctx);
+
+        let tuned_section_partial = sections_partial
+            .iter()
+            .find(|s| s.id == "tuned")
+            .expect("tuned section must exist");
+
+        let items_partial = tuned_section_partial
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        assert_eq!(items_partial.len(), 1);
+        // Non-universal: count must NOT equal total.
+        assert!(
+            items_partial[0].prevalence.count < items_partial[0].prevalence.total,
+            "non-universal tuned profile must show count < total, got {}/{}",
+            items_partial[0].prevalence.count,
+            items_partial[0].prevalence.total,
         );
     }
 }

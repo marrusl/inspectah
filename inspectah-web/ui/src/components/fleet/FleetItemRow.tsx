@@ -45,8 +45,12 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.path;
     case "Compose":
       return itemId.key.path;
-    case "Flatpak":
-      return itemId.key.app_id;
+    case "Flatpak": {
+      const parts = [itemId.key.app_id];
+      if (itemId.key.remote) parts.push(itemId.key.remote);
+      if (itemId.key.branch) parts.push(itemId.key.branch);
+      return parts.join(" / ");
+    }
     case "NMConnection":
       return itemId.key.path;
     case "FirewallZone":
