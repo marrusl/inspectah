@@ -32,6 +32,11 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     (":stats", "Session statistics"),
     (":undo / :redo", "Undo / redo"),
     (":fresh", "Discard and restart"),
+    ("", ""),
+    ("Indicators", ""),
+    ("[+]", "Included"),
+    ("[-]", "Excluded"),
+    ("[-L]", "Locked (cannot toggle)"),
 ];
 
 /// Width of the key column in characters.

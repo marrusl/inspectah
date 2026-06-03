@@ -308,11 +308,11 @@ fn render_item_row(
 ) {
     // Include/exclude indicator column (4 chars: "[+] " or "[-] " or "    ").
     // Uses [+]/[-] per spec Decision 21 (distinct from triage glyphs).
-    // Locked items show "[L] " instead, preventing toggling.
+    // Locked items show "[-L]" to compose excluded+locked state.
     let indicator_width: usize = 4;
     let (indicator, indicator_style) = if item.locked {
         (
-            "[L] ",
+            "[-L]",
             Token::StatusLocked.style(ctx.tier),
         )
     } else if is_pure_reference {
