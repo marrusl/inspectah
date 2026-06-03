@@ -126,6 +126,21 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 pkg.include = false;
             }
         }
+        for ms in &mut rpm.module_streams {
+            if ms.locked {
+                ms.include = false;
+            }
+        }
+        for vl in &mut rpm.version_locks {
+            if vl.locked {
+                vl.include = false;
+            }
+        }
+        for rf in &mut rpm.repo_files {
+            if rf.locked {
+                rf.include = false;
+            }
+        }
     }
     if let Some(ref mut config) = snapshot.config {
         for f in &mut config.files {
@@ -152,6 +167,16 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 q.include = false;
             }
         }
+        for cf in &mut containers.compose_files {
+            if cf.locked {
+                cf.include = false;
+            }
+        }
+        for rc in &mut containers.running_containers {
+            if rc.locked {
+                rc.include = false;
+            }
+        }
         for f in &mut containers.flatpak_apps {
             if f.locked {
                 f.include = false;
@@ -169,6 +194,69 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
         for s in &mut kb.sysctl_overrides {
             if s.locked {
                 s.include = false;
+            }
+        }
+        for m in &mut kb.loaded_modules {
+            if m.locked {
+                m.include = false;
+            }
+        }
+        for m in &mut kb.non_default_modules {
+            if m.locked {
+                m.include = false;
+            }
+        }
+    }
+    if let Some(ref mut net) = snapshot.network {
+        for c in &mut net.connections {
+            if c.locked {
+                c.include = false;
+            }
+        }
+        for fz in &mut net.firewall_zones {
+            if fz.locked {
+                fz.include = false;
+            }
+        }
+        for fdr in &mut net.firewall_direct_rules {
+            if fdr.locked {
+                fdr.include = false;
+            }
+        }
+    }
+    if let Some(ref mut sched) = snapshot.scheduled_tasks {
+        for cj in &mut sched.cron_jobs {
+            if cj.locked {
+                cj.include = false;
+            }
+        }
+        for st in &mut sched.systemd_timers {
+            if st.locked {
+                st.include = false;
+            }
+        }
+        for aj in &mut sched.at_jobs {
+            if aj.locked {
+                aj.include = false;
+            }
+        }
+        for gtu in &mut sched.generated_timer_units {
+            if gtu.locked {
+                gtu.include = false;
+            }
+        }
+    }
+    if let Some(ref mut sel) = snapshot.selinux {
+        for pl in &mut sel.port_labels {
+            if pl.locked {
+                pl.include = false;
+            }
+        }
+    }
+    if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
+        for item in &mut nonrpm.items {
+            if item.locked {
+                item.include = false;
             }
         }
     }
