@@ -32,6 +32,7 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
     normalize_incompatible_services(&mut snap);
+    normalize_merge_hostile_configs(&mut snap);
 
     Ok(snap)
 }
@@ -134,6 +135,37 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
             }
             TriageBucket::Investigate => {
                 rpm.packages_added[i].include = false;
+            }
+        }
+    }
+}
+
+/// Paths that fight bootc's /etc 3-way merge or carry host-specific state
+/// that is never image-portable.
+const MERGE_HOSTILE_PATHS: &[&str] = &["/etc/fstab", "/etc/crypttab"];
+
+/// Lock merge-hostile configs and all fstab entries.
+///
+/// Fstab entries are host-specific mount state — never image-portable.
+/// Config files matching `MERGE_HOSTILE_PATHS` fight bootc's /etc 3-way
+/// merge and must not be included in a Containerfile.
+pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
+    // Lock ALL fstab entries — host state, not image-portable
+    if let Some(ref mut storage) = snapshot.storage {
+        for entry in &mut storage.fstab_entries {
+            entry.include = false;
+            entry.locked = true;
+            entry.attention_reason = Some("host state — not image-portable".into());
+        }
+    }
+    // Lock /etc/crypttab (and any future merge-hostile paths) in config files
+    if let Some(ref mut config) = snapshot.config {
+        for file in &mut config.files {
+            if MERGE_HOSTILE_PATHS.contains(&file.path.as_str()) {
+                file.include = false;
+                file.locked = true;
+                file.attention_reason =
+                    Some("merge-hostile — fights bootc /etc 3-way merge".into());
             }
         }
     }
@@ -542,6 +574,141 @@ mod tests {
             !rpm.packages_added[2].include,
             "git-core should be excluded (dep only, not a top-level leaf)"
         );
+    }
+
+    // --- merge-hostile config tests ---
+
+    fn snap_with_fstab(entries: Vec<inspectah_core::types::storage::FstabEntry>) -> InspectionSnapshot {
+        use inspectah_core::types::storage::StorageSection;
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            storage: Some(StorageSection {
+                fstab_entries: entries,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn snap_with_configs(files: Vec<inspectah_core::types::config::ConfigFileEntry>) -> InspectionSnapshot {
+        use inspectah_core::types::config::ConfigSection;
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            config: Some(ConfigSection { files }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merge_hostile_fstab_locked() {
+        use inspectah_core::types::storage::FstabEntry;
+        let mut snap = snap_with_fstab(vec![FstabEntry {
+            device: "/dev/sda1".into(),
+            mount_point: "/boot".into(),
+            fstype: "xfs".into(),
+            options: "defaults".into(),
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let entry = &snap.storage.as_ref().unwrap().fstab_entries[0];
+        assert!(!entry.include);
+        assert!(entry.locked);
+        assert!(entry.attention_reason.is_some());
+    }
+
+    #[test]
+    fn merge_hostile_crypttab_locked() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+        let mut snap = snap_with_configs(vec![ConfigFileEntry {
+            path: "/etc/crypttab".into(),
+            kind: ConfigFileKind::Unowned,
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let file = &snap.config.as_ref().unwrap().files[0];
+        assert!(!file.include);
+        assert!(file.locked);
+        assert!(file.attention_reason.is_some());
+    }
+
+    #[test]
+    fn non_hostile_config_untouched() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+        let mut snap = snap_with_configs(vec![ConfigFileEntry {
+            path: "/etc/httpd/conf/httpd.conf".into(),
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let file = &snap.config.as_ref().unwrap().files[0];
+        assert!(file.include);
+        assert!(!file.locked);
+        assert!(file.attention_reason.is_none());
+    }
+
+    #[test]
+    fn merge_hostile_no_storage_no_config_is_noop() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            ..Default::default()
+        };
+        normalize_merge_hostile_configs(&mut snap);
+        assert!(snap.storage.is_none());
+        assert!(snap.config.is_none());
+    }
+
+    #[test]
+    fn merge_hostile_fstab_locked_also_sets_crypttab() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+        use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            storage: Some(StorageSection {
+                fstab_entries: vec![FstabEntry {
+                    device: "/dev/sda1".into(),
+                    mount_point: "/boot".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/crypttab".into(),
+                        kind: ConfigFileKind::Unowned,
+                        include: true,
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/httpd/conf/httpd.conf".into(),
+                        kind: ConfigFileKind::RpmOwnedModified,
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+        normalize_merge_hostile_configs(&mut snap);
+
+        // fstab locked
+        let fstab = &snap.storage.as_ref().unwrap().fstab_entries[0];
+        assert!(!fstab.include);
+        assert!(fstab.locked);
+
+        // crypttab locked
+        let crypttab = &snap.config.as_ref().unwrap().files[0];
+        assert!(!crypttab.include);
+        assert!(crypttab.locked);
+
+        // httpd.conf untouched
+        let httpd = &snap.config.as_ref().unwrap().files[1];
+        assert!(httpd.include);
+        assert!(!httpd.locked);
     }
 
     #[test]
