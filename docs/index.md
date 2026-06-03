@@ -10,7 +10,7 @@ inspectah is a migration analysis tool that scans package-mode RHEL, CentOS, and
 
 ## Quick Links
 
-- [Getting Started](tutorials/getting-started.md) — Install inspectah and run your first scan
+- [Getting Started](getting-started.md) — Install inspectah and run your first scan
 - [CLI Reference](reference/cli.md) — Complete command documentation
 
 ## Documentation
