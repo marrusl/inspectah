@@ -306,156 +306,10 @@ impl RefineSession {
             RefineMode::SingleHost
         };
 
-        // Fleet prevalence gate: in fleet mode, items below full prevalence
-        // default to excluded (strict intersection). This overrides the
-        // single-host triage defaults set by normalize_package_defaults.
-        // Applies to ALL section types with per-item fleet prevalence data.
-        if matches!(refine_mode, RefineMode::Fleet(_)) {
-            // Packages
-            if let Some(ref mut rpm) = snapshot.rpm {
-                for pkg in &mut rpm.packages_added {
-                    if let Some(ref fp) = pkg.fleet
-                        && fp.count < fp.total
-                    {
-                        pkg.include = false;
-                    }
-                }
-            }
+        // Fleet prevalence narrowing is handled in the aggregate merge layer
+        // (merge.rs). Items below full prevalence arrive with include=false
+        // already set before the session sees them.
 
-            // Config files
-            if let Some(ref mut config) = snapshot.config {
-                for entry in &mut config.files {
-                    if let Some(ref fp) = entry.fleet
-                        && fp.count < fp.total
-                    {
-                        entry.include = false;
-                    }
-                }
-            }
-
-            // Services
-            if let Some(ref mut services) = snapshot.services {
-                for svc in &mut services.state_changes {
-                    if let Some(ref fp) = svc.fleet
-                        && fp.count < fp.total
-                    {
-                        svc.include = false;
-                    }
-                }
-                for dropin in &mut services.drop_ins {
-                    if let Some(ref fp) = dropin.fleet
-                        && fp.count < fp.total
-                    {
-                        dropin.include = false;
-                    }
-                }
-            }
-
-            // Containers (quadlets, compose)
-            if let Some(ref mut containers) = snapshot.containers {
-                for quadlet in &mut containers.quadlet_units {
-                    if let Some(ref fp) = quadlet.fleet
-                        && fp.count < fp.total
-                    {
-                        quadlet.include = false;
-                    }
-                }
-                for compose in &mut containers.compose_files {
-                    if let Some(ref fp) = compose.fleet
-                        && fp.count < fp.total
-                    {
-                        compose.include = false;
-                    }
-                }
-            }
-
-            // Kernel/boot: sysctl overrides, loaded modules
-            if let Some(ref mut kb) = snapshot.kernel_boot {
-                for sysctl in &mut kb.sysctl_overrides {
-                    if let Some(ref fp) = sysctl.fleet
-                        && fp.count < fp.total
-                    {
-                        sysctl.include = false;
-                    }
-                }
-                for module in &mut kb.loaded_modules {
-                    if let Some(ref fp) = module.fleet
-                        && fp.count < fp.total
-                    {
-                        module.include = false;
-                    }
-                }
-            }
-
-            // Scheduled tasks
-            if let Some(ref mut sched) = snapshot.scheduled_tasks {
-                for cron in &mut sched.cron_jobs {
-                    if let Some(ref fp) = cron.fleet
-                        && fp.count < fp.total
-                    {
-                        cron.include = false;
-                    }
-                }
-                for timer in &mut sched.generated_timer_units {
-                    if let Some(ref fp) = timer.fleet
-                        && fp.count < fp.total
-                    {
-                        timer.include = false;
-                    }
-                }
-            }
-
-            // SELinux port labels
-            if let Some(ref mut selinux) = snapshot.selinux {
-                for port in &mut selinux.port_labels {
-                    if let Some(ref fp) = port.fleet
-                        && fp.count < fp.total
-                    {
-                        port.include = false;
-                    }
-                }
-            }
-
-            // Network: connections, firewall zones
-            if let Some(ref mut network) = snapshot.network {
-                for conn in &mut network.connections {
-                    if let Some(ref fp) = conn.fleet
-                        && fp.count < fp.total
-                    {
-                        conn.include = false;
-                    }
-                }
-                for zone in &mut network.firewall_zones {
-                    if let Some(ref fp) = zone.fleet
-                        && fp.count < fp.total
-                    {
-                        zone.include = false;
-                    }
-                }
-            }
-
-            // Non-RPM software
-            if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
-                for item in &mut nonrpm.items {
-                    if let Some(ref fp) = item.fleet
-                        && fp.count < fp.total
-                    {
-                        item.include = false;
-                    }
-                }
-            }
-
-            // Storage: fstab entries
-            if let Some(ref mut storage) = snapshot.storage {
-                for entry in &mut storage.fstab_entries {
-                    if let Some(ref fp) = entry.fleet
-                        && fp.count < fp.total
-                    {
-                        entry.include = false;
-                    }
-                }
-            }
-        }
         let mut session = Self {
             original: snapshot,
             repo_index,
@@ -1877,11 +1731,10 @@ impl RefineSession {
         // Packages the user explicitly excluded via ops remain visible so
         // the user can undo the exclusion.
         //
-        // Fleet gate exclusion: In fleet mode, the prevalence gate also sets
-        // include=false for non-universal items. Those must NOT be hidden —
-        // they should be visible but unchecked. We distinguish them by
-        // checking fleet prevalence: if count < total, the package was
-        // excluded by the fleet gate, not by normalization.
+        // In fleet mode, non-universal items arrive with include=false from
+        // the aggregate merge layer — those are NOT hidden here because they
+        // should remain visible but unchecked. The merge layer tags them with
+        // fleet prevalence data, so we can distinguish them from normalized deps.
         let is_fleet = matches!(self.refine_mode, RefineMode::Fleet(_));
         let hidden_deps: HashSet<(&str, &str)> = self
             .original
@@ -1894,8 +1747,9 @@ impl RefineSession {
                         if p.include {
                             return false;
                         }
-                        // In fleet mode, skip packages excluded by the fleet
-                        // prevalence gate — those should remain visible.
+                        // In fleet mode, skip packages excluded by the merge
+                        // layer's prevalence narrowing — those should remain
+                        // visible but unchecked.
                         if is_fleet
                             && let Some(ref fp) = p.fleet
                             && fp.count < fp.total
