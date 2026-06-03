@@ -22,6 +22,7 @@ fn state_change(
         current_state,
         default_state,
         include: true,
+        locked: false,
         owning_package: owning_package.map(str::to_string),
         fleet: None,
         attention_reason: None,
@@ -42,6 +43,7 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -50,6 +52,7 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: false,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -72,6 +75,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         arch: "x86_64".into(),
         state: PackageState::Added,
         include: true,
+        locked: false,
         source_repo: "appstream".into(),
         ..Default::default()
     };
@@ -80,6 +84,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         arch: "x86_64".into(),
         state: PackageState::LocalInstall,
         include: true,
+        locked: false,
         source_repo: String::new(),
         ..Default::default()
     };
@@ -88,6 +93,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         arch: "x86_64".into(),
         state: PackageState::Added,
         include: true,
+        locked: false,
         source_repo: String::new(),
         ..Default::default()
     };
@@ -158,6 +164,7 @@ fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             include: false,
+            locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
         }],
@@ -210,6 +217,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
             arch: "x86_64".into(),
             state: PackageState::LocalInstall,
             include: true,
+            locked: false,
             source_repo: String::new(),
             ..Default::default()
         }],
@@ -357,6 +365,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             include: true,
+            locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
         }],
@@ -514,6 +523,7 @@ fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             include: false,
+            locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
         }],

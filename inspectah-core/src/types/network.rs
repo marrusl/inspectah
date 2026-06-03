@@ -14,6 +14,8 @@ pub struct NMConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
@@ -35,6 +37,8 @@ pub struct FirewallZone {
     pub rich_rules: Vec<String>,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -52,6 +56,8 @@ pub struct FirewallDirectRule {
     pub args: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

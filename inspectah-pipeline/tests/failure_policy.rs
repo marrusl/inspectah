@@ -77,6 +77,7 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,
@@ -115,6 +116,7 @@ fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=supersecret123\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -571,6 +573,7 @@ fn redaction_state_set_after_engine() {
             path: "/etc/myapp/config".into(),
             content: "db_password = s3cretP@ss\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });

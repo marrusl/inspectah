@@ -735,6 +735,7 @@ VARIANT_ID="workstation"
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Enable),
             include: true,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,

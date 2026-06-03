@@ -2173,6 +2173,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2180,6 +2181,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "i686".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2205,6 +2207,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2212,6 +2215,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2240,6 +2244,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2247,6 +2252,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2282,6 +2288,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2289,6 +2296,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "i686".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2321,6 +2329,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2328,6 +2337,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2357,6 +2367,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 state: PackageState::LocalInstall,
                 ..Default::default()
@@ -2365,6 +2376,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2398,6 +2410,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2405,6 +2418,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2436,6 +2450,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2443,6 +2458,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2712,6 +2728,7 @@ mod tests {
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Disable),
                         include: true,
+                        locked: false,
                         owning_package: Some("httpd".into()),
                         fleet: None,
                         attention_reason: None,
@@ -2721,6 +2738,7 @@ mod tests {
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Enable),
                         include: true,
+                        locked: false,
                         owning_package: Some("openssh-server".into()),
                         fleet: None,
                         attention_reason: None,
@@ -2734,6 +2752,7 @@ mod tests {
                         path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
                         content: "[Service]\nLimitNOFILE=65536".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     SystemdDropIn {
@@ -2741,6 +2760,7 @@ mod tests {
                         path: "/etc/systemd/system/httpd.service.d/timeout.conf".into(),
                         content: "[Service]\nTimeoutStartSec=120".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -2968,6 +2988,7 @@ mod tests {
                         name: "myapp.container".into(),
                         image: "quay.io/myorg/myapp:latest".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     QuadletUnit {
@@ -2975,6 +2996,7 @@ mod tests {
                         name: "db.container".into(),
                         image: "docker.io/library/postgres:16".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -2984,6 +3006,7 @@ mod tests {
                         remote: "flathub".into(),
                         branch: "stable".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     FlatpakApp {
@@ -2991,6 +3014,7 @@ mod tests {
                         remote: "flathub".into(),
                         branch: "stable".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -3127,6 +3151,7 @@ mod tests {
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -3135,6 +3160,7 @@ mod tests {
                         default: "60".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                 ],
@@ -3261,6 +3287,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -3273,6 +3300,7 @@ mod tests {
                 name: "myapp.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             flatpak_apps: vec![FlatpakApp {
@@ -3280,6 +3308,7 @@ mod tests {
                 remote: "flathub".into(),
                 branch: "stable".into(),
                 include: true,
+                locked: false,
                 remote_url: "https://flathub.org/repo/".into(),
                 ..Default::default()
             }],
@@ -3294,6 +3323,7 @@ mod tests {
                 runtime: "1".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             tuned_include: true,
@@ -3414,6 +3444,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,
@@ -3453,6 +3484,7 @@ mod tests {
                     version: "1.24.0".into(),
                     release: "1.el9".into(),
                     include: true,
+                    locked: false,
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -3485,6 +3517,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: false,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,

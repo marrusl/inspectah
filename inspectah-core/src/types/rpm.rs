@@ -37,6 +37,8 @@ pub struct PackageEntry {
     #[serde(default)]
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
@@ -70,6 +72,8 @@ pub struct EnabledModuleStream {
     pub profiles: Vec<String>,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub baseline_match: bool,
     pub fleet: Option<FleetPrevalence>,
@@ -91,6 +95,8 @@ pub struct VersionLockEntry {
     pub arch: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -143,6 +149,8 @@ pub struct RepoFile {
     pub is_default_repo: bool,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 

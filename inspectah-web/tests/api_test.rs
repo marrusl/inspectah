@@ -35,6 +35,7 @@ fn test_state() -> Arc<AppState> {
             arch: "x86_64".into(),
             state: PackageState::Added,
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -44,6 +45,7 @@ fn test_state() -> Arc<AppState> {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });
@@ -376,6 +378,7 @@ fn rich_snapshot() -> InspectionSnapshot {
             current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
             default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
             include: false,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,
@@ -781,6 +784,7 @@ async fn view_response_repo_groups_include_tier() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -789,6 +793,7 @@ async fn view_response_repo_groups_include_tier() {
                 arch: "noarch".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 source_repo: "epel".into(),
                 ..Default::default()
             },
@@ -1201,6 +1206,7 @@ fn service_subsection_state() -> Arc<AppState> {
             arch: "x86_64".into(),
             state: PackageState::Added,
             include: false,
+            locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
         }],
@@ -1213,6 +1219,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 include: true,
+                locked: false,
                 owning_package: Some("custom-app".into()),
                 fleet: None,
                 attention_reason: None,
@@ -1222,6 +1229,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 current_state: ServiceUnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
                 include: true,
+                locked: false,
                 owning_package: Some("sssd".into()),
                 fleet: None,
                 attention_reason: None,

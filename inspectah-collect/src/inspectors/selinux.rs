@@ -368,6 +368,7 @@ fn parse_semanage_ports(text: &str) -> Vec<SelinuxPortLabel> {
                     port: port.to_string(),
                     label_type: port_type.to_string(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 });
             }

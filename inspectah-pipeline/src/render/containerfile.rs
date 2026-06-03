@@ -1301,6 +1301,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 })
                 .collect(),
@@ -1341,6 +1342,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -1349,6 +1351,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: false,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1385,6 +1388,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -1393,6 +1397,7 @@ mod tests {
                     state: PackageState::LocalInstall,
                     source_repo: String::new(),
                     include: false,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -1401,6 +1406,7 @@ mod tests {
                     state: PackageState::NoRepo,
                     source_repo: String::new(),
                     include: false,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -1409,6 +1415,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: String::new(),
                     include: false,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1465,6 +1472,7 @@ mod tests {
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 include: true,
+                locked: false,
                 owning_package: None,
                 fleet: None,
                 attention_reason: None,
@@ -1541,6 +1549,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1550,6 +1559,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1559,6 +1569,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1637,6 +1648,7 @@ mod tests {
                     stream: "1.0".into(),
                     profiles: vec![],
                     include: true,
+                    locked: false,
                     baseline_match: false,
                     ..Default::default()
                 },
@@ -1645,6 +1657,7 @@ mod tests {
                     stream: "2.0".into(),
                     profiles: vec![],
                     include: true,
+                    locked: false,
                     baseline_match: false,
                     ..Default::default()
                 },
@@ -1680,11 +1693,13 @@ mod tests {
                 VersionLockEntry {
                     raw_pattern: "httpd-0:2.4.57-5.el9.*".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 VersionLockEntry {
                     raw_pattern: "pkg;rm -rf /".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1760,6 +1775,7 @@ mod tests {
                 name: "evil$(whoami)".into(),
                 source: "local".into(),
                 include: Some(true),
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1793,12 +1809,14 @@ mod tests {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key-data".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/opt/custom/keys/signing-key.asc".into(),
                     content: "key-data".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1830,12 +1848,14 @@ mod tests {
                     path: "/etc/pki/rpm-gpg/GOOD-KEY".into(),
                     content: "key-data".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "../../etc/shadow".into(),
                     content: "bad".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1866,6 +1886,7 @@ mod tests {
                 path: "/opt/custom keys/signing-key.asc".into(),
                 content: "key-data".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1890,12 +1911,14 @@ mod tests {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key1".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
                     content: "key2".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1927,12 +1950,14 @@ mod tests {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key1".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/opt/custom/keys/signing-key.asc".into(),
                     content: "key2".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1964,6 +1989,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1973,6 +1999,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1982,6 +2009,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1991,6 +2019,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2023,6 +2052,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2032,6 +2062,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2059,6 +2090,7 @@ mod tests {
                     current_state: ServiceUnitState::Masked,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2068,6 +2100,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2100,6 +2133,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2109,6 +2143,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2118,6 +2153,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2127,6 +2163,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2149,6 +2186,7 @@ mod tests {
                 path: "/good-key".into(),
                 content: "key-data".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -2255,6 +2293,7 @@ mod tests {
                 name: "excluded.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -2338,6 +2377,7 @@ mod tests {
                 origin: "flathub".into(),
                 branch: "stable".into(),
                 include: false,
+                locked: false,
                 remote: "flathub".into(),
                 remote_url: "https://flathub.org/repo/".into(),
             }],
@@ -2367,6 +2407,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2374,6 +2415,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2408,6 +2450,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2417,6 +2460,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: false, // excluded by triage
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -2457,6 +2501,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,
@@ -2466,6 +2511,7 @@ mod tests {
                     current_state: ServiceUnitState::Masked,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: Some("cups".into()),
                     fleet: None,
                     attention_reason: None,
@@ -2475,6 +2521,7 @@ mod tests {
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: Some("avahi".into()),
                     fleet: None,
                     attention_reason: None,
@@ -2509,6 +2556,7 @@ mod tests {
                     runtime: "1".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 SysctlOverride {
@@ -2516,6 +2564,7 @@ mod tests {
                     runtime: "10".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
                     include: false,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -2542,6 +2591,7 @@ mod tests {
                 runtime: "10".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -2617,6 +2667,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -2642,6 +2693,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()

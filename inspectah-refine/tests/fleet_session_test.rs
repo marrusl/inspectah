@@ -77,18 +77,21 @@ fn multi_variant_path_zone_uses_most_divergent_variant() {
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(3, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(1, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(1, 5),
                 ..Default::default()
             },
@@ -116,6 +119,7 @@ fn zone_for_partial_path_is_divergent() {
         files: vec![ConfigFileEntry {
             path: "/etc/app/rare.conf".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(2, 5),
             ..Default::default()
         }],
@@ -142,6 +146,7 @@ fn dropin_zone_classified_on_fleet_init() {
             path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
             content: "test".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(4, 5),
             ..Default::default()
         }],
@@ -168,6 +173,7 @@ fn quadlet_zone_classified_on_fleet_init() {
             path: "/etc/containers/systemd/myapp.container".into(),
             name: "myapp".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(5, 5),
             ..Default::default()
         }],
@@ -209,6 +215,7 @@ fn variants_changed_net_zero_is_clean() {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: fleet_prevalence(3, 5),
                 ..Default::default()
@@ -217,6 +224,7 @@ fn variants_changed_net_zero_is_clean() {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: fleet_prevalence(2, 5),
                 ..Default::default()
@@ -287,6 +295,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     ..Default::default()
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -303,6 +312,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     ..Default::default()
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -352,6 +362,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_a,
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -364,6 +375,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_b,
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,

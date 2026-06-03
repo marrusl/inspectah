@@ -1006,6 +1006,7 @@ mod tests {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             version_changes: vec![VersionChange {

@@ -11,6 +11,8 @@ pub struct CronJob {
     pub rpm_owned: bool,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -34,6 +36,8 @@ pub struct SystemdTimer {
     pub service_content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
 }
@@ -50,6 +54,8 @@ pub struct AtJob {
     pub working_dir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
 }
@@ -70,6 +76,8 @@ pub struct GeneratedTimerUnit {
     pub command: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 

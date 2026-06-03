@@ -22,6 +22,8 @@ pub struct SysctlOverride {
     pub source: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -35,6 +37,8 @@ pub struct KernelModule {
     pub used_by: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -118,6 +122,7 @@ mod tests {
                 default: "0".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
+                locked: false,
                 fleet: None,
             }],
             modules_load_d: vec![],

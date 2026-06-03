@@ -67,6 +67,8 @@ pub struct ServiceStateChange {
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub owning_package: Option<String>,
     pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,9 +104,13 @@ pub struct SystemdDropIn {
     pub content: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -129,6 +135,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -138,6 +145,7 @@ mod tests {
                     current_state: ServiceUnitState::Masked,
                     default_state: None,
                     include: true,
+                    locked: false,
                     owning_package: Some("cups".into()),
                     fleet: None,
                     attention_reason: None,
@@ -162,6 +170,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: Some("firewalld".into()),
             fleet: None,
             attention_reason: None,
@@ -171,6 +180,7 @@ mod tests {
             current_state: ServiceUnitState::Disabled,
             default_state: Some(PresetDefault::Enable),
             include: true,
+            locked: false,
             owning_package: Some("openssh-server".into()),
             fleet: None,
             attention_reason: None,
@@ -180,6 +190,7 @@ mod tests {
             current_state: ServiceUnitState::Masked,
             default_state: None,
             include: true,
+            locked: false,
             owning_package: Some("cups".into()),
             fleet: None,
             attention_reason: None,
@@ -197,6 +208,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: Some("firewalld".into()),
             fleet: None,
             attention_reason: None,
@@ -210,6 +222,7 @@ mod tests {
             current_state: ServiceUnitState::Masked,
             default_state: None,
             include: true,
+            locked: false,
             owning_package: Some("cups".into()),
             fleet: None,
             attention_reason: None,

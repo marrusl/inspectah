@@ -228,6 +228,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,
@@ -387,6 +388,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -395,6 +397,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -403,6 +406,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -475,6 +479,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -483,6 +488,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -491,6 +497,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],

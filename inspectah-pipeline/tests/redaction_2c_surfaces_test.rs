@@ -30,6 +30,7 @@ fn test_redaction_config_content_password() {
             path: "/etc/myapp/db.conf".into(),
             content: "host=localhost\npassword=cfg_secret_42\nport=5432\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });
@@ -65,6 +66,7 @@ fn test_redaction_config_content_api_key() {
             path: "/etc/myapp/cloud.conf".into(),
             content: "region=us-east-1\napi_key=AKIAIOSFODNN7EXAMPLE\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });
@@ -95,6 +97,7 @@ fn test_redaction_env_file_database_url() {
             path: "/opt/myapp/.env".into(),
             content: "NODE_ENV=production\nDATABASE_URL=postgres://appuser:env_secret_99@db.internal:5432/mydb\nPORT=3000\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -127,6 +130,7 @@ fn test_redaction_cron_command_password() {
             command: "/usr/bin/backup --host=db.local --password=cron_secret_88".into(),
             source_path: "/etc/cron.d/backup".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -196,6 +200,7 @@ fn test_redaction_git_url_credentials() {
             method: "git repo".into(),
             git_remote: "https://deploy:git_secret_66@github.com/corp/myapp.git".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -233,6 +238,7 @@ fn test_redaction_service_content_leak() {
             command: "/usr/bin/app --token=svc_secret_42".into(),
             source_path: "/etc/cron.d/backup".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -282,6 +288,7 @@ fn test_redaction_service_content_materialized() {
             command: "/usr/bin/deploy --password=mat_secret_73".into(),
             source_path: "/etc/cron.d/deploy".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -331,6 +338,7 @@ fn test_redaction_username_only_git_token() {
                 "https://ghp_tokenABC123456789012345678901234567890@github.com/corp/myapp.git"
                     .into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -375,6 +383,7 @@ fn test_redaction_username_only_generic_token() {
             git_remote:
                 "https://a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6@gitlab.com/corp/internal-tool.git".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -418,6 +427,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
             path: "/etc/myapp/db.conf".into(),
             content: "host=localhost\npassword=cfg_secret_42\nport=5432\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });
@@ -428,6 +438,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
             path: "/opt/myapp/.env".into(),
             content: "DATABASE_URL=postgres://user:env_secret_99@host/db\nPORT=3000\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         items: vec![
@@ -437,6 +448,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
                 method: "git repo".into(),
                 git_remote: "https://deploy:git_secret_66@github.com/corp/myapp.git".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             NonRpmItem {
@@ -445,6 +457,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
                 method: "git repo".into(),
                 git_remote: "https://ghp_tokenOnlySecret990123456789012345678901@github.com/corp/tokenapp.git".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -458,6 +471,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
             service_content: "[Service]\nType=oneshot\nExecStart=/usr/bin/backup --password=svc_content_secret_44\n".into(),
             source_path: "/etc/cron.d/backup".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         at_jobs: vec![AtJob {

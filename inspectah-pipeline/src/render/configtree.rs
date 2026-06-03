@@ -709,6 +709,7 @@ mod tests {
                 path: path.to_string(),
                 content: content.to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -722,6 +723,7 @@ mod tests {
                 path: path.to_string(),
                 content: content.to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -759,6 +761,7 @@ mod tests {
                 path: "etc/pki/rpm-gpg/RPM-GPG-KEY-test".to_string(),
                 content: "-----BEGIN PGP PUBLIC KEY BLOCK-----".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -846,6 +849,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
                 content: "[Service]\nLimitNOFILE=65535".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -885,6 +889,7 @@ mod tests {
                 timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".to_string(),
                 service_content: "[Service]\nExecStart=/usr/bin/backup".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -940,6 +945,7 @@ mod tests {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -963,6 +969,7 @@ mod tests {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -991,6 +998,7 @@ mod tests {
                 name: "public".to_string(),
                 content: "<zone>...</zone>".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1036,6 +1044,7 @@ mod tests {
                 path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
                 content: "[connection]".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1056,6 +1065,7 @@ mod tests {
                 path: "/etc/containers/systemd/myapp.container".to_string(),
                 content: "[Container]".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1183,6 +1193,7 @@ mod tests {
                 path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1194,6 +1205,7 @@ mod tests {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1227,6 +1239,7 @@ mod tests {
                 name: "myapp.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1238,6 +1251,7 @@ mod tests {
                     path: "/etc/containers/systemd/myapp.container".to_string(),
                     content: "[Container]\nImage=quay.io/test:latest".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 // A non-quadlet config file should still be materialized
@@ -1245,6 +1259,7 @@ mod tests {
                     path: "/etc/httpd/conf/httpd.conf".to_string(),
                     content: "ServerRoot /etc/httpd".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1290,6 +1305,7 @@ mod tests {
                 name: "excluded.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1314,6 +1330,7 @@ mod tests {
                 name: "app.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1346,6 +1363,7 @@ mod tests {
                 origin: "flathub".to_string(),
                 branch: "stable".to_string(),
                 include: false,
+                locked: false,
                 remote: "flathub".to_string(),
                 remote_url: "https://flathub.org/repo/".to_string(),
             }],
@@ -1397,6 +1415,7 @@ mod tests {
                 runtime: "1".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1407,6 +1426,7 @@ mod tests {
                 path: "/etc/sysctl.d/99-custom.conf".to_string(),
                 content: "net.ipv4.ip_forward = 1".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1431,6 +1451,7 @@ mod tests {
                     runtime: "1".to_string(),
                     source: "/etc/sysctl.d/99-custom.conf".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 SysctlOverride {
@@ -1471,6 +1492,7 @@ mod tests {
                 path: "/etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=test".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });

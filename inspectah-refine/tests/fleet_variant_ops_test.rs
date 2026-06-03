@@ -42,6 +42,7 @@ fn make_variant_snapshot(
                 path: path.into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -55,6 +56,7 @@ fn make_variant_snapshot(
                 path: path.into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -91,6 +93,7 @@ fn make_single_variant_snapshot(
             path: path.into(),
             content: content.into(),
             include: true,
+            locked: false,
             variant_selection: VariantSelection::Only,
             fleet: Some(FleetPrevalence {
                 count: host_count as i32,
@@ -677,6 +680,8 @@ fn make_dropin_variant_snapshot(
                 path: path.into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -690,6 +695,8 @@ fn make_dropin_variant_snapshot(
                 path: path.into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -732,6 +739,7 @@ fn make_quadlet_variant_snapshot(
                 content: content_a.into(),
                 image: "quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -747,6 +755,7 @@ fn make_quadlet_variant_snapshot(
                 content: content_b.into(),
                 image: "quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -785,6 +794,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     image: "nginx:1.24".into(),
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -800,6 +810,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     image: "nginx:1.25".into(),
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -1126,6 +1137,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-content".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -1139,6 +1151,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-variant-2".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -1153,6 +1166,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-content".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 4,
@@ -1171,6 +1185,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-variant-2".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 1,

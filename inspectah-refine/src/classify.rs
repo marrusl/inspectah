@@ -925,11 +925,13 @@ mod tests {
                     CfgEntry {
                         path: "/etc/yum.repos.d/rpmfusion-free.repo".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     CfgEntry {
                         path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-9".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -966,6 +968,7 @@ mod tests {
                 files: vec![CfgEntry {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
             }),
@@ -1084,6 +1087,7 @@ mod tests {
             kind,
             category: ConfigCategory::default(),
             include: true,
+            locked: false,
             ..Default::default()
         }
     }
@@ -1250,6 +1254,7 @@ mod tests {
             epoch: String::new(),
             state: PackageState::Modified,
             include: true,
+            locked: false,
             source_repo: "baseos".into(),
             ..Default::default()
         }];
@@ -1286,6 +1291,7 @@ mod tests {
             epoch: String::new(),
             state: PackageState::Modified,
             include: true,
+            locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
         }];
@@ -1330,6 +1336,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1366,6 +1373,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: Some("openssh-server".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1394,6 +1402,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1420,6 +1429,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: None,
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1446,6 +1456,7 @@ mod service_classification {
                     path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
                     content: "[Service]\nTimeoutStartSec=90".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1492,6 +1503,7 @@ mod container_classification {
                     name: "myapp.container".into(),
                     image: "quay.io/myorg/myapp:latest".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1517,6 +1529,7 @@ mod container_classification {
                     remote: "flathub".into(),
                     branch: "stable".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1549,6 +1562,7 @@ mod container_classification {
                     remote: String::new(),
                     branch: "stable".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1573,6 +1587,7 @@ mod container_classification {
                     remote: "flathub".into(),
                     branch: String::new(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1619,6 +1634,7 @@ mod sysctl_classification {
                     default: "0".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1648,6 +1664,7 @@ mod sysctl_classification {
                     default: "128".into(),
                     source: "/etc/sysctl.conf".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1673,6 +1690,7 @@ mod sysctl_classification {
                     default: "0".into(),
                     source: "runtime".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1706,6 +1724,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -1714,6 +1733,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "runtime".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -1722,6 +1742,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "/etc/sysctl.d/10-sysrq.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                 ],

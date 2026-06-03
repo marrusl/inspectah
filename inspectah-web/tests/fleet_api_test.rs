@@ -356,6 +356,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: VARIANT_A_CONTENT.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -370,6 +371,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: VARIANT_B_CONTENT.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -536,6 +538,7 @@ async fn fleet_diff_422_binary() {
                 kind: ConfigFileKind::Unowned,
                 content: binary_content.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 1,
@@ -550,6 +553,7 @@ async fn fleet_diff_422_binary() {
                 kind: ConfigFileKind::Unowned,
                 content: text_content.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 1,
@@ -612,6 +616,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v1\n".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -626,6 +631,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v2\n".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 1,
@@ -647,6 +653,8 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nRestart=always\n".into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -660,6 +668,8 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nRestart=on-failure\n".into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 1,
@@ -791,6 +801,7 @@ fn fleet_state_with_packages() -> Arc<AppState> {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -799,6 +810,7 @@ fn fleet_state_with_packages() -> Arc<AppState> {
                     state: PackageState::Added,
                     source_repo: "epel".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -808,6 +820,7 @@ fn fleet_state_with_packages() -> Arc<AppState> {
                     source_repo: nginx_repo.into(),
                     version: nginx_version.into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -817,12 +830,14 @@ fn fleet_state_with_packages() -> Arc<AppState> {
                     content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
                         .into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 RepoFile {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     content: "[epel]\nname=EPEL 9\n".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],

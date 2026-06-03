@@ -14,9 +14,13 @@ pub struct FstabEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

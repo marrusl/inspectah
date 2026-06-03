@@ -27,6 +27,8 @@ pub struct QuadletUnit {
     pub image: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
@@ -54,6 +56,8 @@ pub struct ComposeFile {
     pub images: Vec<ComposeService>,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
@@ -86,6 +90,8 @@ pub struct RunningContainer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
@@ -101,6 +107,8 @@ pub struct FlatpakApp {
     pub branch: String,
     #[serde(default)]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub remote: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

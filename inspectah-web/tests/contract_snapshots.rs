@@ -59,6 +59,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             release: "11.el9".into(),
             state: PackageState::Added,
             include: true,
+            locked: false,
             ..Default::default()
         }],
         version_changes: vec![VersionChange {
@@ -77,6 +78,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: false,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,

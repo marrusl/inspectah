@@ -145,6 +145,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,

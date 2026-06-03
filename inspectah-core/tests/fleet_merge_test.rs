@@ -1101,6 +1101,7 @@ fn test_merge_service_sections_dedup_units() {
         current_state: ServiceUnitState::Enabled,
         default_state: None,
         include: false,
+        locked: false,
         owning_package: None,
         fleet: None,
         attention_reason: None,
