@@ -56,7 +56,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
             source: "local".into(),
             timer_content: "[Timer]\nOnCalendar=daily".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/logrotate".into(),
-            include: Some(true),
+            include: true,
             locked: false,
             ..Default::default()
         }],
@@ -708,7 +708,7 @@ fn configtree_vendor_timers_not_copied() {
             path: "/usr/lib/systemd/system/fstrim.timer".into(),
             timer_content: "[Timer]\nOnCalendar=weekly".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/fstrim -a".into(),
-            include: Some(false), // vendor timers excluded
+            include: false, // vendor timers excluded
             ..Default::default()
         }],
         ..Default::default()

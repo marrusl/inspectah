@@ -255,11 +255,12 @@ fn test_nm_connection_identity_is_path() {
 }
 
 #[test]
-fn test_nm_connection_set_include_uses_option() {
+fn test_nm_connection_set_include() {
     let mut n = NMConnection::default();
-    assert!(n.include.is_none());
+    n.set_include(false);
+    assert!(!n.include);
     n.set_include(true);
-    assert_eq!(n.include, Some(true));
+    assert!(n.include);
 }
 
 #[test]
@@ -865,19 +866,22 @@ fn test_fstab_entry_identity_is_mount_point() {
 }
 
 #[test]
-fn test_systemd_timer_set_include_uses_option() {
+fn test_systemd_timer_set_include() {
     let mut t = SystemdTimer::default();
-    assert!(t.include.is_none());
+    // default_true: Default trait gives false, but serde default gives true
+    t.set_include(false);
+    assert!(!t.include);
     t.set_include(true);
-    assert_eq!(t.include, Some(true));
+    assert!(t.include);
 }
 
 #[test]
-fn test_fstab_entry_set_include_uses_option() {
+fn test_fstab_entry_set_include() {
     let mut f = FstabEntry::default();
-    assert!(f.include.is_none());
+    f.set_include(false);
+    assert!(!f.include);
     f.set_include(true);
-    assert_eq!(f.include, Some(true));
+    assert!(f.include);
 }
 
 // ===========================================================================

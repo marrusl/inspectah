@@ -34,8 +34,8 @@ pub struct SystemdTimer {
     pub timer_content: String,
     #[serde(default)]
     pub service_content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,8 +52,8 @@ pub struct AtJob {
     pub user: String,
     #[serde(default)]
     pub working_dir: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

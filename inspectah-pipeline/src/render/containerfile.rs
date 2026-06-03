@@ -635,7 +635,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let local_timers: Vec<_> = st
         .systemd_timers
         .iter()
-        .filter(|t| t.source == "local" && t.include == Some(true))
+        .filter(|t| t.source == "local" && t.include)
         .collect();
 
     let included_timers: Vec<_> = st
@@ -1774,7 +1774,7 @@ mod tests {
             systemd_timers: vec![SystemdTimer {
                 name: "evil$(whoami)".into(),
                 source: "local".into(),
-                include: Some(true),
+                include: true,
                 locked: false,
                 ..Default::default()
             }],

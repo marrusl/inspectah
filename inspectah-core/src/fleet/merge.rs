@@ -245,7 +245,7 @@ impl FleetMergeable for NMConnection {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -367,7 +367,7 @@ impl FleetMergeable for SystemdTimer {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -381,7 +381,7 @@ impl FleetMergeable for AtJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -415,7 +415,7 @@ impl FleetMergeable for FstabEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 

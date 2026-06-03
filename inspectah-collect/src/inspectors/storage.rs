@@ -176,7 +176,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
             mount_point,
             fstype,
             options,
-            include: None,
+            include: true,
             locked: false,
             acknowledged: false,
             fleet: None,

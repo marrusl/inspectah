@@ -295,7 +295,7 @@ impl RefineSession {
                     if let Some(ref fp) = conn.fleet
                         && fp.count < fp.total
                     {
-                        conn.include = Some(false);
+                        conn.include = false;
                     }
                 }
                 for zone in &mut network.firewall_zones {
@@ -324,7 +324,7 @@ impl RefineSession {
                     if let Some(ref fp) = entry.fleet
                         && fp.count < fp.total
                     {
-                        entry.include = Some(false);
+                        entry.include = false;
                     }
                 }
             }
@@ -394,7 +394,7 @@ impl RefineSession {
             // Network (connections and firewall zones)
             if let Some(ref mut network) = snapshot.network {
                 for conn in &mut network.connections {
-                    conn.include = Some(true);
+                    conn.include = true;
                 }
                 for zone in &mut network.firewall_zones {
                     zone.include = true;
@@ -411,7 +411,7 @@ impl RefineSession {
             // Storage (fstab entries)
             if let Some(ref mut storage) = snapshot.storage {
                 for entry in &mut storage.fstab_entries {
-                    entry.include = Some(true);
+                    entry.include = true;
                 }
             }
         }

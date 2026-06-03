@@ -11,8 +11,8 @@ pub struct FstabEntry {
     pub fstype: String,
     #[serde(default)]
     pub options: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
