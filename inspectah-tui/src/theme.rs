@@ -18,6 +18,7 @@ pub enum Token {
     DiffRemoved,
     StatusIncluded,
     StatusExcluded,
+    StatusLocked,
     FocusBorder,
     FocusUnfocused,
     FocusSelected,
@@ -46,6 +47,7 @@ impl Token {
             Self::DiffRemoved => Style::default(),
             Self::StatusIncluded => Style::default(),
             Self::StatusExcluded => Style::default().add_modifier(Modifier::DIM),
+            Self::StatusLocked => Style::default().add_modifier(Modifier::DIM),
             Self::FocusBorder => Style::default().add_modifier(Modifier::BOLD),
             Self::FocusUnfocused => Style::default(),
             Self::FocusSelected => {
@@ -68,6 +70,9 @@ impl Token {
             Self::DiffRemoved => Style::default().fg(Color::Red),
             Self::StatusIncluded => Style::default().fg(Color::Green),
             Self::StatusExcluded => Style::default().add_modifier(Modifier::DIM),
+            Self::StatusLocked => Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
             Self::FocusBorder => Style::default().fg(Color::Cyan),
             Self::FocusUnfocused => Style::default().add_modifier(Modifier::DIM),
             Self::FocusSelected => Style::default().add_modifier(Modifier::REVERSED),
