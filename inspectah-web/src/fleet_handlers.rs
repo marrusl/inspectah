@@ -937,7 +937,7 @@ fn build_reference_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: c.include,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -968,7 +968,7 @@ fn build_reference_sections(
             let fp = conn.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: conn.include,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -983,7 +983,7 @@ fn build_reference_sections(
             let fp = zone.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: zone.include,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1008,7 +1008,7 @@ fn build_reference_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: entry.include,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1032,7 +1032,7 @@ fn build_reference_sections(
             let fp = cron.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: cron.include,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1047,7 +1047,7 @@ fn build_reference_sections(
             let fp = timer.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: timer.include,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1078,7 +1078,7 @@ fn build_reference_sections(
                 let fp = port.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: port.include,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1103,7 +1103,7 @@ fn build_reference_sections(
             let fp = module.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: module.include,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1134,7 +1134,7 @@ fn build_reference_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: entry.include,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1206,12 +1206,6 @@ fn default_context_triage(
         zone,
         prevalence: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
     }
-}
-
-/// Returns `true` only when the item is present on every host (100% prevalence).
-/// Items without fleet prevalence data default to excluded.
-fn fleet_include_default(fp: Option<&inspectah_core::types::fleet::FleetPrevalence>) -> bool {
-    fp.is_some_and(|f| f.count > 0 && f.count == f.total)
 }
 
 fn fleet_prevalence_dto(
@@ -1426,5 +1420,90 @@ fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) ->
         count: entries.len(),
         selected: selected_key,
         options,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+
+    /// Fleet handlers must read the stored `include` value from snapshot entries,
+    /// NOT recompute it from prevalence.  This test builds an NMConnection with
+    /// `include: true` but non-universal prevalence (2 of 5 hosts).  The deleted
+    /// `fleet_include_default` function would have returned `false` for this
+    /// prevalence — if the handler still recomputes, this test catches it.
+    #[test]
+    fn fleet_handlers_use_stored_include_not_recomputed() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_core::types::network::{NMConnection, NetworkSection};
+
+        // Build a snapshot with one NMConnection: include=true, prevalence=2/5.
+        let conn = NMConnection {
+            path: "/etc/NetworkManager/test.nmconnection".to_string(),
+            include: true, // stored value — should pass through
+            fleet: Some(FleetPrevalence {
+                count: 2,
+                total: 5,
+                hosts: vec!["host-a".into(), "host-b".into()],
+                aggregate_count: None,
+                aggregate_hosts: None,
+            }),
+            ..Default::default()
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            network: Some(NetworkSection {
+                connections: vec![conn],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 5,
+                hostnames: vec![
+                    "host-a".into(),
+                    "host-b".into(),
+                    "host-c".into(),
+                    "host-d".into(),
+                    "host-e".into(),
+                ],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 5,
+            zones_active: false, // flat list mode for simpler assertion
+            repo_conflicts: HashMap::new(),
+        };
+
+        let mut sections = Vec::new();
+        build_reference_sections(&mut sections, &snap, &ctx);
+
+        // Find the network section.
+        let net_section = sections
+            .iter()
+            .find(|s| s.id == "network")
+            .expect("network section must exist");
+
+        // Get the first item — our NMConnection (flat list when zones_active=false).
+        let items = net_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+        assert_eq!(items.len(), 1);
+
+        // The critical assertion: include must be true (stored value),
+        // not false (which fleet_include_default would have returned for 2/5).
+        assert!(
+            items[0].include,
+            "fleet handler must use stored include value (true), \
+             not recompute from prevalence (which would be false for 2/5 hosts)"
+        );
     }
 }
