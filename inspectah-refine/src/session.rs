@@ -47,6 +47,133 @@ fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
 }
 
+/// Check whether an item is locked in the original (normalized) snapshot.
+/// Locked items cannot be re-included via SetInclude ops.
+fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
+    match item_id {
+        ItemId::Package { name, arch } => snapshot
+            .rpm
+            .as_ref()
+            .and_then(|r| {
+                r.packages_added
+                    .iter()
+                    .find(|e| e.name == *name && e.arch == *arch)
+            })
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Config { path } => snapshot
+            .config
+            .as_ref()
+            .and_then(|c| c.files.iter().find(|e| e.path == *path))
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Service { unit } => snapshot
+            .services
+            .as_ref()
+            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit == *unit))
+            .map(|sc| sc.locked)
+            .unwrap_or(false),
+        ItemId::DropIn { path } => snapshot
+            .services
+            .as_ref()
+            .and_then(|s| s.drop_ins.iter().find(|d| d.path == *path))
+            .map(|d| d.locked)
+            .unwrap_or(false),
+        ItemId::Quadlet { path } => snapshot
+            .containers
+            .as_ref()
+            .and_then(|c| c.quadlet_units.iter().find(|q| q.path == *path))
+            .map(|q| q.locked)
+            .unwrap_or(false),
+        ItemId::Flatpak {
+            app_id,
+            remote,
+            branch,
+        } => snapshot
+            .containers
+            .as_ref()
+            .and_then(|c| {
+                c.flatpak_apps
+                    .iter()
+                    .find(|f| f.app_id == *app_id && f.remote == *remote && f.branch == *branch)
+            })
+            .map(|f| f.locked)
+            .unwrap_or(false),
+        ItemId::Fstab { mount_point } => snapshot
+            .storage
+            .as_ref()
+            .and_then(|s| s.fstab_entries.iter().find(|e| e.mount_point == *mount_point))
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Sysctl { key } => snapshot
+            .kernel_boot
+            .as_ref()
+            .and_then(|kb| kb.sysctl_overrides.iter().find(|s| s.key == *key))
+            .map(|s| s.locked)
+            .unwrap_or(false),
+        // Item kinds without locked field or not yet handled: not lockable
+        _ => false,
+    }
+}
+
+/// Defense-in-depth: clamp all locked items to include=false in the
+/// projected snapshot. Ensures renderers and exporters never see a
+/// locked item with include=true, regardless of op-stack state.
+fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
+    if let Some(ref mut rpm) = snapshot.rpm {
+        for pkg in &mut rpm.packages_added {
+            if pkg.locked {
+                pkg.include = false;
+            }
+        }
+    }
+    if let Some(ref mut config) = snapshot.config {
+        for f in &mut config.files {
+            if f.locked {
+                f.include = false;
+            }
+        }
+    }
+    if let Some(ref mut services) = snapshot.services {
+        for sc in &mut services.state_changes {
+            if sc.locked {
+                sc.include = false;
+            }
+        }
+        for di in &mut services.drop_ins {
+            if di.locked {
+                di.include = false;
+            }
+        }
+    }
+    if let Some(ref mut containers) = snapshot.containers {
+        for q in &mut containers.quadlet_units {
+            if q.locked {
+                q.include = false;
+            }
+        }
+        for f in &mut containers.flatpak_apps {
+            if f.locked {
+                f.include = false;
+            }
+        }
+    }
+    if let Some(ref mut storage) = snapshot.storage {
+        for e in &mut storage.fstab_entries {
+            if e.locked {
+                e.include = false;
+            }
+        }
+    }
+    if let Some(ref mut kb) = snapshot.kernel_boot {
+        for s in &mut kb.sysctl_overrides {
+            if s.locked {
+                s.include = false;
+            }
+        }
+    }
+}
+
 impl RefineSession {
     pub fn new(mut snapshot: InspectionSnapshot) -> Self {
         let repo_index = RepoIndex::build(&snapshot);
@@ -573,6 +700,18 @@ impl RefineSession {
     pub fn apply(&mut self, op: RefinementOp) -> Result<(), RefineError> {
         // Validate target exists
         self.validate_target(&op)?;
+
+        // Short-circuit: locked items cannot be re-included.
+        // Must happen before the op is recorded to prevent stale ops
+        // from persisting in autosaved history.
+        if let RefinementOp::SetInclude {
+            ref item_id,
+            include: true,
+        } = op
+            && is_item_locked(&self.original, item_id)
+        {
+            return Ok(()); // silent no-op — op never recorded
+        }
 
         // Check idempotency
         if self.is_op_noop(&op) {
@@ -1382,6 +1521,11 @@ impl RefineSession {
         for op in &self.ops[..self.cursor] {
             match op {
                 RefinementOp::SetInclude { item_id, include } => {
+                    // Defense-in-depth: skip stale SetInclude(true) ops
+                    // from pre-locked autosaved sessions.
+                    if *include && is_item_locked(&self.original, item_id) {
+                        continue;
+                    }
                     match item_id {
                         ItemId::Package { name, arch } => {
                             if let Some(ref mut rpm) = snap.rpm
@@ -1723,6 +1867,11 @@ impl RefineSession {
                 }
             }
         }
+
+        // Defense-in-depth: clamp locked items to include=false regardless
+        // of op-stack state. Ensures renderers and exporters never see a
+        // locked item with include=true.
+        clamp_locked_items(&mut snap);
 
         snap
     }
@@ -3668,6 +3817,147 @@ mod tests {
         assert!(
             !kb.tuned_include,
             "empty tuned_active must stay excluded even in single-host mode"
+        );
+    }
+
+    // ── Locked field enforcement tests ────────────────────────────────
+
+    #[test]
+    fn set_include_on_locked_item_is_rejected() {
+        let mut snap = test_snapshot_with_services();
+        // Lock httpd.service to simulate a semantic exclusion
+        let services = snap.services.as_mut().unwrap();
+        services.state_changes[0].include = false;
+        services.state_changes[0].locked = true;
+
+        let mut session = RefineSession::new(snap);
+
+        // Attempting to re-include a locked service must be a silent no-op
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Service {
+                unit: "httpd.service".into(),
+            },
+            include: true,
+        });
+        assert!(result.is_ok(), "locked set-include must not error");
+
+        // The service must remain excluded
+        let projected = session.snapshot_projected();
+        let svc = projected.services.as_ref().unwrap();
+        let httpd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(!httpd.include, "locked service must stay excluded after set-include attempt");
+
+        // The op must NOT be recorded in history
+        assert!(
+            session.ops_history().is_empty(),
+            "locked set-include must not record an op"
+        );
+    }
+
+    #[test]
+    fn recompute_view_skips_locked_set_include_ops() {
+        let mut snap = test_snapshot_with_services();
+        let services = snap.services.as_mut().unwrap();
+        // Start unlocked and excluded
+        services.state_changes[0].include = false;
+        services.state_changes[0].locked = false;
+
+        let mut session = RefineSession::new(snap);
+
+        // Apply a valid include op while unlocked
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+
+        // Verify the op was recorded and the service is included
+        assert_eq!(session.ops_history().len(), 1);
+        let projected = session.snapshot_projected();
+        assert!(
+            projected
+                .services
+                .as_ref()
+                .unwrap()
+                .state_changes
+                .iter()
+                .find(|s| s.unit == "httpd.service")
+                .unwrap()
+                .include,
+            "service must be included after unlocked set-include"
+        );
+
+        // Now simulate what happens when the item becomes locked in a
+        // newer snapshot but stale ops exist from the autosaved session.
+        // We do this by directly locking the original snapshot's item and
+        // forcing a recompute. This models resume_from() with a snapshot
+        // where the normalize layer now locks this item.
+        session.original.services.as_mut().unwrap().state_changes[0].locked = true;
+        session.original.services.as_mut().unwrap().state_changes[0].include = false;
+        session.cached_view = None;
+        session.cached_decisions = None;
+        session.recompute_view();
+
+        // The stale SetInclude(true) op must be skipped during replay
+        let projected = session.snapshot_projected();
+        let httpd = projected
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(
+            !httpd.include,
+            "locked service must stay excluded even with stale include op in history"
+        );
+    }
+
+    #[test]
+    fn export_clamp_forces_locked_items_excluded() {
+        // Verify clamp_locked_items forces include=false on locked items
+        // even if the working snapshot somehow has include=true.
+        let mut snap = test_snapshot_with_services();
+        let services = snap.services.as_mut().unwrap();
+        // Simulate a locked item that somehow has include=true
+        services.state_changes[0].include = true;
+        services.state_changes[0].locked = true;
+
+        clamp_locked_items(&mut snap);
+
+        let httpd = snap
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(
+            !httpd.include,
+            "clamp must force locked item to include=false"
+        );
+
+        // Verify unlocked items are not affected
+        let sshd = snap
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "sshd.service")
+            .unwrap();
+        assert!(
+            sshd.include,
+            "clamp must not affect unlocked items"
         );
     }
 }
