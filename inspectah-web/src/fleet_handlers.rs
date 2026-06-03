@@ -83,6 +83,9 @@ pub struct RepoSourceEntryDto {
 pub struct FleetItem {
     pub item_id: ItemId,
     pub include: bool,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
     pub triage: FleetTriageDto,
     pub prevalence: FleetPrevalenceDto,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,6 +466,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: pkg.entry.include,
+                    locked: pkg.entry.locked,
+                    attention_reason: None,
                     triage: build_triage_dto(&pkg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -535,6 +540,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: cfg.entry.include,
+                    locked: cfg.entry.locked,
+                    attention_reason: cfg.entry.attention_reason.clone(),
                     triage: build_triage_dto(&cfg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -567,6 +574,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: s.entry.include,
+                    locked: s.entry.locked,
+                    attention_reason: s.entry.attention_reason.clone(),
                     triage: build_triage_dto(&s.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -622,6 +631,8 @@ fn build_fleet_sections(
                 items.push(FleetItem {
                     item_id,
                     include: d.entry.include,
+                    locked: d.entry.locked,
+                    attention_reason: d.entry.attention_reason.clone(),
                     triage: build_triage_dto(&d.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -688,6 +699,8 @@ fn build_fleet_sections(
                 items.push(FleetItem {
                     item_id,
                     include: q.entry.include,
+                    locked: q.entry.locked,
+                    attention_reason: None,
                     triage: build_triage_dto(&q.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -708,6 +721,8 @@ fn build_fleet_sections(
             items.push(FleetItem {
                 item_id,
                 include: f.entry.include,
+                locked: f.entry.locked,
+                attention_reason: None,
                 triage: build_triage_dto(&f.triage, None, ctx),
                 prevalence: fleet_prevalence_dto(None, ctx),
                 variants: None,
@@ -762,6 +777,8 @@ fn build_fleet_sections(
             items.push(FleetItem {
                 item_id,
                 include: representative.entry.include,
+                locked: representative.entry.locked,
+                attention_reason: None,
                 triage: build_triage_dto(&representative.triage, fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants,
@@ -809,6 +826,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: tuned_include,
+                    locked: false,
+                    attention_reason: None,
                     triage: build_triage_dto(&t.triage, None, ctx),
                     prevalence: FleetPrevalenceDto {
                         count: kb_host_count,
@@ -938,6 +957,8 @@ fn build_reference_sections(
                 items.push(FleetItem {
                     item_id,
                     include: c.include,
+                    locked: c.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -969,6 +990,8 @@ fn build_reference_sections(
             items.push(FleetItem {
                 item_id,
                 include: conn.include,
+                locked: conn.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -984,6 +1007,8 @@ fn build_reference_sections(
             items.push(FleetItem {
                 item_id,
                 include: zone.include,
+                locked: zone.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1009,6 +1034,8 @@ fn build_reference_sections(
                 FleetItem {
                     item_id,
                     include: entry.include,
+                    locked: entry.locked,
+                    attention_reason: entry.attention_reason.clone(),
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1033,6 +1060,8 @@ fn build_reference_sections(
             items.push(FleetItem {
                 item_id,
                 include: cron.include,
+                locked: cron.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1048,6 +1077,8 @@ fn build_reference_sections(
             items.push(FleetItem {
                 item_id,
                 include: timer.include,
+                locked: timer.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1079,6 +1110,8 @@ fn build_reference_sections(
                 FleetItem {
                     item_id,
                     include: port.include,
+                    locked: port.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1104,6 +1137,8 @@ fn build_reference_sections(
             items.push(FleetItem {
                 item_id,
                 include: module.include,
+                locked: module.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1135,6 +1170,8 @@ fn build_reference_sections(
                 FleetItem {
                     item_id,
                     include: entry.include,
+                    locked: entry.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,

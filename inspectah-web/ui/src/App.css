@@ -593,6 +593,33 @@ html, body, #root {
   padding-left: calc(var(--pf-t--global--spacer--sm) + 18px);
 }
 
+/* ─── Locked item styling ─────────────────────────────────────────────── */
+
+.inspectah-decision-row--locked {
+  opacity: 0.55;
+  border-left-color: transparent !important;
+}
+
+.inspectah-decision-row--locked:hover {
+  background: inherit;
+}
+
+.inspectah-decision-row--locked .inspectah-decision-row__toggle input {
+  cursor: not-allowed;
+}
+
+.fleet-item-row--locked {
+  opacity: 0.55;
+}
+
+.fleet-item-row--locked .fleet-item-row__toggle .pf-v6-c-switch {
+  cursor: not-allowed;
+}
+
+.fleet-item-row__locked-badge {
+  margin-left: var(--pf-t--global--spacer--xs);
+}
+
 /* ─── Service drop-in child rows ─────────────────────────────────────── */
 
 .inspectah-service-dropin {

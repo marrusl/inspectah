@@ -1,4 +1,4 @@
-import { Switch } from "@patternfly/react-core";
+import { Label, Switch } from "@patternfly/react-core";
 import type { FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
@@ -93,8 +93,10 @@ export function FleetItemRow({
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
+  const locked = item.locked === true;
 
   const handleToggle = () => {
+    if (locked) return;
     onToggle(item.item_id, !item.include);
   };
 
@@ -109,9 +111,10 @@ export function FleetItemRow({
 
   return (
     <div
-      className="fleet-item-row"
+      className={`fleet-item-row${locked ? " fleet-item-row--locked" : ""}`}
       data-testid="fleet-item-row"
       data-item-id={JSON.stringify(item.item_id)}
+      data-locked={locked ? "true" : undefined}
       onClick={handleRowClick}
       role="row"
       tabIndex={0}
@@ -125,12 +128,24 @@ export function FleetItemRow({
             id={`fleet-switch-${name}`}
             isChecked={item.include}
             onChange={handleToggle}
-            aria-label={`Toggle ${name}`}
+            isDisabled={locked}
+            aria-label={locked ? `${name} (locked)` : `Toggle ${name}`}
           />
         </div>
       )}
 
       <div className="fleet-item-row__name">{name}</div>
+
+      {locked && (
+        <Label
+          color="grey"
+          isCompact
+          data-testid={`locked-badge-fleet-${name}`}
+          className="fleet-item-row__locked-badge"
+        >
+          {item.attention_reason ?? "LOCKED"}
+        </Label>
+      )}
 
       <span
         className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}

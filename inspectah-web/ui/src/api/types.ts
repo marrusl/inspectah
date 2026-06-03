@@ -26,6 +26,7 @@ export interface PackageEntry {
   arch: string;
   state: PackageState;
   include: boolean;
+  locked?: boolean;
   acknowledged?: boolean;
   source_repo: string;
   fleet: FleetPrevalence | null;
@@ -64,6 +65,8 @@ export interface ConfigFileEntry {
   package: string | null;
   diff_against_rpm: string | null;
   include: boolean;
+  locked?: boolean;
+  attention_reason?: string | null;
   tie: boolean;
   tie_winner: boolean;
   fleet: FleetPrevalence | null;
@@ -365,6 +368,8 @@ export interface ServiceDecisionDto {
   unit: string;
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
+  attention_reason?: string | null;
   owning_package?: string | null;
 }
 
@@ -374,6 +379,8 @@ export interface DropInDecisionDto {
   path: string;
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
+  attention_reason?: string | null;
 }
 
 // --- Sysctl decision types (inspectah-web/src/handlers.rs) ---
@@ -386,6 +393,7 @@ export interface SysctlDecisionDto {
   source: string;
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
 }
 
 /** A classified tuned profile selection, projected for the view response. */
@@ -394,6 +402,7 @@ export interface TunedDecisionDto {
   custom_profiles: string[];
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
 }
 
 // --- Container decision types (inspectah-web/src/handlers.rs) ---
@@ -405,6 +414,7 @@ export interface QuadletDecisionDto {
   image: string;
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
 }
 
 /** A classified flatpak app, projected for the view response. */
@@ -414,6 +424,7 @@ export interface FlatpakDecisionDto {
   branch: string;
   triage: TriageTag;
   include: boolean;
+  locked?: boolean;
   lifecycle: string;
 }
 
@@ -653,6 +664,8 @@ export interface FleetItemPrevalence {
 export interface FleetItem {
   item_id: ItemId;
   include: boolean;
+  locked?: boolean;
+  attention_reason?: string | null;
   triage: FleetTriageDto;
   /** @deprecated Use triage.prevalence instead. */
   prevalence: FleetItemPrevalence;

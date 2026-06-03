@@ -76,6 +76,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             unit: s.entry.unit.clone(),
             triage: s.triage.clone(),
             include: s.entry.include,
+            locked: s.entry.locked,
+            attention_reason: s.entry.attention_reason.clone(),
             owning_package: s.entry.owning_package.clone(),
         })
         .collect();
@@ -88,6 +90,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             path: d.entry.path.clone(),
             triage: d.triage.clone(),
             include: d.entry.include,
+            locked: d.entry.locked,
+            attention_reason: d.entry.attention_reason.clone(),
         })
         .collect();
 
@@ -101,6 +105,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             image: q.entry.image.clone(),
             triage: q.triage.clone(),
             include: q.entry.include,
+            locked: q.entry.locked,
         })
         .collect();
 
@@ -113,6 +118,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             branch: f.entry.branch.clone(),
             triage: f.triage.clone(),
             include: f.entry.include,
+            locked: f.entry.locked,
             lifecycle: "first_boot".to_string(),
         })
         .collect();
@@ -128,6 +134,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             source: s.entry.source.clone(),
             triage: s.triage.clone(),
             include: s.entry.include,
+            locked: s.entry.locked,
         })
         .collect();
 
@@ -140,6 +147,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             custom_profiles: t.custom_profiles.clone(),
             triage: t.triage.clone(),
             include: t.include,
+            locked: false,
         })
         .collect();
 

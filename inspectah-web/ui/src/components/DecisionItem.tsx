@@ -60,6 +60,17 @@ function isIncluded(item: DecisionItemKind): boolean {
   return item.data.entry.include;
 }
 
+function isLocked(item: DecisionItemKind): boolean {
+  return item.data.entry.locked === true;
+}
+
+function lockedReason(item: DecisionItemKind): string | null {
+  if (item.type === "config" && item.data.entry.attention_reason) {
+    return item.data.entry.attention_reason;
+  }
+  return null;
+}
+
 function buildItemId(item: DecisionItemKind): ItemId {
   if (item.type === "package") {
     return {
@@ -108,6 +119,8 @@ export function DecisionItem({
   const id = itemId(item);
   const name = itemName(item);
   const included = isIncluded(item);
+  const locked = isLocked(item);
+  const reasonText = lockedReason(item);
   const hasBeenToggled = useRef(false);
 
   // Derive effective attention level: triageTag takes priority over legacy level prop
@@ -128,12 +141,12 @@ export function DecisionItem({
       : null;
 
   const handleToggle = useCallback(() => {
-    if (!onToggleInclude) return;
+    if (!onToggleInclude || locked) return;
     const op = buildToggleOp(item);
     onToggleInclude(op);
     onMarkViewed(id);
     hasBeenToggled.current = true;
-  }, [item, onToggleInclude, onMarkViewed, id]);
+  }, [item, onToggleInclude, onMarkViewed, id, locked]);
 
   const handleExpand = useCallback(() => {
     const willExpand = !isExpanded;
@@ -230,7 +243,8 @@ export function DecisionItem({
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
       data-expanded={isExpanded ? "true" : "false"}
-      className="inspectah-decision-row"
+      data-locked={locked ? "true" : undefined}
+      className={`inspectah-decision-row${locked ? " inspectah-decision-row--locked" : ""}`}
       style={{ borderLeft }}
     >
       <div
@@ -247,8 +261,8 @@ export function DecisionItem({
               checked={included}
               onChange={handleToggle}
               onClick={(e) => e.stopPropagation()}
-              disabled={isPending}
-              aria-label={`Toggle ${name}`}
+              disabled={isPending || locked}
+              aria-label={locked ? `${name} (locked)` : `Toggle ${name}`}
             />
           </div>
         )}
@@ -276,9 +290,20 @@ export function DecisionItem({
             </Label>
           </div>
         )}
-        {badgeText && (
+        {badgeText && !locked && (
           <div role="gridcell" className="inspectah-decision-row__badge">
             <Label color={attentionLabelColor(topAttention)}>{badgeText}</Label>
+          </div>
+        )}
+        {locked && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid={`locked-badge-${id}`}
+          >
+            <Label color="grey" isCompact>
+              {reasonText ?? "LOCKED"}
+            </Label>
           </div>
         )}
         <div role="gridcell" className="inspectah-decision-row__expand">
