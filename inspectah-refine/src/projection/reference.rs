@@ -512,6 +512,9 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
             mount_point: e.mount_point.clone(),
             fstype: e.fstype.clone(),
             options: e.options.clone(),
+            include: e.include,
+            locked: e.locked,
+            attention_reason: e.attention_reason.clone(),
         })
         .collect();
 
@@ -2125,6 +2128,41 @@ mod tests {
         assert_eq!(result.fstab_entries[0].mount_point, "/boot");
         assert_eq!(result.fstab_entries[0].fstype, "xfs");
         assert_eq!(result.fstab_entries[0].options, "defaults");
+        assert!(result.fstab_entries[0].include);
+        assert!(!result.fstab_entries[0].locked);
+        assert!(result.fstab_entries[0].attention_reason.is_none());
+    }
+
+    #[test]
+    fn test_fstab_locked_entry_surfaces_reason() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                fstab_entries: vec![FstabEntry {
+                    device: "/dev/sda1".into(),
+                    mount_point: "/boot".into(),
+                    fstype: "xfs".into(),
+                    options: "defaults".into(),
+                    include: false,
+                    locked: true,
+                    attention_reason: Some(
+                        "host state \u{2014} not image-portable".into(),
+                    ),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.fstab_entries.len(), 1);
+        assert!(!result.fstab_entries[0].include);
+        assert!(result.fstab_entries[0].locked);
+        assert_eq!(
+            result.fstab_entries[0].attention_reason.as_deref(),
+            Some("host state \u{2014} not image-portable"),
+        );
     }
 
     #[test]

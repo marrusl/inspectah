@@ -866,11 +866,16 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
 
     // FstabEntry
     for entry in &data.fstab_entries {
+        let detail = if let Some(reason) = &entry.attention_reason {
+            format!("{} [{}]", entry.options, reason)
+        } else {
+            entry.options.clone()
+        };
         items.push(ContextItem {
             id: entry.mount_point.clone(),
             title: entry.mount_point.clone(),
             subtitle: Some(format!("{} ({})", entry.device, entry.fstype)),
-            detail: Some(entry.options.clone()),
+            detail: Some(detail),
             searchable_text: format!(
                 "{} {} {} {}",
                 entry.device, entry.mount_point, entry.fstype, entry.options

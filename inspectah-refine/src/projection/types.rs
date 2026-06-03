@@ -301,6 +301,9 @@ pub struct RefFstabEntry {
     pub mount_point: String,
     pub fstype: String,
     pub options: String,
+    pub include: bool,
+    pub locked: bool,
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -715,7 +715,7 @@ pub fn build_list_items(
                     format!("{} ({} {})", f.device, f.fstype, f.options),
                     TriageGroup::Site, None,
                     Some(ItemId::Fstab { mount_point: f.mount_point.clone() }),
-                    false, false, None,
+                    false, f.locked, f.attention_reason.clone(),
                 ));
             }
             for m in &st.mount_points {
