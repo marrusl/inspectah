@@ -109,6 +109,8 @@ pub struct FlatpakApp {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub remote: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

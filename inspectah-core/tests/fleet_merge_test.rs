@@ -1180,6 +1180,25 @@ fn test_merge_container_sections_flatpak_dedup() {
 
     assert_eq!(result.flatpak_apps.len(), 2);
     assert!(result.running_containers.is_empty()); // runtime state skipped
+
+    // Calculator present on both hosts, Firefox on one
+    let calc = result
+        .flatpak_apps
+        .iter()
+        .find(|a| a.app_id == "org.gnome.Calculator")
+        .expect("Calculator should be in merged output");
+    let calc_fleet = calc.fleet.as_ref().expect("should have fleet data");
+    assert_eq!(calc_fleet.count, 2);
+    assert_eq!(calc_fleet.total, 2);
+
+    let firefox = result
+        .flatpak_apps
+        .iter()
+        .find(|a| a.app_id == "org.mozilla.Firefox")
+        .expect("Firefox should be in merged output");
+    let ff_fleet = firefox.fleet.as_ref().expect("should have fleet data");
+    assert_eq!(ff_fleet.count, 1);
+    assert_eq!(ff_fleet.total, 2);
 }
 
 #[test]

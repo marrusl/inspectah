@@ -174,7 +174,7 @@ impl FleetMergeable for SystemdDropIn {
 // Container types
 // ---------------------------------------------------------------------------
 
-use crate::types::containers::{ComposeFile, QuadletUnit};
+use crate::types::containers::{ComposeFile, FlatpakApp, QuadletUnit};
 
 impl FleetMergeable for QuadletUnit {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -226,6 +226,20 @@ impl FleetMergeable for ComposeFile {
             "{:x}",
             Sha256::digest(serialized.as_bytes())
         )))
+    }
+}
+
+impl FleetMergeable for FlatpakApp {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}.{}.{}", self.app_id, self.remote, self.branch))
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = val;
     }
 }
 
@@ -1125,27 +1139,11 @@ pub fn merge_container_sections(
     // Skip running_containers — runtime state, not config
     let running_containers = Vec::new();
 
-    // Dedup flatpak_apps by (app_id, remote, branch) identity.
-    // remote_url is render metadata and not part of the identity key.
-    let flatpak_apps = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for app in &s.flatpak_apps {
-                let key = (app.app_id.clone(), app.remote.clone(), app.branch.clone());
-                if seen.insert(key) {
-                    result.push(app.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| {
-            a.app_id
-                .cmp(&b.app_id)
-                .then_with(|| a.remote.cmp(&b.remote))
-                .then_with(|| a.branch.cmp(&b.branch))
-        });
-        result
-    };
+    let flatpak_apps = merge_items(
+        collect_items(&sections, |s| &s.flatpak_apps),
+        total_hosts,
+        hostnames,
+    );
 
     Some(ContainerSection {
         quadlet_units,
@@ -2128,6 +2126,13 @@ mod tests {
             .collect();
         assert!(remotes.contains(&"fedora"));
         assert!(remotes.contains(&"flathub"));
+
+        // Each distinct identity appears on exactly 1 of 2 hosts
+        for app in &merged.flatpak_apps {
+            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
+            assert_eq!(fleet.count, 1);
+            assert_eq!(fleet.total, 2);
+        }
     }
 
     #[test]
@@ -2169,6 +2174,15 @@ mod tests {
             1,
             "same (app_id, remote, branch) must collapse despite different remote_url"
         );
+
+        let fleet = merged.flatpak_apps[0]
+            .fleet
+            .as_ref()
+            .expect("merged flatpak should have fleet data");
+        assert_eq!(fleet.count, 2, "present on both hosts");
+        assert_eq!(fleet.total, 2);
+        assert!(fleet.hosts.contains(&"host-a".to_string()));
+        assert!(fleet.hosts.contains(&"host-b".to_string()));
     }
 
     #[test]
@@ -2207,5 +2221,12 @@ mod tests {
             2,
             "same app_id with different branches must not be collapsed"
         );
+
+        // Each branch variant appears on exactly 1 of 2 hosts
+        for app in &merged.flatpak_apps {
+            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
+            assert_eq!(fleet.count, 1);
+            assert_eq!(fleet.total, 2);
+        }
     }
 }
