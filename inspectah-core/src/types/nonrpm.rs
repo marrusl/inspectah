@@ -20,7 +20,7 @@ pub struct NonRpmItem {
     pub method: String,
     #[serde(default)]
     pub confidence: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,

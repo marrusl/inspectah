@@ -42,7 +42,7 @@ pub struct ConfigFileEntry {
     pub rpm_va_flags: Option<String>,
     pub package: Option<String>,
     pub diff_against_rpm: Option<String>,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
