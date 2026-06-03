@@ -771,7 +771,8 @@ fn test_merge_items_mixed_paths_with_variants() {
 
 #[test]
 fn test_merge_items_all_variants_included() {
-    // Even alternative variants should have include = true
+    // With fleet narrowing, per-variant prevalence determines include.
+    // Each variant appears on 1/2 hosts (non-universal), so include=false.
     let items: Vec<(usize, ConfigFileEntry)> = vec![
         (
             0,
@@ -793,7 +794,10 @@ fn test_merge_items_all_variants_included() {
     let hostnames = vec!["h1".into(), "h2".into()];
     let merged = merge_items(items, 2, &hostnames);
     for item in &merged {
-        assert!(item.include, "all merged items should be included");
+        assert!(
+            !item.include,
+            "non-universal variant (1/2 hosts) must have include=false"
+        );
     }
 }
 
