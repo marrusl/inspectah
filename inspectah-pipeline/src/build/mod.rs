@@ -718,7 +718,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sub_dir = tmp.path().join("subscription");
         // No subscription directory at all -- returns Ok(false).
-        assert_eq!(validate_subscription_bundle(&sub_dir).unwrap(), false);
+        assert!(!validate_subscription_bundle(&sub_dir).unwrap());
     }
 
     #[test]
@@ -749,7 +749,7 @@ mod tests {
         std::fs::write(rhsm_dir.join("ca.pem"), "ca").unwrap();
         std::fs::write(sub_dir.join("redhat.repo"), "repo").unwrap();
 
-        assert_eq!(validate_subscription_bundle(&sub_dir).unwrap(), true);
+        assert!(validate_subscription_bundle(&sub_dir).unwrap());
     }
 
     #[test]

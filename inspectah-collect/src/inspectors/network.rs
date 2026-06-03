@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn proxy_redaction_hint_for_credentials() {
         let content = "https_proxy=http://user:secret@proxy:8080\n";
-        let exec = MockExecutor::new().with_file("/etc/environment", &content);
+        let exec = MockExecutor::new().with_file("/etc/environment", content);
 
         let mut section = NetworkSection::default();
         let mut hints = Vec::new();

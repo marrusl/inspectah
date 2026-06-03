@@ -638,18 +638,8 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
-    use inspectah_core::types::containers::{
-        ComposeFile, ComposeService, ContainerSection, RunningContainer,
-    };
-    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
-    use inspectah_core::types::rpm::{
-        PackageEntry, PackageState, RepoFile, RpmSection, VersionChange, VersionChangeDirection,
-    };
-    use inspectah_core::types::selinux::SelinuxSection;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
-    use inspectah_core::types::warnings::{Warning, WarningSeverity};
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
     use inspectah_refine::types::RepoTier;
 
     fn empty_snapshot() -> InspectionSnapshot {

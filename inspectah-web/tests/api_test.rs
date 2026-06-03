@@ -1352,7 +1352,7 @@ async fn fallback_serves_asset_files() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/{}", js_asset))
+                .uri(format!("/{}", js_asset))
                 .body(Body::empty())
                 .unwrap(),
         )

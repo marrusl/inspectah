@@ -2391,30 +2391,32 @@ mod tests {
 
         // Build an RpmSection with baseline_suppressed packages
         // and verify they don't appear in the rendered containerfile
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![
-            PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                include: true,
-                locked: false,
-                source_repo: "appstream".into(),
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "httpd".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "kernel".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "baseos".into(),
+                        ..Default::default()
+                    },
+                ],
+                leaf_packages: Some(vec!["httpd.x86_64".into(), "kernel.x86_64".into()]),
+                baseline_suppressed: Some(vec!["kernel.x86_64".into()]),
                 ..Default::default()
-            },
-            PackageEntry {
-                name: "kernel".into(),
-                arch: "x86_64".into(),
-                include: true,
-                locked: false,
-                source_repo: "baseos".into(),
-                ..Default::default()
-            },
-        ];
-        rpm.leaf_packages = Some(vec!["httpd.x86_64".into(), "kernel.x86_64".into()]);
-        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
-
-        let mut snap = InspectionSnapshot::default();
-        snap.rpm = Some(rpm);
+            }),
+            ..Default::default()
+        };
 
         let output = render_containerfile(&snap, None);
         assert!(

@@ -12,8 +12,10 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
 /// Build a single-host snapshot (no fleet_meta) with one config file.
 fn single_host_snapshot() -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.schema_version = 17;
+    let mut snap = InspectionSnapshot {
+        schema_version: 17,
+        ..Default::default()
+    };
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "httpd".into(),

@@ -553,6 +553,7 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_update)]
 mod tests {
     use super::*;
     use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
@@ -1244,31 +1245,34 @@ mod tests {
 
     #[test]
     fn test_baseline_suppressed_package_gets_baseline_not_investigate() {
-        let mut snap = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![PackageEntry {
-            name: "bash".into(),
-            arch: "x86_64".into(),
-            version: "5.2.26".into(),
-            release: "3.el9".into(),
-            epoch: String::new(),
-            state: PackageState::Modified,
-            include: true,
-            locked: false,
-            source_repo: "baseos".into(),
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    version: "5.2.26".into(),
+                    release: "3.el9".into(),
+                    epoch: String::new(),
+                    state: PackageState::Modified,
+                    include: true,
+                    locked: false,
+                    source_repo: "baseos".into(),
+                    ..Default::default()
+                }],
+                version_changes: vec![VersionChange {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    host_version: "5.2.26-3.el9".into(),
+                    base_version: "5.2.26-4.el9".into(),
+                    host_epoch: String::new(),
+                    base_epoch: String::new(),
+                    direction: VersionChangeDirection::Downgrade,
+                }],
+                baseline_suppressed: Some(vec!["bash.x86_64".into()]),
+                ..Default::default()
+            }),
             ..Default::default()
-        }];
-        rpm.version_changes = vec![VersionChange {
-            name: "bash".into(),
-            arch: "x86_64".into(),
-            host_version: "5.2.26-3.el9".into(),
-            base_version: "5.2.26-4.el9".into(),
-            host_epoch: String::new(),
-            base_epoch: String::new(),
-            direction: VersionChangeDirection::Downgrade,
-        }];
-        rpm.baseline_suppressed = Some(vec!["bash.x86_64".into()]);
-        snap.rpm = Some(rpm);
+        };
 
         let result = classify_packages(&snap);
         let bash = result.iter().find(|p| p.entry.name == "bash").unwrap();
@@ -1281,36 +1285,39 @@ mod tests {
 
     #[test]
     fn test_non_suppressed_downgrade_still_gets_investigate() {
-        let mut snap = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![PackageEntry {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            version: "2.4.57".into(),
-            release: "4.el9".into(),
-            epoch: String::new(),
-            state: PackageState::Modified,
-            include: true,
-            locked: false,
-            source_repo: "appstream".into(),
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    version: "2.4.57".into(),
+                    release: "4.el9".into(),
+                    epoch: String::new(),
+                    state: PackageState::Modified,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                }],
+                version_changes: vec![VersionChange {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    host_version: "2.4.57-4.el9".into(),
+                    base_version: "2.4.57-5.el9".into(),
+                    host_epoch: String::new(),
+                    base_epoch: String::new(),
+                    direction: VersionChangeDirection::Downgrade,
+                }],
+                baseline_suppressed: Some(Vec::new()),
+                ..Default::default()
+            }),
+            baseline: Some(BaselineData {
+                image_digest: "sha256:test".into(),
+                packages: std::collections::HashMap::new(),
+                extracted_at: "2026-01-01T00:00:00Z".into(),
+            }),
             ..Default::default()
-        }];
-        rpm.version_changes = vec![VersionChange {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            host_version: "2.4.57-4.el9".into(),
-            base_version: "2.4.57-5.el9".into(),
-            host_epoch: String::new(),
-            base_epoch: String::new(),
-            direction: VersionChangeDirection::Downgrade,
-        }];
-        rpm.baseline_suppressed = Some(Vec::new());
-        snap.rpm = Some(rpm);
-        snap.baseline = Some(BaselineData {
-            image_digest: "sha256:test".into(),
-            packages: std::collections::HashMap::new(),
-            extracted_at: "2026-01-01T00:00:00Z".into(),
-        });
+        };
 
         let result = classify_packages(&snap);
         let httpd = result.iter().find(|p| p.entry.name == "httpd").unwrap();
@@ -1321,25 +1328,27 @@ mod tests {
     fn sensitive_retained_surfaces_unresolved_hints() {
         use inspectah_core::types::redaction::RedactionHint;
 
-        let mut snap = InspectionSnapshot::default();
-        snap.redaction_state = Some(RedactionState::SensitiveRetained {
-            redacted_by: "inspectah 0.8.0".into(),
-            config_hash: "abc".into(),
-            unresolved_count: 1,
-            unresolved_hints: vec![RedactionHint {
-                path: "/etc/httpd/conf/httpd.conf".into(),
-                reason: "possible credential".into(),
-                confidence: None,
-            }],
-        });
-        snap.config = Some(ConfigSection {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::SensitiveRetained {
+                redacted_by: "inspectah 0.8.0".into(),
+                config_hash: "abc".into(),
+                unresolved_count: 1,
+                unresolved_hints: vec![RedactionHint {
+                    path: "/etc/httpd/conf/httpd.conf".into(),
+                    reason: "possible credential".into(),
+                    confidence: None,
+                }],
+            }),
+            config: Some(ConfigSection {
             files: vec![ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 include: true,
                 locked: false,
                 ..Default::default()
             }],
-        });
+            }),
+            ..Default::default()
+        };
 
         let result = classify_configs(&snap);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);

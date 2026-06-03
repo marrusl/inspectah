@@ -713,23 +713,6 @@ VARIANT_ID="workstation"
             PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
         };
 
-        let mut snapshot = InspectionSnapshot::default();
-
-        // 3 packages
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![
-            PackageEntry::default(),
-            PackageEntry::default(),
-            PackageEntry::default(),
-        ];
-        snapshot.rpm = Some(rpm);
-
-        // 2 configs
-        let mut config = ConfigSection::default();
-        config.files = vec![ConfigFileEntry::default(), ConfigFileEntry::default()];
-        snapshot.config = Some(config);
-
-        // 4 services
         let svc = || ServiceStateChange {
             unit: "test.service".into(),
             current_state: ServiceUnitState::Enabled,
@@ -740,14 +723,28 @@ VARIANT_ID="workstation"
             fleet: None,
             attention_reason: None,
         };
-        let mut services = ServiceSection::default();
-        services.state_changes = vec![svc(), svc(), svc(), svc()];
-        snapshot.services = Some(services);
-
-        // 1 container
-        let mut containers = ContainerSection::default();
-        containers.running_containers = vec![RunningContainer::default()];
-        snapshot.containers = Some(containers);
+        let snapshot = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry::default(),
+                    PackageEntry::default(),
+                    PackageEntry::default(),
+                ],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry::default(), ConfigFileEntry::default()],
+            }),
+            services: Some(ServiceSection {
+                state_changes: vec![svc(), svc(), svc(), svc()],
+                ..Default::default()
+            }),
+            containers: Some(ContainerSection {
+                running_containers: vec![RunningContainer::default()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
 
         assert_eq!(
             build_summary_counts(&snapshot),
@@ -765,10 +762,13 @@ VARIANT_ID="workstation"
     fn test_build_summary_counts_partial() {
         use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
-        let mut snapshot = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = (0..847).map(|_| PackageEntry::default()).collect();
-        snapshot.rpm = Some(rpm);
+        let snapshot = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: (0..847).map(|_| PackageEntry::default()).collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
 
         assert_eq!(build_summary_counts(&snapshot), "847 packages");
     }
@@ -778,11 +778,13 @@ VARIANT_ID="workstation"
         use inspectah_core::types::config::ConfigSection;
         use inspectah_core::types::rpm::RpmSection;
 
-        let mut snapshot = InspectionSnapshot::default();
-        // RPM section present but no packages_added
-        snapshot.rpm = Some(RpmSection::default());
-        // Config section present but no files
-        snapshot.config = Some(ConfigSection::default());
+        let snapshot = InspectionSnapshot {
+            // RPM section present but no packages_added
+            rpm: Some(RpmSection::default()),
+            // Config section present but no files
+            config: Some(ConfigSection::default()),
+            ..Default::default()
+        };
 
         assert_eq!(build_summary_counts(&snapshot), "");
     }

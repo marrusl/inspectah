@@ -1182,15 +1182,12 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress);
-        match &result {
-            Err(InspectorError::Failed { reason }) => {
-                panic!(
-                    "{name}: Some(empty) rpm_state should NOT produce Failed, \
-                     but got Failed {{ reason: \"{reason}\" }}"
-                );
-            }
-            // Ok or Degraded are both acceptable — the point is it's not Failed.
-            _ => {}
+        if let Err(InspectorError::Failed { reason }) = &result {
+            panic!(
+                "{name}: Some(empty) rpm_state should NOT produce Failed, \
+                 but got Failed {{ reason: \"{reason}\" }}"
+            );
         }
+        // Ok or Degraded are both acceptable — the point is it's not Failed.
     }
 }

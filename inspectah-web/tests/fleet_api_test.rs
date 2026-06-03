@@ -755,18 +755,18 @@ fn find_item_in_section<'a>(
     kind: &str,
 ) -> Option<&'a serde_json::Value> {
     // Check flat items
-    if let Some(items) = section.get("items").and_then(|i| i.as_array()) {
-        if let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind) {
-            return Some(item);
-        }
+    if let Some(items) = section.get("items").and_then(|i| i.as_array())
+        && let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind)
+    {
+        return Some(item);
     }
     // Check zone-grouped items
     if let Some(zones) = section.get("zones").and_then(|z| z.as_object()) {
         for (_zone_name, zone_group) in zones {
-            if let Some(items) = zone_group.get("items").and_then(|i| i.as_array()) {
-                if let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind) {
-                    return Some(item);
-                }
+            if let Some(items) = zone_group.get("items").and_then(|i| i.as_array())
+                && let Some(item) = items.iter().find(|i| i["item_id"]["kind"] == kind)
+            {
+                return Some(item);
             }
         }
     }

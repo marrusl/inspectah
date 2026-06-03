@@ -12,16 +12,17 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 use std::collections::BTreeMap;
 
 fn make_fleet_snapshot(host_count: usize) -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-20T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
-    snap
+    InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-20T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -292,7 +293,6 @@ fn compose_multi_variant_pristine_is_clean() {
                 images: vec![ComposeService {
                     service: "web".into(),
                     image: "nginx:1.25".into(),
-                    ..Default::default()
                 }],
                 include: true,
                 locked: false,
@@ -309,7 +309,6 @@ fn compose_multi_variant_pristine_is_clean() {
                 images: vec![ComposeService {
                     service: "web".into(),
                     image: "nginx:1.24".into(),
-                    ..Default::default()
                 }],
                 include: true,
                 locked: false,
@@ -346,12 +345,10 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
     let images_a = vec![ComposeService {
         service: "web".into(),
         image: "nginx:1.25".into(),
-        ..Default::default()
     }];
     let images_b = vec![ComposeService {
         service: "web".into(),
         image: "nginx:1.24".into(),
-        ..Default::default()
     }];
     let hash_a = ContentHash::from_content(serde_json::to_string(&images_a).unwrap().as_bytes());
     let hash_b = ContentHash::from_content(serde_json::to_string(&images_b).unwrap().as_bytes());

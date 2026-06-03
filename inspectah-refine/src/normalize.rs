@@ -539,7 +539,7 @@ mod tests {
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| site_package(entry))
+            .map(site_package)
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);
@@ -630,7 +630,7 @@ mod tests {
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| site_package(entry))
+            .map(site_package)
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);

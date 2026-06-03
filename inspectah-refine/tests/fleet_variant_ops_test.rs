@@ -27,15 +27,17 @@ fn make_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![
             ConfigFileEntry {
@@ -79,15 +81,17 @@ fn make_single_variant_snapshot(
     content: &str,
     host_count: usize,
 ) -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: path.into(),
@@ -664,15 +668,17 @@ fn make_dropin_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.services = Some(ServiceSection {
         drop_ins: vec![
             SystemdDropIn {
@@ -722,15 +728,17 @@ fn make_quadlet_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.containers = Some(ContainerSection {
         quadlet_units: vec![
             QuadletUnit {
@@ -776,15 +784,17 @@ fn make_quadlet_variant_snapshot(
 /// Build a fleet snapshot with two Compose variants (different images lists).
 fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
     let host_count = 5;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.containers = Some(ContainerSection {
         compose_files: vec![
             ComposeFile {
@@ -1121,15 +1131,17 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
     // Create snapshot with two config paths, each having variants.
     // Hash from path A used as based_on for EditVariant on path B should fail.
     let host_count = 5;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![
             // Path A

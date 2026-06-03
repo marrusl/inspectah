@@ -28,15 +28,17 @@ use inspectah_refine::types::{
 /// - `/etc/app/db.conf`: 2 variants (4 hosts, 1 host)
 /// - `/etc/app/logging.conf`: 1 variant (all 5 hosts — no divergence)
 fn make_e2e_snapshot() -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "e2e-fleet".into(),
-        host_count: 5,
-        hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "e2e-fleet".into(),
+            host_count: 5,
+            hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![
             // /etc/app/main.conf — variant A (3 hosts, Selected)
