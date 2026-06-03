@@ -1364,6 +1364,7 @@ mod tests {
                 branch: "stable".to_string(),
                 include: false,
                 locked: false,
+                fleet: None,
                 remote: "flathub".to_string(),
                 remote_url: "https://flathub.org/repo/".to_string(),
             }],

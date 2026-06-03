@@ -2378,6 +2378,7 @@ mod tests {
                 branch: "stable".into(),
                 include: false,
                 locked: false,
+                fleet: None,
                 remote: "flathub".into(),
                 remote_url: "https://flathub.org/repo/".into(),
             }],
