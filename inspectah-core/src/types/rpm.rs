@@ -34,8 +34,10 @@ pub struct PackageEntry {
     pub arch: String,
     #[serde(default)]
     pub state: PackageState,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(default)]
@@ -68,8 +70,10 @@ pub struct EnabledModuleStream {
     pub stream: String,
     #[serde(default)]
     pub profiles: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub baseline_match: bool,
     pub fleet: Option<FleetPrevalence>,
@@ -89,8 +93,10 @@ pub struct VersionLockEntry {
     pub release: String,
     #[serde(default)]
     pub arch: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -141,8 +147,10 @@ pub struct RepoFile {
     pub content: String,
     #[serde(default)]
     pub is_default_repo: bool,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -313,8 +321,10 @@ mod tests {
 
     #[test]
     fn test_baseline_suppressed_roundtrip() {
-        let mut rpm = RpmSection::default();
-        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into(), "dosfstools.x86_64".into()]);
+        let rpm = RpmSection {
+            baseline_suppressed: Some(vec!["kernel.x86_64".into(), "dosfstools.x86_64".into()]),
+            ..Default::default()
+        };
         let json = serde_json::to_value(&rpm).unwrap();
         assert_eq!(
             json["baseline_suppressed"],
@@ -331,8 +341,10 @@ mod tests {
 
     #[test]
     fn test_baseline_suppressed_some_empty_when_baseline_exists_but_nothing_suppressed() {
-        let mut rpm = RpmSection::default();
-        rpm.baseline_suppressed = Some(Vec::new());
+        let rpm = RpmSection {
+            baseline_suppressed: Some(Vec::new()),
+            ..Default::default()
+        };
         let json = serde_json::to_value(&rpm).unwrap();
         assert_eq!(json["baseline_suppressed"], serde_json::json!([]));
     }

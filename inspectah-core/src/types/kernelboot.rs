@@ -20,8 +20,10 @@ pub struct SysctlOverride {
     pub default: String,
     #[serde(default)]
     pub source: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -33,8 +35,10 @@ pub struct KernelModule {
     pub size: String,
     #[serde(default)]
     pub used_by: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -118,6 +122,7 @@ mod tests {
                 default: "0".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
+                locked: false,
                 fleet: None,
             }],
             modules_load_d: vec![],
@@ -136,5 +141,12 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: KernelBootSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn sysctl_override_without_include_deserializes_as_true() {
+        let json = r#"{"key":"kernel.sysrq","runtime":"16","default":"0","source":"/etc/sysctl.d/99-custom.conf"}"#;
+        let so: SysctlOverride = serde_json::from_str(json).unwrap();
+        assert!(so.include, "missing include field should deserialize as true");
     }
 }

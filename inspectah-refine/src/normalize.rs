@@ -32,6 +32,7 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
     normalize_incompatible_services(&mut snap);
+    normalize_merge_hostile_configs(&mut snap);
 
     Ok(snap)
 }
@@ -139,11 +140,42 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
     }
 }
 
+/// Paths that fight bootc's /etc 3-way merge or carry host-specific state
+/// that is never image-portable.
+const MERGE_HOSTILE_PATHS: &[&str] = &["/etc/fstab", "/etc/crypttab"];
+
+/// Lock merge-hostile configs and all fstab entries.
+///
+/// Fstab entries are host-specific mount state — never image-portable.
+/// Config files matching `MERGE_HOSTILE_PATHS` fight bootc's /etc 3-way
+/// merge and must not be included in a Containerfile.
+pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
+    // Lock ALL fstab entries — host state, not image-portable
+    if let Some(ref mut storage) = snapshot.storage {
+        for entry in &mut storage.fstab_entries {
+            entry.include = false;
+            entry.locked = true;
+            entry.attention_reason = Some("host state — not image-portable".into());
+        }
+    }
+    // Lock /etc/crypttab (and any future merge-hostile paths) in config files
+    if let Some(ref mut config) = snapshot.config {
+        for file in &mut config.files {
+            if MERGE_HOSTILE_PATHS.contains(&file.path.as_str()) {
+                file.include = false;
+                file.locked = true;
+                file.attention_reason =
+                    Some("merge-hostile — fights bootc /etc 3-way merge".into());
+            }
+        }
+    }
+}
+
 /// Exclude systemd services incompatible with immutable /usr.
 ///
-/// Walks `services.state_changes` and sets `include = false` on units
-/// listed in `INCOMPATIBLE_SERVICES`. Also removes those units from
-/// `services.enabled_units`.
+/// Walks `services.state_changes` and sets `include = false`, `locked = true`
+/// on units listed in `INCOMPATIBLE_SERVICES`. Also locks any drop-ins
+/// belonging to those units and removes the units from `services.enabled_units`.
 pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     let services = match snapshot.services.as_mut() {
         Some(s) => s,
@@ -152,10 +184,21 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 
     let incompatible_units: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|e| e.unit).collect();
 
+    // Lock incompatible services
     for sc in &mut services.state_changes {
         if incompatible_units.contains(&sc.unit.as_str()) {
             sc.include = false;
+            sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
+        }
+    }
+
+    // Lock drop-ins owned by incompatible services
+    for di in &mut services.drop_ins {
+        if incompatible_units.contains(&di.unit.as_str()) {
+            di.include = false;
+            di.locked = true;
+            di.attention_reason = Some("parent service image-mode incompatible".to_string());
         }
     }
 
@@ -203,7 +246,7 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 
     /// Helper: build a snapshot with a ServiceSection.
     fn snap_with_services(
@@ -228,6 +271,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,
@@ -323,6 +367,72 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_service_is_locked() {
+        let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
+        normalize_incompatible_services(&mut snap);
+        let svc = &snap.services.as_ref().unwrap().state_changes[0];
+        assert!(!svc.include);
+        assert!(svc.locked);
+        assert_eq!(
+            svc.attention_reason.as_deref(),
+            Some("service-image-mode-incompatible")
+        );
+    }
+
+    #[test]
+    fn incompatible_service_dropin_is_locked() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection {
+                state_changes: vec![sc("dnf-makecache.service", true)],
+                drop_ins: vec![SystemdDropIn {
+                    unit: "dnf-makecache.service".into(),
+                    path: "/etc/systemd/system/dnf-makecache.service.d/override.conf".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        // Service itself locked
+        assert!(!services.state_changes[0].include);
+        assert!(services.state_changes[0].locked);
+        // Drop-in also locked
+        assert!(!services.drop_ins[0].include);
+        assert!(services.drop_ins[0].locked);
+        assert_eq!(
+            services.drop_ins[0].attention_reason.as_deref(),
+            Some("parent service image-mode incompatible")
+        );
+    }
+
+    #[test]
+    fn unrelated_dropin_not_locked() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection {
+                state_changes: vec![sc("httpd.service", true)],
+                drop_ins: vec![SystemdDropIn {
+                    unit: "httpd.service".into(),
+                    path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert!(services.drop_ins[0].include);
+        assert!(!services.drop_ins[0].locked);
+        assert!(services.drop_ins[0].attention_reason.is_none());
+    }
+
+    #[test]
     fn collect_dep_tree_empty() {
         let tree = serde_json::json!({});
         let deps = super::collect_dep_tree_names(&tree);
@@ -387,6 +497,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -395,6 +506,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -403,6 +515,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -426,7 +539,7 @@ mod tests {
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| site_package(entry))
+            .map(site_package)
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);
@@ -475,6 +588,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -483,6 +597,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     PackageEntry {
@@ -491,6 +606,7 @@ mod tests {
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -514,7 +630,7 @@ mod tests {
             .unwrap()
             .packages_added
             .iter()
-            .map(|entry| site_package(entry))
+            .map(site_package)
             .collect();
 
         normalize_package_defaults(&mut snap, &packages);
@@ -535,6 +651,141 @@ mod tests {
             !rpm.packages_added[2].include,
             "git-core should be excluded (dep only, not a top-level leaf)"
         );
+    }
+
+    // --- merge-hostile config tests ---
+
+    fn snap_with_fstab(entries: Vec<inspectah_core::types::storage::FstabEntry>) -> InspectionSnapshot {
+        use inspectah_core::types::storage::StorageSection;
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            storage: Some(StorageSection {
+                fstab_entries: entries,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn snap_with_configs(files: Vec<inspectah_core::types::config::ConfigFileEntry>) -> InspectionSnapshot {
+        use inspectah_core::types::config::ConfigSection;
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            config: Some(ConfigSection { files }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merge_hostile_fstab_locked() {
+        use inspectah_core::types::storage::FstabEntry;
+        let mut snap = snap_with_fstab(vec![FstabEntry {
+            device: "/dev/sda1".into(),
+            mount_point: "/boot".into(),
+            fstype: "xfs".into(),
+            options: "defaults".into(),
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let entry = &snap.storage.as_ref().unwrap().fstab_entries[0];
+        assert!(!entry.include);
+        assert!(entry.locked);
+        assert!(entry.attention_reason.is_some());
+    }
+
+    #[test]
+    fn merge_hostile_crypttab_locked() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+        let mut snap = snap_with_configs(vec![ConfigFileEntry {
+            path: "/etc/crypttab".into(),
+            kind: ConfigFileKind::Unowned,
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let file = &snap.config.as_ref().unwrap().files[0];
+        assert!(!file.include);
+        assert!(file.locked);
+        assert!(file.attention_reason.is_some());
+    }
+
+    #[test]
+    fn non_hostile_config_untouched() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+        let mut snap = snap_with_configs(vec![ConfigFileEntry {
+            path: "/etc/httpd/conf/httpd.conf".into(),
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
+        }]);
+        normalize_merge_hostile_configs(&mut snap);
+        let file = &snap.config.as_ref().unwrap().files[0];
+        assert!(file.include);
+        assert!(!file.locked);
+        assert!(file.attention_reason.is_none());
+    }
+
+    #[test]
+    fn merge_hostile_no_storage_no_config_is_noop() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            ..Default::default()
+        };
+        normalize_merge_hostile_configs(&mut snap);
+        assert!(snap.storage.is_none());
+        assert!(snap.config.is_none());
+    }
+
+    #[test]
+    fn merge_hostile_fstab_locked_also_sets_crypttab() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+        use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            storage: Some(StorageSection {
+                fstab_entries: vec![FstabEntry {
+                    device: "/dev/sda1".into(),
+                    mount_point: "/boot".into(),
+                    include: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/crypttab".into(),
+                        kind: ConfigFileKind::Unowned,
+                        include: true,
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/httpd/conf/httpd.conf".into(),
+                        kind: ConfigFileKind::RpmOwnedModified,
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+        normalize_merge_hostile_configs(&mut snap);
+
+        // fstab locked
+        let fstab = &snap.storage.as_ref().unwrap().fstab_entries[0];
+        assert!(!fstab.include);
+        assert!(fstab.locked);
+
+        // crypttab locked
+        let crypttab = &snap.config.as_ref().unwrap().files[0];
+        assert!(!crypttab.include);
+        assert!(crypttab.locked);
+
+        // httpd.conf untouched
+        let httpd = &snap.config.as_ref().unwrap().files[1];
+        assert!(httpd.include);
+        assert!(!httpd.locked);
     }
 
     #[test]

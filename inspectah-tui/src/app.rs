@@ -506,6 +506,7 @@ impl App {
             }
 
             // Item toggling -- Users section cycles strategy instead of include/exclude.
+            // Locked items cannot be toggled (no-op with flash message).
             Action::ToggleItem => {
                 let active_section_id = SECTION_ORDER
                     .get(self.state.active_section)
@@ -525,17 +526,24 @@ impl App {
                     }
                 } else {
                     let items = self.current_items();
-                    if let Some(item) = items.get(self.state.cursor)
-                        && let Some(ref item_id) = item.item_id
-                    {
-                        let new_include = !item.included.unwrap_or(true);
-                        let op = RefinementOp::SetInclude {
-                            item_id: item_id.clone(),
-                            include: new_include,
-                        };
-                        if let Err(e) = self.session.apply(op) {
+                    if let Some(item) = items.get(self.state.cursor) {
+                        if item.locked {
+                            let reason = item
+                                .lock_reason
+                                .as_deref()
+                                .unwrap_or("item is locked");
                             self.state.flash =
-                                Some(FlashMessage::new(format!("Toggle failed: {e}"), 3));
+                                Some(FlashMessage::new(format!("Locked: {reason}"), 3));
+                        } else if let Some(ref item_id) = item.item_id {
+                            let new_include = !item.included.unwrap_or(true);
+                            let op = RefinementOp::SetInclude {
+                                item_id: item_id.clone(),
+                                include: new_include,
+                            };
+                            if let Err(e) = self.session.apply(op) {
+                                self.state.flash =
+                                    Some(FlashMessage::new(format!("Toggle failed: {e}"), 3));
+                            }
                         }
                     }
                 }

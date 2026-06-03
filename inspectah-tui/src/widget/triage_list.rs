@@ -57,6 +57,10 @@ pub struct ListItem {
     pub has_content: bool,
     /// True if this row is the repo bar summary (Packages section only).
     pub is_repo_bar: bool,
+    /// True if this item is locked (cannot be toggled).
+    pub locked: bool,
+    /// Reason the item is locked (shown inline when locked).
+    pub lock_reason: Option<String>,
 }
 
 impl ListItem {
@@ -81,6 +85,8 @@ impl ListItem {
             item_id,
             has_content: false,
             is_repo_bar: false,
+            locked: false,
+            lock_reason: None,
         }
     }
 
@@ -105,6 +111,8 @@ impl ListItem {
             item_id,
             has_content: true,
             is_repo_bar: false,
+            locked: false,
+            lock_reason: None,
         }
     }
 
@@ -122,6 +130,8 @@ impl ListItem {
             item_id: None,
             has_content: false,
             is_repo_bar: false,
+            locked: false,
+            lock_reason: None,
         }
     }
 
@@ -139,6 +149,8 @@ impl ListItem {
             item_id: None,
             has_content: false,
             is_repo_bar: true,
+            locked: false,
+            lock_reason: None,
         }
     }
 }
@@ -296,21 +308,38 @@ fn render_item_row(
 ) {
     // Include/exclude indicator column (4 chars: "[+] " or "[-] " or "    ").
     // Uses [+]/[-] per spec Decision 21 (distinct from triage glyphs).
+    // Locked items show "[-L]" to compose excluded+locked state.
     let indicator_width: usize = 4;
-    let indicator = if is_pure_reference {
-        "    "
+    let (indicator, indicator_style) = if item.locked {
+        (
+            "[-L]",
+            Token::StatusLocked.style(ctx.tier),
+        )
+    } else if is_pure_reference {
+        ("    ", Token::TextMuted.style(ctx.tier))
     } else {
         match item.included {
-            Some(true) => "[+] ",
-            Some(false) => "[-] ",
-            None => "    ", // reference item in composite section
+            Some(true) => ("[+] ", Token::StatusIncluded.style(ctx.tier)),
+            Some(false) => ("[-] ", Token::StatusExcluded.style(ctx.tier)),
+            None => ("    ", Token::TextMuted.style(ctx.tier)),
         }
     };
 
-    let indicator_style = match item.included {
-        Some(true) => Token::StatusIncluded.style(ctx.tier),
-        Some(false) => Token::StatusExcluded.style(ctx.tier),
-        _ => Token::TextMuted.style(ctx.tier),
+    // Locked items append the reason to the detail column.
+    let effective_detail = if item.locked {
+        if let Some(ref reason) = item.lock_reason {
+            if item.detail.is_empty() {
+                format!("LOCKED: {reason}")
+            } else {
+                format!("{} | LOCKED: {reason}", item.detail)
+            }
+        } else if item.detail.is_empty() {
+            "LOCKED".to_string()
+        } else {
+            format!("{} | LOCKED", item.detail)
+        }
+    } else {
+        item.detail.clone()
     };
 
     // Name and detail share the remaining width.
@@ -324,19 +353,26 @@ fn render_item_row(
 
     let name_str = truncate(&item.name, name_width);
     let detail_str = if detail_width > 0 {
-        truncate(&item.detail, detail_width)
+        truncate(&effective_detail, detail_width)
     } else {
         String::new()
     };
 
+    // Locked items use dimmed styling for both name and detail.
+    let locked_style = Token::StatusLocked.style(ctx.tier);
+
     let name_style = if is_cursor {
         Token::FocusSelected.style(ctx.tier)
+    } else if item.locked {
+        locked_style
     } else {
         Token::TextPrimary.style(ctx.tier)
     };
 
     let detail_style = if is_cursor {
         Token::FocusSelected.style(ctx.tier)
+    } else if item.locked {
+        locked_style
     } else {
         Token::TextMuted.style(ctx.tier)
     };

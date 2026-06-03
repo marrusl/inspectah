@@ -255,11 +255,12 @@ fn test_nm_connection_identity_is_path() {
 }
 
 #[test]
-fn test_nm_connection_set_include_uses_option() {
+fn test_nm_connection_set_include() {
     let mut n = NMConnection::default();
-    assert!(n.include.is_none());
+    n.set_include(false);
+    assert!(!n.include);
     n.set_include(true);
-    assert_eq!(n.include, Some(true));
+    assert!(n.include);
 }
 
 #[test]
@@ -770,7 +771,8 @@ fn test_merge_items_mixed_paths_with_variants() {
 
 #[test]
 fn test_merge_items_all_variants_included() {
-    // Even alternative variants should have include = true
+    // With fleet narrowing, per-variant prevalence determines include.
+    // Each variant appears on 1/2 hosts (non-universal), so include=false.
     let items: Vec<(usize, ConfigFileEntry)> = vec![
         (
             0,
@@ -792,7 +794,10 @@ fn test_merge_items_all_variants_included() {
     let hostnames = vec!["h1".into(), "h2".into()];
     let merged = merge_items(items, 2, &hostnames);
     for item in &merged {
-        assert!(item.include, "all merged items should be included");
+        assert!(
+            !item.include,
+            "non-universal variant (1/2 hosts) must have include=false"
+        );
     }
 }
 
@@ -865,19 +870,22 @@ fn test_fstab_entry_identity_is_mount_point() {
 }
 
 #[test]
-fn test_systemd_timer_set_include_uses_option() {
+fn test_systemd_timer_set_include() {
     let mut t = SystemdTimer::default();
-    assert!(t.include.is_none());
+    // default_true: Default trait gives false, but serde default gives true
+    t.set_include(false);
+    assert!(!t.include);
     t.set_include(true);
-    assert_eq!(t.include, Some(true));
+    assert!(t.include);
 }
 
 #[test]
-fn test_fstab_entry_set_include_uses_option() {
+fn test_fstab_entry_set_include() {
     let mut f = FstabEntry::default();
-    assert!(f.include.is_none());
+    f.set_include(false);
+    assert!(!f.include);
     f.set_include(true);
-    assert_eq!(f.include, Some(true));
+    assert!(f.include);
 }
 
 // ===========================================================================
@@ -1101,6 +1109,7 @@ fn test_merge_service_sections_dedup_units() {
         current_state: ServiceUnitState::Enabled,
         default_state: None,
         include: false,
+        locked: false,
         owning_package: None,
         fleet: None,
         attention_reason: None,
@@ -1175,6 +1184,25 @@ fn test_merge_container_sections_flatpak_dedup() {
 
     assert_eq!(result.flatpak_apps.len(), 2);
     assert!(result.running_containers.is_empty()); // runtime state skipped
+
+    // Calculator present on both hosts, Firefox on one
+    let calc = result
+        .flatpak_apps
+        .iter()
+        .find(|a| a.app_id == "org.gnome.Calculator")
+        .expect("Calculator should be in merged output");
+    let calc_fleet = calc.fleet.as_ref().expect("should have fleet data");
+    assert_eq!(calc_fleet.count, 2);
+    assert_eq!(calc_fleet.total, 2);
+
+    let firefox = result
+        .flatpak_apps
+        .iter()
+        .find(|a| a.app_id == "org.mozilla.Firefox")
+        .expect("Firefox should be in merged output");
+    let ff_fleet = firefox.fleet.as_ref().expect("should have fleet data");
+    assert_eq!(ff_fleet.count, 1);
+    assert_eq!(ff_fleet.total, 2);
 }
 
 #[test]

@@ -458,8 +458,8 @@ fn orchestrator_skips_inapplicable() {
 /// 1. Wave 1: RPM inspector runs with rpm_state: None and produces packages.
 /// 2. Join:   collect() extracts RpmState from the RPM output (package names).
 /// 3. Wave 2: (Empty for Slice 2a) Dependent inspectors would receive
-///            rpm_state: Some(&rpm_state). The partition and enrichment path
-///            is exercised even though no inspectors land in Wave 2 yet.
+///    rpm_state: Some(&rpm_state). The partition and enrichment path
+///    is exercised even though no inspectors land in Wave 2 yet.
 ///
 /// This test uses the real RpmInspector via collect() — not a manual
 /// InspectionContext construction — to prove the actual pipeline path.

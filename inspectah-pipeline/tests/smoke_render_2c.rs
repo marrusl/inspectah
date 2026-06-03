@@ -37,6 +37,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 path: "etc/cron.d/backup".into(),
                 source: "cron.d".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             CronJob {
@@ -46,6 +47,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 path: "etc/cron.d/reboot-task".into(),
                 source: "cron.d".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -54,7 +56,8 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
             source: "local".into(),
             timer_content: "[Timer]\nOnCalendar=daily".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/logrotate".into(),
-            include: Some(true),
+            include: true,
+            locked: false,
             ..Default::default()
         }],
         generated_timer_units: vec![
@@ -64,6 +67,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
                 cron_expr: "0 2 * * *".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             // @reboot advisory: empty timer_content, boot-triggered service
@@ -78,6 +82,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 source_path: "etc/cron.d/reboot-task".into(),
                 command: "/usr/local/bin/startup.sh".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -100,6 +105,7 @@ fn snapshot_with_config_files() -> InspectionSnapshot {
                 content: "ServerRoot /etc/httpd".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             ConfigFileEntry {
@@ -107,6 +113,7 @@ fn snapshot_with_config_files() -> InspectionSnapshot {
                 content: "NETWORKING=yes".into(),
                 kind: ConfigFileKind::Unowned,
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -130,6 +137,7 @@ fn snapshot_with_selinux() -> InspectionSnapshot {
             port: "8443".into(),
             label_type: "http_port_t".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -147,6 +155,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 method: "binary".into(),
                 confidence: "high".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             NonRpmItem {
@@ -155,6 +164,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 method: "pip".into(),
                 confidence: "high".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             NonRpmItem {
@@ -163,6 +173,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 method: "npm".into(),
                 confidence: "high".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -171,12 +182,14 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 path: "/opt/app/.env".into(),
                 content: "DB_HOST=localhost\nDB_PASS=secret123".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/srv/webapp/.env.production".into(),
                 content: "API_KEY=abc123".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -193,6 +206,7 @@ fn snapshot_with_nonrpm_no_env() -> InspectionSnapshot {
             method: "binary".into(),
             confidence: "high".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         env_files: vec![],
@@ -264,6 +278,7 @@ fn smoke_containerfile_nonrpm() {
                 method: "binary".into(),
                 confidence: "high".into(),
                 include: true,
+                locked: false,
                 review_status: "migration_planned".into(),
                 ..Default::default()
             },
@@ -273,6 +288,7 @@ fn smoke_containerfile_nonrpm() {
                 method: "pip dist-info".into(),
                 confidence: "high".into(),
                 include: true,
+                locked: false,
                 review_status: "migration_planned".into(),
                 version: "2.3.0".into(),
                 ..Default::default()
@@ -589,6 +605,7 @@ fn audit_reboot_detected_from_generated_units() {
             path: "etc/cron.d/startup".into(),
             source: "cron.d".into(), // collector-shaped, never contains @reboot
             include: true,
+            locked: false,
             ..Default::default()
         }],
         generated_timer_units: vec![GeneratedTimerUnit {
@@ -597,6 +614,7 @@ fn audit_reboot_detected_from_generated_units() {
             service_content: "[Service]\nType=oneshot\nExecStart=/opt/init.sh".into(),
             cron_expr: "@reboot".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -623,6 +641,7 @@ fn audit_no_false_reboot_from_cronjob_source() {
             path: "etc/cron.d/backup".into(),
             source: "cron.d".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         generated_timer_units: vec![GeneratedTimerUnit {
@@ -631,6 +650,7 @@ fn audit_no_false_reboot_from_cronjob_source() {
             service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
             cron_expr: "0 2 * * *".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -688,7 +708,7 @@ fn configtree_vendor_timers_not_copied() {
             path: "/usr/lib/systemd/system/fstrim.timer".into(),
             timer_content: "[Timer]\nOnCalendar=weekly".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/fstrim -a".into(),
-            include: Some(false), // vendor timers excluded
+            include: false, // vendor timers excluded
             ..Default::default()
         }],
         ..Default::default()
@@ -712,6 +732,7 @@ fn configtree_cron_spool_not_materialized() {
             path: "/var/spool/cron/root".into(),
             source: "spool".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()

@@ -83,6 +83,9 @@ pub struct RepoSourceEntryDto {
 pub struct FleetItem {
     pub item_id: ItemId,
     pub include: bool,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
     pub triage: FleetTriageDto,
     pub prevalence: FleetPrevalenceDto,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,6 +466,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: pkg.entry.include,
+                    locked: pkg.entry.locked,
+                    attention_reason: None,
                     triage: build_triage_dto(&pkg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -535,6 +540,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: cfg.entry.include,
+                    locked: cfg.entry.locked,
+                    attention_reason: cfg.entry.attention_reason.clone(),
                     triage: build_triage_dto(&cfg.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -567,6 +574,8 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: s.entry.include,
+                    locked: s.entry.locked,
+                    attention_reason: s.entry.attention_reason.clone(),
                     triage: build_triage_dto(&s.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -622,6 +631,8 @@ fn build_fleet_sections(
                 items.push(FleetItem {
                     item_id,
                     include: d.entry.include,
+                    locked: d.entry.locked,
+                    attention_reason: d.entry.attention_reason.clone(),
                     triage: build_triage_dto(&d.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -688,6 +699,8 @@ fn build_fleet_sections(
                 items.push(FleetItem {
                     item_id,
                     include: q.entry.include,
+                    locked: q.entry.locked,
+                    attention_reason: None,
                     triage: build_triage_dto(&q.triage, fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -697,8 +710,8 @@ fn build_fleet_sections(
             }
         }
 
-        // Flatpaks: no fleet field, so no variant detection or prevalence.
-        // Each flatpak is a standalone decision item with lifecycle badge.
+        // Flatpaks: standalone decision items with fleet prevalence from
+        // the merge layer's per-entry FleetPrevalence.
         for f in &flatpaks {
             let item_id = ItemId::Flatpak {
                 app_id: f.entry.app_id.clone(),
@@ -708,8 +721,10 @@ fn build_fleet_sections(
             items.push(FleetItem {
                 item_id,
                 include: f.entry.include,
+                locked: f.entry.locked,
+                attention_reason: None,
                 triage: build_triage_dto(&f.triage, None, ctx),
-                prevalence: fleet_prevalence_dto(None, ctx),
+                prevalence: fleet_prevalence_dto(f.entry.fleet.as_ref(), ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -762,6 +777,8 @@ fn build_fleet_sections(
             items.push(FleetItem {
                 item_id,
                 include: representative.entry.include,
+                locked: representative.entry.locked,
+                attention_reason: None,
                 triage: build_triage_dto(&representative.triage, fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants,
@@ -791,15 +808,14 @@ fn build_fleet_sections(
             .map(|kb| kb.tuned_include)
             .unwrap_or(false);
         // Tuned is a scalar merged via most_prevalent_scalar; no per-item
-        // FleetPrevalence exists. Use kernel_boot section host count as the
-        // best available prevalence (all hosts with kernel_boot data contributed
-        // to the tuned_active selection).
-        let kb_host_count = ctx
-            .fleet_meta
-            .section_host_counts
-            .get("kernel_boot")
-            .copied()
-            .unwrap_or(0) as u32;
+        // FleetPrevalence exists. Derive prevalence from tuned_include:
+        // - tuned_include=true means the merge layer proved universality
+        //   (is_scalar_universal), so count == total_hosts.
+        // - tuned_include=false means the profile is NOT universal (or is
+        //   a stock profile). We lack the exact winner count from the merge
+        //   layer, so show 0 to avoid the false "N/N hosts" display.
+        let total = ctx.total_hosts as u32;
+        let tuned_prevalence_count = if tuned_include { total } else { 0 };
         let items: Vec<FleetItem> = tuned_selections
             .iter()
             .map(|t| {
@@ -809,10 +825,12 @@ fn build_fleet_sections(
                 FleetItem {
                     item_id,
                     include: tuned_include,
+                    locked: false,
+                    attention_reason: None,
                     triage: build_triage_dto(&t.triage, None, ctx),
                     prevalence: FleetPrevalenceDto {
-                        count: kb_host_count,
-                        total: ctx.total_hosts as u32,
+                        count: tuned_prevalence_count,
+                        total,
                     },
                     variants: None,
                     source_repo: String::new(),
@@ -937,7 +955,9 @@ fn build_reference_sections(
                 };
                 items.push(FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: c.include,
+                    locked: c.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants,
@@ -968,7 +988,9 @@ fn build_reference_sections(
             let fp = conn.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: conn.include,
+                locked: conn.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -983,7 +1005,9 @@ fn build_reference_sections(
             let fp = zone.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: zone.include,
+                locked: zone.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1008,7 +1032,9 @@ fn build_reference_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: entry.include,
+                    locked: entry.locked,
+                    attention_reason: entry.attention_reason.clone(),
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1032,7 +1058,9 @@ fn build_reference_sections(
             let fp = cron.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: cron.include,
+                locked: cron.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1047,7 +1075,9 @@ fn build_reference_sections(
             let fp = timer.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: timer.include,
+                locked: timer.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1078,7 +1108,9 @@ fn build_reference_sections(
                 let fp = port.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: port.include,
+                    locked: port.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1103,7 +1135,9 @@ fn build_reference_sections(
             let fp = module.fleet.as_ref();
             items.push(FleetItem {
                 item_id,
-                include: fleet_include_default(fp),
+                include: module.include,
+                locked: module.locked,
+                attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: fleet_prevalence_dto(fp, ctx),
                 variants: None,
@@ -1134,7 +1168,9 @@ fn build_reference_sections(
                 let fp = entry.fleet.as_ref();
                 FleetItem {
                     item_id,
-                    include: fleet_include_default(fp),
+                    include: entry.include,
+                    locked: entry.locked,
+                    attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: fleet_prevalence_dto(fp, ctx),
                     variants: None,
@@ -1206,12 +1242,6 @@ fn default_context_triage(
         zone,
         prevalence: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
     }
-}
-
-/// Returns `true` only when the item is present on every host (100% prevalence).
-/// Items without fleet prevalence data default to excluded.
-fn fleet_include_default(fp: Option<&inspectah_core::types::fleet::FleetPrevalence>) -> bool {
-    fp.is_some_and(|f| f.count > 0 && f.count == f.total)
 }
 
 fn fleet_prevalence_dto(
@@ -1426,5 +1456,251 @@ fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) ->
         count: entries.len(),
         selected: selected_key,
         options,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+
+    /// Fleet handlers must read the stored `include` value from snapshot entries,
+    /// NOT recompute it from prevalence.  This test builds an NMConnection with
+    /// `include: true` but non-universal prevalence (2 of 5 hosts).  The deleted
+    /// `fleet_include_default` function would have returned `false` for this
+    /// prevalence — if the handler still recomputes, this test catches it.
+    #[test]
+    fn fleet_handlers_use_stored_include_not_recomputed() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_core::types::network::{NMConnection, NetworkSection};
+
+        // Build a snapshot with one NMConnection: include=true, prevalence=2/5.
+        let conn = NMConnection {
+            path: "/etc/NetworkManager/test.nmconnection".to_string(),
+            include: true, // stored value — should pass through
+            fleet: Some(FleetPrevalence {
+                count: 2,
+                total: 5,
+                hosts: vec!["host-a".into(), "host-b".into()],
+                aggregate_count: None,
+                aggregate_hosts: None,
+            }),
+            ..Default::default()
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            network: Some(NetworkSection {
+                connections: vec![conn],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 5,
+                hostnames: vec![
+                    "host-a".into(),
+                    "host-b".into(),
+                    "host-c".into(),
+                    "host-d".into(),
+                    "host-e".into(),
+                ],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 5,
+            zones_active: false, // flat list mode for simpler assertion
+            repo_conflicts: HashMap::new(),
+        };
+
+        let mut sections = Vec::new();
+        build_reference_sections(&mut sections, &snap, &ctx);
+
+        // Find the network section.
+        let net_section = sections
+            .iter()
+            .find(|s| s.id == "network")
+            .expect("network section must exist");
+
+        // Get the first item — our NMConnection (flat list when zones_active=false).
+        let items = net_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+        assert_eq!(items.len(), 1);
+
+        // The critical assertion: include must be true (stored value),
+        // not false (which fleet_include_default would have returned for 2/5).
+        assert!(
+            items[0].include,
+            "fleet handler must use stored include value (true), \
+             not recompute from prevalence (which would be false for 2/5 hosts)"
+        );
+    }
+
+    #[test]
+    fn fleet_flatpak_prevalence_plumbed() {
+        use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_refine::session::RefineSession;
+
+        let app = FlatpakApp {
+            app_id: "org.gnome.Calculator".into(),
+            origin: "flathub".into(),
+            branch: "stable".into(),
+            include: true,
+            remote: "flathub".into(),
+            fleet: Some(FleetPrevalence {
+                count: 2,
+                total: 3,
+                hosts: vec!["host-a".into(), "host-b".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            containers: Some(ContainerSection {
+                flatpak_apps: vec![app],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session = RefineSession::new(snap.clone());
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let sections = build_fleet_sections(&session, &snap, &ctx);
+
+        let container_section = sections
+            .iter()
+            .find(|s| s.id == "containers")
+            .expect("containers section must exist");
+
+        let items = container_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        let flatpak_item = items
+            .iter()
+            .find(|i| matches!(&i.item_id, ItemId::Flatpak { app_id, .. } if app_id == "org.gnome.Calculator"))
+            .expect("flatpak item must exist");
+
+        assert_eq!(
+            flatpak_item.prevalence.count, 2,
+            "flatpak prevalence count must come from fleet data, not be zero"
+        );
+        assert_eq!(flatpak_item.prevalence.total, 3);
+    }
+
+    #[test]
+    fn fleet_tuned_prevalence_reflects_universality() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        use inspectah_refine::session::RefineSession;
+
+        // Tuned profile is universal (tuned_include=true) across 3 hosts.
+        let snap = InspectionSnapshot {
+            schema_version: 1,
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "my-custom-profile".into(),
+                tuned_include: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session = RefineSession::new(snap.clone());
+
+        let ctx = FleetContext {
+            fleet_meta: FleetSnapshotMeta {
+                label: "test-fleet".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::from([
+                    ("kernel_boot".into(), 3),
+                ]),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let sections = build_fleet_sections(&session, &snap, &ctx);
+
+        let tuned_section = sections
+            .iter()
+            .find(|s| s.id == "tuned")
+            .expect("tuned section must exist");
+
+        let items = tuned_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        assert_eq!(items.len(), 1);
+        // Universal profile: count must equal total.
+        assert_eq!(items[0].prevalence.count, 3);
+        assert_eq!(items[0].prevalence.total, 3);
+
+        // Now test non-universal: tuned_include=false means profile is NOT
+        // on all hosts. The section_host_counts["kernel_boot"] = 3 but the
+        // profile is only on 2 hosts (not universal).
+        let snap_partial = InspectionSnapshot {
+            schema_version: 1,
+            kernel_boot: Some(KernelBootSection {
+                tuned_active: "my-custom-profile".into(),
+                tuned_include: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session_partial = RefineSession::new(snap_partial.clone());
+
+        let sections_partial = build_fleet_sections(&session_partial, &snap_partial, &ctx);
+
+        let tuned_section_partial = sections_partial
+            .iter()
+            .find(|s| s.id == "tuned")
+            .expect("tuned section must exist");
+
+        let items_partial = tuned_section_partial
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        assert_eq!(items_partial.len(), 1);
+        // Non-universal: count must NOT equal total.
+        assert!(
+            items_partial[0].prevalence.count < items_partial[0].prevalence.total,
+            "non-universal tuned profile must show count < total, got {}/{}",
+            items_partial[0].prevalence.count,
+            items_partial[0].prevalence.total,
+        );
     }
 }

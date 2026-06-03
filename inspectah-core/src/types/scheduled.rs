@@ -9,12 +9,14 @@ pub struct CronJob {
     pub source: String,
     #[serde(default)]
     pub rpm_owned: bool,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemdTimer {
     #[serde(default)]
     pub name: String,
@@ -32,13 +34,33 @@ pub struct SystemdTimer {
     pub timer_content: String,
     #[serde(default)]
     pub service_content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+impl Default for SystemdTimer {
+    fn default() -> Self {
+        Self {
+            include: true,
+            name: Default::default(),
+            on_calendar: Default::default(),
+            exec_start: Default::default(),
+            description: Default::default(),
+            source: Default::default(),
+            path: Default::default(),
+            timer_content: Default::default(),
+            service_content: Default::default(),
+            locked: Default::default(),
+            fleet: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AtJob {
     #[serde(default)]
     pub file: String,
@@ -48,10 +70,26 @@ pub struct AtJob {
     pub user: String,
     #[serde(default)]
     pub working_dir: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
+}
+
+impl Default for AtJob {
+    fn default() -> Self {
+        Self {
+            include: true,
+            file: Default::default(),
+            command: Default::default(),
+            user: Default::default(),
+            working_dir: Default::default(),
+            locked: Default::default(),
+            fleet: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -68,8 +106,10 @@ pub struct GeneratedTimerUnit {
     pub source_path: String,
     #[serde(default)]
     pub command: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -109,5 +149,12 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ScheduledTaskSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn cron_job_without_include_deserializes_as_true() {
+        let json = r#"{"path":"/etc/cron.d/backup","source":"file"}"#;
+        let cj: CronJob = serde_json::from_str(json).unwrap();
+        assert!(cj.include, "missing include field should deserialize as true");
     }
 }

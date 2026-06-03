@@ -553,6 +553,7 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_update)]
 mod tests {
     use super::*;
     use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
@@ -925,11 +926,13 @@ mod tests {
                     CfgEntry {
                         path: "/etc/yum.repos.d/rpmfusion-free.repo".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     CfgEntry {
                         path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-9".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -966,6 +969,7 @@ mod tests {
                 files: vec![CfgEntry {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
             }),
@@ -1084,6 +1088,7 @@ mod tests {
             kind,
             category: ConfigCategory::default(),
             include: true,
+            locked: false,
             ..Default::default()
         }
     }
@@ -1240,30 +1245,34 @@ mod tests {
 
     #[test]
     fn test_baseline_suppressed_package_gets_baseline_not_investigate() {
-        let mut snap = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![PackageEntry {
-            name: "bash".into(),
-            arch: "x86_64".into(),
-            version: "5.2.26".into(),
-            release: "3.el9".into(),
-            epoch: String::new(),
-            state: PackageState::Modified,
-            include: true,
-            source_repo: "baseos".into(),
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    version: "5.2.26".into(),
+                    release: "3.el9".into(),
+                    epoch: String::new(),
+                    state: PackageState::Modified,
+                    include: true,
+                    locked: false,
+                    source_repo: "baseos".into(),
+                    ..Default::default()
+                }],
+                version_changes: vec![VersionChange {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    host_version: "5.2.26-3.el9".into(),
+                    base_version: "5.2.26-4.el9".into(),
+                    host_epoch: String::new(),
+                    base_epoch: String::new(),
+                    direction: VersionChangeDirection::Downgrade,
+                }],
+                baseline_suppressed: Some(vec!["bash.x86_64".into()]),
+                ..Default::default()
+            }),
             ..Default::default()
-        }];
-        rpm.version_changes = vec![VersionChange {
-            name: "bash".into(),
-            arch: "x86_64".into(),
-            host_version: "5.2.26-3.el9".into(),
-            base_version: "5.2.26-4.el9".into(),
-            host_epoch: String::new(),
-            base_epoch: String::new(),
-            direction: VersionChangeDirection::Downgrade,
-        }];
-        rpm.baseline_suppressed = Some(vec!["bash.x86_64".into()]);
-        snap.rpm = Some(rpm);
+        };
 
         let result = classify_packages(&snap);
         let bash = result.iter().find(|p| p.entry.name == "bash").unwrap();
@@ -1276,35 +1285,39 @@ mod tests {
 
     #[test]
     fn test_non_suppressed_downgrade_still_gets_investigate() {
-        let mut snap = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.packages_added = vec![PackageEntry {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            version: "2.4.57".into(),
-            release: "4.el9".into(),
-            epoch: String::new(),
-            state: PackageState::Modified,
-            include: true,
-            source_repo: "appstream".into(),
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    version: "2.4.57".into(),
+                    release: "4.el9".into(),
+                    epoch: String::new(),
+                    state: PackageState::Modified,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                }],
+                version_changes: vec![VersionChange {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    host_version: "2.4.57-4.el9".into(),
+                    base_version: "2.4.57-5.el9".into(),
+                    host_epoch: String::new(),
+                    base_epoch: String::new(),
+                    direction: VersionChangeDirection::Downgrade,
+                }],
+                baseline_suppressed: Some(Vec::new()),
+                ..Default::default()
+            }),
+            baseline: Some(BaselineData {
+                image_digest: "sha256:test".into(),
+                packages: std::collections::HashMap::new(),
+                extracted_at: "2026-01-01T00:00:00Z".into(),
+            }),
             ..Default::default()
-        }];
-        rpm.version_changes = vec![VersionChange {
-            name: "httpd".into(),
-            arch: "x86_64".into(),
-            host_version: "2.4.57-4.el9".into(),
-            base_version: "2.4.57-5.el9".into(),
-            host_epoch: String::new(),
-            base_epoch: String::new(),
-            direction: VersionChangeDirection::Downgrade,
-        }];
-        rpm.baseline_suppressed = Some(Vec::new());
-        snap.rpm = Some(rpm);
-        snap.baseline = Some(BaselineData {
-            image_digest: "sha256:test".into(),
-            packages: std::collections::HashMap::new(),
-            extracted_at: "2026-01-01T00:00:00Z".into(),
-        });
+        };
 
         let result = classify_packages(&snap);
         let httpd = result.iter().find(|p| p.entry.name == "httpd").unwrap();
@@ -1315,24 +1328,27 @@ mod tests {
     fn sensitive_retained_surfaces_unresolved_hints() {
         use inspectah_core::types::redaction::RedactionHint;
 
-        let mut snap = InspectionSnapshot::default();
-        snap.redaction_state = Some(RedactionState::SensitiveRetained {
-            redacted_by: "inspectah 0.8.0".into(),
-            config_hash: "abc".into(),
-            unresolved_count: 1,
-            unresolved_hints: vec![RedactionHint {
-                path: "/etc/httpd/conf/httpd.conf".into(),
-                reason: "possible credential".into(),
-                confidence: None,
-            }],
-        });
-        snap.config = Some(ConfigSection {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::SensitiveRetained {
+                redacted_by: "inspectah 0.8.0".into(),
+                config_hash: "abc".into(),
+                unresolved_count: 1,
+                unresolved_hints: vec![RedactionHint {
+                    path: "/etc/httpd/conf/httpd.conf".into(),
+                    reason: "possible credential".into(),
+                    confidence: None,
+                }],
+            }),
+            config: Some(ConfigSection {
             files: vec![ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
-        });
+            }),
+            ..Default::default()
+        };
 
         let result = classify_configs(&snap);
         assert_bucket(&result[0].triage, TriageBucket::Investigate);
@@ -1366,6 +1382,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     include: true,
+                    locked: false,
                     owning_package: Some("openssh-server".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1394,6 +1411,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1420,6 +1438,7 @@ mod service_classification {
                     current_state: ServiceUnitState::Enabled,
                     default_state: None,
                     include: true,
+                    locked: false,
                     owning_package: None,
                     fleet: None,
                     attention_reason: None,
@@ -1446,6 +1465,7 @@ mod service_classification {
                     path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
                     content: "[Service]\nTimeoutStartSec=90".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1492,6 +1512,7 @@ mod container_classification {
                     name: "myapp.container".into(),
                     image: "quay.io/myorg/myapp:latest".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1517,6 +1538,7 @@ mod container_classification {
                     remote: "flathub".into(),
                     branch: "stable".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1549,6 +1571,7 @@ mod container_classification {
                     remote: String::new(),
                     branch: "stable".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1573,6 +1596,7 @@ mod container_classification {
                     remote: "flathub".into(),
                     branch: String::new(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1619,6 +1643,7 @@ mod sysctl_classification {
                     default: "0".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1648,6 +1673,7 @@ mod sysctl_classification {
                     default: "128".into(),
                     source: "/etc/sysctl.conf".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1673,6 +1699,7 @@ mod sysctl_classification {
                     default: "0".into(),
                     source: "runtime".into(),
                     include: true,
+                    locked: false,
                     fleet: None,
                 }],
                 ..Default::default()
@@ -1706,6 +1733,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -1714,6 +1742,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "runtime".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -1722,6 +1751,7 @@ mod sysctl_classification {
                         default: "0".into(),
                         source: "/etc/sysctl.d/10-sysrq.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                 ],

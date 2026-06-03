@@ -1,4 +1,4 @@
-import { Switch } from "@patternfly/react-core";
+import { Label, Switch } from "@patternfly/react-core";
 import type { FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
@@ -45,8 +45,12 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.path;
     case "Compose":
       return itemId.key.path;
-    case "Flatpak":
-      return itemId.key.app_id;
+    case "Flatpak": {
+      const parts = [itemId.key.app_id];
+      if (itemId.key.remote) parts.push(itemId.key.remote);
+      if (itemId.key.branch) parts.push(itemId.key.branch);
+      return parts.join(" / ");
+    }
     case "NMConnection":
       return itemId.key.path;
     case "FirewallZone":
@@ -93,8 +97,10 @@ export function FleetItemRow({
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
+  const locked = item.locked === true;
 
   const handleToggle = () => {
+    if (locked) return;
     onToggle(item.item_id, !item.include);
   };
 
@@ -109,9 +115,10 @@ export function FleetItemRow({
 
   return (
     <div
-      className="fleet-item-row"
+      className={`fleet-item-row${locked ? " fleet-item-row--locked" : ""}`}
       data-testid="fleet-item-row"
       data-item-id={JSON.stringify(item.item_id)}
+      data-locked={locked ? "true" : undefined}
       onClick={handleRowClick}
       role="row"
       tabIndex={0}
@@ -125,12 +132,24 @@ export function FleetItemRow({
             id={`fleet-switch-${name}`}
             isChecked={item.include}
             onChange={handleToggle}
-            aria-label={`Toggle ${name}`}
+            isDisabled={locked}
+            aria-label={locked ? `${name} (locked)` : `Toggle ${name}`}
           />
         </div>
       )}
 
       <div className="fleet-item-row__name">{name}</div>
+
+      {locked && (
+        <Label
+          color="grey"
+          isCompact
+          data-testid={`locked-badge-fleet-${name}`}
+          className="fleet-item-row__locked-badge"
+        >
+          {item.attention_reason ?? "LOCKED"}
+        </Label>
+      )}
 
       <span
         className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}

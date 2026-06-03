@@ -9,8 +9,10 @@ pub struct SelinuxPortLabel {
     pub port: String,
     #[serde(default, rename = "type")]
     pub label_type: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -77,6 +79,7 @@ mod tests {
                 port: "8080".to_string(),
                 label_type: "http_port_t".to_string(),
                 include: true,
+                locked: false,
                 fleet: None,
             }],
         };

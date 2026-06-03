@@ -234,12 +234,11 @@ mod tests {
         let mut copy_roots: Vec<String> = Vec::new();
         for line in containerfile.lines() {
             // Match "COPY config/XYZ/ /XYZ/" pattern
-            if let Some(rest) = line.strip_prefix("COPY config/") {
-                if let Some(root) = rest.split('/').next() {
-                    if !root.is_empty() && !copy_roots.contains(&root.to_string()) {
-                        copy_roots.push(root.to_string());
-                    }
-                }
+            if let Some(rest) = line.strip_prefix("COPY config/")
+                && let Some(root) = rest.split('/').next()
+                && !root.is_empty() && !copy_roots.contains(&root.to_string())
+            {
+                copy_roots.push(root.to_string());
             }
         }
         copy_roots.sort();

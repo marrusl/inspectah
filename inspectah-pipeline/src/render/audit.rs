@@ -729,18 +729,21 @@ mod tests {
 
     #[test]
     fn test_audit_renders_version_changes_table_when_populated() {
-        let mut snap = InspectionSnapshot::default();
-        let mut rpm = RpmSection::default();
-        rpm.version_changes = vec![VersionChange {
-            name: "bash".into(),
-            arch: "x86_64".into(),
-            host_version: "5.2.26-4.el9".into(),
-            base_version: "5.2.26-3.el9".into(),
-            host_epoch: String::new(),
-            base_epoch: String::new(),
-            direction: VersionChangeDirection::Downgrade,
-        }];
-        snap.rpm = Some(rpm);
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection {
+                version_changes: vec![VersionChange {
+                    name: "bash".into(),
+                    arch: "x86_64".into(),
+                    host_version: "5.2.26-4.el9".into(),
+                    base_version: "5.2.26-3.el9".into(),
+                    host_epoch: String::new(),
+                    base_epoch: String::new(),
+                    direction: VersionChangeDirection::Downgrade,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
         let report = render_audit(&snap);
         assert!(report.contains("Version Changes"));
         assert!(report.contains("bash"));
@@ -748,8 +751,10 @@ mod tests {
 
     #[test]
     fn test_audit_omits_version_changes_table_when_empty() {
-        let mut snap = InspectionSnapshot::default();
-        snap.rpm = Some(RpmSection::default());
+        let snap = InspectionSnapshot {
+            rpm: Some(RpmSection::default()),
+            ..Default::default()
+        };
         let report = render_audit(&snap);
         assert!(!report.contains("Version Changes"));
     }
@@ -759,19 +764,21 @@ mod tests {
         use inspectah_core::types::fleet::FleetSnapshotMeta;
         use std::collections::BTreeMap;
 
-        let mut snap = InspectionSnapshot::default();
-        snap.fleet_meta = Some(FleetSnapshotMeta {
-            label: "web-servers".into(),
-            host_count: 3,
-            hostnames: vec!["host1".into(), "host2".into(), "host3".into()],
-            merged_at: "2026-05-20T12:00:00Z".into(),
-            baseline_provisional: true,
-            section_host_counts: BTreeMap::from([
-                ("config".into(), 3usize),
-                ("rpm".into(), 3),
-                ("services".into(), 2),
-            ]),
-        });
+        let snap = InspectionSnapshot {
+            fleet_meta: Some(FleetSnapshotMeta {
+                label: "web-servers".into(),
+                host_count: 3,
+                hostnames: vec!["host1".into(), "host2".into(), "host3".into()],
+                merged_at: "2026-05-20T12:00:00Z".into(),
+                baseline_provisional: true,
+                section_host_counts: BTreeMap::from([
+                    ("config".into(), 3usize),
+                    ("rpm".into(), 3),
+                    ("services".into(), 2),
+                ]),
+            }),
+            ..Default::default()
+        };
 
         let report = render_audit(&snap);
 
@@ -798,15 +805,17 @@ mod tests {
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use std::collections::BTreeMap;
 
-        let mut snap = InspectionSnapshot::default();
-        snap.fleet_meta = Some(FleetSnapshotMeta {
-            label: "test-fleet".into(),
-            host_count: 2,
-            hostnames: vec!["host1".into(), "host2".into()],
-            merged_at: "2026-05-20T12:00:00Z".into(),
-            baseline_provisional: false,
-            section_host_counts: BTreeMap::new(),
-        });
+        let mut snap = InspectionSnapshot {
+            fleet_meta: Some(FleetSnapshotMeta {
+                label: "test-fleet".into(),
+                host_count: 2,
+                hostnames: vec!["host1".into(), "host2".into()],
+                merged_at: "2026-05-20T12:00:00Z".into(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            }),
+            ..Default::default()
+        };
 
         // Add config file with variant conflict
         snap.config = Some(ConfigSection {
@@ -822,7 +831,6 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            ..Default::default()
         });
 
         // Add service drop-in with variant conflict

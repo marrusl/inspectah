@@ -23,6 +23,7 @@ fn test_dropin_env_secret_redacted() {
             path: "/etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=secret123\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -288,6 +289,7 @@ fn test_secrets_review_reports_all_findings() {
             path: "/etc/systemd/system/db.service.d/env.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=pass1\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -357,6 +359,7 @@ fn test_clean_surfaces_no_false_positives() {
             path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
             content: "[Service]\nLimitNOFILE=65535\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()

@@ -77,6 +77,7 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,
@@ -115,6 +116,7 @@ fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=supersecret123\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -571,6 +573,7 @@ fn redaction_state_set_after_engine() {
             path: "/etc/myapp/config".into(),
             content: "db_password = s3cretP@ss\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
     });
@@ -1179,15 +1182,12 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress);
-        match &result {
-            Err(InspectorError::Failed { reason }) => {
-                panic!(
-                    "{name}: Some(empty) rpm_state should NOT produce Failed, \
-                     but got Failed {{ reason: \"{reason}\" }}"
-                );
-            }
-            // Ok or Degraded are both acceptable — the point is it's not Failed.
-            _ => {}
+        if let Err(InspectorError::Failed { reason }) = &result {
+            panic!(
+                "{name}: Some(empty) rpm_state should NOT produce Failed, \
+                 but got Failed {{ reason: \"{reason}\" }}"
+            );
         }
+        // Ok or Degraded are both acceptable — the point is it's not Failed.
     }
 }

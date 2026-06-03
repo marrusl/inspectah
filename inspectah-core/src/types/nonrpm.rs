@@ -20,8 +20,10 @@ pub struct NonRpmItem {
     pub method: String,
     #[serde(default)]
     pub confidence: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(default)]
@@ -75,6 +77,7 @@ mod tests {
                 method: "binary".to_string(),
                 confidence: "high".to_string(),
                 include: true,
+                locked: false,
                 acknowledged: false,
                 lang: "c".to_string(),
                 r#static: true,

@@ -1,6 +1,5 @@
 ---
 source: inspectah-collect/tests/storage_test.rs
-assertion_line: 351
 expression: section
 ---
 {
@@ -9,43 +8,50 @@ expression: section
       "device": "UUID=abc-123",
       "mount_point": "/",
       "fstype": "xfs",
-      "options": "defaults"
+      "options": "defaults",
+      "include": true
     },
     {
       "device": "UUID=def-456",
       "mount_point": "/boot",
       "fstype": "xfs",
-      "options": "defaults"
+      "options": "defaults",
+      "include": true
     },
     {
       "device": "UUID=ghi-789",
       "mount_point": "/boot/efi",
       "fstype": "vfat",
-      "options": "umask=0077,shortname=winnt"
+      "options": "umask=0077,shortname=winnt",
+      "include": true
     },
     {
       "device": "tmpfs",
       "mount_point": "/tmp",
       "fstype": "tmpfs",
-      "options": "defaults"
+      "options": "defaults",
+      "include": true
     },
     {
       "device": "//server/share",
       "mount_point": "/mnt/cifs",
       "fstype": "cifs",
-      "options": "credentials=/etc/cifs-creds,uid=1000"
+      "options": "credentials=/etc/cifs-creds,uid=1000",
+      "include": true
     },
     {
       "device": "server:/export",
       "mount_point": "/mnt/nfs",
       "fstype": "nfs",
-      "options": "defaults"
+      "options": "defaults",
+      "include": true
     },
     {
       "device": "/dev/mapper/vg0-data",
       "mount_point": "/data",
       "fstype": "xfs",
-      "options": "defaults"
+      "options": "defaults",
+      "include": true
     }
   ],
   "mount_points": [

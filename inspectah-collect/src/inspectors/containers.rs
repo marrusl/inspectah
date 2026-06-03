@@ -224,6 +224,7 @@ fn scan_quadlet_dir(
             image,
             ports,
             volumes,
+            include: true,
             ..Default::default()
         });
     }
@@ -362,6 +363,7 @@ fn find_compose_files(
         files.push(ComposeFile {
             path: rel_path,
             images: parse_result.services,
+            include: true,
             ..Default::default()
         });
     }
@@ -723,6 +725,7 @@ fn parse_podman_inspect(
             ports,
             env,
             inspect_data: true,
+            include: true,
             ..Default::default()
         });
     }
@@ -759,6 +762,7 @@ fn parse_podman_ps(data: &[serde_json::Value]) -> Vec<RunningContainer> {
             name,
             image: string_field(c, &["Image"]),
             status,
+            include: true,
             ..Default::default()
         });
     }
@@ -881,6 +885,7 @@ fn detect_flatpak_apps(exec: &dyn Executor) -> Vec<FlatpakApp> {
             branch,
             remote,
             remote_url,
+            include: true,
             ..Default::default()
         });
     }
@@ -1685,5 +1690,164 @@ com.visualstudio.code\tflathub\tstable
         assert!(!match_glob("compose*.yaml", "docker-compose.yaml"));
         assert!(match_glob("*.container", "webapp.container"));
         assert!(!match_glob("*.container", "webapp.volume"));
+    }
+
+    // -----------------------------------------------------------------------
+    // include: true collector defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn collected_quadlets_have_include_true() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc/containers/systemd", vec!["app.container"])
+            .with_file(
+                "/etc/containers/systemd/app.container",
+                "[Container]\nImage=quay.io/org/app:v1\n",
+            );
+
+        let mut degraded = Vec::new();
+        let units = scan_quadlet_dir(&exec, "/etc/containers/systemd", &mut degraded);
+        assert_eq!(units.len(), 1);
+        assert!(
+            units[0].include,
+            "collected QuadletUnit should have include: true"
+        );
+    }
+
+    #[test]
+    fn collected_compose_files_have_include_true() {
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["docker-compose.yml"])
+            .with_file(
+                "/opt/docker-compose.yml",
+                "services:\n  web:\n    image: nginx\n",
+            );
+
+        let mut hints = Vec::new();
+        let mut degraded = Vec::new();
+        let files = find_compose_files(&exec, "/opt", &mut hints, &mut degraded);
+        assert_eq!(files.len(), 1);
+        assert!(
+            files[0].include,
+            "collected ComposeFile should have include: true"
+        );
+    }
+
+    #[test]
+    fn collected_flatpak_apps_have_include_true() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "which flatpak",
+                ExecResult {
+                    stdout: "/usr/bin/flatpak".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "flatpak list --app --system --columns=application,origin,branch",
+                ExecResult {
+                    stdout: "org.mozilla.firefox\tflathub\tstable\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "flatpak remote-list --system --columns=name,url",
+                ExecResult {
+                    stdout: "flathub\thttps://dl.flathub.org/repo/\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let apps = detect_flatpak_apps(&exec);
+        assert_eq!(apps.len(), 1);
+        assert!(
+            apps[0].include,
+            "collected FlatpakApp should have include: true"
+        );
+    }
+
+    #[test]
+    fn collected_running_containers_have_include_true() {
+        let ps_json = fixture("podman-ps.json");
+        let inspect_json = fixture("podman-inspect.json");
+
+        let exec = MockExecutor::new()
+            .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman ps --format json",
+                ExecResult {
+                    stdout: ps_json.clone(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman inspect abc123def456",
+                ExecResult {
+                    stdout: inspect_json,
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut hints = Vec::new();
+        let mut degraded = Vec::new();
+        let (containers, _) = query_podman_containers(&exec, &mut hints, &mut degraded);
+        assert!(!containers.is_empty());
+        for c in &containers {
+            assert!(
+                c.include,
+                "collected RunningContainer '{}' should have include: true",
+                c.name
+            );
+        }
+
+        // Also verify ps-only fallback path sets include: true
+        let exec2 = MockExecutor::new()
+            .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman ps --format json",
+                ExecResult {
+                    stdout: ps_json,
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman inspect abc123def456",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut hints2 = Vec::new();
+        let mut degraded2 = Vec::new();
+        let (containers2, _) = query_podman_containers(&exec2, &mut hints2, &mut degraded2);
+        assert!(!containers2.is_empty());
+        for c in &containers2 {
+            assert!(
+                c.include,
+                "ps-only RunningContainer '{}' should have include: true",
+                c.name
+            );
+        }
     }
 }

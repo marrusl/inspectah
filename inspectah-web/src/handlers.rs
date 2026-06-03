@@ -638,18 +638,8 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
-    use inspectah_core::types::containers::{
-        ComposeFile, ComposeService, ContainerSection, RunningContainer,
-    };
-    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
-    use inspectah_core::types::rpm::{
-        PackageEntry, PackageState, RepoFile, RpmSection, VersionChange, VersionChangeDirection,
-    };
-    use inspectah_core::types::selinux::SelinuxSection;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
-    use inspectah_core::types::warnings::{Warning, WarningSeverity};
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
     use inspectah_refine::types::RepoTier;
 
     fn empty_snapshot() -> InspectionSnapshot {
@@ -747,6 +737,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     include: true,
+                    locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
                 },
@@ -755,6 +746,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     include: true,
+                    locked: false,
                     source_repo: "baseos".into(),
                     ..Default::default()
                 },
@@ -763,6 +755,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     include: true,
+                    locked: false,
                     source_repo: "epel".into(),
                     ..Default::default()
                 },
@@ -824,6 +817,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     include: true,
+                    locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
                 },
@@ -832,6 +826,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     include: true,
+                    locked: false,
                     source_repo: "epel".into(),
                     ..Default::default()
                 },
@@ -868,6 +863,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 PackageEntry {
@@ -876,6 +872,7 @@ mod tests {
                     state: PackageState::Added,
                     source_repo: "epel".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -885,12 +882,14 @@ mod tests {
                     content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
                         .into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 RepoFile {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     content: "[epel]\nname=EPEL 9\n".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],

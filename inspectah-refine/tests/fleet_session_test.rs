@@ -12,16 +12,17 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 use std::collections::BTreeMap;
 
 fn make_fleet_snapshot(host_count: usize) -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-20T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
-    snap
+    InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-20T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -77,18 +78,21 @@ fn multi_variant_path_zone_uses_most_divergent_variant() {
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(3, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(1, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 include: true,
+                locked: false,
                 fleet: fleet_prevalence(1, 5),
                 ..Default::default()
             },
@@ -116,6 +120,7 @@ fn zone_for_partial_path_is_divergent() {
         files: vec![ConfigFileEntry {
             path: "/etc/app/rare.conf".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(2, 5),
             ..Default::default()
         }],
@@ -142,6 +147,7 @@ fn dropin_zone_classified_on_fleet_init() {
             path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
             content: "test".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(4, 5),
             ..Default::default()
         }],
@@ -168,6 +174,7 @@ fn quadlet_zone_classified_on_fleet_init() {
             path: "/etc/containers/systemd/myapp.container".into(),
             name: "myapp".into(),
             include: true,
+            locked: false,
             fleet: fleet_prevalence(5, 5),
             ..Default::default()
         }],
@@ -209,6 +216,7 @@ fn variants_changed_net_zero_is_clean() {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: fleet_prevalence(3, 5),
                 ..Default::default()
@@ -217,6 +225,7 @@ fn variants_changed_net_zero_is_clean() {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: fleet_prevalence(2, 5),
                 ..Default::default()
@@ -284,9 +293,9 @@ fn compose_multi_variant_pristine_is_clean() {
                 images: vec![ComposeService {
                     service: "web".into(),
                     image: "nginx:1.25".into(),
-                    ..Default::default()
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -300,9 +309,9 @@ fn compose_multi_variant_pristine_is_clean() {
                 images: vec![ComposeService {
                     service: "web".into(),
                     image: "nginx:1.24".into(),
-                    ..Default::default()
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -336,12 +345,10 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
     let images_a = vec![ComposeService {
         service: "web".into(),
         image: "nginx:1.25".into(),
-        ..Default::default()
     }];
     let images_b = vec![ComposeService {
         service: "web".into(),
         image: "nginx:1.24".into(),
-        ..Default::default()
     }];
     let hash_a = ContentHash::from_content(serde_json::to_string(&images_a).unwrap().as_bytes());
     let hash_b = ContentHash::from_content(serde_json::to_string(&images_b).unwrap().as_bytes());
@@ -352,6 +359,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_a,
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -364,6 +372,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_b,
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,

@@ -1,7 +1,7 @@
 use super::fleet::FleetPrevalence;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NMConnection {
     #[serde(default)]
     pub path: String,
@@ -11,12 +11,29 @@ pub struct NMConnection {
     pub method: String,
     #[serde(default, rename = "type")]
     pub conn_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
+}
+
+impl Default for NMConnection {
+    fn default() -> Self {
+        Self {
+            include: true,
+            path: Default::default(),
+            name: Default::default(),
+            method: Default::default(),
+            conn_type: Default::default(),
+            locked: Default::default(),
+            acknowledged: Default::default(),
+            fleet: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -33,8 +50,10 @@ pub struct FirewallZone {
     pub ports: Vec<String>,
     #[serde(default)]
     pub rich_rules: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub fleet: Option<FleetPrevalence>,
 }
 
@@ -50,8 +69,10 @@ pub struct FirewallDirectRule {
     pub priority: String,
     #[serde(default)]
     pub args: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

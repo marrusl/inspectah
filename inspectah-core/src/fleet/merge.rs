@@ -174,7 +174,7 @@ impl FleetMergeable for SystemdDropIn {
 // Container types
 // ---------------------------------------------------------------------------
 
-use crate::types::containers::{ComposeFile, QuadletUnit};
+use crate::types::containers::{ComposeFile, FlatpakApp, QuadletUnit};
 
 impl FleetMergeable for QuadletUnit {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -229,6 +229,20 @@ impl FleetMergeable for ComposeFile {
     }
 }
 
+impl FleetMergeable for FlatpakApp {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}.{}.{}", self.app_id, self.remote, self.branch))
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = val;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Network types
 // ---------------------------------------------------------------------------
@@ -245,7 +259,7 @@ impl FleetMergeable for NMConnection {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -367,7 +381,7 @@ impl FleetMergeable for SystemdTimer {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -381,7 +395,7 @@ impl FleetMergeable for AtJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -415,7 +429,7 @@ impl FleetMergeable for FstabEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = Some(val);
+        self.include = val;
     }
 }
 
@@ -491,6 +505,9 @@ pub fn merge_items<T: FleetMergeable + serde::Serialize>(
             result.push(representative);
         }
     }
+
+    // Narrowing pass: non-universal items get include=false
+    narrow_non_universal(&mut result);
 
     result.sort_by(|a, b| a.identity_key().cmp(&b.identity_key()));
     result
@@ -595,7 +612,28 @@ fn merge_with_variants<T: FleetMergeable>(
         }
         variant_results.push(item);
     }
+
+    // Narrowing pass: non-universal items get include=false
+    narrow_non_universal(&mut variant_results);
+
     variant_results
+}
+
+/// Post-merge narrowing: set `include = false` for items that are not
+/// universal across all hosts in the fleet (count < total).
+///
+/// This is the single place where fleet narrowing happens — called after
+/// both `merge_items` and `merge_with_variants` produce their results.
+fn narrow_non_universal<T: FleetMergeable>(items: &mut [T]) {
+    for item in items.iter_mut() {
+        let dominated = item
+            .fleet_mut()
+            .as_ref()
+            .is_some_and(|f| f.count < f.total);
+        if dominated {
+            item.set_include(false);
+        }
+    }
 }
 
 // ===========================================================================
@@ -707,6 +745,21 @@ where
     // Stable: highest count first; ties preserve insertion order (first-seen)
     counts.sort_by(|(_, a), (_, b)| b.cmp(a));
     counts.first().map(|(v, _)| v.clone()).unwrap_or_default()
+}
+
+/// Check whether a scalar field has the same value on every host that
+/// has the section present.
+///
+/// Used for tuned universality: a custom profile is only included when
+/// every host agrees on the same active profile.
+fn is_scalar_universal<S, F>(sections: &[Option<S>], accessor: F, winner: &str) -> bool
+where
+    F: Fn(&S) -> &str,
+{
+    sections
+        .iter()
+        .flatten()
+        .all(|s| accessor(s) == winner)
 }
 
 /// Pick the most-prevalent bool value across hosts.
@@ -1125,27 +1178,11 @@ pub fn merge_container_sections(
     // Skip running_containers — runtime state, not config
     let running_containers = Vec::new();
 
-    // Dedup flatpak_apps by (app_id, remote, branch) identity.
-    // remote_url is render metadata and not part of the identity key.
-    let flatpak_apps = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for app in &s.flatpak_apps {
-                let key = (app.app_id.clone(), app.remote.clone(), app.branch.clone());
-                if seen.insert(key) {
-                    result.push(app.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| {
-            a.app_id
-                .cmp(&b.app_id)
-                .then_with(|| a.remote.cmp(&b.remote))
-                .then_with(|| a.branch.cmp(&b.branch))
-        });
-        result
-    };
+    let flatpak_apps = merge_items(
+        collect_items(&sections, |s| &s.flatpak_apps),
+        total_hosts,
+        hostnames,
+    );
 
     Some(ContainerSection {
         quadlet_units,
@@ -1502,17 +1539,16 @@ pub fn merge_kernelboot_sections(
     let locale = first_host_option(&sections, hostnames, |s| &s.locale);
     let timezone = first_host_option(&sections, hostnames, |s| &s.timezone);
 
-    // Stock default profiles are auto-selected by tuned's recommendation
-    // engine (e.g. throughput-performance on servers, virtual-guest on VMs,
-    // balanced on desktops). Including these in the Containerfile with
-    // profile_mode=manual would override tuned's automatic selection in the
-    // image, which is not the admin's intent. Default to excluded; the
-    // operator can opt in via the UI toggle.
-    let tuned_include = if tuned_active.is_empty() {
-        false
-    } else {
-        !is_stock_tuned_profile(&tuned_active)
-    };
+    // Tuned include is a composition of two rules:
+    // 1. Classifier: stock profiles (virtual-guest, throughput-performance,
+    //    etc.) are excluded — they are auto-selected by tuned's recommendation
+    //    engine and including them would override that.
+    // 2. Universality: non-stock profiles are included only if the winner
+    //    profile is universal across all hosts. A custom profile on 2/3 hosts
+    //    is not fleet consensus, so it should not be included.
+    let tuned_include = !tuned_active.is_empty()
+        && !is_stock_tuned_profile(&tuned_active)
+        && is_scalar_universal(&sections, |s| &s.tuned_active, &tuned_active);
 
     Some(KernelBootSection {
         cmdline,
@@ -2128,6 +2164,13 @@ mod tests {
             .collect();
         assert!(remotes.contains(&"fedora"));
         assert!(remotes.contains(&"flathub"));
+
+        // Each distinct identity appears on exactly 1 of 2 hosts
+        for app in &merged.flatpak_apps {
+            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
+            assert_eq!(fleet.count, 1);
+            assert_eq!(fleet.total, 2);
+        }
     }
 
     #[test]
@@ -2169,6 +2212,15 @@ mod tests {
             1,
             "same (app_id, remote, branch) must collapse despite different remote_url"
         );
+
+        let fleet = merged.flatpak_apps[0]
+            .fleet
+            .as_ref()
+            .expect("merged flatpak should have fleet data");
+        assert_eq!(fleet.count, 2, "present on both hosts");
+        assert_eq!(fleet.total, 2);
+        assert!(fleet.hosts.contains(&"host-a".to_string()));
+        assert!(fleet.hosts.contains(&"host-b".to_string()));
     }
 
     #[test]
@@ -2207,5 +2259,212 @@ mod tests {
             2,
             "same app_id with different branches must not be collapsed"
         );
+
+        // Each branch variant appears on exactly 1 of 2 hosts
+        for app in &merged.flatpak_apps {
+            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
+            assert_eq!(fleet.count, 1);
+            assert_eq!(fleet.total, 2);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fleet aggregate narrowing tests (Task 11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fleet_merge_non_universal_quadlet_excluded() {
+        use crate::types::containers::{ContainerSection, QuadletUnit};
+
+        // Quadlet appears on 2 of 3 hosts
+        let host_a = ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                name: "myapp.container".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b = ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                name: "myapp.container".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_c = ContainerSection {
+            ..Default::default()
+        };
+
+        let merged = merge_container_sections(
+            vec![Some(host_a), Some(host_b), Some(host_c)],
+            3,
+            &["host-a".into(), "host-b".into(), "host-c".into()],
+        )
+        .expect("merge should succeed");
+
+        assert_eq!(merged.quadlet_units.len(), 1);
+        let q = &merged.quadlet_units[0];
+        let fleet = q.fleet.as_ref().expect("should have fleet data");
+        assert_eq!(fleet.count, 2);
+        assert_eq!(fleet.total, 3);
+        assert!(!q.include, "non-universal quadlet must have include=false");
+    }
+
+    #[test]
+    fn fleet_merge_universal_quadlet_included() {
+        use crate::types::containers::{ContainerSection, QuadletUnit};
+
+        // Quadlet appears on all 3 hosts
+        let make_host = || ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                name: "myapp.container".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = merge_container_sections(
+            vec![Some(make_host()), Some(make_host()), Some(make_host())],
+            3,
+            &["host-a".into(), "host-b".into(), "host-c".into()],
+        )
+        .expect("merge should succeed");
+
+        assert_eq!(merged.quadlet_units.len(), 1);
+        let q = &merged.quadlet_units[0];
+        let fleet = q.fleet.as_ref().expect("should have fleet data");
+        assert_eq!(fleet.count, 3);
+        assert_eq!(fleet.total, 3);
+        assert!(q.include, "universal quadlet must have include=true");
+    }
+
+    #[test]
+    fn fleet_merge_tuned_universal_stock_excluded() {
+        use crate::types::kernelboot::KernelBootSection;
+
+        // All 3 hosts have virtual-guest (stock profile)
+        let make_host = || KernelBootSection {
+            tuned_active: "virtual-guest".into(),
+            ..Default::default()
+        };
+
+        let merged = merge_kernelboot_sections(
+            vec![Some(make_host()), Some(make_host()), Some(make_host())],
+            3,
+            &["host-a".into(), "host-b".into(), "host-c".into()],
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            !merged.tuned_include,
+            "stock tuned profile must be excluded even when universal"
+        );
+    }
+
+    #[test]
+    fn fleet_merge_tuned_universal_custom_included() {
+        use crate::types::kernelboot::KernelBootSection;
+
+        // All 3 hosts have my-custom-profile
+        let make_host = || KernelBootSection {
+            tuned_active: "my-custom-profile".into(),
+            ..Default::default()
+        };
+
+        let merged = merge_kernelboot_sections(
+            vec![Some(make_host()), Some(make_host()), Some(make_host())],
+            3,
+            &["host-a".into(), "host-b".into(), "host-c".into()],
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            merged.tuned_include,
+            "custom tuned profile universal across all hosts must be included"
+        );
+    }
+
+    #[test]
+    fn fleet_merge_tuned_non_universal_custom_excluded() {
+        use crate::types::kernelboot::KernelBootSection;
+
+        // 2 of 3 hosts have my-custom-profile, 1 has something else
+        let host_a = KernelBootSection {
+            tuned_active: "my-custom-profile".into(),
+            ..Default::default()
+        };
+        let host_b = KernelBootSection {
+            tuned_active: "my-custom-profile".into(),
+            ..Default::default()
+        };
+        let host_c = KernelBootSection {
+            tuned_active: "throughput-performance".into(),
+            ..Default::default()
+        };
+
+        let merged = merge_kernelboot_sections(
+            vec![Some(host_a), Some(host_b), Some(host_c)],
+            3,
+            &["host-a".into(), "host-b".into(), "host-c".into()],
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            !merged.tuned_include,
+            "non-universal custom tuned profile must be excluded"
+        );
+    }
+
+    #[test]
+    fn fleet_merge_narrowing_applies_to_all_item_types() {
+        // Verify narrowing works generically through merge_items
+        // by testing with PackageEntry (non-variant type)
+        let items: Vec<(usize, PackageEntry)> = vec![
+            (0, PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            }),
+            (1, PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            }),
+            // host 2 does NOT have httpd
+        ];
+
+        let result = merge_items(items, 3, &["host-a".into(), "host-b".into(), "host-c".into()]);
+        assert_eq!(result.len(), 1);
+        let pkg = &result[0];
+        assert!(!pkg.include, "non-universal package must have include=false after narrowing");
+        assert_eq!(pkg.fleet.as_ref().unwrap().count, 2);
+    }
+
+    #[test]
+    fn fleet_merge_narrowing_universal_item_stays_included() {
+        // All 3 hosts have the same package
+        let items: Vec<(usize, PackageEntry)> = vec![
+            (0, PackageEntry {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            }),
+            (1, PackageEntry {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            }),
+            (2, PackageEntry {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            }),
+        ];
+
+        let result = merge_items(items, 3, &["host-a".into(), "host-b".into(), "host-c".into()]);
+        assert_eq!(result.len(), 1);
+        let pkg = &result[0];
+        assert!(pkg.include, "universal package must remain include=true");
+        assert_eq!(pkg.fleet.as_ref().unwrap().count, 3);
     }
 }

@@ -67,6 +67,9 @@ pub struct ServiceDecisionDto {
     pub unit: String,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owning_package: Option<String>,
 }
@@ -78,6 +81,9 @@ pub struct DropInDecisionDto {
     pub path: String,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 /// A classified quadlet unit, projected for the view response.
@@ -88,6 +94,7 @@ pub struct QuadletDecisionDto {
     pub image: String,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
 }
 
 /// A classified flatpak app, projected for the view response.
@@ -98,6 +105,7 @@ pub struct FlatpakDecisionDto {
     pub branch: String,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
     pub lifecycle: String,
 }
 
@@ -110,6 +118,7 @@ pub struct SysctlDecisionDto {
     pub source: String,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
 }
 
 /// A classified tuned profile selection, projected for the view response.
@@ -119,6 +128,7 @@ pub struct TunedDecisionDto {
     pub custom_profiles: Vec<String>,
     pub triage: TriageTag,
     pub include: bool,
+    pub locked: bool,
 }
 
 #[derive(Serialize)]

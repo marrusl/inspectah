@@ -297,7 +297,7 @@ mod tests {
         assert!(none_state.is_none());
         // Some(empty) means "RPM succeeded, confirmed no data"
         assert!(some_empty.is_some());
-        assert!(some_empty.unwrap().packages().is_empty());
-        assert!(some_empty.unwrap().owned_paths().is_empty());
+        assert!(empty_state.packages().is_empty());
+        assert!(empty_state.owned_paths().is_empty());
     }
 }

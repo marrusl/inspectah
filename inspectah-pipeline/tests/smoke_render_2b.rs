@@ -35,6 +35,7 @@ fn snapshot_with_firewall() -> InspectionSnapshot {
                 name: "public".into(),
                 content: "<zone><short>Public</short></zone>".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             FirewallZone {
@@ -42,6 +43,7 @@ fn snapshot_with_firewall() -> InspectionSnapshot {
                 name: "internal".into(),
                 content: "<zone><short>Internal</short></zone>".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -78,12 +80,14 @@ fn snapshot_with_quadlets() -> InspectionSnapshot {
                 name: "webapp.container".into(),
                 content: "[Container]\nImage=quay.io/myorg/webapp:latest\n".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
             QuadletUnit {
                 name: "db.volume".into(),
                 content: "[Volume]\nDevice=tmpfs\n".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             },
         ],
@@ -98,6 +102,7 @@ fn snapshot_with_compose_only() -> InspectionSnapshot {
         compose_files: vec![ComposeFile {
             path: "/opt/app/docker-compose.yml".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -113,6 +118,7 @@ fn snapshot_with_flatpaks() -> InspectionSnapshot {
             remote: "flathub".into(),
             branch: "stable".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -223,11 +229,13 @@ fn snapshot_with_quadlets_and_compose() -> InspectionSnapshot {
             name: "app.container".into(),
             content: "[Container]\nImage=registry.io/app:v1\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         compose_files: vec![ComposeFile {
             path: "/opt/stack/docker-compose.yml".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()

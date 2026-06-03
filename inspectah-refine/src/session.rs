@@ -47,6 +47,221 @@ fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
 }
 
+/// Check whether an item is locked in the original (normalized) snapshot.
+/// Locked items cannot be re-included via SetInclude ops.
+fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
+    match item_id {
+        ItemId::Package { name, arch } => snapshot
+            .rpm
+            .as_ref()
+            .and_then(|r| {
+                r.packages_added
+                    .iter()
+                    .find(|e| e.name == *name && e.arch == *arch)
+            })
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Config { path } => snapshot
+            .config
+            .as_ref()
+            .and_then(|c| c.files.iter().find(|e| e.path == *path))
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Service { unit } => snapshot
+            .services
+            .as_ref()
+            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit == *unit))
+            .map(|sc| sc.locked)
+            .unwrap_or(false),
+        ItemId::DropIn { path } => snapshot
+            .services
+            .as_ref()
+            .and_then(|s| s.drop_ins.iter().find(|d| d.path == *path))
+            .map(|d| d.locked)
+            .unwrap_or(false),
+        ItemId::Quadlet { path } => snapshot
+            .containers
+            .as_ref()
+            .and_then(|c| c.quadlet_units.iter().find(|q| q.path == *path))
+            .map(|q| q.locked)
+            .unwrap_or(false),
+        ItemId::Flatpak {
+            app_id,
+            remote,
+            branch,
+        } => snapshot
+            .containers
+            .as_ref()
+            .and_then(|c| {
+                c.flatpak_apps
+                    .iter()
+                    .find(|f| f.app_id == *app_id && f.remote == *remote && f.branch == *branch)
+            })
+            .map(|f| f.locked)
+            .unwrap_or(false),
+        ItemId::Fstab { mount_point } => snapshot
+            .storage
+            .as_ref()
+            .and_then(|s| s.fstab_entries.iter().find(|e| e.mount_point == *mount_point))
+            .map(|e| e.locked)
+            .unwrap_or(false),
+        ItemId::Sysctl { key } => snapshot
+            .kernel_boot
+            .as_ref()
+            .and_then(|kb| kb.sysctl_overrides.iter().find(|s| s.key == *key))
+            .map(|s| s.locked)
+            .unwrap_or(false),
+        // Item kinds without locked field or not yet handled: not lockable
+        _ => false,
+    }
+}
+
+/// Defense-in-depth: clamp all locked items to include=false in the
+/// projected snapshot. Ensures renderers and exporters never see a
+/// locked item with include=true, regardless of op-stack state.
+fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
+    if let Some(ref mut rpm) = snapshot.rpm {
+        for pkg in &mut rpm.packages_added {
+            if pkg.locked {
+                pkg.include = false;
+            }
+        }
+        for ms in &mut rpm.module_streams {
+            if ms.locked {
+                ms.include = false;
+            }
+        }
+        for vl in &mut rpm.version_locks {
+            if vl.locked {
+                vl.include = false;
+            }
+        }
+        for rf in &mut rpm.repo_files {
+            if rf.locked {
+                rf.include = false;
+            }
+        }
+    }
+    if let Some(ref mut config) = snapshot.config {
+        for f in &mut config.files {
+            if f.locked {
+                f.include = false;
+            }
+        }
+    }
+    if let Some(ref mut services) = snapshot.services {
+        for sc in &mut services.state_changes {
+            if sc.locked {
+                sc.include = false;
+            }
+        }
+        for di in &mut services.drop_ins {
+            if di.locked {
+                di.include = false;
+            }
+        }
+    }
+    if let Some(ref mut containers) = snapshot.containers {
+        for q in &mut containers.quadlet_units {
+            if q.locked {
+                q.include = false;
+            }
+        }
+        for cf in &mut containers.compose_files {
+            if cf.locked {
+                cf.include = false;
+            }
+        }
+        for rc in &mut containers.running_containers {
+            if rc.locked {
+                rc.include = false;
+            }
+        }
+        for f in &mut containers.flatpak_apps {
+            if f.locked {
+                f.include = false;
+            }
+        }
+    }
+    if let Some(ref mut storage) = snapshot.storage {
+        for e in &mut storage.fstab_entries {
+            if e.locked {
+                e.include = false;
+            }
+        }
+    }
+    if let Some(ref mut kb) = snapshot.kernel_boot {
+        for s in &mut kb.sysctl_overrides {
+            if s.locked {
+                s.include = false;
+            }
+        }
+        for m in &mut kb.loaded_modules {
+            if m.locked {
+                m.include = false;
+            }
+        }
+        for m in &mut kb.non_default_modules {
+            if m.locked {
+                m.include = false;
+            }
+        }
+    }
+    if let Some(ref mut net) = snapshot.network {
+        for c in &mut net.connections {
+            if c.locked {
+                c.include = false;
+            }
+        }
+        for fz in &mut net.firewall_zones {
+            if fz.locked {
+                fz.include = false;
+            }
+        }
+        for fdr in &mut net.firewall_direct_rules {
+            if fdr.locked {
+                fdr.include = false;
+            }
+        }
+    }
+    if let Some(ref mut sched) = snapshot.scheduled_tasks {
+        for cj in &mut sched.cron_jobs {
+            if cj.locked {
+                cj.include = false;
+            }
+        }
+        for st in &mut sched.systemd_timers {
+            if st.locked {
+                st.include = false;
+            }
+        }
+        for aj in &mut sched.at_jobs {
+            if aj.locked {
+                aj.include = false;
+            }
+        }
+        for gtu in &mut sched.generated_timer_units {
+            if gtu.locked {
+                gtu.include = false;
+            }
+        }
+    }
+    if let Some(ref mut sel) = snapshot.selinux {
+        for pl in &mut sel.port_labels {
+            if pl.locked {
+                pl.include = false;
+            }
+        }
+    }
+    if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
+        for item in &mut nonrpm.items {
+            if item.locked {
+                item.include = false;
+            }
+        }
+    }
+}
+
 impl RefineSession {
     pub fn new(mut snapshot: InspectionSnapshot) -> Self {
         let repo_index = RepoIndex::build(&snapshot);
@@ -179,242 +394,9 @@ impl RefineSession {
             RefineMode::SingleHost
         };
 
-        // Fleet prevalence gate: in fleet mode, items below full prevalence
-        // default to excluded (strict intersection). This overrides the
-        // single-host triage defaults set by normalize_package_defaults.
-        // Applies to ALL section types with per-item fleet prevalence data.
-        if matches!(refine_mode, RefineMode::Fleet(_)) {
-            // Packages
-            if let Some(ref mut rpm) = snapshot.rpm {
-                for pkg in &mut rpm.packages_added {
-                    if let Some(ref fp) = pkg.fleet
-                        && fp.count < fp.total
-                    {
-                        pkg.include = false;
-                    }
-                }
-            }
-
-            // Config files
-            if let Some(ref mut config) = snapshot.config {
-                for entry in &mut config.files {
-                    if let Some(ref fp) = entry.fleet
-                        && fp.count < fp.total
-                    {
-                        entry.include = false;
-                    }
-                }
-            }
-
-            // Services
-            if let Some(ref mut services) = snapshot.services {
-                for svc in &mut services.state_changes {
-                    if let Some(ref fp) = svc.fleet
-                        && fp.count < fp.total
-                    {
-                        svc.include = false;
-                    }
-                }
-                for dropin in &mut services.drop_ins {
-                    if let Some(ref fp) = dropin.fleet
-                        && fp.count < fp.total
-                    {
-                        dropin.include = false;
-                    }
-                }
-            }
-
-            // Containers (quadlets, compose)
-            if let Some(ref mut containers) = snapshot.containers {
-                for quadlet in &mut containers.quadlet_units {
-                    if let Some(ref fp) = quadlet.fleet
-                        && fp.count < fp.total
-                    {
-                        quadlet.include = false;
-                    }
-                }
-                for compose in &mut containers.compose_files {
-                    if let Some(ref fp) = compose.fleet
-                        && fp.count < fp.total
-                    {
-                        compose.include = false;
-                    }
-                }
-            }
-
-            // Kernel/boot: sysctl overrides, loaded modules
-            if let Some(ref mut kb) = snapshot.kernel_boot {
-                for sysctl in &mut kb.sysctl_overrides {
-                    if let Some(ref fp) = sysctl.fleet
-                        && fp.count < fp.total
-                    {
-                        sysctl.include = false;
-                    }
-                }
-                for module in &mut kb.loaded_modules {
-                    if let Some(ref fp) = module.fleet
-                        && fp.count < fp.total
-                    {
-                        module.include = false;
-                    }
-                }
-            }
-
-            // Scheduled tasks
-            if let Some(ref mut sched) = snapshot.scheduled_tasks {
-                for cron in &mut sched.cron_jobs {
-                    if let Some(ref fp) = cron.fleet
-                        && fp.count < fp.total
-                    {
-                        cron.include = false;
-                    }
-                }
-                for timer in &mut sched.generated_timer_units {
-                    if let Some(ref fp) = timer.fleet
-                        && fp.count < fp.total
-                    {
-                        timer.include = false;
-                    }
-                }
-            }
-
-            // SELinux port labels
-            if let Some(ref mut selinux) = snapshot.selinux {
-                for port in &mut selinux.port_labels {
-                    if let Some(ref fp) = port.fleet
-                        && fp.count < fp.total
-                    {
-                        port.include = false;
-                    }
-                }
-            }
-
-            // Network: connections, firewall zones
-            if let Some(ref mut network) = snapshot.network {
-                for conn in &mut network.connections {
-                    if let Some(ref fp) = conn.fleet
-                        && fp.count < fp.total
-                    {
-                        conn.include = Some(false);
-                    }
-                }
-                for zone in &mut network.firewall_zones {
-                    if let Some(ref fp) = zone.fleet
-                        && fp.count < fp.total
-                    {
-                        zone.include = false;
-                    }
-                }
-            }
-
-            // Non-RPM software
-            if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
-                for item in &mut nonrpm.items {
-                    if let Some(ref fp) = item.fleet
-                        && fp.count < fp.total
-                    {
-                        item.include = false;
-                    }
-                }
-            }
-
-            // Storage: fstab entries
-            if let Some(ref mut storage) = snapshot.storage {
-                for entry in &mut storage.fstab_entries {
-                    if let Some(ref fp) = entry.fleet
-                        && fp.count < fp.total
-                    {
-                        entry.include = Some(false);
-                    }
-                }
-            }
-        }
-
-        // Single-host defaults: in single-host mode everything the user
-        // configured is assumed intentional — there's no fleet consensus
-        // to compare against. Set include=true for items whose serde
-        // default is false/None and whose only exclusion reason would be
-        // fleet prevalence.
-        //
-        // NOT included here:
-        // - Packages: handled by normalize_package_defaults (tier-based)
-        // - Config files: handled by normalize_config_defaults (tier-based)
-        // - Services/drop-ins: collector sets include=true, then
-        //   normalize_incompatible_services excludes image-incompatible
-        //   units — those exclusions are intentional and must be preserved
-        // - Repo files/GPG keys: include set at collection time based on
-        //   content analysis (is_default_repo, valid PGP content)
-        //
-        // Fleet mode keeps its prevalence-based logic above.
-        if matches!(refine_mode, RefineMode::SingleHost) {
-            // Containers (quadlets, compose files, flatpak apps)
-            if let Some(ref mut containers) = snapshot.containers {
-                for quadlet in &mut containers.quadlet_units {
-                    quadlet.include = true;
-                }
-                for compose in &mut containers.compose_files {
-                    compose.include = true;
-                }
-                for flatpak in &mut containers.flatpak_apps {
-                    flatpak.include = true;
-                }
-            }
-
-            // Kernel/boot: sysctl overrides, loaded modules, tuned profile
-            if let Some(ref mut kb) = snapshot.kernel_boot {
-                for sysctl in &mut kb.sysctl_overrides {
-                    sysctl.include = true;
-                }
-                for module in &mut kb.loaded_modules {
-                    module.include = true;
-                }
-                // Tuned profile (stock or custom — all intentional in single-host)
-                if !kb.tuned_active.is_empty() {
-                    kb.tuned_include = true;
-                }
-            }
-
-            // Scheduled tasks (cron jobs and generated timer units)
-            if let Some(ref mut sched) = snapshot.scheduled_tasks {
-                for cron in &mut sched.cron_jobs {
-                    cron.include = true;
-                }
-                for timer in &mut sched.generated_timer_units {
-                    timer.include = true;
-                }
-            }
-
-            // SELinux port labels
-            if let Some(ref mut selinux) = snapshot.selinux {
-                for port in &mut selinux.port_labels {
-                    port.include = true;
-                }
-            }
-
-            // Network (connections and firewall zones)
-            if let Some(ref mut network) = snapshot.network {
-                for conn in &mut network.connections {
-                    conn.include = Some(true);
-                }
-                for zone in &mut network.firewall_zones {
-                    zone.include = true;
-                }
-            }
-
-            // Non-RPM software
-            if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
-                for item in &mut nonrpm.items {
-                    item.include = true;
-                }
-            }
-
-            // Storage (fstab entries)
-            if let Some(ref mut storage) = snapshot.storage {
-                for entry in &mut storage.fstab_entries {
-                    entry.include = Some(true);
-                }
-            }
-        }
+        // Fleet prevalence narrowing is handled in the aggregate merge layer
+        // (merge.rs). Items below full prevalence arrive with include=false
+        // already set before the session sees them.
 
         let mut session = Self {
             original: snapshot,
@@ -573,6 +555,18 @@ impl RefineSession {
     pub fn apply(&mut self, op: RefinementOp) -> Result<(), RefineError> {
         // Validate target exists
         self.validate_target(&op)?;
+
+        // Short-circuit: locked items cannot be re-included.
+        // Must happen before the op is recorded to prevent stale ops
+        // from persisting in autosaved history.
+        if let RefinementOp::SetInclude {
+            ref item_id,
+            include: true,
+        } = op
+            && is_item_locked(&self.original, item_id)
+        {
+            return Ok(()); // silent no-op — op never recorded
+        }
 
         // Check idempotency
         if self.is_op_noop(&op) {
@@ -1382,6 +1376,11 @@ impl RefineSession {
         for op in &self.ops[..self.cursor] {
             match op {
                 RefinementOp::SetInclude { item_id, include } => {
+                    // Defense-in-depth: skip stale SetInclude(true) ops
+                    // from pre-locked autosaved sessions.
+                    if *include && is_item_locked(&self.original, item_id) {
+                        continue;
+                    }
                     match item_id {
                         ItemId::Package { name, arch } => {
                             if let Some(ref mut rpm) = snap.rpm
@@ -1724,6 +1723,11 @@ impl RefineSession {
             }
         }
 
+        // Defense-in-depth: clamp locked items to include=false regardless
+        // of op-stack state. Ensures renderers and exporters never see a
+        // locked item with include=true.
+        clamp_locked_items(&mut snap);
+
         snap
     }
 
@@ -1815,11 +1819,10 @@ impl RefineSession {
         // Packages the user explicitly excluded via ops remain visible so
         // the user can undo the exclusion.
         //
-        // Fleet gate exclusion: In fleet mode, the prevalence gate also sets
-        // include=false for non-universal items. Those must NOT be hidden —
-        // they should be visible but unchecked. We distinguish them by
-        // checking fleet prevalence: if count < total, the package was
-        // excluded by the fleet gate, not by normalization.
+        // In fleet mode, non-universal items arrive with include=false from
+        // the aggregate merge layer — those are NOT hidden here because they
+        // should remain visible but unchecked. The merge layer tags them with
+        // fleet prevalence data, so we can distinguish them from normalized deps.
         let is_fleet = matches!(self.refine_mode, RefineMode::Fleet(_));
         let hidden_deps: HashSet<(&str, &str)> = self
             .original
@@ -1832,8 +1835,9 @@ impl RefineSession {
                         if p.include {
                             return false;
                         }
-                        // In fleet mode, skip packages excluded by the fleet
-                        // prevalence gate — those should remain visible.
+                        // In fleet mode, skip packages excluded by the merge
+                        // layer's prevalence narrowing — those should remain
+                        // visible but unchecked.
                         if is_fleet
                             && let Some(ref fp) = p.fleet
                             && fp.count < fp.total
@@ -2173,6 +2177,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2180,6 +2185,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "i686".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2205,6 +2211,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2212,6 +2219,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2240,6 +2248,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2247,6 +2256,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2282,6 +2292,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2289,6 +2300,7 @@ mod tests {
                 name: "glibc".into(),
                 arch: "i686".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2321,6 +2333,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2328,6 +2341,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2357,6 +2371,7 @@ mod tests {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 state: PackageState::LocalInstall,
                 ..Default::default()
@@ -2365,6 +2380,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2398,6 +2414,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2405,6 +2422,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
                 ..Default::default()
@@ -2436,6 +2454,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2443,6 +2462,7 @@ mod tests {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -2712,6 +2732,7 @@ mod tests {
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Disable),
                         include: true,
+                        locked: false,
                         owning_package: Some("httpd".into()),
                         fleet: None,
                         attention_reason: None,
@@ -2721,6 +2742,7 @@ mod tests {
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Enable),
                         include: true,
+                        locked: false,
                         owning_package: Some("openssh-server".into()),
                         fleet: None,
                         attention_reason: None,
@@ -2734,6 +2756,7 @@ mod tests {
                         path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
                         content: "[Service]\nLimitNOFILE=65536".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     SystemdDropIn {
@@ -2741,6 +2764,7 @@ mod tests {
                         path: "/etc/systemd/system/httpd.service.d/timeout.conf".into(),
                         content: "[Service]\nTimeoutStartSec=120".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -2968,6 +2992,7 @@ mod tests {
                         name: "myapp.container".into(),
                         image: "quay.io/myorg/myapp:latest".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     QuadletUnit {
@@ -2975,6 +3000,7 @@ mod tests {
                         name: "db.container".into(),
                         image: "docker.io/library/postgres:16".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -2984,6 +3010,7 @@ mod tests {
                         remote: "flathub".into(),
                         branch: "stable".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                     FlatpakApp {
@@ -2991,6 +3018,7 @@ mod tests {
                         remote: "flathub".into(),
                         branch: "stable".into(),
                         include: true,
+                        locked: false,
                         ..Default::default()
                     },
                 ],
@@ -3127,6 +3155,7 @@ mod tests {
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                     SysctlOverride {
@@ -3135,6 +3164,7 @@ mod tests {
                         default: "60".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
+                        locked: false,
                         fleet: None,
                     },
                 ],
@@ -3261,6 +3291,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -3273,6 +3304,7 @@ mod tests {
                 name: "myapp.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             flatpak_apps: vec![FlatpakApp {
@@ -3280,6 +3312,7 @@ mod tests {
                 remote: "flathub".into(),
                 branch: "stable".into(),
                 include: true,
+                locked: false,
                 remote_url: "https://flathub.org/repo/".into(),
                 ..Default::default()
             }],
@@ -3294,6 +3327,7 @@ mod tests {
                 runtime: "1".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             tuned_include: true,
@@ -3414,6 +3448,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,
@@ -3453,6 +3488,7 @@ mod tests {
                     version: "1.24.0".into(),
                     release: "1.el9".into(),
                     include: true,
+                    locked: false,
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -3485,6 +3521,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: false,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,
@@ -3560,81 +3597,144 @@ mod tests {
         assert_eq!(ref_proj.version_changes.upgrades[0].name, "curl");
     }
 
-    // ── Single-host default normalization tests ───────────────────────
+    // ── Locked field enforcement tests ────────────────────────────────
 
     #[test]
-    fn single_host_quadlets_default_to_included() {
-        let mut snap = test_snapshot();
-        snap.containers = Some(ContainerSection {
-            quadlet_units: vec![
-                QuadletUnit {
-                    path: "/etc/containers/systemd/app.container".into(),
-                    name: "app.container".into(),
-                    include: false, // collector default
-                    ..Default::default()
-                },
-                QuadletUnit {
-                    path: "/etc/containers/systemd/db.container".into(),
-                    name: "db.container".into(),
-                    include: false, // collector default
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
+    fn set_include_on_locked_item_is_rejected() {
+        let mut snap = test_snapshot_with_services();
+        // Lock httpd.service to simulate a semantic exclusion
+        let services = snap.services.as_mut().unwrap();
+        services.state_changes[0].include = false;
+        services.state_changes[0].locked = true;
+
+        let mut session = RefineSession::new(snap);
+
+        // Attempting to re-include a locked service must be a silent no-op
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Service {
+                unit: "httpd.service".into(),
+            },
+            include: true,
         });
+        assert!(result.is_ok(), "locked set-include must not error");
 
-        let session = RefineSession::new(snap);
+        // The service must remain excluded
         let projected = session.snapshot_projected();
-        let containers = projected.containers.as_ref().unwrap();
+        let svc = projected.services.as_ref().unwrap();
+        let httpd = svc
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(!httpd.include, "locked service must stay excluded after set-include attempt");
 
-        for q in &containers.quadlet_units {
-            assert!(
-                q.include,
-                "single-host quadlet '{}' must default to included",
-                q.name
-            );
-        }
-    }
-
-    #[test]
-    fn single_host_tuned_defaults_to_included() {
-        use inspectah_core::types::kernelboot::KernelBootSection;
-
-        let mut snap = test_snapshot();
-        snap.kernel_boot = Some(KernelBootSection {
-            tuned_active: "virtual-guest".into(),
-            tuned_include: false, // collector excludes stock profiles
-            ..Default::default()
-        });
-
-        let session = RefineSession::new(snap);
-        let projected = session.snapshot_projected();
-        let kb = projected.kernel_boot.as_ref().unwrap();
-
+        // The op must NOT be recorded in history
         assert!(
-            kb.tuned_include,
-            "single-host tuned profile must default to included"
+            session.ops_history().is_empty(),
+            "locked set-include must not record an op"
         );
     }
 
     #[test]
-    fn single_host_tuned_empty_stays_excluded() {
-        use inspectah_core::types::kernelboot::KernelBootSection;
+    fn recompute_view_skips_locked_set_include_ops() {
+        let mut snap = test_snapshot_with_services();
+        let services = snap.services.as_mut().unwrap();
+        // Start unlocked and excluded
+        services.state_changes[0].include = false;
+        services.state_changes[0].locked = false;
 
-        let mut snap = test_snapshot();
-        snap.kernel_boot = Some(KernelBootSection {
-            tuned_active: String::new(),
-            tuned_include: false,
-            ..Default::default()
-        });
+        let mut session = RefineSession::new(snap);
 
-        let session = RefineSession::new(snap);
+        // Apply a valid include op while unlocked
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "httpd.service".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+
+        // Verify the op was recorded and the service is included
+        assert_eq!(session.ops_history().len(), 1);
         let projected = session.snapshot_projected();
-        let kb = projected.kernel_boot.as_ref().unwrap();
-
         assert!(
-            !kb.tuned_include,
-            "empty tuned_active must stay excluded even in single-host mode"
+            projected
+                .services
+                .as_ref()
+                .unwrap()
+                .state_changes
+                .iter()
+                .find(|s| s.unit == "httpd.service")
+                .unwrap()
+                .include,
+            "service must be included after unlocked set-include"
+        );
+
+        // Now simulate what happens when the item becomes locked in a
+        // newer snapshot but stale ops exist from the autosaved session.
+        // We do this by directly locking the original snapshot's item and
+        // forcing a recompute. This models resume_from() with a snapshot
+        // where the normalize layer now locks this item.
+        session.original.services.as_mut().unwrap().state_changes[0].locked = true;
+        session.original.services.as_mut().unwrap().state_changes[0].include = false;
+        session.cached_view = None;
+        session.cached_decisions = None;
+        session.recompute_view();
+
+        // The stale SetInclude(true) op must be skipped during replay
+        let projected = session.snapshot_projected();
+        let httpd = projected
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(
+            !httpd.include,
+            "locked service must stay excluded even with stale include op in history"
+        );
+    }
+
+    #[test]
+    fn export_clamp_forces_locked_items_excluded() {
+        // Verify clamp_locked_items forces include=false on locked items
+        // even if the working snapshot somehow has include=true.
+        let mut snap = test_snapshot_with_services();
+        let services = snap.services.as_mut().unwrap();
+        // Simulate a locked item that somehow has include=true
+        services.state_changes[0].include = true;
+        services.state_changes[0].locked = true;
+
+        clamp_locked_items(&mut snap);
+
+        let httpd = snap
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "httpd.service")
+            .unwrap();
+        assert!(
+            !httpd.include,
+            "clamp must force locked item to include=false"
+        );
+
+        // Verify unlocked items are not affected
+        let sshd = snap
+            .services
+            .as_ref()
+            .unwrap()
+            .state_changes
+            .iter()
+            .find(|s| s.unit == "sshd.service")
+            .unwrap();
+        assert!(
+            sshd.include,
+            "clamp must not affect unlocked items"
         );
     }
 }

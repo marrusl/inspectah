@@ -209,6 +209,7 @@ fn scan_cron_dir(
             path: strip_leading_slash(&file_path),
             source: cron_source.clone(),
             rpm_owned: is_rpm_owned,
+            include: true,
             ..Default::default()
         });
 
@@ -253,6 +254,7 @@ fn scan_cron_file(
         path: strip_leading_slash(file_path),
         source: source.into(),
         rpm_owned: is_rpm_owned,
+        include: true,
         ..Default::default()
     });
 
@@ -319,6 +321,7 @@ fn parse_cron_entries(
                         cron_expr: "@reboot".into(),
                         source_path: rel_path,
                         command,
+                        include: true,
                         ..Default::default()
                     });
                 } else {
@@ -331,6 +334,7 @@ fn parse_cron_entries(
                         cron_expr: shortcut.into(),
                         source_path: rel_path,
                         command,
+                        include: true,
                         ..Default::default()
                     });
                 }
@@ -375,6 +379,7 @@ fn parse_cron_entries(
             cron_expr,
             source_path: rel_path,
             command,
+            include: true,
             ..Default::default()
         });
     }
@@ -431,6 +436,7 @@ fn scan_cron_period_dir(
             path: rel_path.clone(),
             source: format!("cron.{period}"),
             rpm_owned: is_rpm_owned,
+            include: true,
             ..Default::default()
         });
 
@@ -460,6 +466,7 @@ fn scan_cron_period_dir(
             cron_expr: format!("@{period}"),
             source_path: rel_path,
             command,
+            include: true,
             ..Default::default()
         });
     }
@@ -811,6 +818,7 @@ fn scan_systemd_timers(
             path: strip_leading_slash(&timer_path),
             timer_content: timer_text,
             service_content: service_text,
+            include: true,
             ..Default::default()
         });
     }
@@ -854,6 +862,7 @@ fn parse_at_job(content: &str, rel_path: &str) -> AtJob {
     if content.is_empty() {
         return AtJob {
             file: rel_path.into(),
+            include: true,
             ..Default::default()
         };
     }
@@ -912,6 +921,7 @@ fn parse_at_job(content: &str, rel_path: &str) -> AtJob {
         command,
         user,
         working_dir,
+        include: true,
         ..Default::default()
     }
 }
@@ -1606,6 +1616,124 @@ mod tests {
                 );
             }
             other => panic!("expected Failed error for None rpm_state, got: {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // include: true collector defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn collected_cron_jobs_have_include_true() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc/cron.d", vec!["backup"])
+            .with_file(
+                "/etc/cron.d/backup",
+                "0 2 * * * root /opt/backup.sh\n",
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ScheduledTasksInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::ScheduledTasks(ref section) = output.section {
+            for job in &section.cron_jobs {
+                assert!(
+                    job.include,
+                    "collected CronJob '{}' should have include: true",
+                    job.path
+                );
+            }
+            for timer in &section.generated_timer_units {
+                assert!(
+                    timer.include,
+                    "generated timer '{}' should have include: true",
+                    timer.name
+                );
+            }
+        } else {
+            panic!("expected ScheduledTasks section");
+        }
+    }
+
+    #[test]
+    fn collected_systemd_timers_have_include_true() {
+        let timer_content = "[Unit]\nDescription=Test timer\n\n\
+            [Timer]\nOnCalendar=daily\nPersistent=true\n\n\
+            [Install]\nWantedBy=timers.target\n";
+        let service_content = "[Unit]\nDescription=Test\n\n\
+            [Service]\nType=oneshot\nExecStart=/usr/bin/test\n";
+
+        let exec = MockExecutor::new()
+            .with_dir(
+                "/etc/systemd/system",
+                vec!["test.timer", "test.service"],
+            )
+            .with_file("/etc/systemd/system/test.timer", timer_content)
+            .with_file("/etc/systemd/system/test.service", service_content);
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ScheduledTasksInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::ScheduledTasks(ref section) = output.section {
+            for timer in &section.systemd_timers {
+                assert!(
+                    timer.include,
+                    "collected SystemdTimer '{}' should have include: true",
+                    timer.name
+                );
+            }
+        } else {
+            panic!("expected ScheduledTasks section");
+        }
+    }
+
+    #[test]
+    fn collected_at_jobs_have_include_true() {
+        let at_content = "#!/bin/sh\n# mail appuser 0\n/opt/run.sh\n";
+        let exec = MockExecutor::new()
+            .with_dir("/var/spool/at", vec!["a00001"])
+            .with_file("/var/spool/at/a00001", at_content);
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ScheduledTasksInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::ScheduledTasks(ref section) = output.section {
+            for job in &section.at_jobs {
+                assert!(
+                    job.include,
+                    "collected AtJob '{}' should have include: true",
+                    job.file
+                );
+            }
+        } else {
+            panic!("expected ScheduledTasks section");
         }
     }
 }

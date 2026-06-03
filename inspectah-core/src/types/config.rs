@@ -42,11 +42,15 @@ pub struct ConfigFileEntry {
     pub rpm_va_flags: Option<String>,
     pub package: Option<String>,
     pub diff_against_rpm: Option<String>,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -66,7 +66,10 @@ pub struct ServiceStateChange {
     pub current_state: ServiceUnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     pub owning_package: Option<String>,
     pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,11 +103,15 @@ pub struct SystemdDropIn {
     pub path: String,
     #[serde(default)]
     pub content: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -129,6 +136,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -138,6 +146,7 @@ mod tests {
                     current_state: ServiceUnitState::Masked,
                     default_state: None,
                     include: true,
+                    locked: false,
                     owning_package: Some("cups".into()),
                     fleet: None,
                     attention_reason: None,
@@ -162,6 +171,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: Some("firewalld".into()),
             fleet: None,
             attention_reason: None,
@@ -171,6 +181,7 @@ mod tests {
             current_state: ServiceUnitState::Disabled,
             default_state: Some(PresetDefault::Enable),
             include: true,
+            locked: false,
             owning_package: Some("openssh-server".into()),
             fleet: None,
             attention_reason: None,
@@ -180,6 +191,7 @@ mod tests {
             current_state: ServiceUnitState::Masked,
             default_state: None,
             include: true,
+            locked: false,
             owning_package: Some("cups".into()),
             fleet: None,
             attention_reason: None,
@@ -197,6 +209,7 @@ mod tests {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: Some("firewalld".into()),
             fleet: None,
             attention_reason: None,
@@ -210,6 +223,7 @@ mod tests {
             current_state: ServiceUnitState::Masked,
             default_state: None,
             include: true,
+            locked: false,
             owning_package: Some("cups".into()),
             fleet: None,
             attention_reason: None,
@@ -273,5 +287,22 @@ mod tests {
             err.to_string().contains("default_state"),
             "expected missing-field error, got: {err}"
         );
+    }
+
+    // -- Serde backward-compat contract tests ---------------------------------
+    // Verify that JSON without `include` deserializes with include=true.
+
+    #[test]
+    fn service_without_include_deserializes_as_true() {
+        let json = r#"{"unit":"test.service","current_state":"enabled","default_state":null}"#;
+        let sc: ServiceStateChange = serde_json::from_str(json).unwrap();
+        assert!(sc.include, "missing include field should deserialize as true");
+    }
+
+    #[test]
+    fn dropin_without_include_deserializes_as_true() {
+        let json = r#"{"unit":"test.service","path":"/etc/systemd/system/test.service.d/override.conf","content":"[Service]\nRestart=always"}"#;
+        let di: SystemdDropIn = serde_json::from_str(json).unwrap();
+        assert!(di.include, "missing include field should deserialize as true");
     }
 }

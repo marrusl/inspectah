@@ -23,7 +23,7 @@ fn session_file_path_strips_tgz() {
 #[test]
 fn session_state_serde_roundtrip() {
     let state = SessionState {
-        schema_version: 1,
+        schema_version: 2,
         tarball_path: PathBuf::from("/tmp/test.tar.gz"),
         tarball_hash: ContentHash::from_content(b"tarball"),
         ops: vec![],
@@ -32,7 +32,7 @@ fn session_state_serde_roundtrip() {
     };
     let json = serde_json::to_string_pretty(&state).unwrap();
     let parsed: SessionState = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.schema_version, 1);
+    assert_eq!(parsed.schema_version, 2);
     assert_eq!(parsed.cursor, 0);
 }
 
@@ -42,7 +42,7 @@ fn atomic_save_and_load() {
     let tarball = dir.path().join("test.tar.gz");
     std::fs::write(&tarball, b"fake tarball").unwrap();
     let state = SessionState {
-        schema_version: 1,
+        schema_version: 2,
         tarball_path: tarball.clone(),
         tarball_hash: ContentHash::from_content(b"fake tarball"),
         ops: vec![],
@@ -91,7 +91,7 @@ fn stale_detection_different_hash() {
     let tarball = dir.path().join("test.tar.gz");
     std::fs::write(&tarball, b"original").unwrap();
     let state = SessionState {
-        schema_version: 1,
+        schema_version: 2,
         tarball_path: tarball.clone(),
         tarball_hash: ContentHash::from_content(b"original"),
         ops: vec![],

@@ -87,6 +87,7 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             include: true,
+            locked: false,
             owning_package: None,
             fleet: None,
             attention_reason: None,

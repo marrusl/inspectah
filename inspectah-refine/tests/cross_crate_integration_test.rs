@@ -65,6 +65,7 @@ fn snapshot_with_full_baseline() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
@@ -73,6 +74,7 @@ fn snapshot_with_full_baseline() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 include: true,
+                locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -208,6 +210,7 @@ fn service_surface_agreement() {
                 current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
+                locked: false,
                 owning_package: None,
                 fleet: None,
                 attention_reason: None,
@@ -217,6 +220,7 @@ fn service_surface_agreement() {
                 current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
+                locked: false,
                 owning_package: None,
                 fleet: None,
                 attention_reason: None,

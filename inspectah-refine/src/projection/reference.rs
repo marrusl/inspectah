@@ -512,6 +512,9 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
             mount_point: e.mount_point.clone(),
             fstype: e.fstype.clone(),
             options: e.options.clone(),
+            include: e.include,
+            locked: e.locked,
+            attention_reason: e.attention_reason.clone(),
         })
         .collect();
 
@@ -1058,6 +1061,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1100,6 +1104,7 @@ mod tests {
                     path: "/etc/systemd/system/chronyd.service.d/override.conf".into(),
                     content: "[Service]\nExecStart=".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 preset_matched_units: vec!["chronyd.service".into()],
@@ -1186,6 +1191,7 @@ mod tests {
                     path: "/etc/systemd/system/phantom.service.d/10-custom.conf".into(),
                     content: "[Service]\nRestart=always".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 preset_matched_units: Vec::new(),
@@ -1216,6 +1222,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("httpd".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1227,6 +1234,7 @@ mod tests {
                     path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                     content: "[Service]\nLimitNOFILE=65536".into(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 preset_matched_units: Vec::new(),
@@ -1255,6 +1263,7 @@ mod tests {
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     include: true,
+                    locked: false,
                     owning_package: Some("firewalld".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1327,6 +1336,7 @@ mod tests {
                     current_state: ServiceUnitState::Masked,
                     default_state: None,
                     include: true,
+                    locked: false,
                     owning_package: Some("cups".into()),
                     fleet: None,
                     attention_reason: None,
@@ -1431,6 +1441,7 @@ mod tests {
                         },
                     ],
                     include: true,
+                    locked: false,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2117,6 +2128,41 @@ mod tests {
         assert_eq!(result.fstab_entries[0].mount_point, "/boot");
         assert_eq!(result.fstab_entries[0].fstype, "xfs");
         assert_eq!(result.fstab_entries[0].options, "defaults");
+        assert!(result.fstab_entries[0].include);
+        assert!(!result.fstab_entries[0].locked);
+        assert!(result.fstab_entries[0].attention_reason.is_none());
+    }
+
+    #[test]
+    fn test_fstab_locked_entry_surfaces_reason() {
+        let snap = InspectionSnapshot {
+            storage: Some(StorageSection {
+                fstab_entries: vec![FstabEntry {
+                    device: "/dev/sda1".into(),
+                    mount_point: "/boot".into(),
+                    fstype: "xfs".into(),
+                    options: "defaults".into(),
+                    include: false,
+                    locked: true,
+                    attention_reason: Some(
+                        "host state \u{2014} not image-portable".into(),
+                    ),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_storage(&snap);
+
+        assert_eq!(result.fstab_entries.len(), 1);
+        assert!(!result.fstab_entries[0].include);
+        assert!(result.fstab_entries[0].locked);
+        assert_eq!(
+            result.fstab_entries[0].attention_reason.as_deref(),
+            Some("host state \u{2014} not image-portable"),
+        );
     }
 
     #[test]

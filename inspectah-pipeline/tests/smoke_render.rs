@@ -28,6 +28,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 include: true,
+                locked: false,
                 owning_package: None,
                 fleet: None,
                 attention_reason: None,
@@ -37,6 +38,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 current_state: ServiceUnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
                 include: true,
+                locked: false,
                 owning_package: None,
                 fleet: None,
                 attention_reason: None,
@@ -49,6 +51,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
             path: "etc/systemd/system/httpd.service.d/override.conf".into(),
             content: "[Service]\nLimitNOFILE=65535\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         preset_matched_units: Vec::new(),
@@ -95,6 +98,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
             default: "0".into(),
             source: "/etc/sysctl.d/99-custom.conf".into(),
             include: true,
+            locked: false,
             fleet: None,
         }],
         modules_load_d: vec![ConfigSnippet {
@@ -479,6 +483,7 @@ fn credential_refs_in_secrets_review() {
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=supersecret\n".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()

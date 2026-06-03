@@ -151,6 +151,7 @@ export function ServiceSection({
         const badge = badgeTextForTriage(svc.triage);
         const level = triageBucketToAttention(svc.triage);
         const isPending = pendingIds.has(`service:${svc.unit}`);
+        const svcLocked = svc.locked === true;
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -159,12 +160,15 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
+              aria-describedby={svcLocked ? `locked-reason-service-${svc.unit}` : undefined}
               tabIndex={idx === 0 ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
-              className="inspectah-decision-row"
+              data-locked={svcLocked ? "true" : undefined}
+              className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
               style={{ borderLeft }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
+                if (svcLocked) return;
                 if (e.key === " " || e.key === "x") {
                   e.preventDefault();
                   handleToggleService(svc.unit, svc.include);
@@ -179,8 +183,8 @@ export function ServiceSection({
                     id={`switch-service-${svc.unit}`}
                     checked={svc.include}
                     onChange={() => handleToggleService(svc.unit, svc.include)}
-                    disabled={isPending}
-                    aria-label={`Toggle ${svc.unit}`}
+                    disabled={isPending || svcLocked}
+                    aria-label={svcLocked ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})` : `Toggle ${svc.unit}`}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
@@ -198,12 +202,24 @@ export function ServiceSection({
                     </span>
                   )}
                 </div>
-                {badge && (
+                {badge && !svcLocked && (
                   <div
                     role="gridcell"
                     className="inspectah-decision-row__badge"
                   >
                     <Label color={attentionLabelColor(level)}>{badge}</Label>
+                  </div>
+                )}
+                {svcLocked && (
+                  <div
+                    role="gridcell"
+                    className="inspectah-decision-row__badge"
+                    id={`locked-reason-service-${svc.unit}`}
+                    data-testid={`locked-badge-service-${svc.unit}`}
+                  >
+                    <Label color="grey" isCompact>
+                      {svc.attention_reason ?? "LOCKED"}
+                    </Label>
                   </div>
                 )}
               </div>
@@ -217,16 +233,19 @@ export function ServiceSection({
               const diBadge = badgeTextForTriage(di.triage);
               const diLevel = triageBucketToAttention(di.triage);
               const diPending = pendingIds.has(`dropin:${di.path}`);
-              const disabled = parentExcluded || diPending;
+              const diLocked = di.locked === true || svcLocked;
+              const disabled = parentExcluded || diPending || diLocked;
 
               return (
                 <div
                   key={di.path}
                   role="row"
                   aria-label={di.path}
-                  tabIndex={-1}
+                  aria-describedby={diLocked ? `locked-reason-dropin-${di.path}` : undefined}
+                  tabIndex={diLocked ? 0 : -1}
                   data-testid={`dropin-item-${di.path}`}
-                  className="inspectah-decision-row inspectah-service-dropin"
+                  data-locked={diLocked ? "true" : undefined}
+                  className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
                   style={{
                     borderLeft: diBorder,
                     paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
@@ -259,7 +278,7 @@ export function ServiceSection({
                         checked={di.include}
                         onChange={() => handleToggleDropin(di.path, di.include)}
                         disabled={disabled}
-                        aria-label={`Toggle ${di.path}`}
+                        aria-label={diLocked ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})` : `Toggle ${di.path}`}
                         aria-disabled={parentExcluded}
                         style={{ minWidth: 20, minHeight: 20 }}
                       />
@@ -276,7 +295,7 @@ export function ServiceSection({
                         {di.path}
                       </span>
                     </div>
-                    {parentExcluded && (
+                    {parentExcluded && !diLocked && (
                       <div
                         role="gridcell"
                         className="inspectah-decision-row__badge"
@@ -289,7 +308,19 @@ export function ServiceSection({
                         </Label>
                       </div>
                     )}
-                    {!parentExcluded && diBadge && (
+                    {diLocked && (
+                      <div
+                        role="gridcell"
+                        className="inspectah-decision-row__badge"
+                        id={`locked-reason-dropin-${di.path}`}
+                        data-testid={`locked-badge-dropin-${di.path}`}
+                      >
+                        <Label color="grey" isCompact>
+                          {di.attention_reason ?? "LOCKED"}
+                        </Label>
+                      </div>
+                    )}
+                    {!parentExcluded && !diLocked && diBadge && (
                       <div
                         role="gridcell"
                         className="inspectah-decision-row__badge"

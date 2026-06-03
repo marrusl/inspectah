@@ -1,7 +1,7 @@
 use super::fleet::FleetPrevalence;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FstabEntry {
     #[serde(default)]
     pub device: String,
@@ -11,12 +11,32 @@ pub struct FstabEntry {
     pub fstype: String,
     #[serde(default)]
     pub options: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
+}
+
+impl Default for FstabEntry {
+    fn default() -> Self {
+        Self {
+            include: true,
+            device: Default::default(),
+            mount_point: Default::default(),
+            fstype: Default::default(),
+            options: Default::default(),
+            locked: Default::default(),
+            acknowledged: Default::default(),
+            fleet: Default::default(),
+            attention_reason: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -65,9 +65,12 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
         // credential=, private_key=, access_key=, secret_key=, *_key= (compound
         // forms only — bare "key=" is too broad for config files).
+        // Uses (?:^|\b|_) instead of bare \b so compound forms like
+        // iscsi_password= or db_password= are caught (underscore is a word
+        // character, so \b alone misses mid-identifier boundaries).
         SecretPattern {
             regex: Regex::new(
-                r"(?i)\b(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
+                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,

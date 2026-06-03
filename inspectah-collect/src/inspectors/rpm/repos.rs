@@ -75,6 +75,7 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
             content,
             is_default_repo: is_default,
             include: !is_default,
+            locked: false,
             fleet: None,
         });
     }
@@ -134,6 +135,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                     content,
                     is_default_repo: false,
                     include: true,
+                    locked: false,
                     fleet: None,
                 });
             } else {
@@ -151,6 +153,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                     ),
                     is_default_repo: false,
                     include: false,
+                    locked: false,
                     fleet: None,
                 });
             }

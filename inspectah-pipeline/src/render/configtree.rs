@@ -311,10 +311,8 @@ pub fn write_config_tree(
             }
         }
         // Custom tuned profiles — written to tuned/ (promoted root),
-        // not config/. Single-host snapshots (no fleet_meta) treat tuned
-        // as included when a profile is active.
-        let tuned_included =
-            kb.tuned_include || (snap.fleet_meta.is_none() && !kb.tuned_active.is_empty());
+        // not config/. Gated on include flag (set by collectors / fleet merge).
+        let tuned_included = kb.tuned_include;
         if tuned_included {
             for tp in &kb.tuned_custom_profiles {
                 if !tp.path.is_empty() {
@@ -415,12 +413,9 @@ pub fn write_config_tree(
         }
     }
 
-    // Quadlet units — single-host snapshots (no fleet_meta) treat all
-    // quadlets as included by default.
-    let is_single_host = snap.fleet_meta.is_none();
     if let Some(ref containers) = snap.containers {
         for u in &containers.quadlet_units {
-            if (!u.include && !is_single_host) || u.name.is_empty() || u.content.is_empty() {
+            if !u.include || u.name.is_empty() || u.content.is_empty() {
                 continue;
             }
             let quadlet_dir = output_dir.join("quadlet");
@@ -428,12 +423,10 @@ pub fn write_config_tree(
             let _ = std::fs::write(quadlet_dir.join(&u.name), &u.content);
         }
 
-        // Flatpak manifest and provisioning service — single-host snapshots
-        // treat all flatpaks as included (same principle as quadlets above).
         let included_flatpaks: Vec<_> = containers
             .flatpak_apps
             .iter()
-            .filter(|app| app.include || is_single_host)
+            .filter(|app| app.include)
             .collect();
         if !included_flatpaks.is_empty() {
             let flatpak_dir = output_dir.join("flatpak");
@@ -709,6 +702,7 @@ mod tests {
                 path: path.to_string(),
                 content: content.to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -722,6 +716,7 @@ mod tests {
                 path: path.to_string(),
                 content: content.to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -759,6 +754,7 @@ mod tests {
                 path: "etc/pki/rpm-gpg/RPM-GPG-KEY-test".to_string(),
                 content: "-----BEGIN PGP PUBLIC KEY BLOCK-----".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -846,6 +842,7 @@ mod tests {
                 path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
                 content: "[Service]\nLimitNOFILE=65535".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -885,6 +882,7 @@ mod tests {
                 timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".to_string(),
                 service_content: "[Service]\nExecStart=/usr/bin/backup".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -940,6 +938,7 @@ mod tests {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -963,6 +962,7 @@ mod tests {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -991,6 +991,7 @@ mod tests {
                 name: "public".to_string(),
                 content: "<zone>...</zone>".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1036,6 +1037,7 @@ mod tests {
                 path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
                 content: "[connection]".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1056,6 +1058,7 @@ mod tests {
                 path: "/etc/containers/systemd/myapp.container".to_string(),
                 content: "[Container]".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1183,6 +1186,7 @@ mod tests {
                 path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1194,6 +1198,7 @@ mod tests {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1227,6 +1232,7 @@ mod tests {
                 name: "myapp.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1238,6 +1244,7 @@ mod tests {
                     path: "/etc/containers/systemd/myapp.container".to_string(),
                     content: "[Container]\nImage=quay.io/test:latest".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 // A non-quadlet config file should still be materialized
@@ -1245,6 +1252,7 @@ mod tests {
                     path: "/etc/httpd/conf/httpd.conf".to_string(),
                     content: "ServerRoot /etc/httpd".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
             ],
@@ -1290,6 +1298,7 @@ mod tests {
                 name: "excluded.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
                 include: false,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1304,16 +1313,16 @@ mod tests {
     }
 
     #[test]
-    fn test_single_host_quadlet_materialized_by_default() {
-        // Single-host snapshots (no fleet_meta) materialize quadlets
-        // even when include=false (the raw serde default).
+    fn test_included_quadlet_materialized() {
+        // Quadlets with include=true (set by collectors) are materialized.
         let mut snap = InspectionSnapshot::new();
         snap.containers = Some(ContainerSection {
             quadlet_units: vec![QuadletUnit {
                 path: "/etc/containers/systemd/app.container".to_string(),
                 name: "app.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
-                include: false,
+                include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1323,14 +1332,13 @@ mod tests {
 
         assert!(
             dir.path().join("quadlet/app.container").exists(),
-            "single-host quadlet must be written to quadlet/"
+            "included quadlet must be written to quadlet/"
         );
     }
 
     #[test]
     fn test_excluded_flatpak_not_materialized() {
-        // Fleet context: explicit include=false is honored (prevalence-based).
-        // Single-host snapshots override include=false for flatpaks.
+        // Flatpaks with include=false are not materialized.
         let mut snap = InspectionSnapshot::new();
         snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
             label: "test".into(),
@@ -1346,6 +1354,8 @@ mod tests {
                 origin: "flathub".to_string(),
                 branch: "stable".to_string(),
                 include: false,
+                locked: false,
+                fleet: None,
                 remote: "flathub".to_string(),
                 remote_url: "https://flathub.org/repo/".to_string(),
             }],
@@ -1397,6 +1407,7 @@ mod tests {
                 runtime: "1".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -1407,6 +1418,7 @@ mod tests {
                 path: "/etc/sysctl.d/99-custom.conf".to_string(),
                 content: "net.ipv4.ip_forward = 1".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });
@@ -1431,6 +1443,7 @@ mod tests {
                     runtime: "1".to_string(),
                     source: "/etc/sysctl.d/99-custom.conf".to_string(),
                     include: true,
+                    locked: false,
                     ..Default::default()
                 },
                 SysctlOverride {
@@ -1471,6 +1484,7 @@ mod tests {
                 path: "/etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=test".to_string(),
                 include: true,
+                locked: false,
                 ..Default::default()
             }],
         });

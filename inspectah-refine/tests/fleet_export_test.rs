@@ -12,8 +12,10 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
 /// Build a single-host snapshot (no fleet_meta) with one config file.
 fn single_host_snapshot() -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.schema_version = 17;
+    let mut snap = InspectionSnapshot {
+        schema_version: 17,
+        ..Default::default()
+    };
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "httpd".into(),
@@ -21,6 +23,7 @@ fn single_host_snapshot() -> InspectionSnapshot {
             state: PackageState::Added,
             source_repo: "appstream".into(),
             include: true,
+            locked: false,
             ..Default::default()
         }],
         ..Default::default()
@@ -31,6 +34,7 @@ fn single_host_snapshot() -> InspectionSnapshot {
             kind: ConfigFileKind::RpmOwnedModified,
             content: "ServerRoot /etc/httpd".into(),
             include: true,
+            locked: false,
             variant_selection: VariantSelection::Only,
             ..Default::default()
         }],
@@ -70,6 +74,7 @@ fn fleet_snapshot_with_variants() -> InspectionSnapshot {
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "ServerRoot /etc/httpd\nMaxClients 256".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 ..Default::default()
             },
@@ -78,6 +83,7 @@ fn fleet_snapshot_with_variants() -> InspectionSnapshot {
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "ServerRoot /etc/httpd\nMaxClients 128".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 ..Default::default()
             },
@@ -86,6 +92,7 @@ fn fleet_snapshot_with_variants() -> InspectionSnapshot {
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "vm.swappiness = 10".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 ..Default::default()
             },
@@ -318,6 +325,8 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=90".into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -331,6 +340,8 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=120".into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -364,6 +375,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 content: "[Container]\nImage=quay.io/app:v1".into(),
                 image: "quay.io/app:v1".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -379,6 +391,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 content: "[Container]\nImage=quay.io/app:v2".into(),
                 image: "quay.io/app:v2".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,

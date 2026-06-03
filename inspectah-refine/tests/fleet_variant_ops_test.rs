@@ -27,21 +27,24 @@ fn make_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![
             ConfigFileEntry {
                 path: path.into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -55,6 +58,7 @@ fn make_variant_snapshot(
                 path: path.into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -77,20 +81,23 @@ fn make_single_variant_snapshot(
     content: &str,
     host_count: usize,
 ) -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: path.into(),
             content: content.into(),
             include: true,
+            locked: false,
             variant_selection: VariantSelection::Only,
             fleet: Some(FleetPrevalence {
                 count: host_count as i32,
@@ -661,15 +668,17 @@ fn make_dropin_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.services = Some(ServiceSection {
         drop_ins: vec![
             SystemdDropIn {
@@ -677,6 +686,8 @@ fn make_dropin_variant_snapshot(
                 path: path.into(),
                 content: content_a.into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -690,6 +701,8 @@ fn make_dropin_variant_snapshot(
                 path: path.into(),
                 content: content_b.into(),
                 include: true,
+                locked: false,
+                attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -715,15 +728,17 @@ fn make_quadlet_variant_snapshot(
     count_b: i32,
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.containers = Some(ContainerSection {
         quadlet_units: vec![
             QuadletUnit {
@@ -732,6 +747,7 @@ fn make_quadlet_variant_snapshot(
                 content: content_a.into(),
                 image: "quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: count_a,
@@ -747,6 +763,7 @@ fn make_quadlet_variant_snapshot(
                 content: content_b.into(),
                 image: "quay.io/test:latest".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: count_b,
@@ -767,15 +784,17 @@ fn make_quadlet_variant_snapshot(
 /// Build a fleet snapshot with two Compose variants (different images lists).
 fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
     let host_count = 5;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.containers = Some(ContainerSection {
         compose_files: vec![
             ComposeFile {
@@ -785,6 +804,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     image: "nginx:1.24".into(),
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -800,6 +820,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     image: "nginx:1.25".into(),
                 }],
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -1110,15 +1131,17 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
     // Create snapshot with two config paths, each having variants.
     // Hash from path A used as based_on for EditVariant on path B should fail.
     let host_count = 5;
-    let mut snap = InspectionSnapshot::default();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count,
-        hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
-        merged_at: "2026-05-21T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    let mut snap = InspectionSnapshot {
+        fleet_meta: Some(FleetSnapshotMeta {
+            label: "test".into(),
+            host_count,
+            hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
+            merged_at: "2026-05-21T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
     snap.config = Some(ConfigSection {
         files: vec![
             // Path A
@@ -1126,6 +1149,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-content".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 3,
@@ -1139,6 +1163,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-variant-2".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 2,
@@ -1153,6 +1178,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-content".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Selected,
                 fleet: Some(FleetPrevalence {
                     count: 4,
@@ -1171,6 +1197,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-variant-2".into(),
                 include: true,
+                locked: false,
                 variant_selection: VariantSelection::Alternative,
                 fleet: Some(FleetPrevalence {
                     count: 1,

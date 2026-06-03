@@ -25,8 +25,10 @@ pub struct QuadletUnit {
     pub content: String,
     #[serde(default)]
     pub image: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
@@ -52,14 +54,16 @@ pub struct ComposeFile {
     pub path: String,
     #[serde(default)]
     pub images: Vec<ComposeService>,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunningContainer {
     #[serde(default)]
     pub id: String,
@@ -83,12 +87,36 @@ pub struct RunningContainer {
     pub env: Vec<String>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub inspect_data: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<bool>,
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetPrevalence>,
+}
+
+impl Default for RunningContainer {
+    fn default() -> Self {
+        Self {
+            include: true,
+            id: Default::default(),
+            name: Default::default(),
+            image: Default::default(),
+            image_id: Default::default(),
+            status: Default::default(),
+            restart_policy: Default::default(),
+            mounts: Default::default(),
+            networks: Default::default(),
+            ports: Default::default(),
+            env: Default::default(),
+            inspect_data: Default::default(),
+            locked: Default::default(),
+            acknowledged: Default::default(),
+            fleet: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,8 +127,12 @@ pub struct FlatpakApp {
     pub origin: String,
     #[serde(default)]
     pub branch: String,
-    #[serde(default)]
+    #[serde(default = "crate::default_true")]
     pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub remote: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -137,5 +169,12 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ContainerSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn quadlet_without_include_deserializes_as_true() {
+        let json = r#"{"path":"/etc/containers/systemd/myapp.container","name":"myapp.container","content":"","image":"quay.io/myorg/myapp:latest"}"#;
+        let q: QuadletUnit = serde_json::from_str(json).unwrap();
+        assert!(q.include, "missing include field should deserialize as true");
     }
 }

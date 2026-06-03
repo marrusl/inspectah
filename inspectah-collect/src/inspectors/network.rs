@@ -191,6 +191,7 @@ fn collect_nm_connections(
                 name: stem,
                 method,
                 conn_type,
+                include: true,
                 ..Default::default()
             });
         }
@@ -386,6 +387,7 @@ fn collect_firewall_zones(
                     services: result.services,
                     ports: result.ports,
                     rich_rules: result.rich_rules,
+                    include: true,
                     ..Default::default()
                 });
             }
@@ -421,6 +423,7 @@ fn parse_passthrough_tag(tag_text: &str, content: &str) -> Option<FirewallDirect
         chain,
         priority: "0".to_string(),
         args,
+        include: true,
         ..Default::default()
     })
 }
@@ -1063,7 +1066,7 @@ mod tests {
     #[test]
     fn proxy_redaction_hint_for_credentials() {
         let content = "https_proxy=http://user:secret@proxy:8080\n";
-        let exec = MockExecutor::new().with_file("/etc/environment", &content);
+        let exec = MockExecutor::new().with_file("/etc/environment", content);
 
         let mut section = NetworkSection::default();
         let mut hints = Vec::new();
@@ -1112,5 +1115,66 @@ mod tests {
         assert!(!is_proxy_line("# this is a comment"));
         assert!(!is_proxy_line("EDITOR=vim"));
         assert!(!is_proxy_line(""));
+    }
+
+    // -----------------------------------------------------------------------
+    // include: true collector defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn collected_nm_connections_have_include_true() {
+        let text = fixture("eth0.nmconnection");
+        let exec = MockExecutor::new()
+            .with_dir(
+                "/etc/NetworkManager/system-connections",
+                vec!["eth0.nmconnection"],
+            )
+            .with_file("/etc/NetworkManager/system-connections/eth0.nmconnection", &text);
+
+        let mut section = NetworkSection::default();
+        let mut degraded = Vec::new();
+        collect_nm_connections(&exec, &mut section, &mut degraded);
+
+        assert_eq!(section.connections.len(), 1);
+        assert!(
+            section.connections[0].include,
+            "collected NMConnection should have include: true"
+        );
+    }
+
+    #[test]
+    fn collected_firewall_zones_have_include_true() {
+        let xml = fixture("public-zone.xml");
+        let exec = MockExecutor::new()
+            .with_dir("/etc/firewalld/zones", vec!["public.xml"])
+            .with_file("/etc/firewalld/zones/public.xml", &xml);
+
+        let mut section = NetworkSection::default();
+        let mut warnings = Vec::new();
+        let mut degraded = Vec::new();
+        collect_firewall_zones(&exec, &mut section, &mut warnings, &mut degraded);
+
+        assert_eq!(section.firewall_zones.len(), 1);
+        assert!(
+            section.firewall_zones[0].include,
+            "collected FirewallZone should have include: true"
+        );
+    }
+
+    #[test]
+    fn collected_firewall_direct_rules_have_include_true() {
+        let xml = fixture("direct.xml");
+        let exec = MockExecutor::new().with_file("/etc/firewalld/direct.xml", &xml);
+
+        let mut section = NetworkSection::default();
+        collect_firewall_direct_rules(&exec, &mut section);
+
+        assert!(!section.firewall_direct_rules.is_empty());
+        for rule in &section.firewall_direct_rules {
+            assert!(
+                rule.include,
+                "collected FirewallDirectRule should have include: true"
+            );
+        }
     }
 }

@@ -341,9 +341,7 @@ fn baseline_digest_fallback_repo_digests() {
                 "nsenter -t 1 -m -u -i -n -- podman inspect --format {{{{index .RepoDigests 0}}}} {}",
                 TEST_IMAGE
             ),
-            ok_with_stdout(&format!(
-                "registry.redhat.io/rhel9/rhel-bootc@sha256:fallback999\n"
-            )),
+            ok_with_stdout("registry.redhat.io/rhel9/rhel-bootc@sha256:fallback999\n"),
         );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
