@@ -483,6 +483,7 @@ fn walk_for_elf_binaries(
                 r#static: bc.is_static,
                 shared_libs: bc.shared_libs,
                 version,
+                include: true,
                 ..Default::default()
             });
             continue;
@@ -497,6 +498,7 @@ fn walk_for_elf_binaries(
                 method: "file scan".to_string(),
                 confidence: "low".to_string(),
                 version,
+                include: true,
                 ..Default::default()
             });
         }
@@ -541,6 +543,7 @@ fn scan_python_venvs(
                 confidence: "high".to_string(),
                 system_site_packages: venv.system_site_packages,
                 packages: pip_packages,
+                include: true,
                 ..Default::default()
             });
         }
@@ -757,6 +760,7 @@ fn scan_pip_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                         method: "pip dist-info".to_string(),
                         confidence: "medium".to_string(),
                         packages: vec![PipPackage { name, version }],
+                        include: true,
                         ..Default::default()
                     });
                 }
@@ -787,6 +791,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                         method: "npm lockfile".to_string(),
                         confidence: "high".to_string(),
                         version: pkg.version,
+                        include: true,
                         ..Default::default()
                     });
                 }
@@ -864,6 +869,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                         method: "gem lockfile".to_string(),
                         confidence: "high".to_string(),
                         version: gem.version,
+                        include: true,
                         ..Default::default()
                     });
                 }
@@ -1024,6 +1030,7 @@ fn find_git_configs(
                 method: "git repo".to_string(),
                 confidence: "high".to_string(),
                 git_remote: remote_url,
+                include: true,
                 ..Default::default()
             });
             continue; // Don't recurse into .git.
@@ -1946,6 +1953,60 @@ mod tests {
                 );
             }
             _ => unreachable!(),
+        }
+    }
+
+    // ---- Test 23: collector items have include true ----
+
+    #[test]
+    fn test_collected_items_have_include_true() {
+        // ELF binary via readelf should have include: true.
+        let exec = MockExecutor::new()
+            .with_command(
+                "readelf --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "file --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec![".git", "src"])
+            .with_dir("/opt/myapp/.git", vec!["config"])
+            .with_file("/opt/myapp/.git/config", git_config_fixture())
+            .with_dir("/opt/myapp/src", vec![])
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = NonRpmInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::NonRpmSoftware(section) = &output.section {
+            assert!(!section.items.is_empty(), "should have at least one item");
+            for item in &section.items {
+                assert!(
+                    item.include,
+                    "collected NonRpmItem '{}' should have include: true",
+                    item.name
+                );
+            }
+        } else {
+            panic!("expected NonRpmSoftware section");
         }
     }
 }
