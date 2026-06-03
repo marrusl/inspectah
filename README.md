@@ -162,12 +162,10 @@ Set environment variables to customize behavior:
 
 ## Documentation
 
-Full documentation is available at [https://marrusl.github.io/inspectah/](https://marrusl.github.io/inspectah/):
-
-- [Tutorials](https://marrusl.github.io/inspectah/tutorials/) — step-by-step guides for common tasks
-- [How-to Guides](https://marrusl.github.io/inspectah/how-to/) — recipes for specific scenarios
-- [Reference](https://marrusl.github.io/inspectah/reference/) — CLI commands, inspector catalog, output format
-- [Explanation](https://marrusl.github.io/inspectah/explanation/) — concepts, architecture, design decisions
+- [Tutorials](docs/tutorials/) — step-by-step guides for common tasks
+- [How-to Guides](docs/how-to/) — recipes for specific scenarios
+- [Reference](docs/reference/) — CLI commands, inspector catalog, output format
+- [Explanation](docs/explanation/) — concepts, architecture, design decisions
 
 ## License
 
