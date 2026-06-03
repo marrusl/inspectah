@@ -160,6 +160,7 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
+              aria-describedby={svcLocked ? `locked-reason-service-${svc.unit}` : undefined}
               tabIndex={idx === 0 ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
@@ -183,7 +184,7 @@ export function ServiceSection({
                     checked={svc.include}
                     onChange={() => handleToggleService(svc.unit, svc.include)}
                     disabled={isPending || svcLocked}
-                    aria-label={svcLocked ? `${svc.unit} (locked)` : `Toggle ${svc.unit}`}
+                    aria-label={svcLocked ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})` : `Toggle ${svc.unit}`}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
@@ -213,6 +214,7 @@ export function ServiceSection({
                   <div
                     role="gridcell"
                     className="inspectah-decision-row__badge"
+                    id={`locked-reason-service-${svc.unit}`}
                     data-testid={`locked-badge-service-${svc.unit}`}
                   >
                     <Label color="grey" isCompact>
@@ -239,7 +241,8 @@ export function ServiceSection({
                   key={di.path}
                   role="row"
                   aria-label={di.path}
-                  tabIndex={-1}
+                  aria-describedby={diLocked ? `locked-reason-dropin-${di.path}` : undefined}
+                  tabIndex={diLocked ? 0 : -1}
                   data-testid={`dropin-item-${di.path}`}
                   data-locked={diLocked ? "true" : undefined}
                   className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
@@ -275,7 +278,7 @@ export function ServiceSection({
                         checked={di.include}
                         onChange={() => handleToggleDropin(di.path, di.include)}
                         disabled={disabled}
-                        aria-label={`Toggle ${di.path}`}
+                        aria-label={diLocked ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})` : `Toggle ${di.path}`}
                         aria-disabled={parentExcluded}
                         style={{ minWidth: 20, minHeight: 20 }}
                       />
@@ -309,6 +312,7 @@ export function ServiceSection({
                       <div
                         role="gridcell"
                         className="inspectah-decision-row__badge"
+                        id={`locked-reason-dropin-${di.path}`}
                         data-testid={`locked-badge-dropin-${di.path}`}
                       >
                         <Label color="grey" isCompact>

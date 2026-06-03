@@ -239,6 +239,7 @@ export function DecisionItem({
       role="row"
       aria-rowindex={rowIndex}
       aria-label={name}
+      aria-describedby={locked ? `locked-reason-${id}` : undefined}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
@@ -262,7 +263,7 @@ export function DecisionItem({
               onChange={handleToggle}
               onClick={(e) => e.stopPropagation()}
               disabled={isPending || locked}
-              aria-label={locked ? `${name} (locked)` : `Toggle ${name}`}
+              aria-label={locked ? `${name} (locked: ${reasonText ?? "cannot toggle"})` : `Toggle ${name}`}
             />
           </div>
         )}
@@ -299,6 +300,7 @@ export function DecisionItem({
           <div
             role="gridcell"
             className="inspectah-decision-row__badge"
+            id={`locked-reason-${id}`}
             data-testid={`locked-badge-${id}`}
           >
             <Label color="grey" isCompact>
