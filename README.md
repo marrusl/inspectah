@@ -8,7 +8,7 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
 
 ```bash
 # 1. Install inspectah
-sudo dnf copr enable marrusl/inspectah
+sudo dnf copr enable mrussell/inspectah
 sudo dnf install inspectah
 
 # 2. Scan your system (run on the host you want to migrate)
@@ -26,7 +26,7 @@ The tarball contains a `Containerfile`, `config/` tree, `audit-report.md`, and a
 ### RPM (Fedora / RHEL / CentOS Stream)
 
 ```bash
-sudo dnf copr enable marrusl/inspectah
+sudo dnf copr enable mrussell/inspectah
 sudo dnf install inspectah
 ```
 
