@@ -125,6 +125,16 @@ The browser opens automatically with the Refine dashboard. From here you can:
 
 Refine works on both single-host inspection tarballs and fleet-aggregated tarballs.
 
+#### Terminal UI (experimental)
+
+For terminal-based editing, use the `--tui` flag:
+
+```bash
+inspectah refine --tui hostname-*.tar.gz
+```
+
+The TUI provides keyboard-driven navigation and inline item toggling without leaving the terminal. This is an experimental feature — the browser-based workflow is recommended for most users.
+
 ### Fleet Aggregation
 
 For managing multiple hosts, use `inspectah fleet`:
