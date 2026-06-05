@@ -32,7 +32,7 @@ with `--no-baseline`, but classification quality degrades significantly.
 ### RPM (Fedora / RHEL / CentOS Stream)
 
 ```bash
-sudo dnf copr enable marrusl/inspectah
+sudo dnf copr enable mrussell/inspectah
 sudo dnf install inspectah
 ```
 
