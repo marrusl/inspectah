@@ -71,8 +71,9 @@ hostname-20260312-143000.tar.gz
     │   ├── etc/                      # Modified configs, repos, firewall, timers
     │   ├── opt/                      # Non-RPM software (venvs, npm apps, binaries)
     │   └── usr/                      # Files under /usr/local
+    ├── kickstart-suggestion.ks       # Suggested deploy-time settings (hostname, networking)
     ├── quadlet/                      # Container workload unit files (conditional)
-    ├── inspectah-users.toml          # bootc-image-builder user config (conditional)
+    ├── inspectah-users.toml          # bootc-image-builder user config
     └── subscription/                 # RHEL subscription material (conditional)
         ├── entitlement/              # Cert/key pairs
         ├── rhsm/                     # CA certs + rhsm.conf
