@@ -23,7 +23,7 @@ cd inspectah
 cargo build
 ```
 
-The workspace compiles six crates in dependency order. A clean build
+The workspace compiles seven crates in dependency order. A clean build
 typically takes 1-2 minutes.
 
 For a release build with optimizations:
@@ -36,20 +36,22 @@ The resulting binary is at `target/release/inspectah`.
 
 ## Workspace structure
 
-inspectah is a Cargo workspace with six member crates:
+inspectah is a Cargo workspace with seven member crates:
 
 | Crate | Purpose |
 |---|---|
 | `inspectah-core` | Shared traits (`Inspector`, `Executor`, `ProgressSink`), type definitions, and snapshot structures |
 | `inspectah-collect` | Inspector implementations -- each inspector gathers data from one system domain |
 | `inspectah-pipeline` | Orchestrates collection, rendering, and output generation |
-| `inspectah-cli` | Command-line interface and progress display |
-| `inspectah-web` | Web UI (refine interface) for interactive triage |
 | `inspectah-refine` | Refinement engine -- decision persistence, fleet consensus, section promotion |
+| `inspectah-web` | Web UI (refine interface) for interactive triage |
+| `inspectah-tui` | Terminal UI for interactive triage (ratatui-based alternative to the web UI) |
+| `inspectah-cli` | Command-line interface and progress display |
 
-Dependencies flow downward: `inspectah-cli` depends on `inspectah-pipeline`,
-which depends on `inspectah-collect` and `inspectah-core`. The `inspectah-web`
-and `inspectah-refine` crates handle the interactive refinement layer.
+Dependencies flow downward: `inspectah-cli` depends on all other crates.
+`inspectah-web` and `inspectah-tui` both depend on `inspectah-refine` and
+`inspectah-core`. `inspectah-refine` depends on `inspectah-pipeline` and
+`inspectah-core`.
 
 <div id="diagram-software-architecture-contrib">
   <iframe

@@ -73,8 +73,10 @@ hostname-20260312-143000.tar.gz
     │   └── usr/                      # Files under /usr/local
     ├── quadlet/                      # Container workload unit files (conditional)
     ├── inspectah-users.toml          # bootc-image-builder user config (conditional)
-    ├── entitlement/                  # RHEL subscription certs (conditional)
-    └── rhsm/                         # RHEL subscription manager config (conditional)
+    └── subscription/                 # RHEL subscription material (conditional)
+        ├── entitlement/              # Cert/key pairs
+        ├── rhsm/                     # CA certs + rhsm.conf
+        └── redhat.repo               # Red Hat repo definition
 ```
 
 Use `--output <dir>` to get an unpacked directory instead of a tarball.
@@ -86,6 +88,7 @@ Use `--output <dir>` to get an unpacked directory instead of a tarball.
 | `scan` | Scan the current system and produce a migration snapshot |
 | `refine` | Interactively refine scan output and re-render artifacts |
 | `fleet` | Aggregate and manage fleet-wide migration snapshots |
+| `build` | Build a bootc container image from an inspectah tarball |
 | `version` | Print version, commit, and build date |
 
 For full command-line reference, see the [CLI documentation](https://marrusl.github.io/inspectah/reference/cli.html).
@@ -98,7 +101,7 @@ Common flags for `inspectah scan`:
 - `--no-baseline` — Skip baseline extraction (degraded classification mode, faster but less accurate)
 - `--preserve-password-hashes` — Preserve password hashes for users with status `password_set`
 - `--preserve-ssh-keys` — Preserve full SSH `authorized_keys` content per user
-- `--acknowledge-sensitive` — Required when using `--preserve-*` flags (acknowledges snapshot contains sensitive data)
+- `--ack-sensitive` — Required when using `--preserve-*` flags (acknowledges snapshot contains sensitive data). Alias: `--acknowledge-sensitive`
 - `--progress <MODE>` — Progress display: `rich` (default TTY), `plain` (durable scrollback), `flat` (CI/non-TTY)
 - `-o, --output <PATH>` — Output file path (tarball) or directory
 - `-v, --verbose` — Show sub-step detail for all inspectors
@@ -140,14 +143,14 @@ The TUI provides keyboard-driven navigation and inline item toggling without lea
 For managing multiple hosts, use `inspectah fleet`:
 
 ```bash
-# Initialize a fleet directory from scan outputs
-inspectah fleet init ./my-fleet/ host1.tar.gz host2.tar.gz host3.tar.gz
+# Generate a fleet manifest from a directory of tarballs
+inspectah fleet init ./scans/
 
-# Aggregate the fleet into a single migration spec
-inspectah fleet aggregate ./my-fleet/
+# Aggregate the fleet into a single fleet tarball
+inspectah fleet aggregate --manifest fleet.toml
 
 # Refine the aggregated output
-inspectah refine ./my-fleet/fleet-aggregate-*.tar.gz
+inspectah refine fleet-*.tar.gz
 ```
 
 Fleet mode finds the intersection of packages/configs across hosts and identifies per-host exceptions.
@@ -163,12 +166,12 @@ Each step consumes and produces tarballs. Refine and Fleet are optional.
 
 ## Configuration
 
-Set environment variables to customize behavior:
+inspectah does not use a configuration file. Behavior is controlled through CLI flags and environment variables:
 
 | Variable | Effect |
 |----------|--------|
-| `INSPECTAH_HOSTNAME` | Override the reported hostname |
-| `INSPECTAH_DEBUG` | Set to `1` to enable debug logging |
+| `INSPECTAH_PROGRESS` | Override progress display mode (`rich`, `plain`, `flat`). Takes effect when no `--progress` CLI flag is provided. |
+| `NO_COLOR` | Disable ANSI color output (follows [no-color.org](https://no-color.org/) convention). |
 
 ## Documentation
 

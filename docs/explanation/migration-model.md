@@ -172,10 +172,7 @@ workflow aggregates scans from many hosts and shows item prevalence — "this
 package is on 47 of 50 hosts" — so the sysadmin can make informed decisions
 about what belongs in the shared image versus what's host-specific.
 
-The planned **architect** capability will extend this further by proposing
-layered image topologies for complex environments — a base layer shared by all
-hosts, with derived layers for different roles. This is a future direction; the
-core scan-refine-build-fleet workflow is available today.
+The core scan-refine-build-fleet workflow is available today.
 
 ## Putting it together
 

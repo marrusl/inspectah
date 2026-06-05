@@ -108,7 +108,7 @@ inspectah runs a four-stage pipeline:
 1. **Detect** the OS and resolve a matching base image
 2. **Pull** the base image (you will see download progress)
 3. **Inspect** the system — RPMs, configs, services, users, repos,
-   containers, storage, and more (11 inspectors total)
+   containers, storage, and more (12 inspectors total)
 4. **Render** migration artifacts and package them into a tarball
 
 A typical scan takes 30--90 seconds depending on the number of installed

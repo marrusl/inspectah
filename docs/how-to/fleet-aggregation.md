@@ -237,10 +237,3 @@ two hosts may be host-specific customizations.
 For details on how items are classified during triage, see the
 [Triage Classification](../reference/triage-classification.md) reference.
 
----
-
-{: .note }
-> **Planned future capability:** A higher-level analysis layer for
-> fleet-wide decision support is under development but not yet available
-> in the current CLI. The fleet workflow above covers the full scanning,
-> aggregation, and refinement pipeline available today.

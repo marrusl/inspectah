@@ -14,7 +14,13 @@ image build.
 
 - A scan output tarball (`.tar.gz`) from a previous `inspectah scan` run
 
-## Start the refine server
+## Choose your interface
+
+inspectah refine offers two interfaces: a **web UI** (default) and a
+**terminal UI**. Both provide the same refinement capabilities -- section
+navigation, item toggling, search, export, and session persistence.
+
+### Web UI (default)
 
 ```bash
 inspectah refine ./scan-output.tar.gz
@@ -32,6 +38,20 @@ To suppress the browser launch:
 ```bash
 inspectah refine --open false ./scan-output.tar.gz
 ```
+
+### Terminal UI
+
+For environments without a browser (SSH sessions, headless servers, or
+personal preference), use the terminal UI:
+
+```bash
+inspectah refine --tui ./scan-output.tar.gz
+```
+
+The TUI renders directly in your terminal using a keyboard-driven
+interface. Press `?` to see available keybindings. The TUI shares the
+same session persistence as the web UI -- switching between them
+preserves your progress.
 
 ## Navigate the dashboard
 
@@ -91,6 +111,18 @@ decided not to carry forward.
 
 When you toggle a repository, all packages sourced from that repository
 are affected as a batch.
+
+### Locked items
+
+Some items display as locked -- their include/exclude state is visible but
+the toggle is disabled. Locked items carry a reason explaining why they
+cannot be changed (e.g., "Baseline package" or "Required dependency").
+These represent non-negotiable decisions where toggling would produce an
+invalid Containerfile.
+
+In the web UI, locked items appear with a lock icon and a reason badge.
+In the TUI, locked items are marked with a lock indicator and cannot be
+selected for toggling.
 
 ## Handle version changes
 

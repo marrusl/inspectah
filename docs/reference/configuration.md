@@ -59,6 +59,15 @@ for the full command reference.
 | `--keep-context` | Keep the extracted build context after build completes. |
 | `[-- <PODMAN_ARGS>...]` | Additional arguments to pass to `podman build`. |
 
+## CLI flags (refine)
+
+| Flag | Description |
+|:-----|:------------|
+| `--port <PORT>` | Port to bind the web UI (default: 8642, use 0 for ephemeral). |
+| `--open <true\|false>` | Open browser automatically (default: true). Use `--no-open` to suppress. |
+| `--fresh` | Start a fresh session, discarding any saved progress. |
+| `--tui` | Use terminal UI instead of web browser. |
+
 ## CLI flags (fleet aggregate)
 
 | Flag | Description |
@@ -70,6 +79,7 @@ for the full command reference.
 | `--json-only` | Write JSON snapshot to stdout (or file) instead of tarball. |
 | `--strict` | Treat aggregation warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |
+| `--ack-sensitive` | Acknowledge that the merged output may contain sensitive data. Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive`. |
 
 ## CLI flags (fleet init)
 

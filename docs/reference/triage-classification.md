@@ -214,24 +214,46 @@ Triage classification applies across all inspected sections:
 
 ## Include/exclude and the Containerfile
 
-Every classified item has an `include` flag that determines whether it
-appears in the generated Containerfile. The default value depends on the
-triage bucket:
+### Unified include-default model
 
-| Bucket | Default include | Rationale |
+All 25 toggleable item types default to `include: true` at the schema level.
+This is the unified include-default model: items start included and are
+narrowed during triage classification and fleet aggregation, not expanded
+from an excluded default. The `include` field uses a `default_true` serde
+helper so that snapshots from older schema versions deserialize correctly.
+
+After classification, items are excluded in two ways:
+
+1. **Baseline subtraction** -- items matching the base image are excluded
+   during the scan pipeline.
+2. **Fleet prevalence narrowing** -- in fleet mode, items below the
+   consensus threshold are excluded during the aggregate merge pass.
+
+The net effect after classification:
+
+| Bucket | Effective include | Rationale |
 |---|---|---|
-| Baseline | No | Already in the base image |
-| Site | Yes (leaf packages and non-orphaned configs) | User customization to reproduce |
-| Investigate | Varies by section | Packages: excluded by default (user reviews and adds if needed). Config files: included by default. |
-| Universal | Yes (maps to Baseline for include logic; items also in the base image are then removed by baseline subtraction) | Fleet consensus item. Included unless baseline subtraction removes it. |
-| Partial | No | Not universal across fleet |
-| Divergent | No | Below fleet consensus threshold |
+| Baseline | No | Excluded by baseline subtraction |
+| Site | Yes | User customization to reproduce |
+| Investigate | Varies by section | Packages: excluded by default. Config files: included. |
+| Universal | Yes | Fleet consensus item |
+| Partial | No | Excluded by prevalence narrowing |
+| Divergent | No | Excluded by prevalence narrowing |
 
-In fleet mode, items that are not present on all hosts (`count < total`) are
-excluded by default regardless of their single-host classification.
+### Locked items
 
-Users can override any item's include/exclude state in the refine UI. The
-Containerfile is regenerated from the current include states when exported.
+Some items carry a `locked: true` flag that prevents toggling in the refine
+UI (both web and TUI). Locked items display their include/exclude state but
+the toggle is disabled. A reason string explains why the item is locked
+(e.g., "Baseline package" or "Required dependency").
+
+Locked items are set during classification and aggregate merge. They
+represent non-negotiable decisions -- items where toggling would produce an
+invalid or broken Containerfile.
+
+Users can override any **unlocked** item's include/exclude state in the refine
+UI. The Containerfile is regenerated from the current include states when
+exported.
 
 ### What "included" means in the Containerfile
 

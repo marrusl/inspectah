@@ -6,7 +6,7 @@ nav_order: 1
 
 # Architecture
 
-Inspectah is structured as a Rust workspace of six crates. This separation is
+Inspectah is structured as a Rust workspace of seven crates. This separation is
 deliberate: each crate owns one concern, and the boundaries between them
 reflect real architectural decisions about what should depend on what. This
 document explains both the structure and the reasoning behind it.
@@ -25,13 +25,13 @@ document explains both the structure and the reasoning behind it.
       Open interactive diagram
     </button>
   </div>
-  <p><em>The software architecture diagram shows how inspectah's six crates relate to each other and where the dependency boundaries fall.</em></p>
+  <p><em>The software architecture diagram shows how inspectah's seven crates relate to each other and where the dependency boundaries fall.</em></p>
 </div>
 {% endraw %}
 
 ## The workspace at a glance
 
-The six crates form a layered dependency graph:
+The seven crates form a layered dependency graph:
 
 | Crate | Purpose | Depends on |
 |-------|---------|------------|
@@ -40,6 +40,7 @@ The six crates form a layered dependency graph:
 | **inspectah-pipeline** | Orchestration, rendering, output generation | core, collect |
 | **inspectah-refine** | Interactive editing and re-rendering engine | core, pipeline |
 | **inspectah-web** | HTTP server, HTML reports, interactive UIs | core, pipeline, refine |
+| **inspectah-tui** | Terminal UI for interactive refinement | core, refine |
 | **inspectah-cli** | Binary entry point, argument parsing, subcommands | all of the above |
 
 Dependencies flow in one direction: from the CLI inward toward core. No crate
@@ -66,7 +67,10 @@ Core contains several important modules:
   `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
   `nonrpm`, `fleet`, `subscription`, and supporting types like `warnings`,
   `redaction`, `completeness`, and `preflight`. Each defines the serializable
-  structs that flow through the entire pipeline.
+  structs that flow through the entire pipeline. All 25 toggleable item types
+  use a unified include-default model: `include` fields default to `true`
+  via a `default_true` serde helper, and a `locked` boolean field prevents
+  toggling for non-negotiable decisions (e.g., baseline-subtracted items).
 - **traits/** -- The `Inspector`, `Renderer`, `Detector`, `Executor`, and
   `Progress` traits that define the contracts between crates. Collectors
   implement `Inspector`. Output generators implement `Renderer`. The executor
@@ -158,7 +162,12 @@ Pipeline's modules:
   assertions, and completeness verification.
 - **redaction/** -- Secret detection and redaction engine. Pattern-based
   scanning with configurable rules ensures credentials, API keys, and other
-  sensitive values never appear in output artifacts.
+  sensitive values never appear in output artifacts. The engine matches
+  password hashes, PEM certificate blocks, database connection strings
+  (including MongoDB URL structure preservation), and NSS/PAM tokens.
+  Comment-line filtering and false-positive filtering reduce noise.
+  Sub-modules: `engine.rs` (scan orchestration), `patterns.rs` (pattern
+  definitions and matching).
 - **render/** -- Output renderers, each implementing the `Renderer` trait:
   - `containerfile.rs` -- Generates a Containerfile with correctly ordered
     `RUN`, `COPY`, and `RUN dnf install` directives.
@@ -204,6 +213,9 @@ Refine's modules:
   view.
 - **tarball.rs** -- Packages the current refine session state for export.
 - **types.rs** -- Refine-specific request/response types for the web API.
+- **projection/** -- Snapshot projection for refine: applies user decisions
+  to the snapshot, computes reference data, and produces the projected
+  types consumed by renderers and the export path.
 - **fleet/** -- Fleet-specific refine logic: classification across hosts,
   variant diffing, and variant operations for the fleet refine UI.
 
@@ -215,8 +227,8 @@ API routes, and serves the interactive UIs for refine and fleet workflows.
 **Why web is separate from refine.** Refine is the engine -- it manages state
 and orchestrates re-rendering. Web is the transport -- it maps HTTP requests
 to refine operations and serves the resulting HTML. This separation means
-the refine engine could, in principle, be driven by a TUI or a CLI without
-any web server involvement.
+the refine engine can be driven by other frontends -- and it is: the TUI
+crate provides a terminal-based alternative (see below).
 
 Web's modules:
 
@@ -224,10 +236,43 @@ Web's modules:
   reports, processing toggle changes, and triggering re-renders.
 - **fleet_handlers.rs** -- Route handlers for fleet-specific operations:
   fleet report serving and fleet refine interactions.
+- **adapter.rs** -- Bridges refine session state to web response types.
+- **web_types.rs** -- Web-specific request and response types.
 - **assets.rs** -- Embedded static assets (HTML templates, CSS, JavaScript)
   compiled into the binary at build time.
 - **error.rs** -- HTTP error types and response formatting.
 - **lib.rs** -- Server construction and route registration using Axum.
+
+## inspectah-tui: the terminal interface
+
+TUI is an alternative frontend for the refine workflow. It provides the same
+interactive refinement experience as the web UI -- section navigation, item
+toggling, search, export -- but rendered entirely in the terminal using
+[ratatui](https://ratatui.rs/). Invoked via `inspectah refine --tui`.
+
+**Why TUI is a separate crate from web.** Web serves an HTTP-based UI with
+HTML/JS assets. TUI renders directly to the terminal using crossterm. They
+share no transport code, but both drive the same refine engine underneath.
+Keeping them separate means each frontend depends only on what it needs: TUI
+depends on refine and core, not on axum or web assets.
+
+TUI's modules:
+
+- **app.rs** -- Application state, main loop, and event dispatch.
+- **screen/** -- Screen-level layouts: `single_host.rs` for the primary refine
+  view.
+- **widget/** -- Reusable UI components: `section_nav.rs` (section sidebar),
+  `triage_list.rs` (item list with toggle controls), `detail_view.rs` (item
+  detail pane), `search.rs` (incremental search), `containerfile.rs`
+  (live Containerfile preview), `status_bar.rs`, `info_bar.rs`,
+  `help_screen.rs` (keybinding reference), `user_strategy.rs` (user
+  provisioning strategy selector), and `command_line.rs`.
+- **sections.rs** -- Maps snapshot sections to navigable TUI sections.
+- **keys.rs** -- Keybinding definitions.
+- **event.rs** -- Terminal event handling (keyboard, mouse, resize).
+- **action.rs** -- Action types that flow from events to state mutations.
+- **theme.rs** -- Color palette and styling.
+- **types.rs** -- TUI-specific type definitions.
 
 ## inspectah-cli: the entry point
 

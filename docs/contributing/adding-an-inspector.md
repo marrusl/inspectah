@@ -40,8 +40,22 @@ pub struct FirewallZone {
     pub target: String,
     #[serde(default)]
     pub services: Vec<String>,
+    /// Whether this item is included in the generated Containerfile.
+    /// Defaults to true (unified include-default model).
+    #[serde(default = "crate::default_true")]
+    pub include: bool,
+    /// When true, the UI prevents toggling this item's include state.
+    /// Used for non-negotiable decisions (e.g., baseline-subtracted items).
+    #[serde(default)]
+    pub locked: bool,
 }
 ```
+
+Every toggleable item type follows this pattern: `include` defaults to `true`
+via `crate::default_true`, and `locked` defaults to `false`. This is the
+unified include-default model -- all items start included and are narrowed
+during triage and fleet aggregation. Locked items cannot be toggled in the
+refine UI.
 
 Then register the module in `inspectah-core/src/types/mod.rs`:
 

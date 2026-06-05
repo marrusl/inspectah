@@ -301,3 +301,37 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 - Symlinks within subscription paths are followed; symlinks resolving outside approved roots are rejected with a warning.
 - Files over 1 MB are rejected.
 - Permission-denied errors produce warnings (not silent skips).
+
+---
+
+## Redaction engine
+
+The redaction engine runs as a pipeline stage after collection, before
+rendering. It is not an inspector but operates on inspector output.
+
+**Source:** `inspectah-pipeline/src/redaction/`
+{: .text-grey-dk-000 }
+
+### Pattern types
+
+| Pattern | What it matches | Example |
+|:--------|:---------------|:--------|
+| PasswordHash | Shadow-file password hash strings | `$6$rounds=...` |
+| PEM block | Full PEM certificate/key blocks (`-----BEGIN...-----END`) | Private keys, certificates |
+| Connection string | Database connection URLs (PostgreSQL, MySQL, MongoDB) | `mongodb://user:pass@host/db` |
+| NSS/PAM token | Sensitive tokens in NSS/PAM configuration files | `ldap_default_authtok` values |
+
+### Behaviors
+
+- **Comment-line filtering** -- lines beginning with `#` are excluded from
+  pattern matching to avoid false positives in commented-out configuration.
+- **False-positive filtering** -- known non-sensitive values (e.g., example
+  hostnames, placeholder strings) are filtered out before redaction.
+- **Structure preservation** -- connection string redaction preserves the URL
+  structure (scheme, host, path) while replacing credentials with
+  `[REDACTED]`. MongoDB connection strings preserve the
+  `mongodb://` prefix and database path.
+- **Inspector hints** -- inspectors emit `RedactionHint` values to flag
+  content they know is sensitive (e.g., sudoers env vars matching secret
+  patterns, SSH key material). The redaction engine uses these hints to
+  supplement pattern-based scanning.
