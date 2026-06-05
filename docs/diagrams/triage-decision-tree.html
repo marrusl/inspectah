@@ -189,6 +189,7 @@ svg.append('desc').text(
 // ─── Layout constants ───────────────────────────────────────────────
 const nodeW = 180;
 const nodeH = 64;
+const fleetNodeH = 84;
 const rootNodeW = 200;
 const rootNodeH = 72;
 const gapX = 80;
@@ -360,11 +361,11 @@ const shNodes = singleHostBranches.map(b => drawNode(nodeGroup, b, nodeW, nodeH)
 
 // ─── Draw fleet branch nodes with host-pattern icons ────────────────
 const flNodes = fleetBranches.map(b => {
-  const node = drawNode(nodeGroup, b, nodeW, nodeH);
+  const node = drawNode(nodeGroup, b, nodeW, fleetNodeH);
 
   // Draw host-pattern icon inside the node (bottom area)
   const iconG = node.append('g')
-    .attr('transform', `translate(${nodeW / 2 - 27}, ${nodeH - 22})`)
+    .attr('transform', `translate(${nodeW / 2 - 27}, ${fleetNodeH - 22})`)
     .attr('aria-hidden', 'true');
 
   const boxW = 14;
@@ -510,7 +511,7 @@ shLockG.append('text')
   .text('Classified items may be locked — prevents toggling in refine UI');
 
 // Fleet locked note (below fleet branches, centered)
-const flLockY = flBranchY + nodeH + 24;
+const flLockY = flBranchY + fleetNodeH + 24;
 
 const flLockG = lockAnnotation.append('g')
   .attr('transform', `translate(${shLockX}, ${flLockY})`);
@@ -535,9 +536,11 @@ flLockG.append('text')
 const allBranchNodes = [...shNodes, ...flNodes];
 allBranchNodes.forEach(node => {
   const d = node.datum();
+  const isFleet = fleetBranches.some(b => b.id === d.id);
+  const h = isFleet ? fleetNodeH : nodeH;
   node.append('text')
     .attr('x', nodeW / 2)
-    .attr('y', nodeH - 4)
+    .attr('y', h - 4)
     .attr('text-anchor', 'middle')
     .attr('fill', textDim)
     .attr('font-size', '9px')
@@ -612,12 +615,13 @@ function renderExpand(nodeId, isExpanded) {
   liveRegion.textContent = `${data.label} expanded. ${lines.length} details.`;
 
   const panelW = 260;
-  const lineH = 40;
+  const lineH = 58;
   const headerH = 32;
   const padV = 12;
   const panelH = headerH + lines.length * lineH + padV * 2;
   const panelX = data.x + (nodeW - panelW) / 2;
-  const panelY = data.y + nodeH + 16;
+  const nodeHeight = isSingleHost ? nodeH : fleetNodeH;
+  const panelY = data.y + nodeHeight + 16;
 
   const panel = panelGroup.append('g')
     .attr('class', `panel-${nodeId}`)
@@ -771,7 +775,7 @@ setupKeyboardNav(allNodeElements, {
 // ─── Initial centering ─────────────────────────────────────────────
 requestAnimationFrame(() => {
   const contentTop = shRootY - 60;
-  const contentBottom = flBranchY + nodeH + 220;
+  const contentBottom = flBranchY + fleetNodeH + 220;
   const contentLeft = Math.min(shStartX, flStartX) - 40;
   const contentRight = Math.max(
     shStartX + shTotalW,
