@@ -619,12 +619,13 @@ impl RichRenderer {
                     break;
                 }
                 // Lock order: state first, writer second.
+                // Hold state lock through redraw to prevent TOCTOU race
+                // with the event handler (both use state→writer order).
                 let mut st = tick_state.lock().expect("tick: state lock poisoned");
                 st.tick();
                 let lines = st.render_lines();
                 let prev_rendered = st.lines_rendered;
                 st.lines_rendered = lines.len();
-                drop(st);
 
                 let mut w = tick_writer.lock().expect("tick: writer lock poisoned");
                 redraw(&mut *w, &lines, prev_rendered);
@@ -643,12 +644,13 @@ impl RichRenderer {
     /// Process a progress event, updating state and triggering a redraw.
     pub fn handle(&self, event: ProgressEvent) {
         // Lock order: state first, writer second.
+        // Hold state lock through redraw to prevent TOCTOU race
+        // with the tick thread (both use state→writer order).
         let mut st = self.state.lock().expect("handle: state lock poisoned");
         st.handle_event(event);
         let lines = st.render_lines();
         let prev_rendered = st.lines_rendered;
         st.lines_rendered = lines.len();
-        drop(st);
 
         let mut w = self.writer.lock().expect("handle: writer lock poisoned");
         redraw(&mut *w, &lines, prev_rendered);
