@@ -63,13 +63,15 @@ const fleetOps = [
     label: 'Fleet Aggregate',
     sublabel: 'Consensus Matrix',
     color: 'rose',
-    tooltip: 'Combines per-host snapshots into a fleet-wide consensus view. Identifies common packages, shared configs, and divergent state across hosts.',
+    tooltip: 'Combines per-host snapshots into a fleet-wide consensus view. Identifies common packages, shared configs, and divergent state. Applies prevalence-based include narrowing.',
     children: [
       { text: 'Package consensus', detail: 'Identify packages common to all hosts vs. host-specific additions' },
       { text: 'Config convergence', detail: 'Detect configuration drift between hosts' },
       { text: 'Service alignment', detail: 'Compare enabled/running services across fleet' },
       { text: 'Repository union', detail: 'Combine repo definitions, flag per-host extras' },
       { text: 'Subscription merge', detail: 'Deduplicate subscription certs across hosts by latest expiry (--ack-sensitive required)' },
+      { text: 'Include narrowing', detail: 'Prevalence-based narrowing — items below consensus threshold get include: false' },
+      { text: 'Locked enforcement', detail: 'After narrowing, affected items get locked: true to prevent re-toggling in refine' },
     ],
   },
   {

@@ -480,6 +480,57 @@ const flNodes = fleetBranches.map(b => {
   return node;
 });
 
+// ─── Locked items annotation ──────────────────────────────────────
+// Post-classification attribute: items may carry locked: true to prevent
+// toggling in the refine UI. Drawn near the leaf nodes as a visual note.
+const lockAnnotation = g.append('g').attr('class', 'lock-annotation');
+
+// Single-host locked note (below single-host branches, centered)
+const shLockY = shBranchY + nodeH + 24;
+const shLockX = width / 2;
+
+const shLockG = lockAnnotation.append('g')
+  .attr('transform', `translate(${shLockX}, ${shLockY})`);
+
+// Lock icon (unicode padlock)
+shLockG.append('text')
+  .attr('x', -8)
+  .attr('y', 4)
+  .attr('text-anchor', 'middle')
+  .attr('fill', colors.amber.stroke)
+  .attr('font-size', '12px')
+  .text('🔒');
+
+shLockG.append('text')
+  .attr('x', 6)
+  .attr('y', 4)
+  .attr('text-anchor', 'start')
+  .attr('fill', textDim)
+  .attr('font-size', '10px')
+  .text('Classified items may be locked — prevents toggling in refine UI');
+
+// Fleet locked note (below fleet branches, centered)
+const flLockY = flBranchY + nodeH + 24;
+
+const flLockG = lockAnnotation.append('g')
+  .attr('transform', `translate(${shLockX}, ${flLockY})`);
+
+flLockG.append('text')
+  .attr('x', -8)
+  .attr('y', 4)
+  .attr('text-anchor', 'middle')
+  .attr('fill', colors.amber.stroke)
+  .attr('font-size', '12px')
+  .text('🔒');
+
+flLockG.append('text')
+  .attr('x', 6)
+  .attr('y', 4)
+  .attr('text-anchor', 'start')
+  .attr('fill', textDim)
+  .attr('font-size', '10px')
+  .text('Fleet narrowing applies locked: true to items below consensus threshold');
+
 // ─── Expand indicator hints ─────────────────────────────────────────
 const allBranchNodes = [...shNodes, ...flNodes];
 allBranchNodes.forEach(node => {
@@ -720,7 +771,7 @@ setupKeyboardNav(allNodeElements, {
 // ─── Initial centering ─────────────────────────────────────────────
 requestAnimationFrame(() => {
   const contentTop = shRootY - 60;
-  const contentBottom = flBranchY + nodeH + 200;
+  const contentBottom = flBranchY + nodeH + 220;
   const contentLeft = Math.min(shStartX, flStartX) - 40;
   const contentRight = Math.max(
     shStartX + shTotalW,

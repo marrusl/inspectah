@@ -111,6 +111,60 @@ const crates = [
     ],
     contract: 'build_router() — constructs axum Router with all API and static routes',
   },
+  {
+    id: 'tui',
+    label: 'inspectah-tui',
+    sublabel: 'Terminal UI',
+    tier: 'entry',
+    color: 'green',
+    deps: ['refine', 'core'],
+    tooltip: 'Terminal UI for interactive refinement (ratatui-based). Keyboard-driven alternative to the web UI.',
+    modules: [
+      {
+        name: 'app.rs',
+        desc: 'Application state',
+        children: [
+          { text: 'app.rs', detail: 'Main application struct, event loop, and state management' },
+        ],
+      },
+      {
+        name: 'screen/',
+        desc: 'Screen views',
+        children: [
+          { text: 'single_host.rs', detail: 'Single-host triage screen with section navigation' },
+        ],
+      },
+      {
+        name: 'widget/',
+        desc: 'UI widgets',
+        children: [
+          { text: 'section_nav', detail: 'Section navigation sidebar' },
+          { text: 'triage_list', detail: 'Scrollable item list with triage controls' },
+          { text: 'detail_view', detail: 'Item detail pane with metadata' },
+          { text: 'search', detail: 'Fuzzy search and filter bar' },
+          { text: 'containerfile', detail: 'Live Containerfile preview' },
+          { text: 'status_bar', detail: 'Status bar with counts and progress' },
+          { text: 'info_bar', detail: 'Contextual information display' },
+          { text: 'help_screen', detail: 'Keybinding help overlay' },
+          { text: 'user_strategy', detail: 'User/group migration strategy selector' },
+          { text: 'command_line', detail: 'Command input line for advanced operations' },
+        ],
+      },
+      {
+        name: 'support',
+        desc: 'Core support modules',
+        children: [
+          { text: 'sections.rs', detail: 'Section definitions and ordering' },
+          { text: 'keys.rs', detail: 'Keybinding configuration' },
+          { text: 'event.rs', detail: 'Terminal event handling (crossterm)' },
+          { text: 'action.rs', detail: 'Action dispatch and processing' },
+          { text: 'theme.rs', detail: 'Color theme and styling' },
+          { text: 'types.rs', detail: 'TUI-specific type definitions' },
+        ],
+      },
+    ],
+    contract: 'run_tui() — launches ratatui terminal, processes events, delegates to refine',
+  },
 
   // ── Orchestration (teal) ──
   {
@@ -149,6 +203,12 @@ const crates = [
         children: [
           { text: 'engine', detail: 'Core redaction engine — applies patterns to all string fields' },
           { text: 'patterns', detail: 'Built-in regex patterns for passwords, keys, tokens, connection strings' },
+          { text: 'PasswordHash', detail: 'Shadow password hash detection and redaction' },
+          { text: 'PEM blocks', detail: 'Private key and certificate PEM block detection' },
+          { text: 'Connection strings', detail: 'Database and service connection string credential masking' },
+          { text: 'NSS/PAM tokens', detail: 'NSS and PAM authentication token detection' },
+          { text: 'Comment-line filter', detail: 'Filters comment lines from false-positive matching' },
+          { text: 'False-positive filter', detail: 'Allowlist for known safe patterns (PAM files, etc.)' },
         ],
       },
       {
@@ -302,7 +362,7 @@ const crates = [
     tier: 'foundation',
     color: 'purple',
     deps: [],
-    tooltip: 'Foundation crate. Defines all shared types (Snapshot, RPM, Config, etc.), core traits (Inspector, Executor, Renderer), and fleet data structures. Zero business logic.',
+    tooltip: 'Foundation crate. Defines all shared types (Snapshot, RPM, Config, etc.), core traits (Inspector, Executor, Renderer), fleet data structures, default_true serde helper, and locked field support. Zero business logic.',
     modules: [
       {
         name: 'types/',
@@ -386,7 +446,7 @@ const nodeGap = 60;
 
 // Tier definitions and positioning
 const tiers = [
-  { id: 'entry',         label: 'ENTRY POINTS',   crateIds: ['cli', 'web'] },
+  { id: 'entry',         label: 'ENTRY POINTS',   crateIds: ['cli', 'web', 'tui'] },
   { id: 'orchestration', label: 'ORCHESTRATION',   crateIds: ['pipeline', 'refine'] },
   { id: 'collection',    label: 'COLLECTION',      crateIds: ['collect'] },
   { id: 'foundation',    label: 'FOUNDATION',      crateIds: ['core'] },
