@@ -11,10 +11,6 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .flow-dot { display: none !important; }
-      .iterate-arc { stroke-dasharray: 6,4 !important; animation: none !important; }
-    }
-    @keyframes arc-flow {
-      to { stroke-dashoffset: -20; }
     }
     .expand-children {
       font-size: 12px;
@@ -195,7 +191,6 @@ const fleetStages = [
       { text: 'inspectah fleet refine', detail: 'Interactive fleet review UI' },
       { text: 'Bulk accept / reject', detail: 'Apply decisions across all hosts' },
       { text: 'Per-host overrides', detail: 'Customize decisions for outlier hosts' },
-      { text: 'Iterate', detail: 'Re-scan hosts and re-aggregate as needed' },
     ],
     docLink: '../fleet-workflow.html',
   },
@@ -385,45 +380,6 @@ connectorDefs.forEach(c => {
     }
   }
 });
-
-// ─── Iterate loop arc (Fleet Refine → Fleet Init) ───────────────────
-const loopLayer = g.append('g').attr('class', 'iterate-loop');
-const fRefine = fleetStages[fleetStages.length - 1];
-const fInit = fleetStages[0];
-
-const arcStartX = fRefine.x + nodeW / 2;
-const arcStartY = fRefine.y + nodeH;
-const arcEndX = fInit.x + nodeW / 2;
-const arcEndY = fInit.y + nodeH;
-const arcMidY = fRefine.y + nodeH + 60;
-
-const arcPath = `M ${arcStartX} ${arcStartY} C ${arcStartX} ${arcMidY}, ${arcEndX} ${arcMidY}, ${arcEndX} ${arcEndY}`;
-
-const iterateArc = loopLayer.append('path')
-  .attr('class', 'iterate-arc')
-  .attr('d', arcPath)
-  .attr('fill', 'none')
-  .attr('stroke', colors.teal.stroke)
-  .attr('stroke-width', 1.5)
-  .attr('stroke-dasharray', '6,4')
-  .attr('opacity', 0.6)
-  .attr('marker-end', 'url(#arrow-teal)');
-
-if (!reducedMotion) {
-  iterateArc.style('animation', 'arc-flow 1s linear infinite');
-}
-
-// Loop label
-const arcLabelX = (arcStartX + arcEndX) / 2;
-const arcLabelY = arcMidY + 14;
-loopLayer.append('text')
-  .attr('x', arcLabelX)
-  .attr('y', arcLabelY)
-  .attr('text-anchor', 'middle')
-  .attr('fill', textDim)
-  .attr('font-size', '10px')
-  .attr('font-style', 'italic')
-  .text('iterate');
 
 // ─── Draw nodes ─────────────────────────────────────────────────────
 const nodeGroup = g.append('g').attr('class', 'nodes');
