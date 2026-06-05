@@ -186,6 +186,29 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         );
     }
 
+    if (args.preserve_password_hashes || args.preserve_ssh_keys || args.preserve_subscription)
+        && !args.ack_sensitive
+    {
+        let mut sensitive_items = Vec::new();
+        if args.preserve_subscription {
+            sensitive_items.push("subscription certs");
+        }
+        if args.preserve_password_hashes {
+            sensitive_items.push("password hashes");
+        }
+        if args.preserve_ssh_keys {
+            sensitive_items.push("SSH keys");
+        }
+
+        let items_list = sensitive_items.join(", ");
+
+        anyhow::bail!(
+            "Snapshot contains sensitive data ({}).\n\
+             To export, re-run with --ack-sensitive",
+            items_list
+        );
+    }
+
     let executor = RealExecutor::new();
 
     // Step 1: Detect source system
@@ -424,33 +447,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     }
 
     redact(&mut snapshot, &RedactOptions::default());
-
-    // Export gating: if snapshot contains sensitive data, require acknowledgment
-    if snapshot.sensitive_snapshot && !args.ack_sensitive {
-        // Build dynamic list of what sensitive data types are actually present
-        let mut sensitive_items = Vec::new();
-        if snapshot.preserved_subscription {
-            sensitive_items.push("subscription certs");
-        }
-        if snapshot.preserved_credentials {
-            sensitive_items.push("password hashes");
-        }
-        if snapshot.preserved_ssh_keys {
-            sensitive_items.push("SSH keys");
-        }
-
-        let items_list = if sensitive_items.is_empty() {
-            "sensitive data".to_string()
-        } else {
-            sensitive_items.join(", ")
-        };
-
-        anyhow::bail!(
-            "Snapshot contains sensitive data ({}).\n\
-             To export, re-run with --ack-sensitive",
-            items_list
-        );
-    }
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
