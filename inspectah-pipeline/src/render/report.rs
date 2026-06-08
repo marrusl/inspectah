@@ -2469,4 +2469,229 @@ mod tests {
             "incomplete sections must not render for complete snapshot"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Section parity test (T13 — spec proof #1)
+    // -----------------------------------------------------------------------
+
+    /// Build a snapshot with every section populated so all sections render.
+    fn fully_populated_snapshot() -> InspectionSnapshot {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
+        use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
+        use inspectah_core::types::selinux::SelinuxSection;
+        use inspectah_core::types::services::{
+            ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+        use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        use inspectah_core::types::warnings::Warning;
+
+        let mut snap = InspectionSnapshot::new();
+
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                version: "2.4.57".into(),
+                release: "5.el9".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/sysconfig/network".into(),
+                content: "NETWORKING=yes".into(),
+                include: true,
+                ..Default::default()
+            }],
+        });
+
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "httpd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: None,
+                include: true,
+                locked: false,
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
+            }],
+            ..Default::default()
+        });
+
+        snap.storage = Some(StorageSection {
+            fstab_entries: vec![FstabEntry {
+                device: "/dev/sda1".into(),
+                mount_point: "/boot".into(),
+                fstype: "xfs".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl_overrides: vec![SysctlOverride {
+                key: "net.ipv4.ip_forward".into(),
+                runtime: "1".into(),
+                default: "0".into(),
+                source: "/etc/sysctl.d/99-custom.conf".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.selinux = Some(SelinuxSection {
+            mode: "enforcing".into(),
+            ..Default::default()
+        });
+
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            cron_jobs: vec![CronJob {
+                path: "/etc/cron.d/backup".into(),
+                source: "file".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/usr/local/bin/node".into(),
+                name: "node".into(),
+                method: "path".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "testuser",
+                "uid": 1000,
+                "gid": 1000,
+                "shell": "/bin/bash",
+                "home": "/home/testuser",
+                "include": true,
+                "classification": "interactive",
+                "containerfile_strategy": "useradd",
+                "password_choice": "preserve"
+            })],
+            ..Default::default()
+        });
+
+        snap.warnings = vec![Warning {
+            inspector: "config".into(),
+            message: "test warning".into(),
+            ..Default::default()
+        }];
+
+        snap.redactions = vec![RedactionFinding {
+            path: "/etc/shadow".into(),
+            source: "config".into(),
+            kind: RedactionKind::Excluded,
+            pattern: "password_hash".into(),
+            remediation: String::new(),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: None,
+            finding_kind: None,
+        }];
+
+        snap
+    }
+
+    #[test]
+    fn test_section_parity_with_audit_report() {
+        let snap = fully_populated_snapshot();
+
+        let md = crate::render::audit::render_audit(&snap);
+        let html = render_report(&snap, &RenderContext { target: None });
+
+        // Extract markdown ## headings (top-level sections only)
+        let md_headings: Vec<&str> = md
+            .lines()
+            .filter(|l| l.starts_with("## "))
+            .map(|l| l.trim_start_matches("## "))
+            .collect();
+
+        // Extract HTML <details id="..."> IDs (section macro output)
+        let re = regex::Regex::new(r#"<details id="([^"]+)">"#).unwrap();
+        let html_ids: Vec<String> = re
+            .captures_iter(&html)
+            .map(|c| c[1].to_string())
+            .collect();
+
+        // Parity table: markdown heading → HTML section ID.
+        // Only sections present in BOTH renderers today.
+        // Users & Groups is HTML-only until T14 adds the audit heading.
+        let expected_mappings = vec![
+            ("Packages", "packages"),
+            ("Configuration Files", "config-files"),
+            ("Service State Changes", "services"),
+            ("Storage", "storage"),
+            ("Kernel & Boot", "kernel-boot"),
+            ("Scheduled Tasks", "scheduled-tasks"),
+            ("Security & Access Control", "security"),
+            ("Non-RPM Software", "nonrpm"),
+            ("Redactions", "redactions"),
+            ("Warnings", "warnings"),
+        ];
+
+        for (md_heading, html_id) in &expected_mappings {
+            assert!(
+                md_headings.contains(md_heading),
+                "markdown missing section: {md_heading}"
+            );
+            assert!(
+                html_ids.contains(&html_id.to_string()),
+                "HTML missing section ID: {html_id}"
+            );
+        }
+
+        // Verify users-groups is in HTML (even though audit.rs lacks it pre-T14)
+        assert!(
+            html_ids.contains(&"users-groups".to_string()),
+            "HTML must contain users-groups section"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Structure snapshot test (T13 — spec proof #11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_html_structure_snapshot() {
+        let snap = fully_populated_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+
+        // Replace vendored CSS, custom CSS, JS, and DTO JSON with
+        // placeholders so the snapshot is stable across asset changes.
+        let mut stable = html
+            .replace(PF_CSS, "/* PF_CSS_PLACEHOLDER */")
+            .replace(REPORT_CSS, "/* REPORT_CSS_PLACEHOLDER */")
+            .replace(REPORT_JS, "/* REPORT_JS_PLACEHOLDER */");
+
+        // Replace the filter-data JSON blob (changes with snapshot content)
+        if let Some(start) = stable.find(r#"id="report-filter-data">"#) {
+            let json_start = start + r#"id="report-filter-data">"#.len();
+            if let Some(end) = stable[json_start..].find("</script>") {
+                let end_abs = json_start + end;
+                stable.replace_range(json_start..end_abs, "/* FILTER_DATA_PLACEHOLDER */");
+            }
+        }
+
+        insta::assert_snapshot!(stable);
+    }
 }
