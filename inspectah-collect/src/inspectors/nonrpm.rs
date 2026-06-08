@@ -263,18 +263,6 @@ impl Inspector for NonRpmInspector {
         // Deduplicate items by path, keeping highest confidence.
         deduplicate_items(&mut section);
 
-        // Return Degraded if readelf was unavailable but we still got partial data.
-        if !has_readelf && (!section.items.is_empty() || !section.env_files.is_empty()) {
-            return Err(InspectorError::Degraded {
-                reason: "readelf unavailable — ELF binary classification skipped".to_string(),
-                partial: Box::new(InspectorOutput {
-                    section: SectionData::NonRpmSoftware(section),
-                    warnings,
-                    redaction_hints,
-                }),
-            });
-        }
-
         Ok(InspectorOutput {
             section: SectionData::NonRpmSoftware(section),
             warnings,
@@ -1668,10 +1656,10 @@ mod tests {
         }
     }
 
-    // ---- Test 18: test_nonrpm_degraded_no_readelf ----
+    // ---- Test 18: readelf missing completes with warning, not degraded ----
 
     #[test]
-    fn test_nonrpm_degraded_no_readelf() {
+    fn test_nonrpm_no_readelf_completes_with_warning() {
         let exec = MockExecutor::new()
             .with_command(
                 "readelf --version",
@@ -1700,17 +1688,17 @@ mod tests {
 
         let result = inspector.inspect(&ctx, &NullProgress);
         match result {
-            Err(InspectorError::Degraded { reason, partial }) => {
+            Ok(output) => {
                 assert!(
-                    reason.contains("readelf"),
-                    "degraded reason should mention readelf: {reason}"
-                );
-                assert!(
-                    !partial.warnings.is_empty(),
+                    !output.warnings.is_empty(),
                     "should have warning about readelf"
                 );
+                assert!(
+                    output.warnings.iter().any(|w| w.message.contains("readelf")),
+                    "warning should mention readelf"
+                );
             }
-            other => panic!("expected Degraded, got {other:?}"),
+            other => panic!("expected Ok with warnings, got {other:?}"),
         }
     }
 

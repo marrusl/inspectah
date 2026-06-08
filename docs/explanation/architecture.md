@@ -171,8 +171,7 @@ Pipeline's modules:
 - **render/** -- Output renderers, each implementing the `Renderer` trait:
   - `containerfile.rs` -- Generates a Containerfile with correctly ordered
     `RUN`, `COPY`, and `RUN dnf install` directives.
-  - `report.rs` -- HTML report with tabbed sections, interactive checkboxes,
-    and embedded JavaScript for the refine UI.
+  - `report.rs` -- HTML audit report with PatternFly UI and full section parity.
   - `audit.rs` -- Machine-readable audit log of all inspection findings.
   - `kickstart.rs` -- Kickstart file generation for hosts that use that
     provisioning model.

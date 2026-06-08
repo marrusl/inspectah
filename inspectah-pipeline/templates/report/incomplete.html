@@ -1,0 +1,28 @@
+<div class="incomplete-sections">
+  <h3>Incomplete Sections</h3>
+  {% if completeness_reason %}
+    <p class="incomplete-reason">{{ completeness_reason }}</p>
+  {% endif %}
+
+  {% if failed_sections | length > 0 %}
+  <div class="incomplete-group">
+    <h4>Failed (no data collected)</h4>
+    <ul>
+      {% for s in failed_sections %}
+        <li><a href="#{{ s.id }}">{{ s.name }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if degraded_sections | length > 0 %}
+  <div class="incomplete-group">
+    <h4>Degraded (partial data collected)</h4>
+    <ul>
+      {% for s in degraded_sections %}
+        <li><a href="#{{ s.id }}">{{ s.name }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>

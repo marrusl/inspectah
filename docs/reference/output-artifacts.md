@@ -35,7 +35,7 @@ system state.
 | File | Description |
 |------|-------------|
 | `Containerfile` | Image build definition. COPY lines are derived from the materialized config tree roots. |
-| `report.html` | Interactive HTML report (PatternFly). |
+| `audit-report.html` | HTML audit report (PatternFly). |
 | `audit-report.md` | Findings, recommendations, storage plan, version drift. |
 | `secrets-review.md` | Redacted sensitive content for operator review. |
 | `README.md` | Summary with build commands and FIXME checklist. |
@@ -157,7 +157,7 @@ Same conditions as scan:
 
 These scan artifacts are intentionally omitted from the export contract:
 
-- `report.html`
+- `audit-report.html`
 - `README.md`
 - `secrets-review.md`
 - `kickstart-suggestion.ks`
@@ -177,7 +177,7 @@ hostname-20260527-143000.tar.gz
     ├── Containerfile
     ├── README.md
     ├── audit-report.md
-    ├── report.html
+    ├── audit-report.html
     ├── secrets-review.md
     ├── kickstart-suggestion.ks
     ├── inspection-snapshot.json

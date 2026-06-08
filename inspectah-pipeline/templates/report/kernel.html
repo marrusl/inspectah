@@ -1,0 +1,56 @@
+{% from "report/section.html" import section %}
+
+{% call section("kernel-boot", "Kernel & Boot", count=kernelboot_count, state=kernelboot_state) %}
+
+{% if kernel_cmdline %}
+<h4>Kernel Command Line</h4>
+<pre><code>{{ kernel_cmdline }}</code></pre>
+{% endif %}
+
+{% if sysctl_overrides | length > 0 %}
+<h4>Sysctl Overrides</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Runtime</th>
+      <th>Default</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in sysctl_overrides %}
+    <tr>
+      <td><code>{{ s.key }}</code></td>
+      <td>{{ s.runtime }}</td>
+      <td>{{ s.default }}</td>
+      <td><code>{{ s.source }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if modules_load_d | length > 0 %}
+<h4>Modules (modules-load.d)</h4>
+<ul>
+  {% for m in modules_load_d %}
+  <li><code>{{ m.path }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if modprobe_d | length > 0 %}
+<h4>Module Configuration (modprobe.d)</h4>
+<ul>
+  {% for m in modprobe_d %}
+  <li><code>{{ m.path }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if kernelboot_count == 0 and not kernel_cmdline %}
+<p class="empty-state">No kernel or boot customizations detected</p>
+{% endif %}
+
+{% endcall %}

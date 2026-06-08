@@ -1,0 +1,46 @@
+<div class="fleet-summary">
+  <h3>Fleet Overview</h3>
+  <dl class="fleet-summary-meta">
+    <dt>Fleet Label</dt>
+    <dd>{{ fleet_label }}</dd>
+    <dt>Host Count</dt>
+    <dd>{{ fleet_host_count }}</dd>
+    <dt>Baseline Status</dt>
+    <dd>{% if fleet_baseline_provisional %}provisional{% else %}unanimous{% endif %}</dd>
+    {% if fleet_variant_conflict_count > 0 %}
+    <dt>Variant Conflicts</dt>
+    <dd>{{ fleet_variant_conflict_count }}</dd>
+    {% endif %}
+  </dl>
+
+  <details class="fleet-hostnames">
+    <summary>Hostnames ({{ fleet_host_count }})</summary>
+    <ul>
+      {% for h in fleet_hostnames %}
+        <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+
+  {% if fleet_section_coverage | length > 0 %}
+  <details class="fleet-coverage">
+    <summary>Section Coverage</summary>
+    <table class="pf-v6-c-table pf-m-compact pf-m-grid-md">
+      <thead>
+        <tr>
+          <th>Section</th>
+          <th>Hosts Reporting</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in fleet_section_coverage %}
+        <tr>
+          <td>{{ entry.section }}</td>
+          <td>{{ entry.count }} / {{ fleet_host_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</div>

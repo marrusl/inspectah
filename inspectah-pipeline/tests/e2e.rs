@@ -206,7 +206,7 @@ fn test_full_pipeline_produces_valid_tarball() {
         "inspection-snapshot.json",
         "Containerfile",
         "README.md",
-        "report.html",
+        "audit-report.html",
         "audit-report.md",
         "secrets-review.md",
         "kickstart-suggestion.ks",

@@ -140,7 +140,7 @@ Key files inside:
 |------|---------|
 | `Containerfile` | Image build definition — the starting point for `podman build` |
 | `audit-report.md` | Findings summary: what was detected, storage plan, version drift |
-| `report.html` | Interactive HTML dashboard of all findings |
+| `audit-report.html` | HTML audit report of all findings |
 | `secrets-review.md` | Details of redacted sensitive content for your review |
 | `README.md` | Build commands and a FIXME checklist |
 | `kickstart-suggestion.ks` | Deploy-time settings (network, storage, boot) |

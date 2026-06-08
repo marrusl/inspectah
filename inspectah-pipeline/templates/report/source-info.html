@@ -1,0 +1,18 @@
+<div class="source-info">
+  <div class="source-info-primary">
+    <span class="source-hostname">{{ hostname }}</span>
+    <span class="source-os">{{ os_name }}</span>
+    <span class="source-type">{{ system_type }}</span>
+  </div>
+  {% if host_count %}
+    <div class="source-info-fleet">
+      <span class="badge">{{ host_count }} host{{ "s" if host_count != 1 }}</span>
+    </div>
+  {% endif %}
+  {% if baseline_ref %}
+    <div class="source-info-baseline">
+      <span class="source-baseline-label">Baseline:</span>
+      <span class="source-baseline-ref">{{ baseline_ref }}</span>
+    </div>
+  {% endif %}
+</div>

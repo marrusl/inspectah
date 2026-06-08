@@ -222,7 +222,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| `Containerfile` | Image definition |".into());
     lines.push("| `config/` | Files to COPY into the image |".into());
     lines.push("| `audit-report.md` | Full findings (markdown) |".into());
-    lines.push("| `report.html` | Interactive report (open in browser) |".into());
+    lines.push("| `audit-report.html` | Interactive report (open in browser) |".into());
     lines.push("| `secrets-review.md` | Redacted items requiring manual handling |".into());
     lines.push("| `kickstart-suggestion.ks` | Suggested deploy-time settings |".into());
     lines.push(
@@ -248,7 +248,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     }
 
     lines.push(
-        "See [`audit-report.md`](audit-report.md) or [`report.html`](report.html) for full details."
+        "See [`audit-report.md`](audit-report.md) or [`audit-report.html`](audit-report.html) for full details."
             .into(),
     );
     lines.push(String::new());
@@ -353,7 +353,7 @@ mod tests {
         let md = render_readme(&snap);
         assert!(md.contains("Containerfile"));
         assert!(md.contains("audit-report.md"));
-        assert!(md.contains("report.html"));
+        assert!(md.contains("audit-report.html"));
         assert!(md.contains("secrets-review.md"));
         assert!(md.contains("kickstart-suggestion.ks"));
     }

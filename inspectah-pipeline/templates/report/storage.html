@@ -1,0 +1,30 @@
+{% from "report/section.html" import section %}
+
+{% call section("storage", "Storage", count=storage_count, state=storage_state) %}
+
+{% if storage_count > 0 %}
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Device</th>
+      <th>Mount Point</th>
+      <th>Type</th>
+      <th>Options</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in storage_items %}
+    <tr>
+      <td>{{ entry.device }}</td>
+      <td><code>{{ entry.mount_point }}</code></td>
+      <td>{{ entry.fstype }}</td>
+      <td><code>{{ entry.options }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No fstab entries detected</p>
+{% endif %}
+
+{% endcall %}

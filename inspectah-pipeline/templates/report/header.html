@@ -1,0 +1,10 @@
+<header class="report-header">
+  <h1>inspectah Audit Report</h1>
+  <div class="report-meta">
+    <span>{{ os_name }}</span>
+    <span>{{ hostname }}</span>
+    {% if warning_count > 0 %}
+      <span class="badge badge-warning">{{ warning_count }} warning{{ "s" if warning_count != 1 }}</span>
+    {% endif %}
+  </div>
+</header>

@@ -775,7 +775,7 @@ fn config_section_lines(
             let has_diffs = config.files.iter().any(|f| f.diff_against_rpm.is_some());
             if has_diffs {
                 cfg_body.push(
-                    "# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs."
+                    "# Config diffs (--config-diffs): see audit-report.md and audit-report.html for per-file diffs."
                         .into(),
                 );
             }

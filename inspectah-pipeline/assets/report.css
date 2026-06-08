@@ -1,0 +1,684 @@
+/* inspectah HTML audit report — custom styles
+   Colors, spacing, and typography use PatternFly 6 design tokens
+   with hardcoded fallbacks for properties PF6 tokens don't cover
+   (shadows, gradients, zebra striping). */
+
+/* ── Reset & base ────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--pf-t--global--font--family--body, 'RedHatText', 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--pf-t--global--font--size--body--default, 1rem);
+  line-height: var(--pf-t--global--font--line-height--body, 1.5);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+}
+
+/* ── Report header ───────────────────────────────────────────── */
+.report-header {
+  background: var(--pf-t--global--color--brand--default, #06c);
+  color: var(--pf-t--global--text--color--on-brand--default, #fff);
+  padding: var(--pf-t--global--spacer--lg, 1.5rem) var(--pf-t--global--spacer--xl, 2rem);
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+}
+
+.report-header h1 {
+  font-size: var(--pf-t--global--font--size--2xl, 1.75rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  margin: 0 0 var(--pf-t--global--spacer--xs, 0.25rem) 0;
+  letter-spacing: -0.01em;
+}
+
+.report-header .report-meta {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  opacity: 0.9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--md, 1rem);
+  align-items: center;
+}
+
+/* ── TOC navigation bar ──────────────────────────────────────── */
+.report-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem);
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) var(--pf-t--global--spacer--xl, 2rem);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+}
+
+.report-toc a {
+  color: var(--pf-t--global--text--color--link--default, #06c);
+  text-decoration: none;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--sm, 0.5rem);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.report-toc a:hover {
+  background: var(--pf-t--global--background--color--primary--hover, #e8e8e8);
+  color: var(--pf-t--global--text--color--link--hover, #004d99);
+}
+
+@media (max-width: 600px) {
+  .report-toc {
+    display: none;
+  }
+}
+
+/* ── Summary cards ───────────────────────────────────────────── */
+.report-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--pf-t--global--spacer--md, 1rem);
+  padding: var(--pf-t--global--spacer--lg, 1.5rem) var(--pf-t--global--spacer--xl, 2rem);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+}
+
+.report-cards dl {
+  margin: 0;
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  border: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  border-radius: var(--pf-t--global--border--radius--medium, 8px);
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--lg, 1.5rem);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.report-cards dl:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  border-color: var(--pf-t--global--border--color--hover, #c7c7c7);
+}
+
+.report-cards dt {
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--pf-t--global--spacer--xs, 0.25rem);
+}
+
+.report-cards dd {
+  margin: 0;
+  font-size: var(--pf-t--global--font--size--2xl, 1.75rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+}
+
+.report-cards dd.text-failed {
+  color: var(--pf-t--global--color--status--danger--default, #c9190b);
+}
+
+.report-cards dd.text-degraded {
+  color: var(--pf-t--global--color--status--warning--200, #795600);
+}
+
+.report-cards dt a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.report-cards dt a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .report-cards {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .report-cards {
+    grid-template-columns: 1fr 1fr;
+    padding: var(--pf-t--global--spacer--md, 1rem);
+  }
+}
+
+@media (max-width: 400px) {
+  .report-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Sections (details/summary) ──────────────────────────────── */
+.report-section {
+  border: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  border-radius: var(--pf-t--global--border--radius--medium, 8px);
+  margin: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.report-section summary {
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--lg, 1.5rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  font-size: var(--pf-t--global--font--size--lg, 1.125rem);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.report-section summary:hover {
+  background: var(--pf-t--global--background--color--primary--hover, #e8e8e8);
+}
+
+.report-section summary::before {
+  content: "\25B6"; /* right-pointing triangle */
+  font-size: 0.65em;
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.report-section details[open] > summary::before,
+.report-section[open] summary::before {
+  transform: rotate(90deg);
+}
+
+/* Also handle when <details> is the direct child */
+details.report-section-inner[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.report-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-section .section-body {
+  padding: var(--pf-t--global--spacer--lg, 1.5rem);
+}
+
+/* ── details element within report-section ───────────────────── */
+.report-section details > summary::before {
+  content: "\25B6";
+  font-size: 0.65em;
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.report-section details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* Warning section — red left border accent */
+.report-section--warning {
+  border-left: 4px solid var(--pf-t--global--color--status--danger--default, #c9190b);
+}
+
+/* Failed section — muted, data unavailable */
+.report-section--failed {
+  opacity: 0.65;
+  border-left: 4px solid var(--pf-t--global--color--status--danger--default, #c9190b);
+}
+
+.report-section--failed summary {
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+}
+
+/* Degraded section — warning left border accent */
+.report-section--degraded {
+  border-left: 4px solid var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+
+.failed-body {
+  padding: var(--pf-t--global--spacer--lg, 1.5rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  font-style: italic;
+}
+
+/* ── Badges / state indicators ───────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem);
+  padding: 0.125rem var(--pf-t--global--spacer--sm, 0.5rem);
+  border-radius: var(--pf-t--global--border--radius--pill, 999px);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  background: var(--pf-t--global--color--status--info--default, #2b9af3);
+  color: var(--pf-t--global--text--color--on-brand--default, #fff);
+  line-height: 1.4;
+}
+
+.badge-degraded {
+  background: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  color: var(--pf-t--global--text--color--status--on-warning--default, #1a1a1a);
+}
+
+.badge-failed {
+  background: var(--pf-t--global--color--status--danger--default, #c9190b);
+  color: var(--pf-t--global--text--color--on-brand--default, #fff);
+}
+
+.badge-warning {
+  background: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  color: var(--pf-t--global--text--color--status--on-warning--default, #1a1a1a);
+}
+
+.badge-extra {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem var(--pf-t--global--spacer--sm, 0.5rem);
+  border-radius: var(--pf-t--global--border--radius--pill, 999px);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  background: var(--pf-t--global--color--status--info--default, #2b9af3);
+  color: var(--pf-t--global--text--color--on-brand--default, #fff);
+  line-height: 1.4;
+}
+
+/* ── Filter inputs ───────────────────────────────────────────── */
+.report-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) 0;
+  margin-bottom: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.report-filter label {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+  white-space: nowrap;
+}
+
+.report-filter input {
+  flex: 1;
+  max-width: 300px;
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--sm, 0.5rem);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  font-family: var(--pf-t--global--font--family--body, 'RedHatText', 'Helvetica Neue', Arial, sans-serif);
+  border: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+}
+
+.report-filter input:focus {
+  outline: 2px solid var(--pf-t--global--color--brand--default, #06c);
+  outline-offset: 1px;
+}
+
+.report-filter .filter-count {
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  white-space: nowrap;
+}
+
+.filter-no-results {
+  padding: var(--pf-t--global--spacer--lg, 1.5rem);
+  text-align: center;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  font-style: italic;
+}
+
+/* ── Tables ──────────────────────────────────────────────────── */
+.report-section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+}
+
+.report-section th,
+.report-section td {
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) var(--pf-t--global--spacer--md, 1rem);
+  text-align: left;
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+}
+
+.report-section th {
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* Zebra striping */
+.report-section tbody tr:nth-child(even) {
+  background: var(--pf-t--global--background--color--striped--row--default, #fafafa);
+}
+
+.report-section tbody tr:hover {
+  background: var(--pf-t--global--background--color--primary--hover, #e8e8e8);
+}
+
+/* Monospace for values that look like paths, hashes, versions */
+.report-section td code,
+.report-section td .mono {
+  font-family: var(--pf-t--global--font--family--mono, 'RedHatMono', 'Courier New', monospace);
+  font-size: 0.9em;
+}
+
+/* Responsive table wrapper */
+@media (max-width: 600px) {
+  .report-section table {
+    font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  }
+
+  .report-section th,
+  .report-section td {
+    padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--sm, 0.5rem);
+  }
+}
+
+/* ── Completeness banner ────────────────────────────────────── */
+.completeness-banner {
+  background: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  color: var(--pf-t--global--text--color--status--on-warning--default, #1a1a1a);
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+}
+
+.completeness-banner p {
+  margin: var(--pf-t--global--spacer--xs, 0.25rem) 0;
+}
+
+.completeness-banner a {
+  color: inherit;
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  text-decoration: underline;
+}
+
+/* ── Incomplete-sections block ─────────────────────────────── */
+.incomplete-sections {
+  margin: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--lg, 1.5rem);
+  background: var(--pf-t--global--color--status--warning--100, #fef3cd);
+  border: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--color--status--warning--default, #f0ab00);
+  border-left: 4px solid var(--pf-t--global--color--status--warning--default, #f0ab00);
+  border-radius: var(--pf-t--global--border--radius--medium, 8px);
+}
+
+.incomplete-sections h3 {
+  margin: 0 0 var(--pf-t--global--spacer--sm, 0.5rem) 0;
+  font-size: var(--pf-t--global--font--size--md, 1rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+}
+
+.incomplete-sections .incomplete-reason {
+  margin: 0 0 var(--pf-t--global--spacer--sm, 0.5rem) 0;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  font-style: italic;
+}
+
+.incomplete-sections .incomplete-group {
+  margin-top: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.incomplete-sections .incomplete-group h4 {
+  margin: 0 0 var(--pf-t--global--spacer--xs, 0.25rem) 0;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+}
+
+.incomplete-sections .incomplete-group ul {
+  margin: 0;
+  padding-left: var(--pf-t--global--spacer--lg, 1.5rem);
+  list-style: disc;
+}
+
+.incomplete-sections .incomplete-group li {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) 0;
+}
+
+.incomplete-sections .incomplete-group a {
+  color: var(--pf-t--global--text--color--link--default, #06c);
+  text-decoration: none;
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+}
+
+.incomplete-sections .incomplete-group a:hover {
+  text-decoration: underline;
+  color: var(--pf-t--global--text--color--link--hover, #004d99);
+}
+
+/* ── Baseline-comparison block ─────────────────────────────── */
+.baseline-info {
+  margin: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--lg, 1.5rem);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  border: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  border-radius: var(--pf-t--global--border--radius--medium, 8px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.baseline-info h3 {
+  margin: 0 0 var(--pf-t--global--spacer--sm, 0.5rem) 0;
+  font-size: var(--pf-t--global--font--size--md, 1rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+}
+
+.baseline-info dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--md, 1rem);
+  align-items: baseline;
+}
+
+.baseline-info dt {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  white-space: nowrap;
+}
+
+.baseline-info dd {
+  margin: 0;
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+  word-break: break-all;
+}
+
+.baseline-info dd code {
+  font-family: var(--pf-t--global--font--family--mono, 'RedHatMono', 'Courier New', monospace);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  padding: 0.1em 0.35em;
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+}
+
+@media (max-width: 600px) {
+  .baseline-info dl {
+    grid-template-columns: 1fr;
+  }
+
+  .incomplete-sections,
+  .baseline-info {
+    margin-left: var(--pf-t--global--spacer--md, 1rem);
+    margin-right: var(--pf-t--global--spacer--md, 1rem);
+  }
+}
+
+@media print {
+  .incomplete-sections {
+    border: 2px solid #f0ab00;
+    background: #fff8e1 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .baseline-info {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+}
+
+/* ── Source info bar ─────────────────────────────────────────── */
+.source-info {
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  background: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pf-t--global--spacer--lg, 1.5rem);
+}
+
+.source-info-primary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pf-t--global--spacer--md, 1rem);
+}
+
+.source-hostname {
+  font-size: var(--pf-t--global--font--size--xl, 1.25rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+}
+
+.source-os {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+}
+
+.source-type {
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.source-info-fleet,
+.source-info-baseline {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+}
+
+.source-baseline-label {
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+}
+
+.source-baseline-ref {
+  font-family: var(--pf-t--global--font--family--mono, 'RedHatMono', 'Courier New', monospace);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  word-break: break-all;
+}
+
+/* ── Fleet summary ───────────────────────────────────────────── */
+.fleet-summary {
+  padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+}
+
+/* ── Report footer ──────────────────────────────────────────── */
+.report-footer {
+  padding: var(--pf-t--global--spacer--lg, 1.5rem) var(--pf-t--global--spacer--xl, 2rem);
+  text-align: center;
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  border-top: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  margin-top: var(--pf-t--global--spacer--xl, 2rem);
+}
+
+/* ── Print ───────────────────────────────────────────────────── */
+@media print {
+  body {
+    font-size: 10pt;
+  }
+
+  .report-toc,
+  .report-filter {
+    display: none;
+  }
+
+  .report-header {
+    background: #004d99 !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .report-section {
+    break-inside: avoid;
+    margin: var(--pf-t--global--spacer--sm, 0.5rem) 0;
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+
+  .report-section summary {
+    background: #f5f5f5 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Force all details open in print */
+  details {
+    display: block;
+  }
+
+  details > summary::before {
+    display: none;
+  }
+
+  .report-cards {
+    grid-template-columns: repeat(3, 1fr);
+    padding: var(--pf-t--global--spacer--sm, 0.5rem) 0;
+  }
+
+  .report-cards dl {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+
+  .completeness-banner {
+    border: 2px solid #f0ab00;
+    background: #fff8e1 !important;
+    color: #1a1a1a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .badge, .badge-degraded, .badge-failed, .badge-warning, .badge-extra {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .report-section tbody tr:nth-child(even) {
+    background: #f9f9f9 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

@@ -1,0 +1,38 @@
+{% from "report/section.html" import section %}
+
+{% call section("services", "Service State Changes", count=svc_count, state=svc_state, extra_badge=svc_extra_badge) %}
+
+{% if svc_count >= 10 %}
+<div class="report-filter">
+  <label for="filter-services">Filter Services</label>
+  <input type="text" id="filter-services" data-section="services">
+  <span class="filter-count">Showing {{ svc_count }} of {{ svc_count }}</span>
+</div>
+{% endif %}
+
+{% if svc_count > 0 %}
+<table class="report-table" data-filterable="services">
+  <thead>
+    <tr>
+      <th>Unit</th>
+      <th>Current State</th>
+      <th>Default State</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in services %}
+    <tr>
+      <td>{{ s.unit }}</td>
+      <td>{{ s.current_state }}</td>
+      <td>{{ s.default_state }}</td>
+      <td>{% if s.include %}include{% else %}exclude{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No service state changes detected</p>
+{% endif %}
+
+{% endcall %}

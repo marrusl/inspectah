@@ -1,0 +1,50 @@
+{% from "report/section.html" import section %}
+
+{% call section("security", "Security & Access Control", count=security_count, state=security_state, extra_badge=security_extra_badge) %}
+
+<dl class="report-dl">
+  <dt>SELinux Mode</dt>
+  <dd>{{ selinux_mode | default("unknown") }}</dd>
+  <dt>FIPS Mode</dt>
+  <dd>{% if fips_enabled %}enabled{% else %}disabled{% endif %}</dd>
+</dl>
+
+{% if selinux_modules | length > 0 %}
+<h4>Custom SELinux Modules</h4>
+<ul>
+  {% for m in selinux_modules %}
+  <li>{{ m }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if selinux_booleans | length > 0 %}
+<h4>Boolean Overrides</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>State</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in selinux_booleans %}
+    <tr>
+      <td><code>{{ b.name }}</code></td>
+      <td>{% if b.state %}on{% else %}off{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if selinux_fcontexts | length > 0 %}
+<h4>File Context Rules</h4>
+<ul>
+  {% for fc in selinux_fcontexts %}
+  <li><code>{{ fc }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% endcall %}

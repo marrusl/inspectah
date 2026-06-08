@@ -1,0 +1,686 @@
+---
+source: inspectah-pipeline/src/render/report.rs
+expression: stable
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>inspectah Audit Report — Unknown System</title>
+  <style>/* PF_CSS_PLACEHOLDER */</style>
+  <style>/* REPORT_CSS_PLACEHOLDER */</style>
+</head>
+<body>
+  <header class="report-header">
+  <h1>inspectah Audit Report</h1>
+  <div class="report-meta">
+    <span>Unknown System</span>
+    <span>unknown</span>
+    
+      <span class="badge badge-warning">1 warning</span>
+    
+  </div>
+</header>
+  
+  <div class="source-info">
+  <div class="source-info-primary">
+    <span class="source-hostname">unknown</span>
+    <span class="source-os">Unknown System</span>
+    <span class="source-type">unknown</span>
+  </div>
+  
+  
+</div>
+  
+
+  <main>
+    
+<div class="report-cards">
+  
+  <dl>
+    <dt><a href="#packages">Packages</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#config-files">Configuration Files</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#services">Service State Changes</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#storage">Storage</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#kernel-boot">Kernel &amp; Boot</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#security">Security &amp; Access Control</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#scheduled-tasks">Scheduled Tasks</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#nonrpm">Non-RPM Software</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#users-groups">Users &amp; Groups</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+  <dl>
+    <dt><a href="#redactions">Redactions</a></dt>
+    <dd class="">
+      1
+    </dd>
+  </dl>
+  
+</div>
+
+    
+<nav class="report-toc" aria-label="Section navigation">
+  
+  <a href="#packages">
+    Packages
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#config-files">
+    Configuration Files
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#services">
+    Service State Changes
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#storage">
+    Storage
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#kernel-boot">
+    Kernel &amp; Boot
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#security">
+    Security &amp; Access Control
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#scheduled-tasks">
+    Scheduled Tasks
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#nonrpm">
+    Non-RPM Software
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#users-groups">
+    Users &amp; Groups
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#redactions">
+    Redactions
+    <span class="badge">1</span>
+  </a>
+  
+  <a href="#warnings">
+    Warnings
+    <span class="badge">1</span>
+  </a>
+  
+</nav>
+
+
+    
+
+    
+    
+
+
+<div class="report-section">
+<details id="packages">
+  <summary>
+    Packages
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+
+
+<table class="report-table" data-filterable="packages">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Version</th>
+      <th>Release</th>
+      <th>Arch</th>
+      <th>Repo</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>httpd</td>
+      <td>2.4.57</td>
+      <td>5.el9</td>
+      <td>x86_64</td>
+      <td>appstream</td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+
+
+  
+</details>
+</div>
+
+    
+
+
+<div class="report-section">
+<details id="config-files">
+  <summary>
+    Configuration Files
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+
+
+<table class="report-table" data-filterable="config-files">
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Kind</th>
+      <th>Category</th>
+      
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>&#x2f;etc&#x2f;sysconfig&#x2f;network</td>
+      <td>unowned</td>
+      <td>other</td>
+      
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+
+
+<div class="report-section">
+<details id="services">
+  <summary>
+    Service State Changes
+    
+      <span class="badge">(1)</span>
+    
+    
+      <span class="badge-extra">1 enabled</span>
+    
+  </summary>
+  
+    
+
+
+
+
+<table class="report-table" data-filterable="services">
+  <thead>
+    <tr>
+      <th>Unit</th>
+      <th>Current State</th>
+      <th>Default State</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>httpd.service</td>
+      <td>enabled</td>
+      <td>n&#x2f;a</td>
+      <td>include</td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+
+    
+      
+
+
+<div class="report-section">
+<details id="storage">
+  <summary>
+    Storage
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Device</th>
+      <th>Mount Point</th>
+      <th>Type</th>
+      <th>Options</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>&#x2f;dev&#x2f;sda1</td>
+      <td><code>&#x2f;boot</code></td>
+      <td>xfs</td>
+      <td><code></code></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+    
+      
+
+
+<div class="report-section">
+<details id="kernel-boot">
+  <summary>
+    Kernel &amp; Boot
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+
+
+<h4>Sysctl Overrides</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Runtime</th>
+      <th>Default</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td><code>net.ipv4.ip_forward</code></td>
+      <td>1</td>
+      <td>0</td>
+      <td><code>&#x2f;etc&#x2f;sysctl.d&#x2f;99-custom.conf</code></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+  
+</details>
+</div>
+
+    
+    
+      
+
+
+<div class="report-section">
+<details id="security">
+  <summary>
+    Security &amp; Access Control
+    
+      <span class="badge">(0)</span>
+    
+    
+      <span class="badge-extra">enforcing</span>
+    
+  </summary>
+  
+    
+
+<dl class="report-dl">
+  <dt>SELinux Mode</dt>
+  <dd>enforcing</dd>
+  <dt>FIPS Mode</dt>
+  <dd>disabled</dd>
+</dl>
+
+
+
+
+
+
+
+
+  
+</details>
+</div>
+
+    
+
+    
+      
+
+
+<div class="report-section">
+<details id="scheduled-tasks">
+  <summary>
+    Scheduled Tasks
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+
+
+<h4>Cron Jobs (1)</h4>
+<table class="report-table" data-filterable="scheduled-tasks">
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td><code>&#x2f;etc&#x2f;cron.d&#x2f;backup</code></td>
+      <td>file</td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+  
+</details>
+</div>
+
+    
+    
+      
+
+
+<div class="report-section">
+<details id="nonrpm">
+  <summary>
+    Non-RPM Software
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Path</th>
+      <th>Detection</th>
+      <th>Confidence</th>
+      <th>Language</th>
+      <th>Version</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>node</td>
+      <td><code>&#x2f;usr&#x2f;local&#x2f;bin&#x2f;node</code></td>
+      <td>path</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+    
+      
+
+
+<div class="report-section">
+<details id="users-groups">
+  <summary>
+    Users &amp; Groups
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+
+
+<table class="report-table" data-filterable="users-groups">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>UID</th>
+      <th>GID</th>
+      <th>Shell</th>
+      <th>Home</th>
+      <th>Classification</th>
+      <th>Sudo</th>
+      <th>SSH Keys</th>
+      <th>Groups</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>testuser</td>
+      <td>1000</td>
+      <td>1000</td>
+      <td>&#x2f;bin&#x2f;bash</td>
+      <td>&#x2f;home&#x2f;testuser</td>
+      <td>interactive</td>
+      <td>no</td>
+      <td>0</td>
+      <td></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+    
+
+
+<div class="report-section report-section--warning">
+<details id="warnings">
+  <summary>
+    Warnings
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Inspector</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>config</td>
+      <td>test warning</td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+
+
+<div class="report-section">
+<details id="redactions">
+  <summary>
+    Redactions
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+<p class="text-muted">1 item(s) redacted. See secrets-review.md for details.</p>
+
+
+  
+</details>
+</div>
+
+  </main>
+
+  <footer class="report-footer">
+    <p>Generated by inspectah. See audit-report.md for the Markdown version of this report.</p>
+  </footer>
+
+  <script type="application/json" id="report-filter-data">/* FILTER_DATA_PLACEHOLDER */</script>
+  <script>/* REPORT_JS_PLACEHOLDER */</script>
+</body>
+</html>

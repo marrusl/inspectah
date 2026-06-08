@@ -1,0 +1,12 @@
+<div class="completeness-banner">
+  <p><strong>Warning:</strong> This report was generated from an incomplete inspection.</p>
+  {% if failed_sections %}
+    <p>Failed: {% for s in failed_sections %}<a href="#{{ s.id }}">{{ s.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% if degraded_sections %}
+    <p>Degraded: {% for s in degraded_sections %}<a href="#{{ s.id }}">{{ s.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% if completeness_reason %}
+    <p>Reason: {{ completeness_reason }}</p>
+  {% endif %}
+</div>

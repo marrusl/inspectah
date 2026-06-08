@@ -20,6 +20,7 @@ base64 = "0.22"
 dirs = "5"
 time = { version = "0.3", features = ["formatting"] }
 tempfile = "3"
+minijinja = { version = "2", features = ["builtins"] }
 
 [dev-dependencies]
 insta.workspace = true
