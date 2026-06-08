@@ -17,11 +17,15 @@ document.addEventListener("DOMContentLoaded", function () {
       document.querySelectorAll(".report-filter input").forEach(function (input) {
         input.addEventListener("input", function () {
           var section = input.getAttribute("data-section");
-          var items = filterData[section];
+          // Map HTML data-section names to JSON keys
+          var jsonKey = section.replace(/-/g, "_");
+          if (jsonKey === "scheduled_tasks") jsonKey = "scheduled";
+          if (jsonKey === "users_groups") jsonKey = "users";
+          var items = filterData[jsonKey];
           if (!items) return;
 
           var query = input.value.toLowerCase().trim();
-          var table = document.getElementById("table-" + section);
+          var table = document.querySelector('[data-filterable="' + section + '"]');
           if (!table) return;
 
           var rows = table.querySelectorAll("tbody tr");
