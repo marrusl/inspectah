@@ -119,7 +119,7 @@ body {
 }
 
 .report-cards dd.text-degraded {
-  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  color: var(--pf-t--global--color--status--warning--200, #795600);
 }
 
 .report-cards dt a {
