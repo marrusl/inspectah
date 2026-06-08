@@ -19,7 +19,12 @@
   <main>
     {% include "report/summary-cards.html" %}
     {% include "report/toc.html" %}
-    <!-- Section templates will be added in T7-T12 -->
+
+    {% if baseline_ref %}
+      {% include "report/baseline.html" %}
+    {% endif %}
+    {% include "report/packages.html" %}
+    <!-- More sections in T8-T12 -->
   </main>
 
   <footer class="report-footer">

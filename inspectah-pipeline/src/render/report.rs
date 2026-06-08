@@ -237,6 +237,58 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         (cards, toc)
     };
 
+    // ── Packages section data ─────────────────────────────────────
+    let packages: Vec<Value> = snap
+        .rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.packages_added
+                .iter()
+                .map(|p| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": p.name,
+                        "version": p.version,
+                        "release": p.release,
+                        "arch": p.arch,
+                        "repo": p.source_repo,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let pkg_count = packages.len();
+    let pkg_state = section_state(InspectorId::Rpm, &snap.completeness);
+    let pkg_state_str = match pkg_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // Version changes from baseline comparison
+    let version_changes: Vec<Value> = snap
+        .rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.version_changes
+                .iter()
+                .map(|vc| {
+                    let dir_str = match vc.direction {
+                        inspectah_core::types::rpm::VersionChangeDirection::Upgrade => "upgrade",
+                        inspectah_core::types::rpm::VersionChangeDirection::Downgrade => "downgrade",
+                    };
+                    Value::from_serialize(serde_json::json!({
+                        "name": vc.name,
+                        "arch": vc.arch,
+                        "host_version": vc.host_version,
+                        "base_version": vc.base_version,
+                        "direction": dir_str,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // System type — use serde name for human-readable display
     let system_type = serde_json::to_string(&snap.system_type)
         .unwrap_or_default()
@@ -248,6 +300,30 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .target_image
         .as_ref()
         .map(|t| t.image_ref.clone())
+        .unwrap_or_default();
+
+    // Baseline details for the baseline info panel
+    let baseline_digest = snap
+        .baseline
+        .as_ref()
+        .map(|b| b.image_digest.clone())
+        .unwrap_or_default();
+
+    let baseline_strategy = snap
+        .target_image
+        .as_ref()
+        .map(|t| {
+            match t.strategy {
+                inspectah_core::baseline::ResolutionStrategy::CliOverride => "CLI override",
+                inspectah_core::baseline::ResolutionStrategy::UniversalBlue => "Universal Blue",
+                inspectah_core::baseline::ResolutionStrategy::BootcStatus => "bootc status",
+                inspectah_core::baseline::ResolutionStrategy::FedoraAtomicDesktop => {
+                    "Fedora Atomic Desktop"
+                }
+                inspectah_core::baseline::ResolutionStrategy::OsRelease => "os-release",
+            }
+            .to_string()
+        })
         .unwrap_or_default();
 
     // Host count for fleet snapshots
@@ -267,6 +343,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let summary_cards_val = Value::from(summary_cards);
     let toc_entries_val = Value::from(toc_entries);
 
+    let packages_val = Value::from(packages);
+    let version_changes_val = Value::from(version_changes);
+
     tmpl.render(context! {
         os_name,
         hostname,
@@ -278,7 +357,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         toc_entries => toc_entries_val,
         system_type,
         baseline_ref,
+        baseline_digest,
+        baseline_strategy,
         host_count,
+        packages => packages_val,
+        pkg_count,
+        pkg_state => pkg_state_str,
+        version_changes => version_changes_val,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,
         report_js => REPORT_JS,
@@ -290,7 +375,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+    use inspectah_core::types::rpm::{
+        PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
+    };
 
     fn test_snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
@@ -551,6 +638,172 @@ mod tests {
         assert!(
             html.contains("1 warning"),
             "header must show warning count"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Packages section tests (T7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_packages_section() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Packages"),
+            "report must contain Packages section"
+        );
+        assert!(
+            html.contains("httpd"),
+            "packages table must contain package name"
+        );
+        assert!(
+            html.contains("2.4.57"),
+            "packages table must contain package version"
+        );
+    }
+
+    #[test]
+    fn test_report_empty_packages_shows_zero() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection::default());
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("(0)"),
+            "empty packages section must show (0) badge"
+        );
+        assert!(
+            html.contains("No packages added"),
+            "empty packages section must show empty state message"
+        );
+    }
+
+    #[test]
+    fn test_report_packages_table_columns() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("<th>Name</th>"), "table must have Name column");
+        assert!(
+            html.contains("<th>Version</th>"),
+            "table must have Version column"
+        );
+        assert!(
+            html.contains("<th>Release</th>"),
+            "table must have Release column"
+        );
+        assert!(html.contains("<th>Arch</th>"), "table must have Arch column");
+        assert!(html.contains("<th>Repo</th>"), "table must have Repo column");
+    }
+
+    #[test]
+    fn test_report_packages_shows_repo() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("appstream"),
+            "packages table must show source repo"
+        );
+    }
+
+    #[test]
+    fn test_report_version_changes_rendered() {
+        let mut snap = test_snapshot();
+        snap.rpm.as_mut().unwrap().version_changes = vec![VersionChange {
+            name: "openssl".into(),
+            arch: "x86_64".into(),
+            host_version: "3.0.8".into(),
+            base_version: "3.0.7".into(),
+            direction: VersionChangeDirection::Upgrade,
+            ..Default::default()
+        }];
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Version Changes"),
+            "must render version changes sub-section"
+        );
+        assert!(
+            html.contains("openssl"),
+            "version changes must contain package name"
+        );
+        assert!(
+            html.contains("3.0.8"),
+            "version changes must contain host version"
+        );
+        assert!(
+            html.contains("3.0.7"),
+            "version changes must contain base version"
+        );
+    }
+
+    #[test]
+    fn test_report_no_version_changes_when_empty() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains("Version Changes"),
+            "must not show version changes sub-section when empty"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Baseline info panel tests (T7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_baseline_panel_rendered() {
+        let mut snap = test_snapshot();
+        snap.target_image = Some(inspectah_core::baseline::TargetImageIdentity {
+            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.4".into(),
+            strategy: inspectah_core::baseline::ResolutionStrategy::BootcStatus,
+        });
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:abc123".into(),
+            packages: Default::default(),
+            extracted_at: "2026-06-01T00:00:00Z".into(),
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Baseline Comparison"),
+            "must render baseline info panel"
+        );
+        // minijinja auto-escapes / to &#x2f; in HTML output
+        assert!(
+            html.contains("registry.redhat.io&#x2f;rhel9&#x2f;rhel-bootc:9.4")
+                || html.contains("registry.redhat.io/rhel9/rhel-bootc:9.4"),
+            "must show target image ref"
+        );
+        assert!(
+            html.contains("sha256:abc123"),
+            "must show baseline digest"
+        );
+        assert!(
+            html.contains("bootc status"),
+            "must show resolution strategy"
+        );
+    }
+
+    #[test]
+    fn test_report_no_baseline_panel_when_absent() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains("Baseline Comparison"),
+            "must not render baseline panel when no target image"
+        );
+    }
+
+    #[test]
+    fn test_report_packages_failed_state() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Rpm],
+            degraded_sections: vec![],
+            reason: "rpm db locked".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("data unavailable"),
+            "failed packages section must show data unavailable badge"
         );
     }
 }

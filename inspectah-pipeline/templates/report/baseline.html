@@ -1,0 +1,17 @@
+{% if baseline_ref %}
+<div class="baseline-info">
+  <h3>Baseline Comparison</h3>
+  <dl>
+    <dt>Target Image</dt>
+    <dd>{{ baseline_ref }}</dd>
+    {% if baseline_digest %}
+    <dt>Digest</dt>
+    <dd><code>{{ baseline_digest }}</code></dd>
+    {% endif %}
+    {% if baseline_strategy %}
+    <dt>Resolution Strategy</dt>
+    <dd>{{ baseline_strategy }}</dd>
+    {% endif %}
+  </dl>
+</div>
+{% endif %}

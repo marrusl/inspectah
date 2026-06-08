@@ -1,0 +1,66 @@
+{% from "report/section.html" import section %}
+
+{% call section("packages", "Packages", count=pkg_count, state=pkg_state) %}
+
+{% if pkg_count >= 10 %}
+<div class="report-filter">
+  <label for="filter-packages">Filter Packages</label>
+  <input type="text" id="filter-packages" data-section="packages">
+  <span class="filter-count">Showing {{ pkg_count }} of {{ pkg_count }}</span>
+</div>
+{% endif %}
+
+{% if pkg_count > 0 %}
+<table class="report-table" data-filterable="packages">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Version</th>
+      <th>Release</th>
+      <th>Arch</th>
+      <th>Repo</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for pkg in packages %}
+    <tr>
+      <td>{{ pkg.name }}</td>
+      <td>{{ pkg.version }}</td>
+      <td>{{ pkg.release }}</td>
+      <td>{{ pkg.arch }}</td>
+      <td>{{ pkg.repo }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No packages added</p>
+{% endif %}
+
+{% if version_changes | length > 0 %}
+<h4>Version Changes ({{ version_changes | length }})</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Arch</th>
+      <th>Host Version</th>
+      <th>Base Version</th>
+      <th>Direction</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for vc in version_changes %}
+    <tr>
+      <td>{{ vc.name }}</td>
+      <td>{{ vc.arch }}</td>
+      <td>{{ vc.host_version }}</td>
+      <td>{{ vc.base_version }}</td>
+      <td>{{ vc.direction }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endcall %}
