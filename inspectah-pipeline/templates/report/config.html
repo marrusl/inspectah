@@ -1,0 +1,42 @@
+{% from "report/section.html" import section %}
+
+{% call section("config-files", "Configuration Files", count=config_count, state=config_state, conflict_count=config_conflict_count) %}
+
+{% if config_count >= 10 %}
+<div class="report-filter">
+  <label for="filter-config-files">Filter Configuration Files</label>
+  <input type="text" id="filter-config-files" data-section="config-files">
+  <span class="filter-count">Showing {{ config_count }} of {{ config_count }}</span>
+</div>
+{% endif %}
+
+{% if config_count > 0 %}
+<table class="report-table" data-filterable="config-files">
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Kind</th>
+      <th>Category</th>
+      {% if has_config_packages %}
+      <th>Package</th>
+      {% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in config_files %}
+    <tr>
+      <td>{{ f.path }}</td>
+      <td>{{ f.kind }}</td>
+      <td>{{ f.category }}</td>
+      {% if has_config_packages %}
+      <td>{{ f.package }}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No configuration file changes detected</p>
+{% endif %}
+
+{% endcall %}

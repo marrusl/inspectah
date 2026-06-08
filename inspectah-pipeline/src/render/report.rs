@@ -289,6 +289,125 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
+    // ── Config files section data ───────────────────────────────
+    let config_files: Vec<Value> = snap
+        .config
+        .as_ref()
+        .map(|cfg| {
+            cfg.files
+                .iter()
+                .map(|f| {
+                    let kind_str = serde_json::to_string(&f.kind)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string();
+                    let cat_str = serde_json::to_string(&f.category)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string();
+                    Value::from_serialize(serde_json::json!({
+                        "path": f.path,
+                        "kind": kind_str,
+                        "category": cat_str,
+                        "package": f.package.as_deref().unwrap_or(""),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let config_count = config_files.len();
+    let config_state = section_state(InspectorId::Config, &snap.completeness);
+    let config_state_str = match config_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // Check if any config file has a package value
+    let has_config_packages = snap
+        .config
+        .as_ref()
+        .map(|cfg| cfg.files.iter().any(|f| f.package.is_some()))
+        .unwrap_or(false);
+
+    // Fleet conflict count: count config files that have fleet data with conflicts
+    let config_conflict_count: usize = snap
+        .config
+        .as_ref()
+        .and_then(|cfg| {
+            if snap.fleet_meta.is_some() {
+                Some(
+                    cfg.files
+                        .iter()
+                        .filter(|f| f.fleet.is_some())
+                        .count(),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    // ── Services section data ────────────────────────────────────
+    let services: Vec<Value> = snap
+        .services
+        .as_ref()
+        .map(|svc| {
+            svc.state_changes
+                .iter()
+                .map(|s| {
+                    let default_str = s
+                        .default_state
+                        .as_ref()
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "n/a".to_string());
+                    Value::from_serialize(serde_json::json!({
+                        "unit": s.unit,
+                        "current_state": s.current_state.to_string(),
+                        "default_state": default_str,
+                        "include": s.include,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let svc_count = services.len();
+    let svc_state = section_state(InspectorId::Services, &snap.completeness);
+    let svc_state_str = match svc_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // Build extra badge with enabled/masked sub-counts
+    let svc_extra_badge = snap
+        .services
+        .as_ref()
+        .map(|svc| {
+            use inspectah_core::types::services::ServiceUnitState;
+            let enabled = svc
+                .state_changes
+                .iter()
+                .filter(|s| s.current_state == ServiceUnitState::Enabled)
+                .count();
+            let masked = svc
+                .state_changes
+                .iter()
+                .filter(|s| s.current_state == ServiceUnitState::Masked)
+                .count();
+            let mut parts = Vec::new();
+            if enabled > 0 {
+                parts.push(format!("{enabled} enabled"));
+            }
+            if masked > 0 {
+                parts.push(format!("{masked} masked"));
+            }
+            parts.join(", ")
+        })
+        .unwrap_or_default();
+
     // System type — use serde name for human-readable display
     let system_type = serde_json::to_string(&snap.system_type)
         .unwrap_or_default()
@@ -345,6 +464,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 
     let packages_val = Value::from(packages);
     let version_changes_val = Value::from(version_changes);
+    let config_files_val = Value::from(config_files);
+    let services_val = Value::from(services);
 
     tmpl.render(context! {
         os_name,
@@ -364,6 +485,15 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         pkg_count,
         pkg_state => pkg_state_str,
         version_changes => version_changes_val,
+        config_files => config_files_val,
+        config_count,
+        config_state => config_state_str,
+        config_conflict_count,
+        has_config_packages,
+        services => services_val,
+        svc_count,
+        svc_state => svc_state_str,
+        svc_extra_badge,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,
         report_js => REPORT_JS,
@@ -804,6 +934,256 @@ mod tests {
         assert!(
             html.contains("data unavailable"),
             "failed packages section must show data unavailable badge"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Configuration Files section tests (T8)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_config_section() {
+        let mut snap = test_snapshot();
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![inspectah_core::types::config::ConfigFileEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
+                include: true,
+                ..Default::default()
+            }],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Configuration Files"),
+            "report must contain Configuration Files section"
+        );
+        assert!(
+            html.contains("httpd.conf"),
+            "config table must contain file path"
+        );
+    }
+
+    #[test]
+    fn test_report_config_table_columns() {
+        let mut snap = test_snapshot();
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![inspectah_core::types::config::ConfigFileEntry {
+                path: "/etc/sysctl.conf".into(),
+                kind: inspectah_core::types::config::ConfigFileKind::Unowned,
+                category: inspectah_core::types::config::ConfigCategory::Sysctl,
+                include: true,
+                ..Default::default()
+            }],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("<th>Path</th>"), "table must have Path column");
+        assert!(html.contains("<th>Kind</th>"), "table must have Kind column");
+        assert!(
+            html.contains("<th>Category</th>"),
+            "table must have Category column"
+        );
+        assert!(
+            html.contains("sysctl"),
+            "config table must show category value"
+        );
+    }
+
+    #[test]
+    fn test_report_config_shows_package_column_when_present() {
+        let mut snap = test_snapshot();
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![inspectah_core::types::config::ConfigFileEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
+                package: Some("httpd".into()),
+                include: true,
+                ..Default::default()
+            }],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("<th>Package</th>"),
+            "table must have Package column when packages present"
+        );
+        assert!(
+            html.contains(">httpd<"),
+            "table must show package name"
+        );
+    }
+
+    #[test]
+    fn test_report_empty_config_shows_empty_state() {
+        let mut snap = test_snapshot();
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("(0)"),
+            "empty config section must show (0) badge"
+        );
+        assert!(
+            html.contains("No configuration file changes detected"),
+            "empty config section must show empty state message"
+        );
+    }
+
+    #[test]
+    fn test_report_config_failed_state() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config],
+            degraded_sections: vec![],
+            reason: "permission denied".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        // The config section should show "data unavailable"
+        assert!(
+            html.contains("Configuration Files"),
+            "failed config section must still have title"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Service State Changes section tests (T8)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_services_section() {
+        let mut snap = test_snapshot();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
+                unit: "firewalld.service".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+                include: true,
+                locked: false,
+                owning_package: Some("firewalld".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            enabled_units: vec!["firewalld.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Service State Changes"),
+            "report must contain Service State Changes section"
+        );
+        assert!(
+            html.contains("firewalld.service"),
+            "services table must contain unit name"
+        );
+        assert!(
+            html.contains("enabled"),
+            "services table must show current state"
+        );
+    }
+
+    #[test]
+    fn test_report_services_table_columns() {
+        let mut snap = test_snapshot();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Disabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Enable),
+                include: false,
+                locked: false,
+                owning_package: Some("openssh-server".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            enabled_units: vec![],
+            disabled_units: vec!["sshd.service".into()],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("<th>Unit</th>"),
+            "table must have Unit column"
+        );
+        assert!(
+            html.contains("<th>Current State</th>"),
+            "table must have Current State column"
+        );
+        assert!(
+            html.contains("<th>Default State</th>"),
+            "table must have Default State column"
+        );
+        assert!(
+            html.contains("<th>Action</th>"),
+            "table must have Action column"
+        );
+        assert!(
+            html.contains("exclude"),
+            "services table must show exclude for include=false"
+        );
+    }
+
+    #[test]
+    fn test_report_empty_services_shows_empty_state() {
+        let mut snap = test_snapshot();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("(0)"),
+            "empty services section must show (0) badge"
+        );
+        assert!(
+            html.contains("No service state changes detected"),
+            "empty services section must show empty state message"
+        );
+    }
+
+    #[test]
+    fn test_report_services_extra_badge() {
+        let mut snap = test_snapshot();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![
+                inspectah_core::types::services::ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                    default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+                    include: true,
+                    locked: false,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                },
+                inspectah_core::types::services::ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: inspectah_core::types::services::ServiceUnitState::Masked,
+                    default_state: None,
+                    include: true,
+                    locked: false,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            enabled_units: vec!["firewalld.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("1 enabled"),
+            "extra badge must show enabled count"
+        );
+        assert!(
+            html.contains("1 masked"),
+            "extra badge must show masked count"
         );
     }
 }
