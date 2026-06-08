@@ -552,6 +552,125 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .map(|s| s.mode.clone())
         .unwrap_or_default();
 
+    // ── Scheduled Tasks section data (conditional) ──────────────
+    let has_scheduled = snap.scheduled_tasks.is_some();
+    let cron_jobs: Vec<Value> = snap
+        .scheduled_tasks
+        .as_ref()
+        .map(|st| {
+            st.cron_jobs
+                .iter()
+                .map(|j| {
+                    Value::from_serialize(serde_json::json!({
+                        "path": j.path,
+                        "source": j.source,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let systemd_timers: Vec<Value> = snap
+        .scheduled_tasks
+        .as_ref()
+        .map(|st| {
+            st.systemd_timers
+                .iter()
+                .map(|t| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": t.name,
+                        "on_calendar": t.on_calendar,
+                        "description": t.description,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let generated_timers: Vec<Value> = snap
+        .scheduled_tasks
+        .as_ref()
+        .map(|st| {
+            st.generated_timer_units
+                .iter()
+                .map(|g| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": g.name,
+                        "cron_expr": g.cron_expr,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let at_jobs: Vec<Value> = snap
+        .scheduled_tasks
+        .as_ref()
+        .map(|st| {
+            st.at_jobs
+                .iter()
+                .map(|a| {
+                    Value::from_serialize(serde_json::json!({
+                        "file": a.file,
+                        "command": a.command,
+                        "user": a.user,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let sched_count = cron_jobs.len()
+        + systemd_timers.len()
+        + generated_timers.len()
+        + at_jobs.len();
+    let sched_state = section_state(InspectorId::ScheduledTasks, &snap.completeness);
+    let sched_state_str = match sched_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // ── Non-RPM Software section data (conditional) ───────────
+    let has_nonrpm = snap.non_rpm_software.is_some();
+    let nonrpm_items: Vec<Value> = snap
+        .non_rpm_software
+        .as_ref()
+        .map(|n| {
+            n.items
+                .iter()
+                .map(|item| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": item.name,
+                        "path": item.path,
+                        "method": item.method,
+                        "confidence": item.confidence,
+                        "lang": item.lang,
+                        "version": item.version,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let nonrpm_count = nonrpm_items.len();
+    let nonrpm_state = section_state(InspectorId::NonRpmSoftware, &snap.completeness);
+    let nonrpm_state_str = match nonrpm_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // ── Warnings section data (always rendered) ───────────────
+    let warnings_list: Vec<Value> = snap
+        .warnings
+        .iter()
+        .map(|w| {
+            Value::from_serialize(serde_json::json!({
+                "inspector": w.inspector,
+                "message": w.message,
+            }))
+        })
+        .collect();
+
+    // ── Redactions section data (always rendered) ─────────────
+    let redaction_count = snap.redactions.len();
+
     // System type — use serde name for human-readable display
     let system_type = serde_json::to_string(&snap.system_type)
         .unwrap_or_default()
@@ -617,6 +736,12 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let selinux_modules_val = Value::from(selinux_modules);
     let selinux_booleans_val = Value::from(selinux_booleans);
     let selinux_fcontexts_val = Value::from(selinux_fcontexts);
+    let cron_jobs_val = Value::from(cron_jobs);
+    let systemd_timers_val = Value::from(systemd_timers);
+    let generated_timers_val = Value::from(generated_timers);
+    let at_jobs_val = Value::from(at_jobs);
+    let nonrpm_items_val = Value::from(nonrpm_items);
+    let warnings_list_val = Value::from(warnings_list);
 
     tmpl.render(context! {
         os_name,
@@ -668,6 +793,23 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         security_count,
         security_state => security_state_str,
         security_extra_badge,
+        // Scheduled Tasks (conditional)
+        has_scheduled,
+        cron_jobs => cron_jobs_val,
+        systemd_timers => systemd_timers_val,
+        generated_timers => generated_timers_val,
+        at_jobs => at_jobs_val,
+        sched_count,
+        sched_state => sched_state_str,
+        // Non-RPM Software (conditional)
+        has_nonrpm,
+        nonrpm_items => nonrpm_items_val,
+        nonrpm_count,
+        nonrpm_state => nonrpm_state_str,
+        // Warnings (always rendered)
+        warnings_list => warnings_list_val,
+        // Redactions (always rendered)
+        redaction_count,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,
         report_js => REPORT_JS,
@@ -1651,6 +1793,240 @@ mod tests {
         assert!(
             html.contains("data unavailable"),
             "failed security section shows data unavailable"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduled Tasks section tests (T10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_scheduled_tasks_renders_with_data() {
+        use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
+        let mut snap = test_snapshot();
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            cron_jobs: vec![CronJob {
+                path: "/etc/cron.d/backup".into(),
+                source: "file".into(),
+                include: true,
+                ..Default::default()
+            }],
+            systemd_timers: vec![SystemdTimer {
+                name: "logrotate.timer".into(),
+                on_calendar: "daily".into(),
+                description: "Rotate logs".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Scheduled Tasks"),
+            "must render Scheduled Tasks section heading"
+        );
+        assert!(
+            html.contains("/etc/cron.d/backup")
+                || html.contains("&#x2f;etc&#x2f;cron.d&#x2f;backup"),
+            "must render cron job path"
+        );
+        assert!(
+            html.contains("logrotate.timer"),
+            "must render systemd timer name"
+        );
+        assert!(html.contains("(2)"), "badge must show total count 2");
+    }
+
+    #[test]
+    fn test_report_scheduled_tasks_hidden_when_absent() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="scheduled-tasks""#),
+            "scheduled tasks section must not render when data is absent"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-RPM Software section tests (T10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_nonrpm_renders_with_data() {
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        let mut snap = test_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/app/bin".into(),
+                name: "custom-app".into(),
+                method: "binary".into(),
+                confidence: "high".into(),
+                lang: "c".into(),
+                version: "1.0.0".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Non-RPM Software"),
+            "must render Non-RPM Software section heading"
+        );
+        assert!(
+            html.contains("custom-app"),
+            "must render non-RPM item name"
+        );
+        assert!(
+            html.contains("/opt/app/bin") || html.contains("&#x2f;opt&#x2f;app&#x2f;bin"),
+            "must render non-RPM item path"
+        );
+    }
+
+    #[test]
+    fn test_report_nonrpm_hidden_when_absent() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="nonrpm""#),
+            "non-RPM section must not render when data is absent"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Warnings section tests (T10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_warnings_always_renders() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains(r#"id="warnings""#),
+            "warnings section must always render even with 0 warnings"
+        );
+        assert!(
+            html.contains("No warnings"),
+            "empty warnings section must show empty state"
+        );
+    }
+
+    #[test]
+    fn test_report_warnings_renders_with_data() {
+        let mut snap = test_snapshot();
+        snap.warnings = vec![inspectah_core::types::warnings::Warning {
+            inspector: "config".into(),
+            message: "Found orphaned config file".into(),
+            severity: None,
+            extra: Default::default(),
+        }];
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Found orphaned config file"),
+            "must render warning message"
+        );
+        assert!(
+            html.contains("report-section--warning"),
+            "warnings section must have warning class"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Redactions section tests (T10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_redactions_always_renders() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains(r#"id="redactions""#),
+            "redactions section must always render"
+        );
+        assert!(
+            html.contains("secrets-review.md"),
+            "redactions section must point to secrets-review.md"
+        );
+    }
+
+    #[test]
+    fn test_report_redactions_shows_count() {
+        use inspectah_core::types::redaction::{
+            DetectionMethod, RedactionFinding, RedactionKind,
+        };
+        let mut snap = test_snapshot();
+        snap.redactions = vec![
+            RedactionFinding {
+                path: "/etc/shadow".into(),
+                source: "file".into(),
+                kind: RedactionKind::Excluded,
+                pattern: String::new(),
+                remediation: String::new(),
+                line: None,
+                replacement: None,
+                detection_method: DetectionMethod::Pattern,
+                confidence: None,
+                finding_kind: None,
+            },
+            RedactionFinding {
+                path: "/etc/pki/key.pem".into(),
+                source: "file".into(),
+                kind: RedactionKind::Excluded,
+                pattern: String::new(),
+                remediation: String::new(),
+                line: None,
+                replacement: None,
+                detection_method: DetectionMethod::Pattern,
+                confidence: None,
+                finding_kind: None,
+            },
+        ];
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("2 item(s) redacted"),
+            "redactions must show count of redacted items"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Failed section rendering for T10 sections
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_failed_scheduled_renders() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::ScheduledTasks],
+            degraded_sections: vec![],
+            reason: "scheduled tasks inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Scheduled Tasks"),
+            "failed scheduled tasks section must be rendered"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed scheduled tasks section shows data unavailable"
+        );
+    }
+
+    #[test]
+    fn test_report_failed_nonrpm_renders() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::NonRpmSoftware],
+            degraded_sections: vec![],
+            reason: "non-rpm inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Non-RPM Software"),
+            "failed non-RPM section must be rendered"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed non-RPM section shows data unavailable"
         );
     }
 }

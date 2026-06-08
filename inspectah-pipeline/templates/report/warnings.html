@@ -1,0 +1,26 @@
+{% from "report/section.html" import section %}
+
+{% call section("warnings", "Warnings", count=warning_count, state="normal") %}
+
+{% if warning_count > 0 %}
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Inspector</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for w in warnings_list %}
+    <tr>
+      <td>{{ w.inspector }}</td>
+      <td>{{ w.message }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No warnings</p>
+{% endif %}
+
+{% endcall %}

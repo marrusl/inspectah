@@ -1,0 +1,101 @@
+{% from "report/section.html" import section %}
+
+{% call section("scheduled-tasks", "Scheduled Tasks", count=sched_count, state=sched_state) %}
+
+{% if sched_count >= 10 %}
+<div class="report-filter">
+  <label for="filter-scheduled-tasks">Filter Scheduled Tasks</label>
+  <input type="text" id="filter-scheduled-tasks" data-section="scheduled-tasks">
+  <span class="filter-count">Showing {{ sched_count }} of {{ sched_count }}</span>
+</div>
+{% endif %}
+
+{% if cron_jobs | length > 0 %}
+<h4>Cron Jobs ({{ cron_jobs | length }})</h4>
+<table class="report-table" data-filterable="scheduled-tasks">
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in cron_jobs %}
+    <tr>
+      <td><code>{{ job.path }}</code></td>
+      <td>{{ job.source }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if systemd_timers | length > 0 %}
+<h4>Systemd Timers ({{ systemd_timers | length }})</h4>
+<table class="report-table" data-filterable="scheduled-tasks">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Schedule</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for timer in systemd_timers %}
+    <tr>
+      <td>{{ timer.name }}</td>
+      <td><code>{{ timer.on_calendar }}</code></td>
+      <td>{{ timer.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if generated_timers | length > 0 %}
+<h4>Generated Timer Units ({{ generated_timers | length }})</h4>
+<table class="report-table" data-filterable="scheduled-tasks">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Cron Expression</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for gt in generated_timers %}
+    <tr>
+      <td>{{ gt.name }}</td>
+      <td><code>{{ gt.cron_expr }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if at_jobs | length > 0 %}
+<h4>At Jobs ({{ at_jobs | length }})</h4>
+<table class="report-table" data-filterable="scheduled-tasks">
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Command</th>
+      <th>User</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in at_jobs %}
+    <tr>
+      <td><code>{{ job.file }}</code></td>
+      <td><code>{{ job.command }}</code></td>
+      <td>{{ job.user }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if sched_count == 0 %}
+<p class="empty-state">No scheduled tasks detected</p>
+{% endif %}
+
+{% endcall %}

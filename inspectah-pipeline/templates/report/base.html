@@ -37,7 +37,16 @@
       {% include "report/security.html" %}
     {% endif %}
 
-    <!-- More sections in T10-T12 -->
+    {% if has_scheduled or sched_state == "failed" %}
+      {% include "report/scheduled.html" %}
+    {% endif %}
+    {% if has_nonrpm or nonrpm_state == "failed" %}
+      {% include "report/nonrpm.html" %}
+    {% endif %}
+    {% include "report/warnings.html" %}
+    {% include "report/redactions.html" %}
+
+    <!-- More sections in T11-T12 -->
   </main>
 
   <footer class="report-footer">

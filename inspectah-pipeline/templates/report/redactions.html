@@ -1,0 +1,7 @@
+{% from "report/section.html" import section %}
+
+{% call section("redactions", "Redactions", count=redaction_count, state="normal") %}
+
+<p class="text-muted">{{ redaction_count }} item(s) redacted. See secrets-review.md for details.</p>
+
+{% endcall %}
