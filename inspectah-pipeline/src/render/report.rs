@@ -7,6 +7,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
+use inspectah_core::types::users::UserGroupDecision;
 use minijinja::{context, Environment, Value};
 
 use super::report_data::{build_filter_data, section_state, script_safe_json, SectionState};
@@ -656,6 +657,43 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         SectionState::Failed => "failed",
     };
 
+    // ── Users & Groups section data (conditional) ─────────────
+    // SECURITY: Only whitelisted fields are projected into the template
+    // context. password_hash and ssh_keys content are EXCLUDED.
+    let has_users = snap.users_groups.is_some();
+    let users_list: Vec<Value> = snap
+        .users_groups
+        .as_ref()
+        .map(|ug| {
+            ug.users
+                .iter()
+                .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
+                .filter(|u| u.include)
+                .map(|u| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": u.name,
+                        "uid": u.uid,
+                        "gid": u.gid,
+                        "shell": u.shell,
+                        "home": u.home,
+                        "classification": u.classification,
+                        "has_sudo": u.has_sudo.unwrap_or(false),
+                        "ssh_key_count": u.ssh_key_count.unwrap_or(0),
+                        "groups": u.supplementary_groups.as_deref().unwrap_or(&[]).join(", "),
+                        "password_status": format!("{:?}", u.password_choice),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let users_count = users_list.len();
+    let users_state = section_state(InspectorId::UsersGroups, &snap.completeness);
+    let users_state_str = match users_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
     // ── Warnings section data (always rendered) ───────────────
     let warnings_list: Vec<Value> = snap
         .warnings
@@ -741,6 +779,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let generated_timers_val = Value::from(generated_timers);
     let at_jobs_val = Value::from(at_jobs);
     let nonrpm_items_val = Value::from(nonrpm_items);
+    let users_list_val = Value::from(users_list);
     let warnings_list_val = Value::from(warnings_list);
 
     tmpl.render(context! {
@@ -806,6 +845,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         nonrpm_items => nonrpm_items_val,
         nonrpm_count,
         nonrpm_state => nonrpm_state_str,
+        // Users & Groups (conditional)
+        has_users,
+        users_list => users_list_val,
+        users_count,
+        users_state => users_state_str,
         // Warnings (always rendered)
         warnings_list => warnings_list_val,
         // Redactions (always rendered)
@@ -2027,6 +2071,196 @@ mod tests {
         assert!(
             html.contains("data unavailable"),
             "failed non-RPM section shows data unavailable"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Users & Groups section tests (T11)
+    // -----------------------------------------------------------------------
+
+    fn users_snapshot() -> InspectionSnapshot {
+        let mut snap = test_snapshot();
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "alice",
+                "uid": 1000,
+                "gid": 1000,
+                "shell": "/bin/bash",
+                "home": "/home/alice",
+                "include": true,
+                "classification": "interactive",
+                "containerfile_strategy": "useradd",
+                "password_choice": "preserve",
+                "has_sudo": true,
+                "ssh_key_count": 2,
+                "supplementary_groups": ["wheel", "docker"]
+            })],
+            ..Default::default()
+        });
+        snap
+    }
+
+    #[test]
+    fn test_report_users_excludes_password_hash() {
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "alice",
+                "uid": 1000,
+                "gid": 1000,
+                "shell": "/bin/bash",
+                "home": "/home/alice",
+                "include": true,
+                "classification": "interactive",
+                "containerfile_strategy": "useradd",
+                "password_choice": "preserve",
+                "password_hash": "$6$secret_hash_value",
+                "ssh_keys": ["ssh-ed25519 AAAA_secret_key_content"]
+            })],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("alice"), "user name should appear");
+        assert!(
+            !html.contains("secret_hash_value"),
+            "password_hash must not appear in HTML"
+        );
+        assert!(
+            !html.contains("secret_key_content"),
+            "ssh_keys content must not appear in HTML"
+        );
+    }
+
+    #[test]
+    fn test_report_contains_users_section() {
+        let snap = users_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Users &amp; Groups") || html.contains("Users & Groups"),
+            "report must contain Users & Groups section"
+        );
+        assert!(
+            html.contains("alice"),
+            "users table must contain user name"
+        );
+    }
+
+    #[test]
+    fn test_report_users_table_columns() {
+        let snap = users_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("<th>Name</th>"), "table must have Name column");
+        assert!(html.contains("<th>UID</th>"), "table must have UID column");
+        assert!(html.contains("<th>GID</th>"), "table must have GID column");
+        assert!(
+            html.contains("<th>Shell</th>"),
+            "table must have Shell column"
+        );
+        assert!(html.contains("<th>Home</th>"), "table must have Home column");
+        assert!(
+            html.contains("<th>Classification</th>"),
+            "table must have Classification column"
+        );
+        assert!(html.contains("<th>Sudo</th>"), "table must have Sudo column");
+        assert!(
+            html.contains("<th>SSH Keys</th>"),
+            "table must have SSH Keys column"
+        );
+        assert!(
+            html.contains("<th>Groups</th>"),
+            "table must have Groups column"
+        );
+    }
+
+    #[test]
+    fn test_report_users_shows_field_values() {
+        let snap = users_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("interactive"),
+            "must show classification value"
+        );
+        assert!(
+            html.contains("wheel, docker"),
+            "must show supplementary groups"
+        );
+        assert!(html.contains(">yes<"), "must show sudo=yes for has_sudo=true");
+    }
+
+    #[test]
+    fn test_report_users_filters_excluded() {
+        let mut snap = test_snapshot();
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection {
+            users: vec![
+                serde_json::json!({
+                    "name": "included_user",
+                    "uid": 1000, "gid": 1000,
+                    "shell": "/bin/bash", "home": "/home/included",
+                    "include": true,
+                    "classification": "interactive",
+                    "containerfile_strategy": "useradd",
+                    "password_choice": "none"
+                }),
+                serde_json::json!({
+                    "name": "excluded_user",
+                    "uid": 1001, "gid": 1001,
+                    "shell": "/sbin/nologin", "home": "/home/excluded",
+                    "include": false,
+                    "classification": "system",
+                    "containerfile_strategy": "skip",
+                    "password_choice": "none"
+                }),
+            ],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("included_user"),
+            "included user must appear"
+        );
+        assert!(
+            !html.contains("excluded_user"),
+            "excluded user must not appear in rendered HTML"
+        );
+    }
+
+    #[test]
+    fn test_report_users_empty_shows_empty_state() {
+        let mut snap = test_snapshot();
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection::default());
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("No user accounts detected"),
+            "empty users section must show empty state message"
+        );
+    }
+
+    #[test]
+    fn test_report_users_absent_not_rendered() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="users-groups""#),
+            "absent users section must not be rendered"
+        );
+    }
+
+    #[test]
+    fn test_report_failed_users_renders() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::UsersGroups],
+            degraded_sections: vec![],
+            reason: "users inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Users"),
+            "failed users section must be rendered"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed users section shows data unavailable"
         );
     }
 }

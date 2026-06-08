@@ -1,0 +1,48 @@
+{% from "report/section.html" import section %}
+
+{% call section("users-groups", "Users & Groups", count=users_count, state=users_state) %}
+
+{% if users_count >= 10 %}
+<div class="report-filter">
+  <label for="filter-users-groups">Filter Users</label>
+  <input type="text" id="filter-users-groups" data-section="users-groups">
+  <span class="filter-count">Showing {{ users_count }} of {{ users_count }}</span>
+</div>
+{% endif %}
+
+{% if users_count > 0 %}
+<table class="report-table" data-filterable="users-groups">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>UID</th>
+      <th>GID</th>
+      <th>Shell</th>
+      <th>Home</th>
+      <th>Classification</th>
+      <th>Sudo</th>
+      <th>SSH Keys</th>
+      <th>Groups</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for user in users_list %}
+    <tr>
+      <td>{{ user.name }}</td>
+      <td>{{ user.uid }}</td>
+      <td>{{ user.gid }}</td>
+      <td>{{ user.shell }}</td>
+      <td>{{ user.home }}</td>
+      <td>{{ user.classification }}</td>
+      <td>{% if user.has_sudo %}yes{% else %}no{% endif %}</td>
+      <td>{{ user.ssh_key_count }}</td>
+      <td>{{ user.groups }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No user accounts detected</p>
+{% endif %}
+
+{% endcall %}

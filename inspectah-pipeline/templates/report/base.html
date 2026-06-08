@@ -43,10 +43,13 @@
     {% if has_nonrpm or nonrpm_state == "failed" %}
       {% include "report/nonrpm.html" %}
     {% endif %}
+    {% if has_users or users_state == "failed" %}
+      {% include "report/users.html" %}
+    {% endif %}
     {% include "report/warnings.html" %}
     {% include "report/redactions.html" %}
 
-    <!-- More sections in T11-T12 -->
+    <!-- More sections in T12 -->
   </main>
 
   <footer class="report-footer">

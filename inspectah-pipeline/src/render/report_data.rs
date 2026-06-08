@@ -215,6 +215,7 @@ pub fn build_filter_data(snap: &InspectionSnapshot) -> ReportFilterData {
             ug.users
                 .iter()
                 .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
+                .filter(|u| u.include)
                 .map(|u| FilterableUser {
                     name: u.name.clone(),
                     uid: u.uid,
