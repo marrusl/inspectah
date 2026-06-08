@@ -1,0 +1,272 @@
+/* inspectah HTML audit report — custom styles
+   All colors, spacing, and typography reference PatternFly 6 design tokens.
+   No hardcoded hex values. */
+
+/* ── Breakpoint custom properties ────────────────────────────── */
+:root {
+  --report-bp-narrow: 600px;
+  --report-bp-medium: 900px;
+}
+
+/* ── Report header ───────────────────────────────────────────── */
+.report-header {
+  background: var(--pf-t--global--color--brand--default);
+  color: var(--pf-t--global--text--color--on-brand--default);
+  padding: var(--pf-t--global--spacer--lg) var(--pf-t--global--spacer--xl);
+  font-family: var(--pf-t--global--font--family--heading);
+}
+
+.report-header h1 {
+  font-size: var(--pf-t--global--font--size--2xl);
+  font-weight: var(--pf-t--global--font--weight--heading--default);
+  margin-bottom: var(--pf-t--global--spacer--xs);
+}
+
+.report-header .report-meta {
+  font-size: var(--pf-t--global--font--size--sm);
+  opacity: 0.85;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--md);
+}
+
+/* ── TOC navigation bar ──────────────────────────────────────── */
+.report-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xl);
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-bottom: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+}
+
+.report-toc a {
+  color: var(--pf-t--global--text--color--link--default);
+  text-decoration: none;
+  font-size: var(--pf-t--global--font--size--sm);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  border-radius: var(--pf-t--global--border--radius--small);
+}
+
+.report-toc a:hover {
+  background: var(--pf-t--global--background--color--primary--hover);
+  color: var(--pf-t--global--text--color--link--hover);
+}
+
+@media (max-width: 600px) {
+  .report-toc {
+    display: none;
+  }
+}
+
+/* ── Summary cards ───────────────────────────────────────────── */
+.report-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--pf-t--global--spacer--md);
+  padding: var(--pf-t--global--spacer--lg) var(--pf-t--global--spacer--xl);
+}
+
+.report-cards dl {
+  background: var(--pf-t--global--background--color--primary--default);
+  border: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--medium);
+  padding: var(--pf-t--global--spacer--md);
+}
+
+.report-cards dt {
+  font-size: var(--pf-t--global--font--size--xs);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--pf-t--global--spacer--xs);
+}
+
+.report-cards dd {
+  font-size: var(--pf-t--global--font--size--2xl);
+  font-weight: var(--pf-t--global--font--weight--heading--default);
+  color: var(--pf-t--global--text--color--regular);
+}
+
+@media (max-width: 900px) {
+  .report-cards {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .report-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Sections (details/summary) ──────────────────────────────── */
+.report-section {
+  border: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--medium);
+  margin: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xl);
+}
+
+.report-section summary {
+  padding: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg);
+  font-weight: var(--pf-t--global--font--weight--heading--default);
+  font-size: var(--pf-t--global--font--size--lg);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-radius: var(--pf-t--global--border--radius--medium);
+}
+
+.report-section summary::before {
+  content: "\25B6"; /* right-pointing triangle */
+  font-size: var(--pf-t--global--font--size--xs);
+  transition: transform 0.15s ease;
+}
+
+.report-section[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.report-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-section .section-body {
+  padding: var(--pf-t--global--spacer--lg);
+}
+
+/* Warning section — red left border accent */
+.report-section--warning {
+  border-left: 4px solid var(--pf-t--global--color--status--danger--default);
+}
+
+/* ── Badges / state indicators ───────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  border-radius: var(--pf-t--global--border--radius--pill);
+  font-size: var(--pf-t--global--font--size--xs);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  background: var(--pf-t--global--color--status--info--default);
+  color: var(--pf-t--global--text--color--on-brand--default);
+}
+
+.badge-degraded {
+  background: var(--pf-t--global--color--status--warning--default);
+  color: var(--pf-t--global--text--color--status--on-warning--default);
+}
+
+.badge-failed {
+  background: var(--pf-t--global--color--status--danger--default);
+  color: var(--pf-t--global--text--color--on-brand--default);
+}
+
+/* ── Filter inputs ───────────────────────────────────────────── */
+.report-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: var(--pf-t--global--spacer--sm) 0;
+  margin-bottom: var(--pf-t--global--spacer--sm);
+}
+
+.report-filter label {
+  font-size: var(--pf-t--global--font--size--sm);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--regular);
+  white-space: nowrap;
+}
+
+.report-filter input {
+  flex: 1;
+  max-width: 300px;
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--sm);
+  font-family: var(--pf-t--global--font--family--body);
+  border: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--small);
+  background: var(--pf-t--global--background--color--primary--default);
+  color: var(--pf-t--global--text--color--regular);
+}
+
+.report-filter input:focus {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: 1px;
+}
+
+.report-filter .filter-count {
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+  white-space: nowrap;
+}
+
+.filter-no-results {
+  padding: var(--pf-t--global--spacer--lg);
+  text-align: center;
+  font-size: var(--pf-t--global--font--size--sm);
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+/* ── Tables ──────────────────────────────────────────────────── */
+.report-section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
+.report-section th,
+.report-section td {
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+  text-align: left;
+  border-bottom: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+}
+
+.report-section th {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--subtle);
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.report-section tbody tr:hover {
+  background: var(--pf-t--global--background--color--primary--hover);
+}
+
+/* ── Print ───────────────────────────────────────────────────── */
+@media print {
+  .report-toc,
+  .report-filter {
+    display: none;
+  }
+
+  .report-section {
+    break-inside: avoid;
+    margin: var(--pf-t--global--spacer--sm) 0;
+  }
+
+  .report-section[open] summary,
+  .report-section summary {
+    background: none;
+  }
+
+  /* Force all details open in print */
+  .report-section {
+    display: block;
+  }
+
+  .report-cards {
+    grid-template-columns: 1fr;
+    padding: var(--pf-t--global--spacer--sm) 0;
+  }
+}
