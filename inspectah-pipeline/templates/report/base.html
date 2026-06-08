@@ -26,7 +26,18 @@
     {% include "report/packages.html" %}
     {% include "report/config.html" %}
     {% include "report/services.html" %}
-    <!-- More sections in T9-T12 -->
+
+    {% if has_storage or storage_state == "failed" %}
+      {% include "report/storage.html" %}
+    {% endif %}
+    {% if has_kernelboot or kernelboot_state == "failed" %}
+      {% include "report/kernel.html" %}
+    {% endif %}
+    {% if has_security or security_state == "failed" %}
+      {% include "report/security.html" %}
+    {% endif %}
+
+    <!-- More sections in T10-T12 -->
   </main>
 
   <footer class="report-footer">

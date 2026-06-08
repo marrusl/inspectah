@@ -408,6 +408,150 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
+    // ── Storage section data (conditional) ────────────────────────
+    let has_storage = snap.storage.is_some();
+    let storage_items: Vec<Value> = snap
+        .storage
+        .as_ref()
+        .map(|st| {
+            st.fstab_entries
+                .iter()
+                .map(|e| {
+                    Value::from_serialize(serde_json::json!({
+                        "device": e.device,
+                        "mount_point": e.mount_point,
+                        "fstype": e.fstype,
+                        "options": e.options,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let storage_count = storage_items.len();
+    let storage_state = section_state(InspectorId::Storage, &snap.completeness);
+    let storage_state_str = match storage_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // ── Kernel & Boot section data (conditional) ────────────────
+    let has_kernelboot = snap.kernel_boot.is_some();
+    let kernel_cmdline = snap
+        .kernel_boot
+        .as_ref()
+        .map(|k| k.cmdline.clone())
+        .unwrap_or_default();
+    let sysctl_overrides: Vec<Value> = snap
+        .kernel_boot
+        .as_ref()
+        .map(|k| {
+            k.sysctl_overrides
+                .iter()
+                .map(|s| {
+                    Value::from_serialize(serde_json::json!({
+                        "key": s.key,
+                        "runtime": s.runtime,
+                        "default": s.default,
+                        "source": s.source,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let modules_load_d: Vec<Value> = snap
+        .kernel_boot
+        .as_ref()
+        .map(|k| {
+            k.modules_load_d
+                .iter()
+                .map(|m| {
+                    Value::from_serialize(serde_json::json!({
+                        "path": m.path,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let modprobe_d: Vec<Value> = snap
+        .kernel_boot
+        .as_ref()
+        .map(|k| {
+            k.modprobe_d
+                .iter()
+                .map(|m| {
+                    Value::from_serialize(serde_json::json!({
+                        "path": m.path,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let kernelboot_count = sysctl_overrides.len() + modules_load_d.len() + modprobe_d.len();
+    let kernelboot_state = section_state(InspectorId::KernelBoot, &snap.completeness);
+    let kernelboot_state_str = match kernelboot_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+
+    // ── Security & Access Control section data (conditional) ────
+    let has_security = snap.selinux.is_some();
+    let selinux_mode = snap
+        .selinux
+        .as_ref()
+        .map(|s| s.mode.clone())
+        .unwrap_or_default();
+    let fips_enabled = snap
+        .selinux
+        .as_ref()
+        .map(|s| s.fips_mode)
+        .unwrap_or(false);
+    let selinux_modules: Vec<Value> = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            s.custom_modules
+                .iter()
+                .map(|m| Value::from(m.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let selinux_booleans: Vec<Value> = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            s.boolean_overrides
+                .iter()
+                .map(Value::from_serialize)
+                .collect()
+        })
+        .unwrap_or_default();
+    let selinux_fcontexts: Vec<Value> = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            s.fcontext_rules
+                .iter()
+                .map(|f| Value::from(f.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let security_count = selinux_modules.len()
+        + selinux_booleans.len()
+        + selinux_fcontexts.len();
+    let security_state = section_state(InspectorId::Selinux, &snap.completeness);
+    let security_state_str = match security_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+    let security_extra_badge = snap
+        .selinux
+        .as_ref()
+        .map(|s| s.mode.clone())
+        .unwrap_or_default();
+
     // System type — use serde name for human-readable display
     let system_type = serde_json::to_string(&snap.system_type)
         .unwrap_or_default()
@@ -466,6 +610,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let version_changes_val = Value::from(version_changes);
     let config_files_val = Value::from(config_files);
     let services_val = Value::from(services);
+    let storage_items_val = Value::from(storage_items);
+    let sysctl_overrides_val = Value::from(sysctl_overrides);
+    let modules_load_d_val = Value::from(modules_load_d);
+    let modprobe_d_val = Value::from(modprobe_d);
+    let selinux_modules_val = Value::from(selinux_modules);
+    let selinux_booleans_val = Value::from(selinux_booleans);
+    let selinux_fcontexts_val = Value::from(selinux_fcontexts);
 
     tmpl.render(context! {
         os_name,
@@ -494,6 +645,29 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         svc_count,
         svc_state => svc_state_str,
         svc_extra_badge,
+        // Storage (conditional)
+        has_storage,
+        storage_items => storage_items_val,
+        storage_count,
+        storage_state => storage_state_str,
+        // Kernel & Boot (conditional)
+        has_kernelboot,
+        kernel_cmdline,
+        sysctl_overrides => sysctl_overrides_val,
+        modules_load_d => modules_load_d_val,
+        modprobe_d => modprobe_d_val,
+        kernelboot_count,
+        kernelboot_state => kernelboot_state_str,
+        // Security & Access Control (conditional)
+        has_security,
+        selinux_mode,
+        fips_enabled,
+        selinux_modules => selinux_modules_val,
+        selinux_booleans => selinux_booleans_val,
+        selinux_fcontexts => selinux_fcontexts_val,
+        security_count,
+        security_state => security_state_str,
+        security_extra_badge,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,
         report_js => REPORT_JS,
@@ -1184,6 +1358,299 @@ mod tests {
         assert!(
             html.contains("1 masked"),
             "extra badge must show masked count"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Storage section tests (T9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_storage_section() {
+        let mut snap = test_snapshot();
+        snap.storage = Some(inspectah_core::types::storage::StorageSection {
+            fstab_entries: vec![inspectah_core::types::storage::FstabEntry {
+                device: "/dev/sda1".into(),
+                mount_point: "/boot".into(),
+                fstype: "xfs".into(),
+                options: "defaults".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Storage"),
+            "report must contain Storage section"
+        );
+        assert!(
+            html.contains("/dev/sda1") || html.contains("&#x2f;dev&#x2f;sda1"),
+            "storage table must contain device"
+        );
+        assert!(
+            html.contains("/boot") || html.contains("&#x2f;boot"),
+            "storage table must contain mount point"
+        );
+        assert!(
+            html.contains("xfs"),
+            "storage table must contain fs type"
+        );
+    }
+
+    #[test]
+    fn test_report_storage_table_columns() {
+        let mut snap = test_snapshot();
+        snap.storage = Some(inspectah_core::types::storage::StorageSection {
+            fstab_entries: vec![inspectah_core::types::storage::FstabEntry {
+                device: "/dev/sda1".into(),
+                mount_point: "/boot".into(),
+                fstype: "xfs".into(),
+                options: "defaults".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("<th>Device</th>"), "table must have Device column");
+        assert!(html.contains("<th>Mount Point</th>"), "table must have Mount Point column");
+        assert!(html.contains("<th>Type</th>"), "table must have Type column");
+        assert!(html.contains("<th>Options</th>"), "table must have Options column");
+    }
+
+    #[test]
+    fn test_report_storage_empty_shows_empty_state() {
+        let mut snap = test_snapshot();
+        snap.storage = Some(inspectah_core::types::storage::StorageSection::default());
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("No fstab entries detected"),
+            "empty storage section must show empty state"
+        );
+    }
+
+    #[test]
+    fn test_report_absent_storage_not_rendered() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="storage""#),
+            "absent storage section must not be rendered"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Kernel & Boot section tests (T9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_kernel_section() {
+        let mut snap = test_snapshot();
+        snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
+            cmdline: "quiet crashkernel=auto".into(),
+            sysctl_overrides: vec![inspectah_core::types::kernelboot::SysctlOverride {
+                key: "kernel.sysrq".into(),
+                runtime: "16".into(),
+                default: "0".into(),
+                source: "/etc/sysctl.d/99-custom.conf".into(),
+                include: true,
+                locked: false,
+                fleet: None,
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Kernel &amp; Boot") || html.contains("Kernel & Boot"),
+            "report must contain Kernel & Boot section"
+        );
+        assert!(
+            html.contains("quiet crashkernel=auto"),
+            "kernel section must show cmdline"
+        );
+        assert!(
+            html.contains("kernel.sysrq"),
+            "kernel section must show sysctl key"
+        );
+    }
+
+    #[test]
+    fn test_report_kernel_sysctl_table_columns() {
+        let mut snap = test_snapshot();
+        snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
+            sysctl_overrides: vec![inspectah_core::types::kernelboot::SysctlOverride {
+                key: "net.ipv4.ip_forward".into(),
+                runtime: "1".into(),
+                default: "0".into(),
+                source: "/etc/sysctl.d/10-forwarding.conf".into(),
+                include: true,
+                locked: false,
+                fleet: None,
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("<th>Key</th>"), "sysctl table must have Key column");
+        assert!(html.contains("<th>Runtime</th>"), "sysctl table must have Runtime column");
+        assert!(html.contains("<th>Default</th>"), "sysctl table must have Default column");
+        assert!(html.contains("<th>Source</th>"), "sysctl table must have Source column");
+    }
+
+    #[test]
+    fn test_report_absent_kernel_not_rendered() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="kernel-boot""#),
+            "absent kernel section must not be rendered"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Security & Access Control section tests (T9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_contains_security_section() {
+        let mut snap = test_snapshot();
+        snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
+            mode: "enforcing".into(),
+            custom_modules: vec!["myapp".into()],
+            boolean_overrides: vec![
+                serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
+            ],
+            fcontext_rules: vec!["/opt/app(/.*)?".into()],
+            fips_mode: false,
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Security &amp; Access Control")
+                || html.contains("Security & Access Control"),
+            "report must contain Security & Access Control section"
+        );
+        assert!(
+            html.contains("enforcing"),
+            "security section must show SELinux mode"
+        );
+        assert!(
+            html.contains("myapp"),
+            "security section must show custom module"
+        );
+        assert!(
+            html.contains("httpd_can_network_connect"),
+            "security section must show boolean override"
+        );
+    }
+
+    #[test]
+    fn test_report_security_fips_enabled() {
+        let mut snap = test_snapshot();
+        snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
+            mode: "enforcing".into(),
+            fips_mode: true,
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        // Should show "enabled" somewhere in the FIPS row
+        assert!(
+            html.contains("enabled"),
+            "security section must show FIPS enabled"
+        );
+    }
+
+    #[test]
+    fn test_report_absent_security_not_rendered() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="security""#),
+            "absent security section must not be rendered"
+        );
+    }
+
+    #[test]
+    fn test_report_security_extra_badge_shows_mode() {
+        let mut snap = test_snapshot();
+        snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
+            mode: "permissive".into(),
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("permissive"),
+            "security extra badge must show SELinux mode"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Failed-conditional section tests (T9 — proof #16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_failed_conditional_section_renders() {
+        let mut snap = InspectionSnapshot::new();
+        // Storage is absent (None) but in failed_sections
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Storage],
+            degraded_sections: vec![],
+            reason: "storage inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Storage"),
+            "failed section must be rendered even when data absent"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed section shows data unavailable"
+        );
+    }
+
+    #[test]
+    fn test_report_absent_conditional_section_not_rendered() {
+        let snap = InspectionSnapshot::new();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains(r#"id="storage""#),
+            "absent section must not be rendered"
+        );
+    }
+
+    #[test]
+    fn test_report_failed_kernel_renders() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::KernelBoot],
+            degraded_sections: vec![],
+            reason: "kernel inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Kernel"),
+            "failed kernel section must be rendered"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed kernel section shows data unavailable"
+        );
+    }
+
+    #[test]
+    fn test_report_failed_security_renders() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Selinux],
+            degraded_sections: vec![],
+            reason: "selinux inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Security"),
+            "failed security section must be rendered"
+        );
+        assert!(
+            html.contains("data unavailable"),
+            "failed security section shows data unavailable"
         );
     }
 }

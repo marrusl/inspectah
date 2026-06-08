@@ -556,20 +556,18 @@ fn report_scheduled_section() {
 }
 
 #[test]
-#[ignore = "summary cards deferred to T6; un-ignore when summary card template lands"]
 fn report_config_section() {
     let snap = snapshot_with_config_files();
     let html = report::render_report(&snap, &RenderContext { target: None });
     assert!(
-        html.contains("Config Files"),
-        "must contain Config Files summary card"
+        html.contains("Configuration Files"),
+        "must contain Configuration Files summary card"
     );
     // 2 included config files
     assert!(html.contains(">2<"), "config count must be 2");
 }
 
 #[test]
-#[ignore = "summary cards deferred to T6; un-ignore when summary card template lands"]
 fn report_selinux_section() {
     let snap = snapshot_with_selinux();
     let html = report::render_report(&snap, &RenderContext { target: None });
