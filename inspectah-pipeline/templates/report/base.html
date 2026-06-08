@@ -10,13 +10,15 @@
   <style>{{ report_css }}</style>
 </head>
 <body>
-  <header class="report-header">
-    <h1>inspectah Audit Report</h1>
-    <p>{{ os_name }} — {{ hostname }}</p>
-  </header>
+  {% include "report/header.html" %}
+  {% if failed_sections | length > 0 or degraded_sections | length > 0 %}
+    {% include "report/completeness.html" %}
+  {% endif %}
+  {% include "report/source-info.html" %}
 
   <main>
-    <!-- Section templates will be added in T5-T12 -->
+    <!-- Summary cards and TOC will be added in T6 -->
+    <!-- Section templates will be added in T7-T12 -->
   </main>
 
   <footer class="report-footer">

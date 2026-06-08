@@ -147,6 +147,27 @@
   border-left: 4px solid var(--pf-t--global--color--status--danger--default);
 }
 
+/* Failed section — muted, data unavailable */
+.report-section--failed {
+  opacity: 0.7;
+  border-left: 4px solid var(--pf-t--global--color--status--danger--default);
+}
+
+.report-section--failed summary {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* Degraded section — warning left border accent */
+.report-section--degraded {
+  border-left: 4px solid var(--pf-t--global--color--status--warning--default);
+}
+
+.failed-body {
+  padding: var(--pf-t--global--spacer--lg);
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
 /* ── Badges / state indicators ───────────────────────────────── */
 .badge {
   display: inline-flex;
@@ -241,6 +262,104 @@
 
 .report-section tbody tr:hover {
   background: var(--pf-t--global--background--color--primary--hover);
+}
+
+/* ── Badge extras ───────────────────────────────────────────── */
+.badge-extra {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  border-radius: var(--pf-t--global--border--radius--pill);
+  font-size: var(--pf-t--global--font--size--xs);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  background: var(--pf-t--global--color--status--info--default);
+  color: var(--pf-t--global--text--color--on-brand--default);
+}
+
+.badge-warning {
+  background: var(--pf-t--global--color--status--warning--default);
+  color: var(--pf-t--global--text--color--status--on-warning--default);
+}
+
+/* ── Completeness banner ────────────────────────────────────── */
+.completeness-banner {
+  background: var(--pf-t--global--color--status--warning--default);
+  color: var(--pf-t--global--text--color--status--on-warning--default);
+  padding: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xl);
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
+.completeness-banner p {
+  margin: var(--pf-t--global--spacer--xs) 0;
+}
+
+.completeness-banner a {
+  color: inherit;
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  text-decoration: underline;
+}
+
+/* ── Source info bar ─────────────────────────────────────────── */
+.source-info {
+  padding: var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xl);
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-bottom: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pf-t--global--spacer--lg);
+}
+
+.source-info-primary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pf-t--global--spacer--md);
+}
+
+.source-hostname {
+  font-size: var(--pf-t--global--font--size--xl);
+  font-weight: var(--pf-t--global--font--weight--heading--default);
+  font-family: var(--pf-t--global--font--family--heading);
+}
+
+.source-os {
+  font-size: var(--pf-t--global--font--size--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.source-type {
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.source-info-fleet,
+.source-info-baseline {
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
+.source-baseline-label {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.source-baseline-ref {
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--xs);
+  word-break: break-all;
+}
+
+/* ── Report footer ──────────────────────────────────────────── */
+.report-footer {
+  padding: var(--pf-t--global--spacer--lg) var(--pf-t--global--spacer--xl);
+  text-align: center;
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+  border-top: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
 }
 
 /* ── Print ───────────────────────────────────────────────────── */

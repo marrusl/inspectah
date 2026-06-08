@@ -1,0 +1,33 @@
+{% macro section(id, title, count, state="normal",
+                 conflict_count=0, extra_badge="") %}
+<div class="report-section
+  {%- if state == 'failed' %} report-section--failed
+  {%- elif state == 'degraded' %} report-section--degraded
+  {%- elif id == 'warnings' %} report-section--warning
+  {%- endif %}">
+<details id="{{ id }}">
+  <summary>
+    {{ title }}
+    {% if state == "failed" %}
+      <span class="badge-failed">data unavailable</span>
+    {% elif state == "degraded" %}
+      <span class="badge">({{ count }}{% if conflict_count %},
+        {{ conflict_count }} conflicts{% endif %})</span>
+      <span class="badge-degraded">partial data</span>
+    {% else %}
+      <span class="badge">({{ count }}{% if conflict_count %},
+        {{ conflict_count }} conflicts{% endif %})</span>
+    {% endif %}
+    {% if extra_badge %}
+      <span class="badge-extra">{{ extra_badge }}</span>
+    {% endif %}
+  </summary>
+  {% if state == "failed" %}
+    <p class="failed-body">Data collection failed for this section.
+    See the completeness warning above for details.</p>
+  {% else %}
+    {{ caller() }}
+  {% endif %}
+</details>
+</div>
+{% endmacro %}
