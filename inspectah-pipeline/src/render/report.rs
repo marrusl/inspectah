@@ -753,6 +753,45 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .map(|fm| fm.host_count as i64)
         .unwrap_or(0);
 
+    // ── Fleet aggregate data (conditional on fleet_meta) ─────────
+    let is_fleet = snap.fleet_meta.is_some();
+    let fleet_label = snap
+        .fleet_meta
+        .as_ref()
+        .map(|f| f.label.clone())
+        .unwrap_or_default();
+    let fleet_host_count = snap
+        .fleet_meta
+        .as_ref()
+        .map(|f| f.host_count)
+        .unwrap_or(0);
+    let fleet_hostnames: Vec<Value> = snap
+        .fleet_meta
+        .as_ref()
+        .map(|f| f.hostnames.iter().map(|h| Value::from(h.as_str())).collect())
+        .unwrap_or_default();
+    let fleet_baseline_provisional = snap
+        .fleet_meta
+        .as_ref()
+        .map(|f| f.baseline_provisional)
+        .unwrap_or(false);
+    let fleet_variant_conflict_count = snap.rpm_repo_conflicts.len();
+    let fleet_section_coverage: Vec<Value> = snap
+        .fleet_meta
+        .as_ref()
+        .map(|f| {
+            f.section_host_counts
+                .iter()
+                .map(|(section, count)| {
+                    Value::from_serialize(serde_json::json!({
+                        "section": section,
+                        "count": count,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let tmpl = env
         .get_template("report/base.html")
         .expect("base template must exist at inspectah-pipeline/templates/report/base.html");
@@ -796,6 +835,14 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         baseline_digest,
         baseline_strategy,
         host_count,
+        // Fleet aggregate (conditional)
+        is_fleet,
+        fleet_label,
+        fleet_host_count,
+        fleet_hostnames => Value::from(fleet_hostnames),
+        fleet_baseline_provisional,
+        fleet_variant_conflict_count,
+        fleet_section_coverage => Value::from(fleet_section_coverage),
         packages => packages_val,
         pkg_count,
         pkg_state => pkg_state_str,
@@ -2261,6 +2308,165 @@ mod tests {
         assert!(
             html.contains("data unavailable"),
             "failed users section shows data unavailable"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fleet Aggregate Summary tests (T12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_fleet_summary_rendered() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use std::collections::BTreeMap;
+
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(FleetSnapshotMeta {
+            label: "web-servers".into(),
+            host_count: 5,
+            hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into(), "host-d".into(), "host-e".into()],
+            merged_at: "2026-06-01T12:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::from([
+                ("config".into(), 5usize),
+                ("rpm".into(), 5),
+            ]),
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Fleet Overview"),
+            "must render fleet summary heading"
+        );
+        assert!(
+            html.contains("web-servers"),
+            "must show fleet label"
+        );
+        assert!(
+            html.contains("host-a"),
+            "must show hostname in list"
+        );
+        assert!(
+            html.contains("unanimous"),
+            "must show unanimous when baseline_provisional is false"
+        );
+        assert!(
+            html.contains("Section Coverage"),
+            "must show section coverage table"
+        );
+    }
+
+    #[test]
+    fn test_report_fleet_summary_provisional_baseline() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use std::collections::BTreeMap;
+
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(FleetSnapshotMeta {
+            label: "mixed-fleet".into(),
+            host_count: 3,
+            hostnames: vec!["a".into(), "b".into(), "c".into()],
+            merged_at: "2026-06-01T12:00:00Z".into(),
+            baseline_provisional: true,
+            section_host_counts: BTreeMap::new(),
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("provisional"),
+            "must show provisional when baseline_provisional is true"
+        );
+    }
+
+    #[test]
+    fn test_report_fleet_summary_not_rendered_for_single_host() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains("Fleet Overview"),
+            "fleet summary must not render for single-host snapshot"
+        );
+    }
+
+    #[test]
+    fn test_report_fleet_variant_conflicts_shown() {
+        use inspectah_core::types::fleet::{FleetSnapshotMeta, RepoSourceEntry};
+        use std::collections::BTreeMap;
+
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(FleetSnapshotMeta {
+            label: "conflict-fleet".into(),
+            host_count: 3,
+            hostnames: vec!["a".into(), "b".into(), "c".into()],
+            merged_at: "2026-06-01T12:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        });
+        snap.rpm_repo_conflicts.insert(
+            "nginx.x86_64".into(),
+            vec![
+                RepoSourceEntry { repo: "epel".into(), host_count: 2 },
+                RepoSourceEntry { repo: "appstream".into(), host_count: 1 },
+            ],
+        );
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Variant Conflicts"),
+            "must show variant conflicts label when conflicts exist"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Incomplete Sections tests (T12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_incomplete_sections_rendered() {
+        let mut snap = test_snapshot();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config],
+            degraded_sections: vec![InspectorId::Services],
+            reason: "mixed failures".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Incomplete Sections"),
+            "must render incomplete sections heading"
+        );
+        assert!(
+            html.contains("Failed (no data collected)"),
+            "must show failed sub-heading"
+        );
+        assert!(
+            html.contains("Degraded (partial data collected)"),
+            "must show degraded sub-heading"
+        );
+        assert!(
+            html.contains("mixed failures"),
+            "must show completeness reason"
+        );
+    }
+
+    #[test]
+    fn test_report_incomplete_sections_has_anchor_links() {
+        let mut snap = test_snapshot();
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Storage],
+            degraded_sections: vec![],
+            reason: "storage timeout".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains(r##"href="#storage""##),
+            "incomplete section must have anchor link to storage section"
+        );
+    }
+
+    #[test]
+    fn test_report_incomplete_sections_not_rendered_when_complete() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            !html.contains("Incomplete Sections"),
+            "incomplete sections must not render for complete snapshot"
         );
     }
 }

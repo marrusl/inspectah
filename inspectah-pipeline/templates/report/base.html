@@ -15,10 +15,17 @@
     {% include "report/completeness.html" %}
   {% endif %}
   {% include "report/source-info.html" %}
+  {% if is_fleet %}
+    {% include "report/fleet-summary.html" %}
+  {% endif %}
 
   <main>
     {% include "report/summary-cards.html" %}
     {% include "report/toc.html" %}
+
+    {% if failed_sections | length > 0 or degraded_sections | length > 0 %}
+      {% include "report/incomplete.html" %}
+    {% endif %}
 
     {% if baseline_ref %}
       {% include "report/baseline.html" %}
@@ -48,8 +55,6 @@
     {% endif %}
     {% include "report/warnings.html" %}
     {% include "report/redactions.html" %}
-
-    <!-- More sections in T12 -->
   </main>
 
   <footer class="report-footer">
