@@ -5,6 +5,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
 
@@ -579,6 +580,41 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         }
     }
 
+    // Users & Groups — safe-field whitelist only (same as HTML renderer).
+    // EXCLUDED: password_hash, ssh_keys contents, shadow_entries, gshadow_entries, sudoers_rules.
+    if let Some(ug) = &snap.users_groups {
+        let included: Vec<UserGroupDecision> = ug
+            .users
+            .iter()
+            .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
+            .filter(|u| u.include)
+            .collect();
+
+        if !included.is_empty() {
+            lines.push(format!("## Users & Groups ({})", included.len()));
+            lines.push(String::new());
+            lines.push("| Name | UID | Shell | Classification | Sudo | SSH Keys |".into());
+            lines.push("|------|-----|-------|----------------|------|----------|".into());
+            for u in &included {
+                let sudo = if u.has_sudo.unwrap_or(false) {
+                    "yes"
+                } else {
+                    "no"
+                };
+                let ssh = match u.ssh_key_count.unwrap_or(0) {
+                    0 => "none".to_string(),
+                    1 => "1 key".to_string(),
+                    n => format!("{n} keys"),
+                };
+                lines.push(format!(
+                    "| {} | {} | {} | {} | {} | {} |",
+                    u.name, u.uid, u.shell, u.classification, sudo, ssh
+                ));
+            }
+            lines.push(String::new());
+        }
+    }
+
     // Redactions
     if !snap.redactions.is_empty() {
         lines.push("## Redactions".into());
@@ -854,5 +890,111 @@ mod tests {
         let snap = InspectionSnapshot::default();
         let report = render_audit(&snap);
         assert!(!report.contains("Fleet Aggregate Summary"));
+    }
+
+    #[test]
+    fn test_audit_users_groups_section() {
+        use inspectah_core::types::users::UserGroupSection;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "alice",
+                "uid": 1000,
+                "gid": 1000,
+                "shell": "/bin/bash",
+                "home": "/home/alice",
+                "include": true,
+                "classification": "interactive",
+                "containerfile_strategy": "useradd",
+                "password_choice": "preserve",
+                "has_sudo": true,
+                "ssh_key_count": 2
+            })],
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+        assert!(
+            md.contains("## Users & Groups"),
+            "must contain Users & Groups heading"
+        );
+        assert!(md.contains("alice"), "must contain user name");
+        assert!(md.contains("| 1000 |"), "must contain UID");
+        assert!(md.contains("| yes |"), "sudo=true must render as yes");
+        assert!(md.contains("2 keys"), "ssh_key_count=2 must render as '2 keys'");
+    }
+
+    #[test]
+    fn test_audit_users_groups_excludes_password_hash() {
+        use inspectah_core::types::users::UserGroupSection;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "bob",
+                "uid": 1001,
+                "gid": 1001,
+                "shell": "/bin/bash",
+                "home": "/home/bob",
+                "include": true,
+                "classification": "interactive",
+                "containerfile_strategy": "useradd",
+                "password_choice": "preserve",
+                "password_hash": "$6$rounds=656000$secret$hash",
+                "ssh_keys": ["ssh-ed25519 AAAA_SECRET_KEY_CONTENT"]
+            })],
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+        // User name must appear
+        assert!(md.contains("bob"), "user name must appear");
+        // Sensitive fields must NOT appear
+        assert!(
+            !md.contains("$6$rounds"),
+            "password_hash value must NOT appear in audit"
+        );
+        assert!(
+            !md.contains("AAAA_SECRET_KEY_CONTENT"),
+            "ssh_keys content must NOT appear in audit"
+        );
+    }
+
+    #[test]
+    fn test_audit_users_groups_skipped_when_none() {
+        let snap = InspectionSnapshot::new();
+        let md = render_audit(&snap);
+        assert!(
+            !md.contains("Users & Groups"),
+            "must not render Users & Groups when users_groups is None"
+        );
+    }
+
+    #[test]
+    fn test_audit_users_groups_skipped_when_all_excluded() {
+        use inspectah_core::types::users::UserGroupSection;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "excluded_user",
+                "uid": 9999,
+                "gid": 9999,
+                "shell": "/sbin/nologin",
+                "home": "/dev/null",
+                "include": false,
+                "classification": "system",
+                "containerfile_strategy": "skip",
+                "password_choice": "none"
+            })],
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+        assert!(
+            !md.contains("Users & Groups"),
+            "must not render Users & Groups when all users are excluded"
+        );
     }
 }

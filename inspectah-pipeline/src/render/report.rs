@@ -2634,8 +2634,7 @@ mod tests {
             .collect();
 
         // Parity table: markdown heading → HTML section ID.
-        // Only sections present in BOTH renderers today.
-        // Users & Groups is HTML-only until T14 adds the audit heading.
+        // All 11 data sections present in both renderers.
         let expected_mappings = vec![
             ("Packages", "packages"),
             ("Configuration Files", "config-files"),
@@ -2645,13 +2644,16 @@ mod tests {
             ("Scheduled Tasks", "scheduled-tasks"),
             ("Security & Access Control", "security"),
             ("Non-RPM Software", "nonrpm"),
+            ("Users & Groups", "users-groups"),
             ("Redactions", "redactions"),
             ("Warnings", "warnings"),
         ];
 
         for (md_heading, html_id) in &expected_mappings {
+            // Use starts_with because some headings include a count suffix,
+            // e.g. "Users & Groups (1)".
             assert!(
-                md_headings.contains(md_heading),
+                md_headings.iter().any(|h| h.starts_with(md_heading)),
                 "markdown missing section: {md_heading}"
             );
             assert!(
@@ -2659,12 +2661,6 @@ mod tests {
                 "HTML missing section ID: {html_id}"
             );
         }
-
-        // Verify users-groups is in HTML (even though audit.rs lacks it pre-T14)
-        assert!(
-            html_ids.contains(&"users-groups".to_string()),
-            "HTML must contain users-groups section"
-        );
     }
 
     // -----------------------------------------------------------------------
