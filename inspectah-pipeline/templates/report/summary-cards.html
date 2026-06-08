@@ -1,0 +1,12 @@
+{% if summary_cards | length > 0 %}
+<div class="report-cards">
+  {% for card in summary_cards %}
+  <dl>
+    <dt><a href="#{{ card.id }}">{{ card.title }}</a></dt>
+    <dd class="{% if card.state == 'failed' %}text-failed{% elif card.state == 'degraded' %}text-degraded{% endif %}">
+      {{ card.count }}
+    </dd>
+  </dl>
+  {% endfor %}
+</div>
+{% endif %}

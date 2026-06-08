@@ -1,0 +1,12 @@
+{% if toc_entries | length > 0 %}
+<nav class="report-toc" aria-label="Section navigation">
+  {% for entry in toc_entries %}
+  <a href="#{{ entry.id }}">
+    {{ entry.title }}
+    <span class="badge{% if entry.state == 'failed' %} badge-failed{% elif entry.state == 'degraded' %} badge-degraded{% endif %}">
+      {%- if entry.state == "failed" -%}failed{%- else -%}{{ entry.count }}{%- endif -%}
+    </span>
+  </a>
+  {% endfor %}
+</nav>
+{% endif %}

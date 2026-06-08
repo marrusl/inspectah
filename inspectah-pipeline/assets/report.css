@@ -91,6 +91,23 @@
   color: var(--pf-t--global--text--color--regular);
 }
 
+.report-cards dd.text-failed {
+  color: var(--pf-t--global--color--status--danger--default);
+}
+
+.report-cards dd.text-degraded {
+  color: var(--pf-t--global--color--status--warning--default);
+}
+
+.report-cards dt a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.report-cards dt a:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 900px) {
   .report-cards {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
