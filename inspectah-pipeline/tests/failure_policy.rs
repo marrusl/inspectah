@@ -1012,13 +1012,13 @@ fn test_selinux_audit_permission_denied_degraded() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. NonRPM: readelf unavailable → Degraded
+// 7. NonRPM: readelf unavailable → Complete with warning (not degraded)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_nonrpm_readelf_unavailable_degraded() {
-    // readelf returns exit code 127 (not found). With partial data from
-    // /opt scan, inspector should return Degraded.
+fn test_nonrpm_readelf_unavailable_completes() {
+    // readelf returns exit code 127 (not found). Missing tools are not a
+    // scan failure — the inspector reports what it found with a warning.
     let exec = wave2_rpm_mock(MockExecutor::new())
         .with_command(
             "readelf --version",
@@ -1028,7 +1028,6 @@ fn test_nonrpm_readelf_unavailable_degraded() {
                 ..Default::default()
             },
         )
-        // Provide a .env file so we get partial data (triggers Degraded, not empty Ok).
         .with_dir("/opt", vec!["app"])
         .with_dir("/opt/app", vec![".env"])
         .with_file("/opt/app/.env", "DATABASE_URL=postgres://localhost/mydb\n");
@@ -1049,25 +1048,19 @@ fn test_nonrpm_readelf_unavailable_degraded() {
     );
     let snapshot = &pipeline.state.snapshot;
 
-    match &snapshot.completeness {
-        Completeness::Partial {
-            degraded_sections, ..
-        } => {
-            assert!(
-                degraded_sections.contains(&InspectorId::NonRpmSoftware),
-                "NonRpmSoftware should be degraded when readelf is unavailable"
-            );
-        }
-        other => panic!(
-            "Expected Completeness::Partial for readelf unavailable, got {:?}",
-            other
-        ),
-    }
+    assert_eq!(
+        snapshot.completeness,
+        Completeness::Complete,
+        "missing readelf should not degrade the scan"
+    );
+    assert!(
+        snapshot.warnings.iter().any(|w| w.message.contains("readelf")),
+        "should have a warning about readelf being unavailable"
+    );
 
-    // Section should still be present with partial data (env files).
     assert!(
         snapshot.non_rpm_software.is_some(),
-        "NonRpmSoftware section should be present even when degraded"
+        "NonRpmSoftware section should be present with partial data"
     );
 }
 

@@ -177,23 +177,6 @@ fn snapshot_with_blueprint_users() -> InspectionSnapshot {
     snap
 }
 
-fn snapshot_with_kickstart_users() -> InspectionSnapshot {
-    let mut snap = InspectionSnapshot::new();
-    snap.users_groups = Some(UserGroupSection {
-        users: vec![serde_json::json!({
-            "name": "deploy",
-            "uid": 2000,
-            "gid": 2000,
-            "shell": "/bin/bash",
-            "home": "/home/deploy",
-            "include": true,
-            "strategy": "kickstart"
-        })],
-        ..Default::default()
-    });
-    snap
-}
-
 fn snapshot_with_dhcp_connections() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.network = Some(NetworkSection {
@@ -648,36 +631,10 @@ fn kickstart_network_hosts_routes() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 17: kickstart_users_override_kickstart
-// Users with kickstart strategy produce user commands in kickstart.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn kickstart_users_override_kickstart() {
-    let snap = snapshot_with_kickstart_users();
-    let ks = kickstart::render_kickstart(&snap);
-
-    assert!(
-        ks.contains("user --name=deploy"),
-        "kickstart must contain user --name= for kickstart-strategy users"
-    );
-    assert!(
-        ks.contains("--uid=2000"),
-        "kickstart must include --uid for the user"
-    );
-    assert!(
-        ks.contains("--gid=2000"),
-        "kickstart must include --gid for the user"
-    );
-    assert!(
-        ks.contains("--shell=/bin/bash"),
-        "kickstart must include --shell for the user"
-    );
-    assert!(
-        ks.contains("--homedir=/home/deploy"),
-        "kickstart must include --homedir for the user"
-    );
-}
+// Test 17: kickstart strategy removed
+// Users are provisioned via Containerfile (useradd) or auto-generated
+// inspectah-users.{ks,toml} fragments. The kickstart renderer no longer
+// emits user commands directly — that code path was dead.
 
 // ---------------------------------------------------------------------------
 // Test 18: readme_container_workload_summary

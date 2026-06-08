@@ -48,14 +48,17 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
             lines.push(String::new());
         }
 
-        // Hostname
+        // Hostname — source hostname noted for reference, not hardcoded
         let hostname = snap
             .meta
             .get("hostname")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if !hostname.is_empty() {
-            lines.push(format!("network --hostname={hostname}"));
+            lines.push(format!(
+                "# FIXME: source hostname was '{hostname}' — set target hostname at deploy time"
+            ));
+            lines.push("# network --hostname=FIXME".into());
             lines.push(String::new());
         }
 
@@ -105,47 +108,6 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
                 "# FIXME: translate ip rules to NM connection properties or dispatcher scripts"
                     .into(),
             );
-            lines.push(String::new());
-        }
-    }
-
-    // Users deferred to kickstart
-    if let Some(ug) = &snap.users_groups {
-        let ks_users: Vec<_> = ug
-            .users
-            .iter()
-            .filter(|u| {
-                let strategy = u.get("strategy").and_then(|v| v.as_str()).unwrap_or("");
-                let include = u.get("include").and_then(|v| v.as_bool()).unwrap_or(true);
-                strategy == "kickstart" && include
-            })
-            .collect();
-
-        if !ks_users.is_empty() {
-            lines.push("# --- Human users (deploy-time provisioning) ---".into());
-            for u in &ks_users {
-                let uname = u.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let uid = u.get("uid").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let gid = u.get("gid").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let shell = u.get("shell").and_then(|v| v.as_str()).unwrap_or("");
-                let home = u.get("home").and_then(|v| v.as_str()).unwrap_or("");
-
-                let mut opts = format!("--name={uname}");
-                if uid > 0.0 {
-                    opts.push_str(&format!(" --uid={}", uid as u32));
-                }
-                if gid > 0.0 {
-                    opts.push_str(&format!(" --gid={}", gid as u32));
-                }
-                if !shell.is_empty() {
-                    opts.push_str(&format!(" --shell={shell}"));
-                }
-                if !home.is_empty() {
-                    opts.push_str(&format!(" --homedir={home}"));
-                }
-                lines.push(format!("user {opts}"));
-            }
-            lines.push("# Set passwords interactively or via --password/--iscrypted".into());
             lines.push(String::new());
         }
     }
