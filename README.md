@@ -1,6 +1,6 @@
 # inspectah
 
-inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates everything you need to rebuild it as a [bootc](https://containers.github.io/bootc/) container image. bootc images are full operating system images managed and deployed as OCI containers — update your OS the same way you update your apps, with atomic upgrades and built-in rollback. inspectah figures out what you added to the base OS — packages, configs, services, users, cron jobs, container workloads — and generates only the delta. The output is a ready-to-build Containerfile, a config tree, an audit report, and an interactive HTML dashboard.
+inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates everything you need to rebuild it as a [bootc](https://containers.github.io/bootc/) container image. bootc images are full operating system images managed and deployed as OCI containers — update your OS the same way you update your apps, with atomic upgrades and built-in rollback. inspectah figures out what you added to the base OS — packages, configs, services, users, cron jobs, container workloads — and generates only the delta. The output is a ready-to-build Containerfile, a config tree, an audit report, and an HTML audit report.
 
 > **Status:** inspectah is an active prototype. It handles common RHEL 9, CentOS Stream, and Fedora configurations well, but expect rough edges on unusual setups. It targets RPM-based systems only — no Debian, no RHEL 7, no live/in-place migration.
 
@@ -19,7 +19,7 @@ ls -lh *.tar.gz
 tar tzf hostname-*.tar.gz | head -20
 ```
 
-The tarball contains a `Containerfile`, `config/` tree, `audit-report.md`, and an interactive HTML dashboard. Run `inspectah build <tarball> <tag>` to build the image, or extract and use `podman build` directly.
+The tarball contains a `Containerfile`, `config/` tree, `audit-report.md`, and an HTML audit report. Run `inspectah build <tarball> <tag>` to build the image, or extract and use `podman build` directly.
 
 ## Installation
 
@@ -64,7 +64,7 @@ hostname-20260312-143000.tar.gz
     ├── Containerfile                 # Layered image definition (cache-optimized)
     ├── README.md                     # Build/deploy commands, FIXME checklist
     ├── audit-report.md               # Detailed findings, storage plan, version drift
-    ├── report.html                   # Self-contained interactive HTML dashboard
+    ├── audit-report.html             # Self-contained HTML audit report
     ├── secrets-review.md             # Redacted sensitive content for review
     ├── inspection-snapshot.json      # Raw structured data (re-renderable)
     ├── config/                       # Files to COPY into the image

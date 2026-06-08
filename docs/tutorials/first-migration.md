@@ -100,7 +100,7 @@ You should see something like:
 webserver01-20260527-091500/
 webserver01-20260527-091500/Containerfile
 webserver01-20260527-091500/audit-report.md
-webserver01-20260527-091500/report.html
+webserver01-20260527-091500/audit-report.html
 webserver01-20260527-091500/secrets-review.md
 webserver01-20260527-091500/README.md
 webserver01-20260527-091500/kickstart-suggestion.ks
@@ -117,7 +117,7 @@ Key files:
 |------|------------|
 | `Containerfile` | A draft image build definition ready for `podman build` |
 | `audit-report.md` | Human-readable summary of everything inspectah found |
-| `report.html` | Interactive dashboard — same data, visual format |
+| `audit-report.html` | HTML audit report — same data, visual format |
 | `secrets-review.md` | Any redacted sensitive content flagged for your review |
 | `inspection-snapshot.json` | Machine-readable snapshot — the refine UI reads this |
 | `config/` | Modified config files, ready to COPY into the image |

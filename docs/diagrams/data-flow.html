@@ -159,7 +159,7 @@ const stages = [
     tooltip: 'Transform the redacted snapshot into migration deliverables.',
     children: [
       { text: 'render_containerfile()', detail: 'Containerfile — image build definition with COPY lines from config tree' },
-      { text: 'render_report()', detail: 'report.html — minimal PatternFly HTML report' },
+      { text: 'render_report()', detail: 'audit-report.html — PatternFly HTML audit report' },
       { text: 'render_audit()', detail: 'audit-report.md — findings and recommendations' },
       { text: 'render_secrets_review()', detail: 'secrets-review.md — redacted items requiring manual handling' },
       { text: 'render_readme()', detail: 'README.md — summary with build commands and artifact table' },
@@ -178,7 +178,7 @@ const stages = [
     tooltip: 'All artifacts packaged into a compressed archive.',
     children: [
       { text: 'Containerfile', detail: 'Always written — image build definition' },
-      { text: 'report.html', detail: 'Always written — PatternFly visual report' },
+      { text: 'audit-report.html', detail: 'Always written — PatternFly visual report' },
       { text: 'audit-report.md', detail: 'Always written — markdown findings' },
       { text: 'secrets-review.md', detail: 'Always written — redaction details' },
       { text: 'README.md', detail: 'Always written — summary and build commands' },
