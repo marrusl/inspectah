@@ -24,6 +24,7 @@ pub mod tarball;
 pub mod users;
 
 pub mod baseline_fmt;
+pub mod report_data;
 
 pub mod service_intent;
 
