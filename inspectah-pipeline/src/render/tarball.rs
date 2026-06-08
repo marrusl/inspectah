@@ -206,7 +206,7 @@ mod tests {
         std::fs::write(source.join("inspection-snapshot.json"), "{}").unwrap();
         std::fs::write(source.join("Containerfile"), "FROM ...").unwrap();
         std::fs::write(source.join("README.md"), "# Output").unwrap();
-        std::fs::write(source.join("report.html"), "<html>").unwrap();
+        std::fs::write(source.join("audit-report.html"), "<html>").unwrap();
         std::fs::write(source.join("audit-report.md"), "# Audit").unwrap();
         std::fs::write(source.join("secrets-review.md"), "# Secrets").unwrap();
         std::fs::write(source.join("kickstart-suggestion.ks"), "# KS").unwrap();
@@ -219,7 +219,7 @@ mod tests {
             "inspection-snapshot.json",
             "Containerfile",
             "README.md",
-            "report.html",
+            "audit-report.html",
             "audit-report.md",
             "secrets-review.md",
             "kickstart-suggestion.ks",

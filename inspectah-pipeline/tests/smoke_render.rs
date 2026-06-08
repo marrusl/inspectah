@@ -550,7 +550,7 @@ fn render_all_with_all_sections() {
     // All 8 artifacts must exist
     let expected_files = [
         "Containerfile",
-        "report.html",
+        "audit-report.html",
         "audit-report.md",
         "secrets-review.md",
         "README.md",
@@ -593,7 +593,7 @@ fn render_all_with_all_sections() {
     );
 
     // Cross-check: HTML report references storage and kernelboot
-    let html_report = std::fs::read_to_string(dir.path().join("report.html")).unwrap();
+    let html_report = std::fs::read_to_string(dir.path().join("audit-report.html")).unwrap();
     assert!(
         html_report.contains("<h2>Storage</h2>"),
         "render_all HTML report must contain Storage section"

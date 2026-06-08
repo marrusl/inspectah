@@ -3,7 +3,7 @@
 //! Produces 8 artifacts:
 //!
 //! 1. Containerfile — image build definition
-//! 2. report.html — minimal PatternFly HTML report
+//! 2. audit-report.html — minimal PatternFly HTML report
 //! 3. audit-report.md — findings and recommendations
 //! 4. secrets-review.md — redaction details
 //! 5. README.md — summary with build commands
@@ -54,9 +54,9 @@ pub fn render_all(
     let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots));
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;
 
-    // 2. report.html
+    // 2. audit-report.html
     let html = report::render_report(snap, context);
-    std::fs::write(output_dir.join("report.html"), html)?;
+    std::fs::write(output_dir.join("audit-report.html"), html)?;
 
     // 3. audit-report.md
     let audit = audit::render_audit(snap);
@@ -137,8 +137,8 @@ mod tests {
             "Containerfile missing"
         );
         assert!(
-            dir.path().join("report.html").exists(),
-            "report.html missing"
+            dir.path().join("audit-report.html").exists(),
+            "audit-report.html missing"
         );
         assert!(
             dir.path().join("audit-report.md").exists(),
@@ -173,7 +173,7 @@ mod tests {
 
         let files = &[
             "Containerfile",
-            "report.html",
+            "audit-report.html",
             "audit-report.md",
             "secrets-review.md",
             "README.md",
