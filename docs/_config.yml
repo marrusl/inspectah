@@ -22,9 +22,5 @@ aux_links:
   "GitHub":
     - "https://github.com/marrusl/inspectah"
 
-exclude:
-  - specs/
-  - plans/
-
 plugins:
   - jekyll-remote-theme
