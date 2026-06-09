@@ -124,8 +124,7 @@ The browser opens automatically with the Refine dashboard. From here you can:
 - **Toggle items on/off** — exclude packages, config files, or services you don't want in the migration image
 - **Search and filter** — use the search box on each card to find specific packages, files, or services
 - **Review classifications** — inspectah auto-classifies items; refine lets you override
-- **Re-render** — regenerate the Containerfile, audit report, and all output artifacts with your changes applied
-- **Download** — grab the updated tarball with your refinements baked in
+- **Export** — regenerate the Containerfile, audit report, and all output artifacts with your changes applied, then download the updated tarball. Refining alone doesn't produce buildable artifacts — you must export to render final artifacts and package them.
 
 Refine works on both single-host inspection tarballs and fleet-aggregated tarballs.
 
