@@ -850,4 +850,129 @@ VARIANT_ID="workstation"
         assert!(ids.contains(&InspectorId::Selinux));
         assert!(ids.contains(&InspectorId::NonRpmSoftware));
     }
+
+    // --- Helper for test isolation ---
+
+    fn base_args() -> ScanArgs {
+        ScanArgs {
+            inspect_only: false,
+            output: None,
+            base_image: None,
+            no_baseline: false,
+            preserve: vec![],
+            no_redaction: false,
+            ack_sensitive: false,
+            progress: None,
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    // --- ack-sensitive validation ---
+
+    #[test]
+    fn preserve_without_ack_is_error() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::SshKeys],
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--preserve requires --ack-sensitive"));
+    }
+
+    #[test]
+    fn no_redaction_without_ack_is_error() {
+        let args = ScanArgs {
+            no_redaction: true,
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--no-redaction requires --ack-sensitive"));
+    }
+
+    #[test]
+    fn both_without_ack_is_error() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::All],
+            no_redaction: true,
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--preserve and --no-redaction require --ack-sensitive"));
+    }
+
+    #[test]
+    fn preserve_with_ack_is_ok() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::SshKeys],
+            ack_sensitive: true,
+            ..base_args()
+        };
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    #[test]
+    fn no_redaction_with_ack_is_ok() {
+        let args = ScanArgs {
+            no_redaction: true,
+            ack_sensitive: true,
+            ..base_args()
+        };
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    #[test]
+    fn no_sensitive_flags_is_ok() {
+        let args = base_args();
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    // --- PreserveItem expansion ---
+
+    #[test]
+    fn expand_all_returns_concrete_variants() {
+        let items = vec![PreserveItem::All];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 3);
+        assert!(expanded.contains(&PreserveItem::PasswordHashes));
+        assert!(expanded.contains(&PreserveItem::SshKeys));
+        assert!(expanded.contains(&PreserveItem::Subscription));
+        assert!(!expanded.contains(&PreserveItem::All));
+    }
+
+    #[test]
+    fn expand_deduplicates_redundant_with_all() {
+        let items = vec![PreserveItem::All, PreserveItem::SshKeys];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 3);
+    }
+
+    #[test]
+    fn expand_deduplicates_repeated_items() {
+        let items = vec![PreserveItem::SshKeys, PreserveItem::SshKeys];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0], PreserveItem::SshKeys);
+    }
+
+    #[test]
+    fn expand_empty_returns_empty() {
+        let items: Vec<PreserveItem> = vec![];
+        let expanded = PreserveItem::expand(&items);
+        assert!(expanded.is_empty());
+    }
+
+    #[test]
+    fn expand_single_item() {
+        let items = vec![PreserveItem::Subscription];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0], PreserveItem::Subscription);
+    }
 }
