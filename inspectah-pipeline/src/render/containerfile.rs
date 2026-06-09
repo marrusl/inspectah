@@ -279,14 +279,14 @@ fn packages_section_lines(
     };
 
     // Partial leaf authority indicator for fleet snapshots
-    if let (Some(auth), Some(total)) = (rpm.leaf_authority_hosts, rpm.leaf_total_hosts) {
-        if auth < total {
-            lines.push(format!(
-                "# Leaf classification: {}/{} hosts (partial authority)",
-                auth, total
-            ));
-            lines.push(String::new());
-        }
+    if let (Some(auth), Some(total)) = (rpm.leaf_authority_hosts, rpm.leaf_total_hosts)
+        && auth < total
+    {
+        lines.push(format!(
+            "# Leaf classification: {}/{} hosts (partial authority)",
+            auth, total
+        ));
+        lines.push(String::new());
     }
 
     // Repo files
@@ -2751,6 +2751,47 @@ mod tests {
         assert!(
             !output.contains("Service Drop-ins"),
             "excluded drop-in must NOT produce Service Drop-ins section"
+        );
+    }
+
+    #[test]
+    fn test_fleet_containerfile_leaf_only_packages() {
+        // Fleet snapshot with pre-filtered leaf-only packages_added.
+        // Simulates what merge_rpm_sections produces: only leaf packages
+        // survive into packages_added, transitive deps are stripped.
+        let mut snap = InspectionSnapshot::new();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 3,
+            hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        snap.rpm = Some(RpmSection {
+            // Only leaf package — merge already filtered out perl-libs
+            packages_added: vec![PackageEntry {
+                name: "git".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                locked: false,
+                ..Default::default()
+            }],
+            leaf_packages: Some(vec!["git.x86_64".into()]),
+            auto_packages: Some(Vec::new()),
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("git"),
+            "leaf package 'git' must appear in containerfile install line"
+        );
+        assert!(
+            !output.contains("perl-libs"),
+            "transitive dep 'perl-libs' must NOT appear (pre-filtered by merge)"
         );
     }
 }

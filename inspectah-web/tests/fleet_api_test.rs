@@ -1071,3 +1071,51 @@ async fn fleet_exclude_repo_round_trip() {
         "epel repo should be re-enabled after SetInclude include"
     );
 }
+
+#[tokio::test]
+async fn fleet_view_contains_leaf_authority_metadata() {
+    // Fleet snapshot with partial leaf authority: 2 of 3 hosts had
+    // leaf classification data. The fleet/view response must surface
+    // leaf_authority_hosts and leaf_total_hosts for downstream rendering.
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "web-tier".into(),
+        host_count: 3,
+        hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+        merged_at: "2026-06-09T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::new(),
+    });
+    snap.rpm = Some(inspectah_core::types::rpm::RpmSection {
+        leaf_authority_hosts: Some(2),
+        leaf_total_hosts: Some(3),
+        ..Default::default()
+    });
+
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let (status, json) = get_json(&app, "/api/fleet/view").await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let summary = json
+        .get("summary")
+        .expect("fleet/view must include summary");
+    assert_eq!(
+        summary
+            .get("leaf_authority_hosts")
+            .and_then(|v| v.as_u64()),
+        Some(2),
+        "fleet/view summary must include leaf_authority_hosts"
+    );
+    assert_eq!(
+        summary
+            .get("leaf_total_hosts")
+            .and_then(|v| v.as_u64()),
+        Some(3),
+        "fleet/view summary must include leaf_total_hosts"
+    );
+}

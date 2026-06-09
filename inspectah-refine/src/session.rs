@@ -3737,4 +3737,89 @@ mod tests {
             "clamp must not affect unlocked items"
         );
     }
+
+    // ── Fleet pre-filtered packages regression tests ──────────────────
+
+    #[test]
+    fn fleet_pre_filtered_packages_drive_refine_view() {
+        // Fleet snapshot where merge already filtered packages_added to
+        // leaf-only. The refine view must show only those pre-filtered
+        // packages, not re-expand to include transitive deps.
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 3,
+            hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        // Baseline so packages land in Site bucket (leaf filtering applies)
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "git".into(),
+                arch: "x86_64".into(),
+                include: true,
+                locked: false,
+                source_repo: "appstream".into(),
+                fleet: Some(Default::default()),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["git.x86_64".into()]);
+        rpm.auto_packages = Some(Vec::new());
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Only the pre-filtered leaf package should appear
+        assert_eq!(
+            view.packages.len(),
+            1,
+            "view must show only the pre-filtered leaf package"
+        );
+        assert_eq!(
+            view.packages[0].entry.name, "git",
+            "the single visible package must be 'git'"
+        );
+    }
+
+    #[test]
+    fn fleet_leaf_authority_metadata_on_snapshot() {
+        // Partial authority metadata set during merge must be accessible
+        // on the snapshot through the refine session.
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 3,
+            hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.leaf_authority_hosts = Some(2);
+        rpm.leaf_total_hosts = Some(3);
+
+        let session = RefineSession::new(snap);
+        let snap_ref = session.snapshot();
+        let rpm_ref = snap_ref.rpm.as_ref().unwrap();
+
+        assert_eq!(
+            rpm_ref.leaf_authority_hosts,
+            Some(2),
+            "leaf_authority_hosts must be preserved through RefineSession"
+        );
+        assert_eq!(
+            rpm_ref.leaf_total_hosts,
+            Some(3),
+            "leaf_total_hosts must be preserved through RefineSession"
+        );
+    }
 }
