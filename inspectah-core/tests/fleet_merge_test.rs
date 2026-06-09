@@ -2011,3 +2011,54 @@ fn test_merge_items_representative_tie_break_first_seen() {
     assert_eq!(fleet.count, 4);
     assert_eq!(fleet.total, 4);
 }
+
+// ---------------------------------------------------------------------------
+// Leaf intersection in merge_rpm_sections
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_fleet_leaf_intersection_filters_packages_added() {
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "perl-libs".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["perl-libs.x86_64"]}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "perl-libs".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["perl-libs.x86_64"]}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _conflicts) =
+        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // packages_added should contain ONLY the leaf package
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "git");
+
+    // leaf_packages should be the intersection
+    assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
+
+    // auto_packages should be None for fleet
+    assert_eq!(merged.auto_packages, None);
+
+    // leaf_dep_tree should only contain entries for intersection packages
+    let tree = merged.leaf_dep_tree.as_object().unwrap();
+    assert_eq!(tree.len(), 1);
+    assert!(tree.contains_key("git.x86_64"));
+
+    // coverage metadata — uses total_hosts param (2), not sections.len()
+    assert_eq!(merged.leaf_authority_hosts, Some(2));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}

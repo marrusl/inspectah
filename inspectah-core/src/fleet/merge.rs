@@ -943,9 +943,90 @@ pub fn merge_rpm_sections(
         result
     };
 
-    // Pass-through from first host (sorted by hostname): non-baseline scalar fields
-    let leaf_packages = first_host_option(&sections, hostnames, |s| &s.leaf_packages);
-    let auto_packages = first_host_option(&sections, hostnames, |s| &s.auto_packages);
+    // --- Leaf intersection across authoritative hosts ---
+    // An authoritative host has leaf_packages: Some(_).
+    // Hosts with leaf_packages: None (degraded) are skipped entirely.
+    let authoritative_indices: Vec<usize> = sections
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| {
+            s.as_ref()
+                .and_then(|s| s.leaf_packages.as_ref())
+                .is_some()
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let leaf_authority_hosts = Some(authoritative_indices.len() as u32);
+    let leaf_total_hosts = Some(total_hosts as u32);
+
+    let (leaf_packages, auto_packages, leaf_dep_tree) = if authoritative_indices.is_empty() {
+        // All hosts degraded — no leaf truth available.
+        (
+            None,
+            None,
+            serde_json::Value::Object(serde_json::Map::new()),
+        )
+    } else {
+        // Compute intersection of authoritative hosts' leaf sets.
+        let mut leaf_sets: Vec<HashSet<String>> = authoritative_indices
+            .iter()
+            .map(|&i| {
+                sections[i]
+                    .as_ref()
+                    .unwrap()
+                    .leaf_packages
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+
+        let mut intersection = leaf_sets.remove(0);
+        for set in &leaf_sets {
+            intersection.retain(|pkg| set.contains(pkg));
+        }
+        let mut sorted_leaf: Vec<String> = intersection.into_iter().collect();
+        sorted_leaf.sort();
+
+        // Fleet auto_packages: None (not independently meaningful).
+        let auto = None;
+
+        // Dep tree from first authoritative host (sorted by hostname),
+        // filtered to intersection entries only.
+        let leaf_ids: HashSet<&str> = sorted_leaf.iter().map(|s| s.as_str()).collect();
+        let dep_tree = {
+            let mut auth_pairs: Vec<(usize, &str)> = authoritative_indices
+                .iter()
+                .map(|&i| {
+                    (
+                        i,
+                        hostnames.get(i).map(|s| s.as_str()).unwrap_or(""),
+                    )
+                })
+                .collect();
+            auth_pairs.sort_by_key(|(_, h)| *h);
+
+            let donor_idx = auth_pairs[0].0;
+            let donor_tree = &sections[donor_idx].as_ref().unwrap().leaf_dep_tree;
+
+            if let Some(obj) = donor_tree.as_object() {
+                let filtered: serde_json::Map<String, serde_json::Value> = obj
+                    .iter()
+                    .filter(|(k, _)| leaf_ids.contains(k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                serde_json::Value::Object(filtered)
+            } else {
+                serde_json::Value::Object(serde_json::Map::new())
+            }
+        };
+
+        (Some(sorted_leaf), auto, dep_tree)
+    };
+
     let versionlock_command_output =
         first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
 
@@ -969,24 +1050,6 @@ pub fn merge_rpm_sections(
     } else {
         // No baseline selected — use defaults
         (None, None, None, false, None)
-    };
-    let leaf_dep_tree = {
-        let mut pairs: Vec<(&str, &serde_json::Value)> = Vec::new();
-        for (idx, section) in sections.iter().enumerate() {
-            if let Some(s) = section
-                && !s.leaf_dep_tree.is_null()
-            {
-                pairs.push((
-                    hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""),
-                    &s.leaf_dep_tree,
-                ));
-            }
-        }
-        pairs.sort_by_key(|(h, _)| *h);
-        pairs
-            .first()
-            .map(|(_, v)| (*v).clone())
-            .unwrap_or(serde_json::Value::Null)
     };
     // file_ownership: dedup by package_name
     let file_ownership = {
@@ -1069,6 +1132,20 @@ pub fn merge_rpm_sections(
         pkgs
     };
 
+    // Filter packages_added to leaf-only when authoritative leaf data exists.
+    let packages_added = if let Some(ref leaf_set) = leaf_packages {
+        let leaf_ids: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
+        packages_added
+            .into_iter()
+            .filter(|pkg| {
+                let id = format!("{}.{}", pkg.name, pkg.arch);
+                leaf_ids.contains(id.as_str())
+            })
+            .collect()
+    } else {
+        packages_added
+    };
+
     Some((
         RpmSection {
             packages_added,
@@ -1094,8 +1171,8 @@ pub fn merge_rpm_sections(
             base_image,
             baseline_package_names,
             no_baseline,
-            leaf_authority_hosts: None,
-            leaf_total_hosts: None,
+            leaf_authority_hosts,
+            leaf_total_hosts,
             baseline_suppressed,
             file_ownership,
         },
