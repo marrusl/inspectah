@@ -79,6 +79,14 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [ ] **Composite section rendering depth:** Services and Containers composite sections render all sub-collections but group headers could be more descriptive (e.g., show sub-collection labels like "Divergent services", "Preset-unknown enabled")
 - [ ] **Repo toggle from TUI:** Repo bar is display-only in TUI. Web UI supports toggling entire repos. Wire `SetInclude { ItemId::Repo }` to a TUI keybind (e.g., `R` on the repo bar line)
 
+## Preserve/Redaction Hardening (from spec review)
+
+- [ ] **In-artifact warning for unredacted output:** Consider a report banner or tarball filename suffix (e.g., `-UNREDACTED`) for snapshots produced with `--no-redaction`, to reduce accidental oversharing. Not blocking for pre-1.0 alpha, but should land before GA or broader external sharing.
+
+## Workspace Layout
+
+- [ ] **Move crates under `crates/` top-level directory:** Restructure the workspace so member crates live under `crates/` (e.g., `crates/inspectah-core/`, `crates/inspectah-collect/`) instead of the repo root. Keeps the root clean as the project grows. Update `Cargo.toml` workspace members paths accordingly.
+
 ## TUI: Quality Items (from Thorn CP1/CP2)
 
 - [ ] **Unicode width handling:** `truncate()` in triage_list.rs uses byte length as proxy for display width. CJK/emoji characters may under-truncate. Consider `unicode-width` crate for accurate column measurement.
