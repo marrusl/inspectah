@@ -141,7 +141,8 @@ fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
     match &snap.redaction_state {
         Some(RedactionState::FullyRedacted { .. })
         | Some(RedactionState::PartiallyRedacted { .. })
-        | Some(RedactionState::SensitiveRetained { .. }) => Ok(()),
+        | Some(RedactionState::SensitiveRetained { .. })
+        | Some(RedactionState::Raw) => Ok(()),
         _ => Err(RefineError::UntrustedSnapshot(
             "Snapshot has not been redacted. Run inspectah scan to produce a redacted snapshot before refining.".into(),
         )),
@@ -193,12 +194,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_provenance_rejects_raw() {
+    fn validate_provenance_accepts_raw() {
         let snap = InspectionSnapshot {
             redaction_state: Some(RedactionState::Raw),
             ..Default::default()
         };
-        assert!(validate_provenance(&snap).is_err());
+        assert!(validate_provenance(&snap).is_ok());
     }
 
     #[test]
