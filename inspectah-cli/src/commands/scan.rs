@@ -678,6 +678,34 @@ fn print_completion(
         }
     }
 
+    // Sensitivity confirmation
+    if snapshot.sensitive_snapshot {
+        let mut preserved_items = Vec::new();
+        if snapshot.preserved_credentials {
+            preserved_items.push("password-hashes");
+        }
+        if snapshot.preserved_ssh_keys {
+            preserved_items.push("ssh-keys");
+        }
+        if snapshot.preserved_subscription {
+            preserved_items.push("subscription");
+        }
+
+        eprintln!("  Snapshot contains sensitive data:");
+        if !preserved_items.is_empty() {
+            eprintln!("    Preserved: {}", preserved_items.join(", "));
+        }
+        let is_raw = matches!(
+            snapshot.redaction_state,
+            Some(RedactionState::Raw)
+        );
+        if is_raw {
+            eprintln!("    Redaction: skipped (raw secrets retained)");
+        } else {
+            eprintln!("    Redaction: active");
+        }
+    }
+
     // Report path and next-step hint
     if let Some(path) = output_path {
         if inspect_only {
