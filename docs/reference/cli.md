@@ -50,10 +50,9 @@ inspectah scan [OPTIONS]
 | `-o, --output <OUTPUT>` | path | — | Output file path (tarball) or directory (with `--inspect-only`) |
 | `--base-image <BASE_IMAGE>` | string | — | Target base image for version upgrades or cross-distro conversion (e.g., upgrade from RHEL 9.4 to 9.6, or convert from CentOS to RHEL) |
 | `--no-baseline` | bool | `false` | Skip baseline extraction (degraded classification mode) |
-| `--preserve-password-hashes` | bool | `false` | Preserve password hashes for users with status `password_set` |
-| `--preserve-ssh-keys` | bool | `false` | Preserve full SSH `authorized_keys` content per user |
-| `--preserve-subscription` | bool | `false` | Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for building on non-RHEL hosts |
-| `--ack-sensitive` | bool | `false` | Acknowledge that snapshot contains sensitive data (required for export when preserve flags used). Alias: `--acknowledge-sensitive` |
+| `--preserve <ITEM>` | string | — | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable |
+| `--no-redaction` | bool | `false` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive) |
+| `--ack-sensitive` | bool | `false` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive` |
 | `--progress <MODE>` | enum | `rich` | Progress display mode: `rich`, `plain`, or `flat` |
 | `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors, including fast ones |
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints) |
@@ -95,13 +94,13 @@ sudo inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream9
 Scan with sensitive data preserved (requires acknowledgment):
 
 ```bash
-sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --ack-sensitive
+sudo inspectah scan --preserve password-hashes --preserve ssh-keys --ack-sensitive
 ```
 
 Scan with RHEL subscription material preserved (for building on non-RHEL hosts):
 
 ```bash
-sudo inspectah scan --preserve-subscription --ack-sensitive
+sudo inspectah scan --preserve subscription --ack-sensitive
 ```
 
 Scan in CI with flat progress output:

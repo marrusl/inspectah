@@ -33,6 +33,7 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
@@ -75,6 +76,39 @@ impl ScanOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PreserveItem {
+    #[value(name = "password-hashes")]
+    PasswordHashes,
+    #[value(name = "ssh-keys")]
+    SshKeys,
+    #[value(name = "subscription")]
+    Subscription,
+    #[value(name = "all")]
+    All,
+}
+
+impl PreserveItem {
+    /// Expand `All` into concrete variants. `All` itself is consumed — it never
+    /// appears in the returned vec.
+    pub fn expand(items: &[PreserveItem]) -> Vec<PreserveItem> {
+        let mut result = Vec::new();
+        let has_all = items.iter().any(|i| matches!(i, PreserveItem::All));
+        if has_all {
+            result.push(PreserveItem::PasswordHashes);
+            result.push(PreserveItem::SshKeys);
+            result.push(PreserveItem::Subscription);
+        } else {
+            for item in items {
+                if !result.contains(item) {
+                    result.push(*item);
+                }
+            }
+        }
+        result
+    }
+}
+
 #[derive(Args)]
 pub struct ScanArgs {
     /// Write JSON snapshot only, skip tarball/artifact generation
@@ -93,19 +127,15 @@ pub struct ScanArgs {
     #[arg(long)]
     pub no_baseline: bool,
 
-    /// Preserve password hashes for users with status password_set
-    #[arg(long)]
-    pub preserve_password_hashes: bool,
+    /// Preserve sensitive data in the snapshot
+    #[arg(long, value_delimiter = ',', value_name = "ITEM")]
+    pub preserve: Vec<PreserveItem>,
 
-    /// Preserve full SSH authorized_keys content per user
+    /// Skip the redaction phase — secrets remain unmasked in output
     #[arg(long)]
-    pub preserve_ssh_keys: bool,
+    pub no_redaction: bool,
 
-    /// Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds
-    #[arg(long)]
-    pub preserve_subscription: bool,
-
-    /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
+    /// Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)
     #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
     pub ack_sensitive: bool,
 
@@ -168,6 +198,28 @@ fn get_hostname(executor: &dyn inspectah_core::traits::executor::Executor) -> St
     }
 }
 
+fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
+    let has_preserve = !args.preserve.is_empty();
+    let has_no_redaction = args.no_redaction;
+
+    if (has_preserve || has_no_redaction) && !args.ack_sensitive {
+        let msg = match (has_preserve, has_no_redaction) {
+            (true, true) => {
+                "--preserve and --no-redaction require --ack-sensitive to acknowledge sensitive data in the snapshot"
+            }
+            (true, false) => {
+                "--preserve requires --ack-sensitive to acknowledge sensitive data in the snapshot"
+            }
+            (false, true) => {
+                "--no-redaction requires --ack-sensitive to acknowledge unredacted secrets in the snapshot"
+            }
+            (false, false) => unreachable!(),
+        };
+        anyhow::bail!(msg);
+    }
+    Ok(())
+}
+
 pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
@@ -186,28 +238,12 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         );
     }
 
-    if (args.preserve_password_hashes || args.preserve_ssh_keys || args.preserve_subscription)
-        && !args.ack_sensitive
-    {
-        let mut sensitive_items = Vec::new();
-        if args.preserve_subscription {
-            sensitive_items.push("subscription certs");
-        }
-        if args.preserve_password_hashes {
-            sensitive_items.push("password hashes");
-        }
-        if args.preserve_ssh_keys {
-            sensitive_items.push("SSH keys");
-        }
+    validate_sensitivity_flags(args)?;
 
-        let items_list = sensitive_items.join(", ");
-
-        anyhow::bail!(
-            "Snapshot contains sensitive data ({}).\n\
-             To export, re-run with --ack-sensitive",
-            items_list
-        );
-    }
+    let preserved = PreserveItem::expand(&args.preserve);
+    let has_password_hashes = preserved.contains(&PreserveItem::PasswordHashes);
+    let has_ssh_keys = preserved.contains(&PreserveItem::SshKeys);
+    let has_subscription = preserved.contains(&PreserveItem::Subscription);
 
     let executor = RealExecutor::new();
 
@@ -339,8 +375,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     // Build UserGroupOptions from CLI flags
     let user_group_options = UserGroupOptions {
         strategy_override: None,
-        preserve_password_hashes: args.preserve_password_hashes,
-        preserve_ssh_keys: args.preserve_ssh_keys,
+        preserve_password_hashes: has_password_hashes,
+        preserve_ssh_keys: has_ssh_keys,
     };
 
     let mut inspectors: Vec<Box<dyn Inspector>> = vec![
@@ -357,8 +393,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         Box::new(NonRpmInspector::new()),
     ];
 
-    // Add SubscriptionInspector when --preserve-subscription is set
-    if args.preserve_subscription {
+    // Add SubscriptionInspector when subscription is preserved
+    if has_subscription {
         inspectors.push(Box::new(SubscriptionInspector::new()));
     }
 
@@ -417,10 +453,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
     // Set sensitivity metadata from CLI flags
     snapshot.sensitive_snapshot =
-        args.preserve_password_hashes || args.preserve_ssh_keys || args.preserve_subscription;
-    snapshot.preserved_credentials = args.preserve_password_hashes;
-    snapshot.preserved_ssh_keys = args.preserve_ssh_keys;
-    snapshot.preserved_subscription = args.preserve_subscription;
+        has_password_hashes || has_ssh_keys || has_subscription || args.no_redaction;
+    snapshot.preserved_credentials = has_password_hashes;
+    snapshot.preserved_ssh_keys = has_ssh_keys;
+    snapshot.preserved_subscription = has_subscription;
 
     // Version comparison line (prints after collection, since version_changes
     // is populated by the RPM inspector during collection)
@@ -446,7 +482,11 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         }
     }
 
-    redact(&mut snapshot, &RedactOptions::default());
+    if args.no_redaction {
+        snapshot.redaction_state = Some(RedactionState::Raw);
+    } else {
+        redact(&mut snapshot, &RedactOptions::default());
+    }
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
@@ -638,6 +678,43 @@ fn print_completion(
         }
     }
 
+    // Sensitivity confirmation
+    if snapshot.sensitive_snapshot {
+        let mut preserved_items = Vec::new();
+        if snapshot.preserved_credentials {
+            preserved_items.push("password-hashes");
+        }
+        if snapshot.preserved_ssh_keys {
+            preserved_items.push("ssh-keys");
+        }
+        if snapshot.preserved_subscription {
+            preserved_items.push("subscription");
+        }
+
+        let is_raw = matches!(snapshot.redaction_state, Some(RedactionState::Raw));
+
+        let color = use_color();
+        let (warn, bold, reset) = if color {
+            ("\x1b[33m", "\x1b[1m", "\x1b[0m")
+        } else {
+            ("", "", "")
+        };
+
+        eprintln!();
+        eprintln!("  {warn}\u{26a0}  Snapshot contains sensitive data:{reset}");
+        if !preserved_items.is_empty() {
+            eprintln!(
+                "  {bold}   Preserved:{reset} {}",
+                preserved_items.join(", ")
+            );
+        }
+        if is_raw {
+            eprintln!("  {bold}   Redaction:{reset} {warn}skipped (raw secrets retained){reset}");
+        } else {
+            eprintln!("  {bold}   Redaction:{reset} active");
+        }
+    }
+
     // Report path and next-step hint
     if let Some(path) = output_path {
         if inspect_only {
@@ -809,5 +886,130 @@ VARIANT_ID="workstation"
         assert!(ids.contains(&InspectorId::Config));
         assert!(ids.contains(&InspectorId::Selinux));
         assert!(ids.contains(&InspectorId::NonRpmSoftware));
+    }
+
+    // --- Helper for test isolation ---
+
+    fn base_args() -> ScanArgs {
+        ScanArgs {
+            inspect_only: false,
+            output: None,
+            base_image: None,
+            no_baseline: false,
+            preserve: vec![],
+            no_redaction: false,
+            ack_sensitive: false,
+            progress: None,
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    // --- ack-sensitive validation ---
+
+    #[test]
+    fn preserve_without_ack_is_error() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::SshKeys],
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--preserve requires --ack-sensitive"));
+    }
+
+    #[test]
+    fn no_redaction_without_ack_is_error() {
+        let args = ScanArgs {
+            no_redaction: true,
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--no-redaction requires --ack-sensitive"));
+    }
+
+    #[test]
+    fn both_without_ack_is_error() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::All],
+            no_redaction: true,
+            ..base_args()
+        };
+        let result = validate_sensitivity_flags(&args);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--preserve and --no-redaction require --ack-sensitive"));
+    }
+
+    #[test]
+    fn preserve_with_ack_is_ok() {
+        let args = ScanArgs {
+            preserve: vec![PreserveItem::SshKeys],
+            ack_sensitive: true,
+            ..base_args()
+        };
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    #[test]
+    fn no_redaction_with_ack_is_ok() {
+        let args = ScanArgs {
+            no_redaction: true,
+            ack_sensitive: true,
+            ..base_args()
+        };
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    #[test]
+    fn no_sensitive_flags_is_ok() {
+        let args = base_args();
+        assert!(validate_sensitivity_flags(&args).is_ok());
+    }
+
+    // --- PreserveItem expansion ---
+
+    #[test]
+    fn expand_all_returns_concrete_variants() {
+        let items = vec![PreserveItem::All];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 3);
+        assert!(expanded.contains(&PreserveItem::PasswordHashes));
+        assert!(expanded.contains(&PreserveItem::SshKeys));
+        assert!(expanded.contains(&PreserveItem::Subscription));
+        assert!(!expanded.contains(&PreserveItem::All));
+    }
+
+    #[test]
+    fn expand_deduplicates_redundant_with_all() {
+        let items = vec![PreserveItem::All, PreserveItem::SshKeys];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 3);
+    }
+
+    #[test]
+    fn expand_deduplicates_repeated_items() {
+        let items = vec![PreserveItem::SshKeys, PreserveItem::SshKeys];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0], PreserveItem::SshKeys);
+    }
+
+    #[test]
+    fn expand_empty_returns_empty() {
+        let items: Vec<PreserveItem> = vec![];
+        let expanded = PreserveItem::expand(&items);
+        assert!(expanded.is_empty());
+    }
+
+    #[test]
+    fn expand_single_item() {
+        let items = vec![PreserveItem::Subscription];
+        let expanded = PreserveItem::expand(&items);
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0], PreserveItem::Subscription);
     }
 }

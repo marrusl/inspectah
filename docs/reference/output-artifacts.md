@@ -62,7 +62,7 @@ system did not have the relevant configuration.
 | `drop-ins/` | `services.drop_ins` has included entries | Systemd service drop-in overrides (e.g., `drop-ins/etc/systemd/system/<unit>.d/override.conf`). |
 | `tuned/` | `kernel_boot.tuned_include` is true and custom profiles exist | Custom tuned performance profiles. |
 | `sysctl/99-inspectah-migrated.conf` | `kernel_boot.sysctl_overrides` has included entries | Synthesized sysctl configuration from included overrides. |
-| `subscription/` | `--preserve-subscription` used during scan | RHEL subscription material for non-RHEL builds. Contains `entitlement/` (cert/key pairs), `rhsm/ca/` (CA certs), `rhsm/rhsm.conf`, and `redhat.repo`. |
+| `subscription/` | `--preserve subscription` used during scan | RHEL subscription material for non-RHEL builds. Contains `entitlement/` (cert/key pairs), `rhsm/ca/` (CA certs), `rhsm/rhsm.conf`, and `redhat.repo`. |
 | `inspectah-users.ks` | `users_groups` has included users or custom groups | Kickstart fragment for user/group provisioning. |
 | `inspectah-users.toml` | `users_groups` has included users or custom groups | Blueprint TOML fragment for bootc-image-builder user/group provisioning. |
 | `users/` | Users have `authorized_keys` data | SSH key staging tree (e.g., `users/home/<user>/.ssh/authorized_keys`). |

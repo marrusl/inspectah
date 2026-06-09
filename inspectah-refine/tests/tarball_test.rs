@@ -67,13 +67,13 @@ fn load_prefixed_tarball() {
 }
 
 #[test]
-fn reject_raw_redaction_state() {
+fn accept_raw_redaction_state() {
     let dir = tempdir().unwrap();
     let snap_json = make_test_snapshot(Some(RedactionState::Raw));
     let tarball = write_flat_tarball(dir.path(), &snap_json);
 
-    let result = inspectah_refine::tarball::from_tarball(&tarball);
-    assert!(matches!(result, Err(RefineError::UntrustedSnapshot(_))));
+    let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
+    assert_eq!(session.view().generation, 0);
 }
 
 #[test]

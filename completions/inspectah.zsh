@@ -34,14 +34,13 @@ _arguments "${_arguments_options[@]}" : \
 '-o+[Output file path (tarball) or directory (with --inspect-only)]:OUTPUT:_files' \
 '--output=[Output file path (tarball) or directory (with --inspect-only)]:OUTPUT:_files' \
 '--base-image=[Target base image for cross-distro conversion (e.g., registry.redhat.io/rhel9/rhel-bootc\:9.6)]:BASE_IMAGE:_default' \
+'*--preserve=[Preserve sensitive data in the snapshot]:ITEM:(password-hashes ssh-keys subscription all)' \
 '--progress=[Progress display mode\: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)]:MODE:((rich\:"Block-redraw checklist with spinners (default for TTY)"
 plain\:"Append-only lines with Unicode symbols (durable scrollback)"
 flat\:"Numbered sequential lines, no ANSI (CI / piped output)"))' \
 '--inspect-only[Write JSON snapshot only, skip tarball/artifact generation]' \
 '--no-baseline[Skip baseline extraction (degraded classification mode)]' \
-'--preserve-password-hashes[Preserve password hashes for users with status password_set]' \
-'--preserve-ssh-keys[Preserve full SSH authorized_keys content per user]' \
-'--preserve-subscription[Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds]' \
+'--no-redaction[Skip the redaction phase — secrets remain unmasked in output]' \
 '--ack-sensitive[Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)]' \
 '--acknowledge-sensitive[Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)]' \
 '(-q --quiet)-v[Show sub-step detail for all inspectors, including fast ones]' \

@@ -13,6 +13,7 @@ use inspectah_core::fleet::merge_snapshots;
 use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 
@@ -162,6 +163,9 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
             }
             if snapshot.preserved_ssh_keys {
                 sensitive_types.insert("SSH keys");
+            }
+            if snapshot.redaction_state == Some(RedactionState::Raw) {
+                sensitive_types.insert("unredacted secrets");
             }
         }
 
@@ -647,8 +651,14 @@ fn load_snapshot_from_tarball(tarball_path: &Path) -> Result<InspectionSnapshot>
             let mut json = String::new();
             std::io::Read::read_to_string(&mut entry, &mut json)
                 .context("failed to read inspection-snapshot.json from tarball")?;
-            let snapshot = InspectionSnapshot::load(&json)
+            let mut snapshot = InspectionSnapshot::load(&json)
                 .map_err(|e| anyhow::anyhow!("failed to parse snapshot: {e}"))?;
+
+            // Normalize: Raw redaction state always implies sensitive data
+            if matches!(snapshot.redaction_state, Some(RedactionState::Raw)) {
+                snapshot.sensitive_snapshot = true;
+            }
+
             return Ok(snapshot);
         }
     }

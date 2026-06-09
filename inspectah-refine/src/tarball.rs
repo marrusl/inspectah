@@ -30,10 +30,15 @@ pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
 
     // load_for_refine handles the full pipeline:
     // raw-JSON include patching → deserialize → schema version check
-    let snapshot = load_for_refine(&snap_json)?;
+    let mut snapshot = load_for_refine(&snap_json)?;
 
     // Check provenance — FullyRedacted only
     validate_provenance(&snapshot)?;
+
+    // Normalize: Raw redaction state always implies sensitive data
+    if matches!(snapshot.redaction_state, Some(RedactionState::Raw)) {
+        snapshot.sensitive_snapshot = true;
+    }
 
     Ok(RefineSession::new(snapshot))
 }
@@ -141,7 +146,8 @@ fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
     match &snap.redaction_state {
         Some(RedactionState::FullyRedacted { .. })
         | Some(RedactionState::PartiallyRedacted { .. })
-        | Some(RedactionState::SensitiveRetained { .. }) => Ok(()),
+        | Some(RedactionState::SensitiveRetained { .. })
+        | Some(RedactionState::Raw) => Ok(()),
         _ => Err(RefineError::UntrustedSnapshot(
             "Snapshot has not been redacted. Run inspectah scan to produce a redacted snapshot before refining.".into(),
         )),
@@ -193,12 +199,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_provenance_rejects_raw() {
+    fn validate_provenance_accepts_raw() {
         let snap = InspectionSnapshot {
             redaction_state: Some(RedactionState::Raw),
             ..Default::default()
         };
-        assert!(validate_provenance(&snap).is_err());
+        assert!(validate_provenance(&snap).is_ok());
+    }
+
+    #[test]
+    fn validate_provenance_raw_implies_sensitive() {
+        // Provenance accepts Raw — normalization (sensitive_snapshot = true)
+        // happens in from_tarball(), not here.
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::Raw),
+            sensitive_snapshot: false,
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_ok());
     }
 
     #[test]

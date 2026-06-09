@@ -175,10 +175,9 @@ inspectah fleet aggregate --manifest fleet.toml --baseline registry.redhat.io/rh
 
 ### Sensitive data acknowledgment
 
-When any contributing scan was run with `--preserve-password-hashes`,
-`--preserve-ssh-keys`, or `--preserve-subscription`, the merged output
-contains sensitive material. Fleet aggregate refuses to produce output
-unless you acknowledge this with `--ack-sensitive`:
+When any contributing scan was run with `--preserve` or `--no-redaction`,
+the merged output contains sensitive material. Fleet aggregate refuses to
+produce output unless you acknowledge this with `--ack-sensitive`:
 
 ```bash
 inspectah fleet aggregate --ack-sensitive --manifest fleet.toml

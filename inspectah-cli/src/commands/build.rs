@@ -83,7 +83,7 @@ pub fn run_build(args: &BuildArgs) -> Result<BuildOutcome> {
         BuildOutcome::NoSubscription => {
             eprintln!("error: no subscription data available");
             eprintln!("This build requires RHEL subscription data.");
-            eprintln!("Re-scan the source host with --preserve-subscription.");
+            eprintln!("Re-scan the source host with --preserve subscription --ack-sensitive.");
         }
         BuildOutcome::PreflightFailed { reason } => {
             eprintln!("error: preflight check failed: {reason}");
