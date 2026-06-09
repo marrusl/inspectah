@@ -1094,6 +1094,8 @@ pub fn merge_rpm_sections(
             base_image,
             baseline_package_names,
             no_baseline,
+            leaf_authority_hosts: None,
+            leaf_total_hosts: None,
             baseline_suppressed,
             file_ownership,
         },

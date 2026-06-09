@@ -215,6 +215,14 @@ pub struct RpmSection {
     pub baseline_package_names: Option<Vec<String>>,
     #[serde(default)]
     pub no_baseline: bool,
+    /// Number of hosts with authoritative leaf classification data.
+    /// Only meaningful for fleet-aggregated snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_authority_hosts: Option<u32>,
+    /// Total number of hosts in the fleet.
+    /// Only meaningful for fleet-aggregated snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_total_hosts: Option<u32>,
     /// File ownership data from `rpm -qa --queryformat '%{NAME}\t[%{FILENAMES}\n]'`.
     /// Each entry maps a package name to the filesystem paths it owns.
     #[serde(default)]
