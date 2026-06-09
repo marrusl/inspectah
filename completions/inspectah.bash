@@ -419,7 +419,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__scan)
-            opts="-o -v -q -h --inspect-only --output --base-image --no-baseline --preserve-password-hashes --preserve-ssh-keys --preserve-subscription --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
+            opts="-o -v -q -h --inspect-only --output --base-image --no-baseline --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -435,6 +435,10 @@ _inspectah() {
                     ;;
                 --base-image)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --preserve)
+                    COMPREPLY=($(compgen -W "password-hashes ssh-keys subscription all" -- "${cur}"))
                     return 0
                     ;;
                 --progress)

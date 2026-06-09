@@ -36,14 +36,16 @@ complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "completions" -d
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s o -l output -d 'Output file path (tarball) or directory (with --inspect-only)' -r -F
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l base-image -d 'Target base image for cross-distro conversion (e.g., registry.redhat.io/rhel9/rhel-bootc:9.6)' -r
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l preserve -d 'Preserve sensitive data in the snapshot' -r -f -a "password-hashes\t''
+ssh-keys\t''
+subscription\t''
+all\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l progress -d 'Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)' -r -f -a "rich\t'Block-redraw checklist with spinners (default for TTY)'
 plain\t'Append-only lines with Unicode symbols (durable scrollback)'
 flat\t'Numbered sequential lines, no ANSI (CI / piped output)'"
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l inspect-only -d 'Write JSON snapshot only, skip tarball/artifact generation'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l no-baseline -d 'Skip baseline extraction (degraded classification mode)'
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l preserve-password-hashes -d 'Preserve password hashes for users with status password_set'
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l preserve-ssh-keys -d 'Preserve full SSH authorized_keys content per user'
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l preserve-subscription -d 'Preserve RHEL subscription material (entitlement certs, rhsm config, redhat.repo) for non-RHEL builds'
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l no-redaction -d 'Skip the redaction phase — secrets remain unmasked in output'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s v -l verbose -d 'Show sub-step detail for all inspectors, including fast ones'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s q -l quiet -d 'Suppress the scan progress checklist (completion summary still prints)'
