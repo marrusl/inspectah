@@ -113,7 +113,7 @@ concern. The partial authority handling here is interim.
 
 ## Implementation: where the filter goes
 
-In `merge_rpm_sections` (`inspectah-core/src/fleet/merge.rs`):
+In `merge_rpm_sections` (`crates/core/src/fleet/merge.rs`):
 
 1. **After `merge_items`** — prevalence metadata is already attached.
 2. **Before repo-conflict detection** — conflicts should only apply to

@@ -23,7 +23,7 @@ refine layer needs to know *which* case it is.
 
 ## The Fix That Exists
 
-`inspectah-refine/src/normalize.rs` contains `load_for_refine()`, which
+`crates/refine/src/normalize.rs` contains `load_for_refine()`, which
 walks the raw JSON *before* typed deserialization and patches any entry
 lacking an `include` key by inserting `"include": true`. This preserves
 an existing `"include": false` while ensuring absent fields get the
@@ -69,6 +69,6 @@ part of that fix.
 
 ## See Also
 
-- `inspectah-core/src/lib.rs` -- `default_true()` and `is_false()`
-- `inspectah-core/src/types/rpm.rs` -- `PackageEntry` definition
-- `inspectah-refine/src/normalize.rs` -- `load_for_refine()`
+- `crates/core/src/lib.rs` -- `default_true()` and `is_false()`
+- `crates/core/src/types/rpm.rs` -- `PackageEntry` definition
+- `crates/refine/src/normalize.rs` -- `load_for_refine()`

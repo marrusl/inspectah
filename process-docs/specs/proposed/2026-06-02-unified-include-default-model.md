@@ -48,8 +48,8 @@ cannot currently distinguish "tuned auto-selected a stock profile" from "admin
 intentionally pinned a stock profile" — both are excluded by default. This is a
 known limitation; intentionally pinned stock profiles are recovered via the
 refine toggle. No change to the existing collector logic
-(`inspectah-collect/src/inspectors/kernelboot.rs:140`) or fleet merge logic
-(`inspectah-core/src/fleet/merge.rs:1514`). Both already call
+(`crates/collect/src/inspectors/kernelboot.rs:140`) or fleet merge logic
+(`crates/core/src/fleet/merge.rs:1514`). Both already call
 `is_stock_tuned_profile()` and produce the correct defaults. Tuned is a standard
 prevalence-tracked item with strict universality in fleet mode.
 
@@ -68,21 +68,21 @@ into a Containerfile would impose one host's disk layout on every image consumer
 
 ### 2. What Gets Deleted
 
-**Session layer (`inspectah-refine/src/session.rs`):**
+**Session layer (`crates/refine/src/session.rs`):**
 - Delete the single-host normalization block (~lines 337-410, the 12-item block)
 - Keep `normalize_package_defaults` — real classifier
 - Keep `normalize_config_defaults` — real classifier
 - Delete the fleet prevalence gate's per-item `include = false` logic
   (~lines 182-327). Fleet narrowing moves to the aggregate pass (see §3).
 
-**Render layer (`inspectah-pipeline/src/render/containerfile.rs`, `configtree.rs`):**
+**Render layer (`crates/pipeline/src/render/containerfile.rs`, `configtree.rs`):**
 - Delete all `|| is_single_host` overrides (6 occurrences across 2 files)
 - Render filters on `.include` only — the flag is already correct from
   collector + classifier + semantic exclusions
 
 ### 3. Fleet Narrowing Moves to Aggregate
 
-The fleet aggregate pass lives in `inspectah-core/src/fleet/merge.rs`. The
+The fleet aggregate pass lives in `crates/core/src/fleet/merge.rs`. The
 `MergeWith` trait already has `set_include(&mut self, val: bool)` wired up for
 every section type.
 
@@ -92,12 +92,12 @@ set `include: false` on items that are not universal across the fleet (i.e.,
 `session.rs`. Strict universality is the threshold — no exceptions for any
 item type including tuned profiles.
 
-The fleet triage classification in `inspectah-refine/src/fleet/classify.rs`
+The fleet triage classification in `crates/refine/src/fleet/classify.rs`
 continues to set triage labels for UI presentation. It does not set `include` —
 that is now solely the aggregate pass's responsibility.
 
 **Fleet reference sections invariant:** Fleet reference sections in
-`inspectah-web/src/fleet_handlers.rs` must consume stored `.include` values from
+`crates/web/src/fleet_handlers.rs` must consume stored `.include` values from
 the projected snapshot. They must not derive or recompute inclusion. Several
 reference section builders currently call `fleet_include_default(fp)` to
 recompute inclusion from prevalence — these must be refactored to read the
@@ -129,18 +129,18 @@ diagnostic value but locked out of the Containerfile.
 - `/etc/localtime`
 
 **Implementation:** Add `normalize_merge_hostile_configs()` in
-`inspectah-refine/src/normalize.rs`, following the existing
+`crates/refine/src/normalize.rs`, following the existing
 `normalize_incompatible_services()` pattern. Called from `load_for_refine()`.
 Sets `include = false` and `locked = true` on matched paths.
 
 #### 4b. Image-Incompatible Services
 
 Services that are semantically wrong in image mode. The existing
-`normalize_incompatible_services()` function in `inspectah-refine/src/normalize.rs`
+`normalize_incompatible_services()` function in `crates/refine/src/normalize.rs`
 already handles this — it sets `include = false` and
 `attention_reason = "service-image-mode-incompatible"` on matched units.
 
-**Current deny list** (in `INCOMPATIBLE_SERVICES`, `inspectah-core/src/baseline.rs`):
+**Current deny list** (in `INCOMPATIBLE_SERVICES`, `crates/core/src/baseline.rs`):
 - `dnf-makecache.service`
 - `dnf-makecache.timer`
 - `packagekit.service`
@@ -189,7 +189,7 @@ response DTO surfaces both `locked: true` and the `attention_reason` string
 so the frontend can render the badge.
 
 **Note:** The config walker's existing `UNOWNED_EXCLUDE_EXACT` list (77 exact
-paths, 30+ globs, 3 prefixes in `inspectah-collect/src/inspectors/config/walk.rs`)
+paths, 30+ globs, 3 prefixes in `crates/collect/src/inspectors/config/walk.rs`)
 stays as-is. It serves a different purpose: collection-time noise filtering for
 files with no diagnostic value. Semantic exclusions operate at classification
 time on files that ARE collected. Two lists, two stages, clean separation.
@@ -204,7 +204,7 @@ already use plain `bool`. No custom deserializer for null values — existing
 snapshots re-scan per standing policy.
 
 **Implementation requirement:** The implementer must `grep` for
-`include: Option<bool>` across all `inspectah-core/src/types/` structs at
+`include: Option<bool>` across all `crates/core/src/types/` structs at
 implementation time and normalize each to `include: bool` with
 `#[serde(default = "default_true")]`. Do not rely on the examples from earlier
 brainstorming — audit the actual code.
@@ -240,7 +240,7 @@ plan must address each one.
    non-universal but custom. Write tests for both cases.
 
 2. **Fleet reference handlers.** Earlier investigation found that
-   `inspectah-web/src/fleet_handlers.rs` reads stored `.include` values for all
+   `crates/web/src/fleet_handlers.rs` reads stored `.include` values for all
    item types. Round 3 reviewers still flagged potential recomputation in some
    reference sections. The plan must include a code audit of every reference
    section in `fleet_handlers.rs` to confirm no path recomputes inclusion, and

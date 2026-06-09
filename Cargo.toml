@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "inspectah-core",
-    "inspectah-collect",
-    "inspectah-pipeline",
-    "inspectah-cli",
-    "inspectah-web",
-    "inspectah-refine",
-    "inspectah-tui",
+    "crates/core",
+    "crates/collect",
+    "crates/pipeline",
+    "crates/cli",
+    "crates/web",
+    "crates/refine",
+    "crates/tui",
 ]
 resolver = "2"
 

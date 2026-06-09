@@ -13,7 +13,7 @@ image-mode migration.
 **Schema version:** 18
 {: .label .label-blue }
 
-**Source:** `inspectah-core/src/snapshot.rs`
+**Source:** `crates/core/src/snapshot.rs`
 {: .text-grey-dk-000 }
 
 {% raw %}

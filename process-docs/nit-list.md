@@ -85,7 +85,11 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 ## Workspace Layout
 
-- [ ] **Move crates under `crates/` top-level directory:** Restructure the workspace so member crates live under `crates/` (e.g., `crates/inspectah-core/`, `crates/inspectah-collect/`) instead of the repo root. Keeps the root clean as the project grows. Update `Cargo.toml` workspace members paths accordingly.
+- [ ] **Move crates under `crates/` top-level directory:** Restructure the workspace so member crates live under `crates/` (e.g., `crates/core/`, `crates/collect/`) with prefix-dropped directory names. Package names stay `inspectah-*` in Cargo.toml. Plan at `process-docs/plans/crates-reorganization.md`.
+
+## TUI Input Handling
+
+- [ ] **Evaluate `tui-input` vs custom input:** TUI currently uses custom input handling via crossterm. The `tui-input` crate was a dependency but unused (removed in dead code scan). Evaluate whether adopting `tui-input` would simplify the input layer vs. maintaining the custom approach.
 
 ## TUI: Quality Items (from Thorn CP1/CP2)
 

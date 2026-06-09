@@ -9,7 +9,7 @@ nav_order: 5
 Inspectors are the data-collection modules that populate snapshot sections.
 Each inspector implements the `Inspector` trait and runs during the scan phase.
 
-**Source:** `inspectah-collect/src/inspectors/`
+**Source:** `crates/collect/src/inspectors/`
 {: .text-grey-dk-000 }
 
 ## Execution model
@@ -309,7 +309,7 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 The redaction engine runs as a pipeline stage after collection, before
 rendering. It is not an inspector but operates on inspector output.
 
-**Source:** `inspectah-pipeline/src/redaction/`
+**Source:** `crates/pipeline/src/redaction/`
 {: .text-grey-dk-000 }
 
 ### Pattern types

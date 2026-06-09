@@ -5,7 +5,7 @@ description: RPM epoch comparison requires explicit normalization -- empty strin
 
 # RPM Epoch Normalization
 
-The RPM classifier in `inspectah-collect/src/inspectors/rpm/classifier.rs`
+The RPM classifier in `crates/collect/src/inspectors/rpm/classifier.rs`
 compares host packages against baseline packages using `rpmvercmp()` for
 epoch, version, and release independently. Epoch has a non-obvious
 normalization requirement.
@@ -66,7 +66,7 @@ serialized epoch values from both sides.
 
 ## See Also
 
-- `inspectah-collect/src/inspectors/rpm/classifier.rs` -- `norm_epoch`, `classify_packages`
-- `inspectah-collect/src/inspectors/rpm/parser.rs` -- `rpmvercmp` implementation
-- `inspectah-collect/src/baseline.rs` -- baseline extraction (container-side RPM query)
-- `inspectah-core/src/baseline.rs` -- `BaselineData`, `BaselinePackageEntry`
+- `crates/collect/src/inspectors/rpm/classifier.rs` -- `norm_epoch`, `classify_packages`
+- `crates/collect/src/inspectors/rpm/parser.rs` -- `rpmvercmp` implementation
+- `crates/collect/src/baseline.rs` -- baseline extraction (container-side RPM query)
+- `crates/core/src/baseline.rs` -- `BaselineData`, `BaselinePackageEntry`

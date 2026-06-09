@@ -6,7 +6,7 @@ description: Inspector execution uses a two-wave dispatch where RPM runs first a
 # Two-Wave Collection Dispatch
 
 Inspectors do not run in a flat parallel pool. The `collect()` function
-in `inspectah-pipeline/src/collect.rs` partitions inspectors into two
+in `crates/pipeline/src/collect.rs` partitions inspectors into two
 waves using `is_wave2()`:
 
 - **Wave 1:** RPM and Subscription (no dependencies on other inspectors)
@@ -50,7 +50,7 @@ your inspector genuinely has no dependency on RPM state, you need to
 explicitly add its `InspectorId` to the Wave 1 list.
 
 You must also add a variant to `InspectorId` in
-`inspectah-core/src/types/completeness.rs` and a `SectionData` variant
+`crates/core/src/types/completeness.rs` and a `SectionData` variant
 (if it produces a snapshot section) before the compiler will let you wire
 it in.
 
@@ -60,11 +60,11 @@ Skipping the wave contract (e.g., treating `None` as "no packages") silently
 degrades Config classification. The bug is invisible in tests unless you
 specifically test with an RPM-failed scenario. The codebase has explicit
 contract tests for `None` vs `Some(empty)` -- check
-`test_rpm_state_none_vs_empty` in `inspectah-core/src/traits/inspector.rs`.
+`test_rpm_state_none_vs_empty` in `crates/core/src/traits/inspector.rs`.
 
 ## See Also
 
-- `inspectah-pipeline/src/collect.rs` -- wave dispatch logic
-- `inspectah-core/src/traits/inspector.rs` -- `RpmState`, `InspectionContext`
-- `inspectah-core/src/types/completeness.rs` -- `InspectorId`, `SectionData`
+- `crates/pipeline/src/collect.rs` -- wave dispatch logic
+- `crates/core/src/traits/inspector.rs` -- `RpmState`, `InspectionContext`
+- `crates/core/src/types/completeness.rs` -- `InspectorId`, `SectionData`
 - `docs/contributing/adding-an-inspector.md` -- high-level guide

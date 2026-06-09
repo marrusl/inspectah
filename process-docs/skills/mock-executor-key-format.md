@@ -5,7 +5,7 @@ description: MockExecutor command lookup uses a specific key format that silentl
 
 # MockExecutor Command Key Format
 
-`MockExecutor` in `inspectah-collect/src/executor/mock.rs` builds lookup
+`MockExecutor` in `crates/collect/src/executor/mock.rs` builds lookup
 keys by joining the command and arguments with a single space:
 
 ```rust
@@ -67,6 +67,6 @@ with incomplete data. You end up testing the wrong scenario.
 
 ## See Also
 
-- `inspectah-collect/src/executor/mock.rs` -- full implementation
-- `inspectah-collect/src/executor/real.rs` -- real executor for comparison
-- `inspectah-core/src/traits/executor.rs` -- `Executor` trait definition
+- `crates/collect/src/executor/mock.rs` -- full implementation
+- `crates/collect/src/executor/real.rs` -- real executor for comparison
+- `crates/core/src/traits/executor.rs` -- `Executor` trait definition
