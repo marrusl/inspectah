@@ -135,7 +135,7 @@ pub struct ScanArgs {
     #[arg(long)]
     pub no_redaction: bool,
 
-    /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
+    /// Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)
     #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
     pub ack_sensitive: bool,
 
@@ -691,18 +691,27 @@ fn print_completion(
             preserved_items.push("subscription");
         }
 
-        eprintln!("  Snapshot contains sensitive data:");
-        if !preserved_items.is_empty() {
-            eprintln!("    Preserved: {}", preserved_items.join(", "));
-        }
-        let is_raw = matches!(
-            snapshot.redaction_state,
-            Some(RedactionState::Raw)
-        );
-        if is_raw {
-            eprintln!("    Redaction: skipped (raw secrets retained)");
+        let is_raw = matches!(snapshot.redaction_state, Some(RedactionState::Raw));
+
+        let color = use_color();
+        let (warn, bold, reset) = if color {
+            ("\x1b[33m", "\x1b[1m", "\x1b[0m")
         } else {
-            eprintln!("    Redaction: active");
+            ("", "", "")
+        };
+
+        eprintln!();
+        eprintln!("  {warn}\u{26a0}  Snapshot contains sensitive data:{reset}");
+        if !preserved_items.is_empty() {
+            eprintln!(
+                "  {bold}   Preserved:{reset} {}",
+                preserved_items.join(", ")
+            );
+        }
+        if is_raw {
+            eprintln!("  {bold}   Redaction:{reset} {warn}skipped (raw secrets retained){reset}");
+        } else {
+            eprintln!("  {bold}   Redaction:{reset} active");
         }
     }
 
