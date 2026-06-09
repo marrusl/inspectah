@@ -330,6 +330,12 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         };
     }
 
+    // Fleet snapshots use leaf-only packages_added, so
+    // classify_service_presence would incorrectly omit services whose
+    // owning package is an auto (non-leaf) dependency. Skip classification
+    // entirely for fleet — force all services to Emit.
+    let is_fleet = snap.fleet_meta.is_some();
+
     let mut omissions = Vec::new();
     let mut omission_comments = Vec::new();
     let mut advisories = Vec::new();
@@ -346,7 +352,15 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
 
         // Evaluate omission BEFORE config-tree deferral — a proven-absent
         // service never becomes deferred fiction.
-        match classify_service_presence(sc, rpm, &target_packages, baseline_unavailable) {
+        let presence = if is_fleet {
+            PresenceDecision::Emit {
+                advisory_reasons: None,
+            }
+        } else {
+            classify_service_presence(sc, rpm, &target_packages, baseline_unavailable)
+        };
+
+        match presence {
             PresenceDecision::Omit { owning_package } => {
                 omission_comments.push(format!(
                     "# Omitted: {} (package '{}' not in target image)",

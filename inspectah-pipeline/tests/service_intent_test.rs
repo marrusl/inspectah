@@ -673,3 +673,61 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
     );
     assert!(plan.lines.iter().any(|l| l.contains("httpd.service")));
 }
+
+/// Fleet mode: `packages_added` is leaf-only, so `classify_service_presence`
+/// would incorrectly omit services owned by auto (non-leaf) packages via
+/// Tier 7. In fleet mode, skip classification entirely — all services Emit,
+/// no omissions, no package-derived advisories.
+#[test]
+fn test_fleet_snapshot_skips_service_omission_and_advisories() {
+    use inspectah_core::types::fleet::FleetSnapshotMeta;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test-fleet".into(),
+        host_count: 2,
+        hostnames: vec!["alpha".into(), "beta".into()],
+        merged_at: "2026-06-09T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: Default::default(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "git".into(),
+            arch: "x86_64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        baseline_package_names: Some(vec!["systemd".into()]),
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        state_changes: vec![state_change(
+            "perl-related.service",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("perl-libs"),
+        )],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+
+    let plan = render_service_intent(&snap);
+
+    // Fleet: no omissions, no advisories, service must be emitted
+    assert!(
+        plan.omissions.is_empty(),
+        "fleet must not omit services"
+    );
+    assert!(
+        plan.advisories.is_empty(),
+        "fleet must not emit package-derived advisories"
+    );
+    assert!(
+        plan.lines.iter().any(|l| l.contains("perl-related.service")),
+        "fleet must emit perl-related.service"
+    );
+}
