@@ -1066,6 +1066,22 @@ pub fn merge_rpm_sections(
         result
     };
 
+    // Filter packages_added to leaf-only when authoritative leaf data exists.
+    // This MUST happen before repo-conflict detection so that auto/transitive
+    // packages cannot appear in the repo_conflicts map.
+    let packages_added = if let Some(ref leaf_set) = leaf_packages {
+        let leaf_ids: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
+        packages_added
+            .into_iter()
+            .filter(|pkg| {
+                let id = format!("{}.{}", pkg.name, pkg.arch);
+                leaf_ids.contains(id.as_str())
+            })
+            .collect()
+    } else {
+        packages_added
+    };
+
     // Detect repo-source conflicts: packages installed from different repos
     // across the fleet. Only tracks conflicts when repos span different tiers
     // (e.g., epel vs baseos). Same-tier differences (e.g., anaconda vs baseos)
@@ -1130,20 +1146,6 @@ pub fn merge_rpm_sections(
             }
         }
         pkgs
-    };
-
-    // Filter packages_added to leaf-only when authoritative leaf data exists.
-    let packages_added = if let Some(ref leaf_set) = leaf_packages {
-        let leaf_ids: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
-        packages_added
-            .into_iter()
-            .filter(|pkg| {
-                let id = format!("{}.{}", pkg.name, pkg.arch);
-                leaf_ids.contains(id.as_str())
-            })
-            .collect()
-    } else {
-        packages_added
     };
 
     Some((

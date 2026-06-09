@@ -2062,3 +2062,451 @@ fn test_fleet_leaf_intersection_filters_packages_added() {
     assert_eq!(merged.leaf_authority_hosts, Some(2));
     assert_eq!(merged.leaf_total_hosts, Some(2));
 }
+
+// ---------------------------------------------------------------------------
+// Leaf intersection edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_fleet_leaf_intersection_excludes_partial_leaf() {
+    // host_a: git + htop both leaf
+    // host_b: git leaf, htop auto (not in leaf_packages)
+    // Result: only git survives intersection, htop filtered from packages_added
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "htop".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "htop.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": [], "htop.x86_64": []}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "htop".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["htop.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["htop.x86_64"]}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // Only git is leaf on ALL authoritative hosts
+    assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
+
+    // packages_added filtered to leaf intersection
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "git");
+}
+
+#[test]
+fn test_fleet_leaf_intersection_skips_degraded_hosts() {
+    // host_a: vim leaf (authoritative)
+    // host_b: vim present but leaf_packages: None (degraded)
+    // Result: vim in intersection, leaf_authority_hosts=1, leaf_total_hosts=2
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["vim.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"vim.x86_64": []}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: None,
+        auto_packages: None,
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // vim passes — only 1 authoritative host, so intersection = that host's set
+    assert_eq!(merged.leaf_packages, Some(vec!["vim.x86_64".into()]));
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "vim");
+
+    // Coverage metadata
+    assert_eq!(merged.leaf_authority_hosts, Some(1));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}
+
+#[test]
+fn test_fleet_leaf_intersection_all_degraded() {
+    // Both hosts: leaf_packages: None
+    // Result: leaf_packages=None, auto_packages=None, leaf_dep_tree={},
+    //         packages_added kept (no filtering), authority=0, total=2
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: None,
+        auto_packages: None,
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: None,
+        auto_packages: None,
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // Full degraded triplet
+    assert_eq!(merged.leaf_packages, None);
+    assert_eq!(merged.auto_packages, None);
+    assert_eq!(merged.leaf_dep_tree, serde_json::json!({}));
+
+    // packages_added NOT filtered (no authoritative data)
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "git");
+
+    // Coverage metadata
+    assert_eq!(merged.leaf_authority_hosts, Some(0));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}
+
+#[test]
+fn test_fleet_leaf_intersection_authoritative_empty() {
+    // host_a: git leaf
+    // host_b: leaf_packages = Some(vec![]) — authoritative but empty
+    // Result: intersection = Some(vec![]) NOT None, packages_added = 0
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": []}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec![]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // Intersection of {git.x86_64} and {} = empty, but Some (not None)
+    assert_eq!(merged.leaf_packages, Some(vec![]));
+
+    // packages_added filtered to empty
+    assert_eq!(merged.packages_added.len(), 0);
+
+    // Both hosts are authoritative
+    assert_eq!(merged.leaf_authority_hosts, Some(2));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}
+
+#[test]
+fn test_fleet_leaf_dep_tree_donor_from_authoritative_host() {
+    // "alpha" sorts first but is degraded (leaf_packages: None, leaf_dep_tree: {})
+    // "beta" sorts second but is authoritative (leaf_packages: Some, leaf_dep_tree: real data)
+    // Result: dep tree comes from beta, not alpha
+    let host_alpha = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "curl".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: None,
+        auto_packages: None,
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+    let host_beta = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "curl".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "curl.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({
+            "git.x86_64": ["perl-libs.x86_64"],
+            "curl.x86_64": ["libcurl.x86_64"]
+        }),
+        ..Default::default()
+    });
+
+    // "alpha" sorts before "beta" — degraded host is first alphabetically
+    let hostnames = vec!["alpha".into(), "beta".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_alpha, host_beta], 2, &hostnames, None).unwrap();
+
+    // Dep tree must come from beta (authoritative), NOT alpha (degraded)
+    let tree = merged.leaf_dep_tree.as_object().unwrap();
+    assert_eq!(tree.len(), 2, "dep tree must have entries from authoritative host");
+    assert!(tree.contains_key("git.x86_64"));
+    assert!(tree.contains_key("curl.x86_64"));
+
+    // Verify actual dep content
+    assert_eq!(tree["git.x86_64"], serde_json::json!(["perl-libs.x86_64"]));
+    assert_eq!(tree["curl.x86_64"], serde_json::json!(["libcurl.x86_64"]));
+
+    // Coverage metadata
+    assert_eq!(merged.leaf_authority_hosts, Some(1));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}
+
+#[test]
+fn test_fleet_leaf_intersection_order_independent() {
+    // Same data, different hostname ordering
+    // Result: identical leaf_packages in both cases, sorted by canonical identity
+    let make_section = || RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "vim.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": [], "vim.x86_64": []}),
+        ..Default::default()
+    };
+
+    // Order 1: host-a first, host-b second
+    let hostnames_1 = vec!["host-a".into(), "host-b".into()];
+    let (merged_1, _) = merge_rpm_sections(
+        vec![Some(make_section()), Some(make_section())],
+        2,
+        &hostnames_1,
+        None,
+    ).unwrap();
+
+    // Order 2: host-b first, host-a second
+    let hostnames_2 = vec!["host-b".into(), "host-a".into()];
+    let (merged_2, _) = merge_rpm_sections(
+        vec![Some(make_section()), Some(make_section())],
+        2,
+        &hostnames_2,
+        None,
+    ).unwrap();
+
+    // leaf_packages must be identical regardless of input order
+    assert_eq!(merged_1.leaf_packages, merged_2.leaf_packages);
+
+    // packages_added names must be in the same order
+    let names_1: Vec<&str> = merged_1.packages_added.iter().map(|p| p.name.as_str()).collect();
+    let names_2: Vec<&str> = merged_2.packages_added.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names_1, names_2);
+}
+
+#[test]
+fn test_fleet_leaf_intersection_multiarch_identity() {
+    // glibc.x86_64 is leaf, glibc.i686 is auto (on both hosts)
+    // Result: only glibc.x86_64 in packages_added, glibc.i686 filtered
+    let make_host = || RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "glibc".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "glibc".into(), arch: "i686".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["glibc.x86_64".into()]),
+        auto_packages: Some(vec!["glibc.i686".into()]),
+        leaf_dep_tree: serde_json::json!({"glibc.x86_64": ["glibc.i686"]}),
+        ..Default::default()
+    };
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(
+        vec![Some(make_host()), Some(make_host())],
+        2,
+        &hostnames,
+        None,
+    ).unwrap();
+
+    // Only x86_64 variant survives — i686 is auto
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "glibc");
+    assert_eq!(merged.packages_added[0].arch, "x86_64");
+
+    assert_eq!(merged.leaf_packages, Some(vec!["glibc.x86_64".into()]));
+}
+
+#[test]
+fn test_fleet_leaf_intersection_host_absent_package() {
+    // host_a: git + vim both leaf
+    // host_b: only vim leaf (git not present at all)
+    // Result: git falls out of intersection (not leaf on host_b)
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "vim.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": [], "vim.x86_64": []}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["vim.x86_64".into()]),
+        auto_packages: Some(vec![]),
+        leaf_dep_tree: serde_json::json!({"vim.x86_64": []}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // Only vim survives intersection (git not leaf on host_b)
+    assert_eq!(merged.leaf_packages, Some(vec!["vim.x86_64".into()]));
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "vim");
+}
+
+#[test]
+fn test_fleet_leaf_filtered_packages_absent_from_repo_conflicts() {
+    // git: baseos on both hosts (no conflict, leaf)
+    // perl-libs: epel on host_a, appstream on host_b (conflict, but auto)
+    // Result: perl-libs NOT in repo_conflicts, NOT in packages_added
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "git".into(), arch: "x86_64".into(), include: true,
+                source_repo: "baseos".into(), ..Default::default()
+            },
+            PackageEntry {
+                name: "perl-libs".into(), arch: "x86_64".into(), include: true,
+                source_repo: "epel".into(), ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["perl-libs.x86_64"]}),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "git".into(), arch: "x86_64".into(), include: true,
+                source_repo: "baseos".into(), ..Default::default()
+            },
+            PackageEntry {
+                name: "perl-libs".into(), arch: "x86_64".into(), include: true,
+                source_repo: "appstream".into(), ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["perl-libs.x86_64"]}),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, repo_conflicts) =
+        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // perl-libs is auto — must be filtered before repo-conflict detection
+    assert!(
+        !repo_conflicts.contains_key("perl-libs.x86_64"),
+        "auto package perl-libs must not appear in repo_conflicts"
+    );
+    assert!(
+        merged.packages_added.iter().all(|p| p.name != "perl-libs"),
+        "auto package perl-libs must not appear in packages_added"
+    );
+
+    // git should remain
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "git");
+}
+
+#[test]
+fn test_fleet_leaf_triplet_coherence() {
+    // 3 packages, 2 hosts with different leaf sets
+    // host_a: git + vim leaf, curl auto
+    // host_b: git + curl leaf, vim auto
+    // Intersection: only git (leaf on both)
+    // Result: intersection consistent across leaf_packages, auto_packages (None),
+    //         leaf_dep_tree, and packages_added. Every package in packages_added
+    //         is in leaf_packages.
+    let host_a = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "curl".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "vim.x86_64".into()]),
+        auto_packages: Some(vec!["curl.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({
+            "git.x86_64": ["perl-libs.x86_64"],
+            "vim.x86_64": ["ncurses.x86_64"]
+        }),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "git".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "vim".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+            PackageEntry { name: "curl".into(), arch: "x86_64".into(), include: true, ..Default::default() },
+        ],
+        leaf_packages: Some(vec!["git.x86_64".into(), "curl.x86_64".into()]),
+        auto_packages: Some(vec!["vim.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({
+            "git.x86_64": ["perl-libs.x86_64"],
+            "curl.x86_64": ["libcurl.x86_64"]
+        }),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // leaf_packages: intersection = {git.x86_64}
+    assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
+
+    // auto_packages: None for fleet
+    assert_eq!(merged.auto_packages, None);
+
+    // leaf_dep_tree: only contains entries for intersection packages
+    let tree = merged.leaf_dep_tree.as_object().unwrap();
+    assert_eq!(tree.len(), 1);
+    assert!(tree.contains_key("git.x86_64"));
+    assert!(!tree.contains_key("vim.x86_64"), "vim not in intersection");
+    assert!(!tree.contains_key("curl.x86_64"), "curl not in intersection");
+
+    // packages_added: only git survives
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "git");
+
+    // Coherence: every package in packages_added is in leaf_packages
+    let leaf_set: std::collections::HashSet<String> = merged
+        .leaf_packages
+        .as_ref()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect();
+    for pkg in &merged.packages_added {
+        let id = format!("{}.{}", pkg.name, pkg.arch);
+        assert!(
+            leaf_set.contains(&id),
+            "packages_added entry {id} must be in leaf_packages"
+        );
+    }
+
+    // Coverage metadata
+    assert_eq!(merged.leaf_authority_hosts, Some(2));
+    assert_eq!(merged.leaf_total_hosts, Some(2));
+}
