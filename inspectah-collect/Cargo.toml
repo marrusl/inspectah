@@ -4,10 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = []
-ffi-rpm = []
-
 [dependencies]
 inspectah-core = { path = "../inspectah-core" }
 serde.workspace = true
@@ -19,9 +15,6 @@ wait-timeout = "0.2"
 x509-parser = "0.16"
 base64 = "0.22"
 time = { version = "0.3", features = ["parsing", "formatting"] }
-
-[build-dependencies]
-pkg-config = "0.3"
 
 [dev-dependencies]
 insta.workspace = true

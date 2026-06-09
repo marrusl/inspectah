@@ -48,7 +48,7 @@ jobs:
       - name: Vitest unit tests
         working-directory: inspectah-web/ui
         run: npm run test
-      - name: Test (no ffi-rpm)
+      - name: Test
         run: cargo test --workspace
       - name: Install Playwright browsers
         working-directory: inspectah-web/ui
@@ -80,17 +80,3 @@ jobs:
       - name: Stop refine server
         if: always() && env.SERVER_PID != ''
         run: kill $SERVER_PID || true
-
-  tier2:
-    name: Test with librpm FFI
-    runs-on: ubuntu-latest
-    container:
-      image: fedora:latest
-    env:
-      INSPECTAH_SKIP_UI: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: dnf install -y gcc rpm-devel pkg-config rust cargo clippy
-      - name: Test with ffi-rpm
-        run: cargo test --workspace --features ffi-rpm
