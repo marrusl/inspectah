@@ -39,6 +39,8 @@ pub struct FleetSummary {
     pub host_count: usize,
     pub actionable_variant_items: Vec<ActionableVariantItem>,
     pub informational_variant_count: usize,
+    pub leaf_authority_hosts: Option<u32>,
+    pub leaf_total_hosts: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -409,10 +411,18 @@ fn build_fleet_summary(
         .filter(|item| item.variants.is_some())
         .count();
 
+    let (leaf_authority_hosts, leaf_total_hosts) = snap
+        .rpm
+        .as_ref()
+        .map(|r| (r.leaf_authority_hosts, r.leaf_total_hosts))
+        .unwrap_or((None, None));
+
     FleetSummary {
         host_count: ctx.total_hosts,
         actionable_variant_items,
         informational_variant_count,
+        leaf_authority_hosts,
+        leaf_total_hosts,
     }
 }
 

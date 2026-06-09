@@ -7,6 +7,10 @@
     <dd>{{ fleet_host_count }}</dd>
     <dt>Baseline Status</dt>
     <dd>{% if fleet_baseline_provisional %}provisional{% else %}unanimous{% endif %}</dd>
+    {% if fleet_leaf_partial %}
+    <dt>Leaf Classification</dt>
+    <dd>{{ fleet_leaf_authority_hosts }}/{{ fleet_leaf_total_hosts }} hosts</dd>
+    {% endif %}
     {% if fleet_variant_conflict_count > 0 %}
     <dt>Variant Conflicts</dt>
     <dd>{{ fleet_variant_conflict_count }}</dd>

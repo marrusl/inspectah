@@ -775,6 +775,19 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .as_ref()
         .map(|f| f.baseline_provisional)
         .unwrap_or(false);
+    let fleet_leaf_authority_hosts = snap
+        .rpm
+        .as_ref()
+        .and_then(|r| r.leaf_authority_hosts)
+        .unwrap_or(0);
+    let fleet_leaf_total_hosts = snap
+        .rpm
+        .as_ref()
+        .and_then(|r| r.leaf_total_hosts)
+        .unwrap_or(0);
+    let fleet_leaf_partial =
+        fleet_leaf_total_hosts > 0 && fleet_leaf_authority_hosts < fleet_leaf_total_hosts;
+
     let fleet_variant_conflict_count = snap.rpm_repo_conflicts.len();
     let fleet_section_coverage: Vec<Value> = snap
         .fleet_meta
@@ -841,6 +854,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         fleet_host_count,
         fleet_hostnames => Value::from(fleet_hostnames),
         fleet_baseline_provisional,
+        fleet_leaf_authority_hosts,
+        fleet_leaf_total_hosts,
+        fleet_leaf_partial,
         fleet_variant_conflict_count,
         fleet_section_coverage => Value::from(fleet_section_coverage),
         packages => packages_val,
@@ -1279,6 +1295,35 @@ mod tests {
         assert!(
             !html.contains("Version Changes"),
             "must not show version changes sub-section when empty"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Partial leaf authority in fleet report
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_fleet_partial_leaf_authority() {
+        let mut snap = test_snapshot();
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 3,
+            hostnames: vec!["a".into(), "b".into(), "c".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        snap.rpm.as_mut().unwrap().leaf_authority_hosts = Some(2);
+        snap.rpm.as_mut().unwrap().leaf_total_hosts = Some(3);
+
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("Leaf Classification"),
+            "partial leaf authority must render Leaf Classification label"
+        );
+        assert!(
+            html.contains("2/3 hosts"),
+            "partial leaf authority must show host counts"
         );
     }
 

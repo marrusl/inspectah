@@ -278,6 +278,17 @@ fn packages_section_lines(
         None => return lines,
     };
 
+    // Partial leaf authority indicator for fleet snapshots
+    if let (Some(auth), Some(total)) = (rpm.leaf_authority_hosts, rpm.leaf_total_hosts) {
+        if auth < total {
+            lines.push(format!(
+                "# Leaf classification: {}/{} hosts (partial authority)",
+                auth, total
+            ));
+            lines.push(String::new());
+        }
+    }
+
     // Repo files
     let included_repos: usize = rpm
         .repo_files
@@ -2672,6 +2683,48 @@ mod tests {
         assert!(
             output.contains("Service Drop-ins"),
             "included drop-in must produce Service Drop-ins section header"
+        );
+    }
+
+    #[test]
+    fn test_partial_leaf_authority_comment_appears() {
+        let mut snap = snapshot_with_packages(&["httpd"]);
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 3,
+            hostnames: vec!["a".into(), "b".into(), "c".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        snap.rpm.as_mut().unwrap().leaf_authority_hosts = Some(2);
+        snap.rpm.as_mut().unwrap().leaf_total_hosts = Some(3);
+
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("# Leaf classification: 2/3 hosts (partial authority)"),
+            "partial authority comment must appear when auth < total, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_full_leaf_authority_no_comment() {
+        let mut snap = snapshot_with_packages(&["httpd"]);
+        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+            label: "test".into(),
+            host_count: 2,
+            hostnames: vec!["a".into(), "b".into()],
+            merged_at: "2026-06-09T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        snap.rpm.as_mut().unwrap().leaf_authority_hosts = Some(2);
+        snap.rpm.as_mut().unwrap().leaf_total_hosts = Some(2);
+
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("partial authority"),
+            "full authority must not produce partial authority comment"
         );
     }
 
