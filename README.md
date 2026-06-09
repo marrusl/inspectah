@@ -100,9 +100,9 @@ Common flags for `inspectah scan`:
 
 - `--base-image <IMAGE>` — Target base image for cross-distro conversion (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`)
 - `--no-baseline` — Skip baseline extraction (degraded classification mode, faster but less accurate)
-- `--preserve-password-hashes` — Preserve password hashes for users with status `password_set`
-- `--preserve-ssh-keys` — Preserve full SSH `authorized_keys` content per user
-- `--ack-sensitive` — Required when using `--preserve-*` flags (acknowledges snapshot contains sensitive data). Alias: `--acknowledge-sensitive`
+- `--preserve <ITEM>` — Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable
+- `--no-redaction` — Skip the redaction pipeline, retaining raw secrets
+- `--ack-sensitive` — Acknowledge sensitive data in snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`
 - `--progress <MODE>` — Progress display: `rich` (default TTY), `plain` (durable scrollback), `flat` (CI/non-TTY)
 - `-o, --output <PATH>` — Output file path (tarball) or directory
 - `-v, --verbose` — Show sub-step detail for all inspectors

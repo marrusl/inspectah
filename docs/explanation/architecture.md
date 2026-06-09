@@ -125,7 +125,7 @@ Collect's inspectors mirror the domain types in core:
   cert/key pairs from `/etc/pki/entitlement`, CA certs from `/etc/rhsm/ca`,
   `rhsm.conf`, and `redhat.repo`. Parses X.509 expiry dates, validates
   bundle completeness, and extracts org metadata from consumer certs.
-  Activated by `--preserve-subscription`.
+  Activated by `--preserve subscription`.
 - **baseline.rs** -- Baseline image querying: runs `podman run` against the
   target image to extract its package list, service presets, and config
   defaults for subtraction.

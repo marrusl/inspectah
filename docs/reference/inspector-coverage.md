@@ -279,7 +279,7 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 | **Applies to** | `PackageBased` systems |
 | **Snapshot field** | `subscription` (`SubscriptionSection`) |
 | **Source** | `inspectors/subscription.rs` |
-| **Activation** | Only runs when `--preserve-subscription` is passed |
+| **Activation** | Only runs when `--preserve subscription` is passed |
 
 **What it reads:**
 

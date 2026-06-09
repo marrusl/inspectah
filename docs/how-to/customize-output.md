@@ -117,42 +117,51 @@ sudo inspectah scan --inspect-only | jq '.packages | length'
 
 By default, inspectah redacts sensitive data from scan output. Password
 hashes are replaced with placeholders and SSH key contents are summarized
-rather than included verbatim. Three flags control this behavior.
+rather than included verbatim. Two flags control this behavior.
 
-### Preserve password hashes
-
-```bash
-sudo inspectah scan --preserve-password-hashes
-```
-
-Retains the actual password hash strings for users whose password status is
-`password_set`. Without this flag, hashes are replaced with redaction
-placeholders.
-
-### Preserve SSH keys
+### Preserve specific sensitive data
 
 ```bash
-sudo inspectah scan --preserve-ssh-keys
+sudo inspectah scan --preserve password-hashes --ack-sensitive
 ```
 
-Includes the full content of each user's `authorized_keys` file. Without
-this flag, SSH keys are summarized (key count and types) but the actual
-key material is omitted.
+The `--preserve` flag retains specific types of sensitive data. It accepts
+one of: `password-hashes`, `ssh-keys`, `subscription`, or `all`. You can
+specify multiple values as a comma-separated list or by repeating the flag:
+
+```bash
+sudo inspectah scan --preserve password-hashes,ssh-keys --ack-sensitive
+```
+
+Or:
+
+```bash
+sudo inspectah scan --preserve password-hashes --preserve ssh-keys --ack-sensitive
+```
+
+Without the `--preserve` flag, password hashes are replaced with redaction
+placeholders and SSH keys are summarized (key count and types) but the
+actual key material is omitted.
+
+### Skip redaction entirely
+
+```bash
+sudo inspectah scan --no-redaction --ack-sensitive
+```
+
+The `--no-redaction` flag skips the entire redaction pipeline, retaining
+all raw secrets in the snapshot. This is the most permissive mode and
+should be used with extreme caution.
 
 ### Acknowledge sensitive data
 
-```bash
-sudo inspectah scan --preserve-password-hashes --preserve-ssh-keys --ack-sensitive
-```
+Both `--preserve` and `--no-redaction` require `--ack-sensitive` as an
+explicit confirmation that the resulting snapshot contains sensitive data.
+This prevents accidental export of credentials. The long form
+`--acknowledge-sensitive` is accepted as an alias.
 
-When either `--preserve-password-hashes` or `--preserve-ssh-keys` is used,
-inspectah requires `--ack-sensitive` as an explicit confirmation that the
-resulting snapshot contains sensitive data. This prevents accidental export
-of credentials. The long form `--acknowledge-sensitive` is accepted as an
-alias.
-
-The acknowledge flag is only needed when a preserve flag is active. A
-standard scan (with default redaction) does not require it.
+The acknowledge flag is only needed when `--preserve` or `--no-redaction`
+is used. A standard scan (with default redaction) does not require it.
 
 ### Combining sensitive data flags
 
@@ -160,8 +169,7 @@ A common pattern for environments where you need full-fidelity user data:
 
 ```bash
 sudo inspectah scan \
-  --preserve-password-hashes \
-  --preserve-ssh-keys \
+  --preserve password-hashes,ssh-keys \
   --ack-sensitive \
   -o /secure/path/scan-output.tar.gz
 ```

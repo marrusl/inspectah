@@ -61,7 +61,7 @@ All are `Option` types -- absent when the inspector did not run or was not appli
 | `kernel_boot` | `KernelBootSection?` | `KernelbootInspector` | Loaded kernel modules (`lsmod`), sysctl overrides, timezone, tuned profile, boot config snippets. |
 | `selinux` | `SelinuxSection?` | `SelinuxInspector` | SELinux mode, custom modules, boolean overrides, fcontext rules, port labels, audit rules, FIPS mode, PAM configs. |
 | `users_groups` | `UserGroupSection?` | `UsersGroupsInspector` | Non-system users/groups, shadow entries, sudoers rules, SSH key references, subuid/subgid mappings. |
-| `subscription` | `SubscriptionSection?` | `SubscriptionInspector` | RHEL subscription material: entitlement cert/key pairs, CA certs, rhsm.conf, redhat.repo. Includes cert expiry dates, bundle completeness, and org metadata. Only populated when `--preserve-subscription` is used. |
+| `subscription` | `SubscriptionSection?` | `SubscriptionInspector` | RHEL subscription material: entitlement cert/key pairs, CA certs, rhsm.conf, redhat.repo. Includes cert expiry dates, bundle completeness, and org metadata. Only populated when `--preserve subscription` is used. |
 
 ## Quality and trust fields
 
@@ -95,10 +95,10 @@ Baseline data connects the host snapshot to a target container image.
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `sensitive_snapshot` | `bool` | `true` if this snapshot intentionally retains credential material. Set when any `--preserve-*` flag is used. |
-| `preserved_credentials` | `bool` | `true` if password hashes were preserved by operator choice. |
-| `preserved_ssh_keys` | `bool` | `true` if SSH authorized keys were preserved by operator choice. |
-| `preserved_subscription` | `bool` | `true` if RHEL subscription material was preserved by operator choice (`--preserve-subscription`). |
+| `sensitive_snapshot` | `bool` | `true` if this snapshot intentionally retains credential material. Set when `--preserve` or `--no-redaction` is used. |
+| `preserved_credentials` | `bool` | `true` if password hashes were preserved by operator choice (`--preserve password-hashes`). |
+| `preserved_ssh_keys` | `bool` | `true` if SSH authorized keys were preserved by operator choice (`--preserve ssh-keys`). |
+| `preserved_subscription` | `bool` | `true` if RHEL subscription material was preserved by operator choice (`--preserve subscription`). |
 
 ## Fleet fields
 

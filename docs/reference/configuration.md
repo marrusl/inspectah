@@ -42,10 +42,9 @@ for the full command reference.
 | `-o, --output <PATH>` | Output file path (tarball) or directory (with `--inspect-only`). |
 | `--base-image <IMAGE>` | Target base image for baseline comparison (e.g., `quay.io/centos-bootc/centos-bootc:stream9`). |
 | `--no-baseline` | Skip baseline extraction. Produces degraded classification (no added/removed distinction). |
-| `--preserve-password-hashes` | Retain password hashes for users with `password_set` status. |
-| `--preserve-ssh-keys` | Retain full SSH `authorized_keys` content per user. |
-| `--preserve-subscription` | Preserve RHEL subscription material for building on non-RHEL hosts. |
-| `--ack-sensitive` | Required for tarball export when preserve flags are used. Explicit operator acknowledgment. Alias: `--acknowledge-sensitive`. |
+| `--preserve <ITEM>` | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable. |
+| `--no-redaction` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive). |
+| `--ack-sensitive` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`. |
 | `--progress <MODE>` | Override progress display: `rich`, `plain`, or `flat`. |
 | `-v, --verbose` | Show sub-step detail for all inspectors. Conflicts with `--quiet`. |
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
