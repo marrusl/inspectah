@@ -13,6 +13,7 @@ use inspectah_core::fleet::merge_snapshots;
 use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 
@@ -162,6 +163,9 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
             }
             if snapshot.preserved_ssh_keys {
                 sensitive_types.insert("SSH keys");
+            }
+            if snapshot.redaction_state == Some(RedactionState::Raw) {
+                sensitive_types.insert("unredacted secrets");
             }
         }
 
