@@ -80,6 +80,9 @@ pub struct InspectionSnapshot {
     /// True if subscription data was preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_subscription: bool,
+    /// True if redaction was skipped during scan (fleet-only, derived from Raw state during merge).
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub redaction_skipped: bool,
     /// Fleet snapshot metadata. None for single-host snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
@@ -340,5 +343,25 @@ mod tests {
         let json = r#"{"schema_version": 17, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn redaction_skipped_round_trip() {
+        let mut snap = InspectionSnapshot::new();
+        snap.redaction_skipped = true;
+        snap.sensitive_snapshot = true;
+        snap.redaction_state = Some(RedactionState::Raw);
+
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+        assert!(parsed.redaction_skipped);
+        assert!(parsed.sensitive_snapshot);
+        assert_eq!(parsed.redaction_state, Some(RedactionState::Raw));
+    }
+
+    #[test]
+    fn redaction_skipped_defaults_false() {
+        let snap = InspectionSnapshot::new();
+        assert!(!snap.redaction_skipped);
     }
 }
