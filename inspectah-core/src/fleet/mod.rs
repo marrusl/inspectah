@@ -8,6 +8,7 @@ use crate::baseline::{ResolutionStrategy, TargetImageIdentity};
 use crate::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use crate::types::completeness::{Completeness, InspectorId};
 use crate::types::fleet::{FleetPrevalence, FleetSnapshotMeta, PrevalenceZone};
+use crate::types::redaction::RedactionState;
 
 use self::manifest::FleetManifest;
 use self::merge::{
@@ -126,6 +127,9 @@ pub fn merge_snapshots(
     merged.sensitive_snapshot = sorted_snapshots.iter().any(|s| s.sensitive_snapshot);
     merged.preserved_credentials = sorted_snapshots.iter().any(|s| s.preserved_credentials);
     merged.preserved_ssh_keys = sorted_snapshots.iter().any(|s| s.preserved_ssh_keys);
+    merged.redaction_skipped = sorted_snapshots
+        .iter()
+        .any(|s| s.redaction_state == Some(RedactionState::Raw));
 
     // Subscription merge: OR the boolean, pick winner by latest typed expiry
     merged.preserved_subscription = sorted_snapshots.iter().any(|s| s.preserved_subscription);
@@ -994,5 +998,31 @@ mod tests {
         let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
         assert!(merged.preserved_subscription);
         assert!(merged.subscription.is_some());
+    }
+
+    #[test]
+    fn merge_derives_redaction_skipped_from_raw_state() {
+        use crate::types::redaction::RedactionState;
+
+        let mut snap1 = valid_snap("host-a");
+        snap1.sensitive_snapshot = true;
+        snap1.redaction_state = Some(RedactionState::Raw);
+
+        let snap2 = valid_snap("host-b");
+
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        assert!(merged.redaction_skipped);
+        assert!(merged.sensitive_snapshot);
+        // redaction_state is dropped for merged snapshots
+        assert!(merged.redaction_state.is_none());
+    }
+
+    #[test]
+    fn merge_no_redaction_skipped_when_all_redacted() {
+        let snap1 = valid_snap("host-a");
+        let snap2 = valid_snap("host-b");
+
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        assert!(!merged.redaction_skipped);
     }
 }
