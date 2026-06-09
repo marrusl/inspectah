@@ -24,7 +24,6 @@ open = "5"
 tar = "0.4"
 flate2 = "1"
 pathdiff = "0.2"
-sha2 = "0.11.0"
 ctrlc = "3"
 clap-markdown = "0.1.5"
 

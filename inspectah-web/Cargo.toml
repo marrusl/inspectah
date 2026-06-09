@@ -23,5 +23,4 @@ regex = "1"
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-hyper = "1"
 insta = { workspace = true }
