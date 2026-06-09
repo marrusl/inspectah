@@ -1082,6 +1082,17 @@ pub fn merge_rpm_sections(
         packages_added
     };
 
+    // Force include=true for leaf intersection survivors.
+    // narrow_non_universal() may have set include=false based on all-host
+    // prevalence, but the authoritative leaf subset has already decided
+    // these packages should be carried.
+    let mut packages_added = packages_added;
+    if leaf_packages.is_some() {
+        for pkg in &mut packages_added {
+            pkg.include = true;
+        }
+    }
+
     // Detect repo-source conflicts: packages installed from different repos
     // across the fleet. Only tracks conflicts when repos span different tiers
     // (e.g., epel vs baseos). Same-tier differences (e.g., anaconda vs baseos)

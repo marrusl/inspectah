@@ -2510,3 +2510,90 @@ fn test_fleet_leaf_triplet_coherence() {
     assert_eq!(merged.leaf_authority_hosts, Some(2));
     assert_eq!(merged.leaf_total_hosts, Some(2));
 }
+
+#[test]
+fn test_fleet_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
+    // host_a (authoritative): vim is leaf, present
+    // host_b (degraded): vim absent, leaf_packages: None
+    // narrow_non_universal sets include=false (count=1, total=2)
+    // BUT vim survived the leaf intersection -> include must be true
+    let host_a = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "vim".into(),
+            arch: "x86_64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        leaf_packages: Some(vec!["vim.x86_64".into()]),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![],
+        leaf_packages: None, // degraded
+        ..Default::default()
+    });
+
+    let hostnames = vec!["alpha".into(), "beta".into()];
+    let (merged, _) =
+        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    // vim must be in packages_added AND include=true
+    assert_eq!(merged.packages_added.len(), 1);
+    assert_eq!(merged.packages_added[0].name, "vim");
+    assert!(
+        merged.packages_added[0].include,
+        "leaf intersection survivor must have include=true despite non-universal narrowing"
+    );
+}
+
+#[test]
+fn test_fleet_degraded_state_json_contract() {
+    // All degraded fleet merge
+    let host_a = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "vim".into(),
+            arch: "x86_64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        leaf_packages: None,
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "vim".into(),
+            arch: "x86_64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        leaf_packages: None,
+        ..Default::default()
+    });
+
+    let hostnames = vec!["a".into(), "b".into()];
+    let (merged, _) =
+        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    let json = serde_json::to_value(&merged).unwrap();
+    assert!(
+        json["leaf_packages"].is_null(),
+        "degraded leaf_packages must be null"
+    );
+    assert!(
+        json["auto_packages"].is_null(),
+        "degraded auto_packages must be null"
+    );
+    assert_eq!(
+        json["leaf_dep_tree"],
+        serde_json::json!({}),
+        "degraded leaf_dep_tree must be empty object"
+    );
+    assert_eq!(
+        json["leaf_authority_hosts"], 0,
+        "all-degraded authority must be 0"
+    );
+    assert_eq!(
+        json["leaf_total_hosts"], 2,
+        "total hosts must reflect fleet size"
+    );
+}

@@ -1908,8 +1908,7 @@ impl RefineSession {
             };
 
             // Step 2: THEN apply leaf filter if available
-            let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
-            if let Some(leaf_names) = rpm.leaf_packages.as_ref().filter(|_| !is_fleet_snapshot) {
+            if let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
                 packages
                     .into_iter()
