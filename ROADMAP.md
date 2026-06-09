@@ -299,6 +299,10 @@ Rust redaction pipeline now has parity with Go's heuristic detection layer. Ship
 
 Promote scheduled tasks (cron + systemd timers), SELinux booleans, and boot parameters (kargs) from Reference to Review. Follows the pattern established by Tier 1 but with additional complexity: SELinux booleans use JSON value dedup instead of prevalence-based merge, kargs need cmdline decomposition for per-argument prevalence, and scheduled tasks need RPM-owned vs user-created filtering. Separate spec after Tier 1 ships.
 
+### Internationalization (i18n) (MEDIUM — taking requests)
+
+Locale-aware output for HTML audit reports and CLI. Translate user-facing strings (headings, labels, recommendations, summary text) at the template/render boundary — internal data identifiers stay English. Initial language support driven by user demand.
+
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 
 Audit and remove defensive backward-compatibility code added during the Rust rewrite. Before 1.0, old tarballs are not sacred — users re-scan. Remove: legacy snapshot field sniffing, dual-carrier fallbacks, serde(default) shims for fields that only existed in transitional schemas, and any "if old format, try X" branching. The goal is a clean codebase where every code path serves the current schema, not historical ones.
