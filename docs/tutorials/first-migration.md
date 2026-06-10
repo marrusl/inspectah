@@ -67,18 +67,22 @@ inspector runs:
 Detecting OS... CentOS Stream 9 (x86_64)
 Resolving base image... quay.io/centos-bootc/centos-bootc:stream9
 Pulling base image... done (12.4s)
+Inspecting host webserver01...
 
   ✓ RPM packages               847 packages, 4 repos
-  ✓ Services                     8 units
-  ✓ Storage                     3 mounts
+  ✓ Services                    8 units
+  ✓ Storage                     done
   ✓ Kernel & boot               done
   ✓ Network                     done
-  ✓ Containers                  0 found
-  ✓ Users & groups              2 non-system
-  ✓ Scheduled tasks             1 found
+  ✓ Containers                  none found
+  ✓ Users & groups              done
+  ✓ Scheduled tasks             1 timer
   ✓ Config files                14 modified
   ✓ SELinux                     done
-  ✓ Non-RPM packages            none
+  ✓ Non-RPM packages            none found
+
+  ┄┄┄
+  14 modified configs
 
   Inspected in 38.7s
   Report: webserver01-20260527-091500.tar.gz
