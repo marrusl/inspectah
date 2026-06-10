@@ -125,14 +125,12 @@ impl TerminalProgress {
         let active_order = display::active_display_order(has_subscription);
 
         let inner = match mode {
-            Mode::Pretty => {
-                TerminalProgressInner::Pretty(pretty::PrettyRenderer::new(
-                    Box::new(std::io::stderr()),
-                    use_color,
-                    verbose,
-                    active_order,
-                ))
-            }
+            Mode::Pretty => TerminalProgressInner::Pretty(pretty::PrettyRenderer::new(
+                Box::new(std::io::stderr()),
+                use_color,
+                verbose,
+                active_order,
+            )),
             Mode::Flat => TerminalProgressInner::Flat(flat::FlatRenderer::new(
                 Box::new(std::io::stderr()),
                 verbose,
@@ -173,12 +171,8 @@ impl TerminalProgress {
     pub fn finished_inspectors(&self) -> Vec<InspectorId> {
         let inner = self.inner.lock().expect("TerminalProgress lock poisoned");
         match &*inner {
-            TerminalProgressInner::Pretty(r) => {
-                r.receipt_lines().iter().map(|l| l.id).collect()
-            }
-            TerminalProgressInner::Flat(r) => {
-                r.receipt_lines().iter().map(|l| l.id).collect()
-            }
+            TerminalProgressInner::Pretty(r) => r.receipt_lines().iter().map(|l| l.id).collect(),
+            TerminalProgressInner::Flat(r) => r.receipt_lines().iter().map(|l| l.id).collect(),
             TerminalProgressInner::Null => Vec::new(),
         }
     }

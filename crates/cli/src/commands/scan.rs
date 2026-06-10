@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::progress::receipt::{ScanEndState, ScanFinalize, VersionChangeSummary};
 use crate::progress::{TerminalProgress, detect_mode, use_color};
-use inspectah_core::traits::progress::ProgressSink;
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
@@ -32,6 +31,7 @@ use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspecto
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
@@ -435,15 +435,16 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         // The renderer is the authoritative outcome ledger.
         // Synthesize Interrupted events for any inspector that didn't finish.
         let finished = progress.finished_inspectors();
-        let active_order =
-            crate::progress::display::active_display_order(has_subscription);
+        let active_order = crate::progress::display::active_display_order(has_subscription);
 
         for (id, _name) in active_order {
             if !finished.contains(id) {
-                progress.emit(inspectah_core::types::progress::ProgressEvent::InspectorFinished {
-                    id: *id,
-                    outcome: inspectah_core::types::progress::InspectorOutcome::Interrupted,
-                });
+                progress.emit(
+                    inspectah_core::types::progress::ProgressEvent::InspectorFinished {
+                        id: *id,
+                        outcome: inspectah_core::types::progress::InspectorOutcome::Interrupted,
+                    },
+                );
             }
         }
 
@@ -503,9 +504,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     Ok(()) => {
                         progress.finalize(ScanFinalize {
                             elapsed: scan_start.elapsed(),
-                            end_state: ScanEndState::InspectOnly {
-                                path: path.clone(),
-                            },
+                            end_state: ScanEndState::InspectOnly { path: path.clone() },
                             version_changes: version_changes.clone(),
                         });
                         if verbosity == crate::progress::Verbosity::Quiet {

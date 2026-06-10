@@ -1,0 +1,19 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "e2e_full_output(&r, &buf, &scan)"
+---
+  ✓ RPM packages                 200 packages, 3 repos
+  ✓ Services                     15 units
+  ✓ Storage                      done
+  ✓ Kernel & boot                done
+  ✓ Network                      done
+  ✓ Containers                   done
+  ✓ Users & groups               done
+  ✓ Scheduled tasks              done
+  ✓ Config files                 done
+  ✓ SELinux                      done
+  ✓ Non-RPM packages             done
+
+  Inspected in 3.1s
+  Report: /tmp/inspectah-report.tar.gz
+  To review: inspectah refine /tmp/inspectah-report.tar.gz

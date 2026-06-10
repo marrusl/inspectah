@@ -1566,4 +1566,334 @@ mod tests {
             "spinner should transfer to the next slow inspector (Config)"
         );
     }
+
+    // ── End-to-end snapshot tests ──────────────────────────────────
+    //
+    // These test the complete output from receipt lines through
+    // finalize (summary + footer) for each spec scenario.
+
+    /// Helper: feed all 11 inspectors, finalize, and return full output.
+    fn e2e_full_output(
+        r: &PrettyRenderer,
+        buf: &Arc<Mutex<Vec<u8>>>,
+        scan: &ScanFinalize,
+    ) -> String {
+        r.finalize(scan);
+        output_text(buf)
+    }
+
+    #[test]
+    fn e2e_pretty_fast_scan() {
+        // All inspectors complete quickly in roughly display order.
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+                (&ProbeId::GemPackages, None),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(12.3),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_slow_rpm_scan() {
+        // Fast inspectors print first, RPM prints after long delay.
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // Wave 1: fast inspectors arrive first.
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 1);
+
+        // RPM finally arrives (slow).
+        feed_rpm(&r, 847, 8);
+
+        // Wave 2: remaining inspectors.
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 2);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 12);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(5)),
+                (&ProbeId::NpmPackages, None),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(45.7),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 120,
+                target_newer: 115,
+                host_newer: 5,
+            }),
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_failures_degradation() {
+        // Mix of success, degraded, and failed inspectors.
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // RPM degraded (rpm verify timed out).
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 613,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 6,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Degraded {
+                reason: "rpm verify timed out".to_string(),
+            },
+        });
+
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+
+        // Network failed.
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Network));
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Network,
+            outcome: InspectorOutcome::Failed {
+                reason: "timeout connecting to NetworkManager".to_string(),
+            },
+        });
+
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+
+        // SELinux skipped.
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Selinux,
+            outcome: InspectorOutcome::Skipped {
+                reason: "disabled".to_string(),
+            },
+        });
+
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(18.5),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_clean_host() {
+        // All inspectors succeed with minimal findings — no summary block.
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        feed_rpm(&r, 200, 3);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 15);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_simple_complete(&r, InspectorId::Containers);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_simple_complete(&r, InspectorId::ScheduledTasks);
+        feed_simple_complete(&r, InspectorId::Config);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_simple_complete(&r, InspectorId::NonRpmSoftware);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(3.1),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_interrupted() {
+        // 5 inspectors complete, 6 interrupted via SIGINT reconciliation.
+        use crate::progress::receipt::ScanEndState;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // 5 complete.
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        // 6 interrupted (SIGINT reconciliation synthesizes these).
+        for id in [
+            InspectorId::Containers,
+            InspectorId::UsersGroups,
+            InspectorId::ScheduledTasks,
+            InspectorId::Config,
+            InspectorId::Selinux,
+            InspectorId::NonRpmSoftware,
+        ] {
+            r.handle(ProgressEvent::InspectorStarted(id));
+            r.handle(ProgressEvent::InspectorFinished {
+                id,
+                outcome: InspectorOutcome::Interrupted,
+            });
+        }
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(6.8),
+            end_state: ScanEndState::Interrupted {
+                completed: 5,
+                total: 11,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_subscription() {
+        // 12 inspectors including Subscription.
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, true);
+
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+                (&ProbeId::GemPackages, None),
+            ],
+        );
+        feed_simple_complete(&r, InspectorId::Subscription);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(14.2),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_pretty_inspect_only_stdout() {
+        // Inspect-only without --output: no path in footer.
+        use crate::progress::receipt::ScanEndState;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(10.5),
+            end_state: ScanEndState::InspectOnlyStdout,
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
 }

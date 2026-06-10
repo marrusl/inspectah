@@ -1,0 +1,17 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "e2e_full_output(&r, &buf, &scan)"
+---
+  ✓ RPM packages                 613 packages, 6 repos
+  ✓ Services                     42 units
+  ✓ Storage                      done
+  ✓ Kernel & boot                done
+  ✓ Network                      done
+  △ Containers                   interrupted
+  △ Users & groups               interrupted
+  △ Scheduled tasks              interrupted
+  △ Config files                 interrupted
+  △ SELinux                      interrupted
+  △ Non-RPM packages             interrupted
+
+  Interrupted after 6.8s (5 of 11 inspectors completed)
