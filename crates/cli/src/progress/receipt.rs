@@ -182,50 +182,65 @@ impl ScanSummary {
             }
         }
 
-        // Build hotspot line from authoritative TypedCounts -- no string parsing.
-        let mut hotspot_segments = Vec::new();
+        // Aggregate across ALL lines first, then emit in fixed order.
+        // This makes hotspot output deterministic regardless of inspector
+        // arrival order.
+        let mut total_configs = 0usize;
+        let mut total_pip = 0usize;
+        let mut total_npm = 0usize;
+        let mut total_gem = 0usize;
+        let mut total_git = 0usize;
+
         for line in lines {
             let tc = &line.typed_counts;
-            if let Some(c) = tc.configs_modified
-                && c > 0
-            {
-                hotspot_segments.push(HotspotSegment {
-                    count: c,
-                    label: "modified configs",
-                });
+            if let Some(c) = tc.configs_modified {
+                total_configs += c;
             }
-            if let Some(c) = tc.pip_packages
-                && c > 0
-            {
-                hotspot_segments.push(HotspotSegment {
-                    count: c,
-                    label: "pip packages",
-                });
+            if let Some(c) = tc.pip_packages {
+                total_pip += c;
             }
-            if let Some(c) = tc.npm_packages
-                && c > 0
-            {
-                hotspot_segments.push(HotspotSegment {
-                    count: c,
-                    label: "npm packages",
-                });
+            if let Some(c) = tc.npm_packages {
+                total_npm += c;
             }
-            if let Some(c) = tc.gem_packages
-                && c > 0
-            {
-                hotspot_segments.push(HotspotSegment {
-                    count: c,
-                    label: "gem packages",
-                });
+            if let Some(c) = tc.gem_packages {
+                total_gem += c;
             }
-            if let Some(c) = tc.git_repos
-                && c > 0
-            {
-                hotspot_segments.push(HotspotSegment {
-                    count: c,
-                    label: "git repos",
-                });
+            if let Some(c) = tc.git_repos {
+                total_git += c;
             }
+        }
+
+        // Emit in fixed order: configs → pip → npm → gem → git.
+        let mut hotspot_segments = Vec::new();
+        if total_configs > 0 {
+            hotspot_segments.push(HotspotSegment {
+                count: total_configs,
+                label: "modified configs",
+            });
+        }
+        if total_pip > 0 {
+            hotspot_segments.push(HotspotSegment {
+                count: total_pip,
+                label: "pip packages",
+            });
+        }
+        if total_npm > 0 {
+            hotspot_segments.push(HotspotSegment {
+                count: total_npm,
+                label: "npm packages",
+            });
+        }
+        if total_gem > 0 {
+            hotspot_segments.push(HotspotSegment {
+                count: total_gem,
+                label: "gem packages",
+            });
+        }
+        if total_git > 0 {
+            hotspot_segments.push(HotspotSegment {
+                count: total_git,
+                label: "git repos",
+            });
         }
 
         let hotspots = if hotspot_segments.is_empty() {
@@ -460,6 +475,80 @@ mod tests {
         assert_eq!(summary.hotspots[0].segments[0].count, 37);
         assert_eq!(summary.hotspots[0].segments[1].count, 23);
         assert_eq!(summary.hotspots[0].segments[2].count, 69);
+    }
+
+    #[test]
+    fn summary_deterministic_order_regardless_of_line_order() {
+        // Even when NonRpmSoftware arrives before Config, the hotspot
+        // order is always: configs → pip → npm → gem → git.
+        let lines_nonrpm_first = vec![
+            ReceiptLine {
+                id: InspectorId::NonRpmSoftware,
+                state: InspectorState::Success,
+                metric: Some("2 ecosystems".into()),
+                reason: None,
+                sub_lines: vec![],
+                typed_counts: TypedCounts {
+                    pip_packages: Some(23),
+                    npm_packages: Some(69),
+                    ..Default::default()
+                },
+            },
+            ReceiptLine {
+                id: InspectorId::Config,
+                state: InspectorState::Success,
+                metric: Some("37 modified".into()),
+                reason: None,
+                sub_lines: vec![],
+                typed_counts: TypedCounts {
+                    configs_modified: Some(37),
+                    ..Default::default()
+                },
+            },
+        ];
+        let lines_config_first = vec![
+            ReceiptLine {
+                id: InspectorId::Config,
+                state: InspectorState::Success,
+                metric: Some("37 modified".into()),
+                reason: None,
+                sub_lines: vec![],
+                typed_counts: TypedCounts {
+                    configs_modified: Some(37),
+                    ..Default::default()
+                },
+            },
+            ReceiptLine {
+                id: InspectorId::NonRpmSoftware,
+                state: InspectorState::Success,
+                metric: Some("2 ecosystems".into()),
+                reason: None,
+                sub_lines: vec![],
+                typed_counts: TypedCounts {
+                    pip_packages: Some(23),
+                    npm_packages: Some(69),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let summary_a = ScanSummary::build(&lines_nonrpm_first, None);
+        let summary_b = ScanSummary::build(&lines_config_first, None);
+
+        // Both should produce identical hotspot segments in the same order.
+        assert_eq!(summary_a.hotspots.len(), 1);
+        assert_eq!(summary_b.hotspots.len(), 1);
+        let segs_a = &summary_a.hotspots[0].segments;
+        let segs_b = &summary_b.hotspots[0].segments;
+        assert_eq!(segs_a.len(), segs_b.len());
+        for (a, b) in segs_a.iter().zip(segs_b.iter()) {
+            assert_eq!(a.count, b.count);
+            assert_eq!(a.label, b.label);
+        }
+        // Verify fixed order: configs first.
+        assert_eq!(segs_a[0].label, "modified configs");
+        assert_eq!(segs_a[1].label, "pip packages");
+        assert_eq!(segs_a[2].label, "npm packages");
     }
 
     #[test]
