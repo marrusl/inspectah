@@ -448,14 +448,18 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
             }
         }
 
+        let end_state = ScanEndState::Interrupted {
+            completed: finished.len(),
+            total: active_order.len(),
+        };
         progress.finalize(ScanFinalize {
             elapsed: scan_start.elapsed(),
-            end_state: ScanEndState::Interrupted {
-                completed: finished.len(),
-                total: active_order.len(),
-            },
+            end_state: end_state.clone(),
             version_changes: None,
         });
+        if verbosity == crate::progress::Verbosity::Quiet {
+            print_quiet_footer(scan_start.elapsed(), &end_state, None);
+        }
 
         return Ok(ScanOutcome::Interrupted);
     }
@@ -502,21 +506,23 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 }
                 match std::fs::write(path, &json) {
                     Ok(()) => {
+                        let end_state = ScanEndState::InspectOnly { path: path.clone() };
                         progress.finalize(ScanFinalize {
                             elapsed: scan_start.elapsed(),
-                            end_state: ScanEndState::InspectOnly { path: path.clone() },
+                            end_state: end_state.clone(),
                             version_changes: version_changes.clone(),
                         });
                         if verbosity == crate::progress::Verbosity::Quiet {
-                            print_quiet_footer(scan_start.elapsed(), Some(path.as_path()));
+                            print_quiet_footer(scan_start.elapsed(), &end_state, None);
                         }
                     }
                     Err(e) => {
+                        let end_state = ScanEndState::WriteFailure {
+                            error: e.to_string(),
+                        };
                         progress.finalize(ScanFinalize {
                             elapsed: scan_start.elapsed(),
-                            end_state: ScanEndState::WriteFailure {
-                                error: e.to_string(),
-                            },
+                            end_state,
                             version_changes: version_changes.clone(),
                         });
                         anyhow::bail!("failed to write output: {e}");
@@ -525,13 +531,14 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
             }
             None => {
                 println!("{json}");
+                let end_state = ScanEndState::InspectOnlyStdout;
                 progress.finalize(ScanFinalize {
                     elapsed: scan_start.elapsed(),
-                    end_state: ScanEndState::InspectOnlyStdout,
+                    end_state: end_state.clone(),
                     version_changes: version_changes.clone(),
                 });
                 if verbosity == crate::progress::Verbosity::Quiet {
-                    print_quiet_footer(scan_start.elapsed(), None);
+                    print_quiet_footer(scan_start.elapsed(), &end_state, None);
                 }
             }
         }
@@ -562,16 +569,21 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     match create_tarball(render_dir.path(), &tarball_path, &stamp) {
         Ok(()) => {
             let sensitivity = build_sensitivity_notice(&snapshot);
+            let end_state = ScanEndState::Completed {
+                path: tarball_path.clone(),
+                sensitivity: sensitivity.clone(),
+            };
             progress.finalize(ScanFinalize {
                 elapsed: scan_start.elapsed(),
-                end_state: ScanEndState::Completed {
-                    path: tarball_path.clone(),
-                    sensitivity,
-                },
+                end_state: end_state.clone(),
                 version_changes,
             });
             if verbosity == crate::progress::Verbosity::Quiet {
-                print_quiet_footer(scan_start.elapsed(), Some(&tarball_path));
+                print_quiet_footer(
+                    scan_start.elapsed(),
+                    &end_state,
+                    sensitivity.as_deref(),
+                );
             }
             Ok(outcome)
         }
@@ -680,12 +692,44 @@ fn build_sensitivity_notice(
 }
 
 /// Print a minimal footer for `--quiet` mode (Null renderer swallows finalize).
-fn print_quiet_footer(elapsed: std::time::Duration, output_path: Option<&std::path::Path>) {
+///
+/// Matches `ScanEndState` variants so each end-state gets the right output:
+/// - Completed: timing + report path + refine hint + sensitivity notice
+/// - InspectOnly: timing + output path (no refine hint)
+/// - InspectOnlyStdout: timing only
+/// - WriteFailure: timing + error
+/// - Interrupted: cancellation message only
+fn print_quiet_footer(
+    elapsed: std::time::Duration,
+    end_state: &ScanEndState,
+    sensitivity: Option<&str>,
+) {
     let secs = elapsed.as_secs_f64();
-    eprintln!("Scan complete ({secs:.1}s)");
-    if let Some(path) = output_path {
-        eprintln!("Report: {}", path.display());
-        eprintln!("To review: inspectah refine {}", path.display());
+    match end_state {
+        ScanEndState::Completed { path, .. } => {
+            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Report: {}", path.display());
+            eprintln!("To review: inspectah refine {}", path.display());
+            if let Some(notice) = sensitivity {
+                for line in notice.lines() {
+                    eprintln!("  {line}");
+                }
+            }
+        }
+        ScanEndState::InspectOnly { path } => {
+            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Output: {}", path.display());
+        }
+        ScanEndState::InspectOnlyStdout => {
+            eprintln!("Scan complete ({secs:.1}s)");
+        }
+        ScanEndState::WriteFailure { error } => {
+            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Error: {error}");
+        }
+        ScanEndState::Interrupted { .. } => {
+            eprintln!("Scan cancelled. No report written.");
+        }
     }
 }
 
