@@ -275,6 +275,16 @@ impl RefineSession {
             .and_then(|r| r.baseline_package_names.as_ref())
             .is_some();
 
+        // Fleet snapshots use prevalence-based intersection, not leaf
+        // filtering. Clear leaf_packages before normalization so
+        // normalize_package_defaults does not exclude non-leaf packages.
+        let is_fleet_snapshot = snapshot.fleet_meta.is_some();
+        if is_fleet_snapshot
+            && let Some(ref mut rpm) = snapshot.rpm
+        {
+            rpm.leaf_packages = None;
+        }
+
         // Classify then normalize — materializes tier-aware defaults
         // into the snapshot BEFORE the op stack begins.
         let pkgs = classify_packages(&snapshot);
@@ -1911,8 +1921,9 @@ impl RefineSession {
                 packages
             };
 
-            // Step 2: THEN apply leaf filter if available
-            if let Some(leaf_names) = rpm.leaf_packages.as_ref() {
+            // Step 2: THEN apply leaf filter if available (single-host only —
+            // fleet mode uses prevalence-based intersection instead).
+            if !is_fleet && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
                 packages
                     .into_iter()

@@ -1,8 +1,18 @@
+use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
+fn empty_baseline() -> BaselineData {
+    BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-05-17T00:00:00Z".into(),
+    }
+}
+
 pub fn make_snap_with_repos() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {

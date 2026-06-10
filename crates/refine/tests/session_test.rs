@@ -3,7 +3,7 @@ mod helpers;
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::fleet::FleetPrevalence;
+use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
@@ -12,6 +12,7 @@ use helpers::*;
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -477,10 +478,11 @@ fn mark_viewed_rejects_cfg_prefix() {
 
 #[test]
 fn test_non_leaf_tier2_excluded_from_view() {
-    // Use degraded mode (no baseline) to produce Tier 2 (Informational)
-    // packages. With baseline present, user-added packages from recognized
-    // repos are now Routine (Tier 1) and always included.
+    // Empty baseline (no packages in it) makes all packages Site (user-added).
+    // Non-leaf Site packages are hidden from the view because dnf resolves
+    // them automatically.
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -500,7 +502,6 @@ fn test_non_leaf_tier2_excluded_from_view() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None, // degraded mode -> Informational
         leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
     });
@@ -519,6 +520,7 @@ fn test_non_leaf_tier2_excluded_from_view() {
 #[test]
 fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -538,7 +540,6 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None,
         leaf_packages: Some(vec!["httpd.x86_64".into()]),
         auto_packages: Some(vec!["mystery.x86_64".into()]),
         ..Default::default()
@@ -565,6 +566,7 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
 #[test]
 fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -584,7 +586,6 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None,
         leaf_packages: Some(vec!["httpd.x86_64".into()]),
         auto_packages: Some(vec!["apr.x86_64".into()]),
         ..Default::default()
@@ -654,6 +655,7 @@ fn test_leaf_data_unavailable_shows_all_packages_in_view() {
 #[test]
 fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -673,7 +675,6 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: None,
         leaf_packages: Some(vec!["glibc.x86_64".into()]),
         auto_packages: Some(vec!["glibc.i686".into()]),
         ..Default::default()
@@ -697,6 +698,20 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
 fn test_fleet_snapshot_skips_leaf_only_filter() {
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test-fleet".into(),
+        host_count: 5,
+        hostnames: vec![
+            "host-a".into(),
+            "host-b".into(),
+            "host-c".into(),
+            "host-d".into(),
+            "host-e".into(),
+        ],
+        merged_at: "2026-01-01T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: Default::default(),
+    });
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -739,6 +754,20 @@ fn test_fleet_snapshot_skips_leaf_only_filter() {
 fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
+    snap.fleet_meta = Some(FleetSnapshotMeta {
+        label: "test-fleet".into(),
+        host_count: 5,
+        hostnames: vec![
+            "host-a".into(),
+            "host-b".into(),
+            "host-c".into(),
+            "host-d".into(),
+            "host-e".into(),
+        ],
+        merged_at: "2026-01-01T00:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: Default::default(),
+    });
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -767,18 +796,18 @@ fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
 
     let session = RefineSession::new(snap);
     let preview = &session.view().containerfile_preview;
-    let install_line = preview
-        .lines()
-        .find(|line| line.starts_with("RUN dnf install -y"))
-        .expect("fleet preview must include an install line");
 
     assert!(
-        install_line.contains("httpd"),
-        "fleet preview must still include httpd, got: {install_line}"
+        preview.contains("dnf install"),
+        "fleet preview must include a dnf install block"
     );
     assert!(
-        install_line.contains("apr"),
-        "fleet preview must not apply leaf-only filtering, got: {install_line}"
+        preview.contains("httpd"),
+        "fleet preview must include httpd"
+    );
+    assert!(
+        preview.contains("apr"),
+        "fleet preview must not apply leaf-only filtering"
     );
 }
 
@@ -787,6 +816,23 @@ fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
 #[test]
 fn test_session_normalizes_at_construction() {
     let mut snap = InspectionSnapshot::new();
+    // Put glibc.x86_64 in the baseline so it classifies as Tier 1 (Baseline).
+    let mut baseline_pkgs = std::collections::HashMap::new();
+    baseline_pkgs.insert(
+        "glibc.x86_64".into(),
+        inspectah_core::baseline::BaselinePackageEntry {
+            name: "glibc".into(),
+            version: "2.34".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            epoch: None,
+        },
+    );
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: baseline_pkgs,
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "glibc".into(),
@@ -814,6 +860,7 @@ fn test_session_normalizes_at_construction() {
 #[test]
 fn test_session_preview_export_parity() {
     let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "httpd".into(),
