@@ -1,22 +1,26 @@
 //! `inspectah version` subcommand — prints version, commit, and build date.
+//!
+//! The `INSPECTAH_COMMIT` and `INSPECTAH_DATE` env vars are set by
+//! `crates/cli/build.rs` at compile time.
 
 pub fn print_version() {
-    let version = env!("CARGO_PKG_VERSION");
-    // Commit and date are populated by build-time env vars when available.
-    // During local development, these default to "unknown".
-    let commit = option_env!("INSPECTAH_COMMIT").unwrap_or("unknown");
-    let date = option_env!("INSPECTAH_DATE").unwrap_or("unknown");
-
-    println!("inspectah {version}");
-    println!("commit: {commit}");
-    println!("date:   {date}");
+    println!(
+        "inspectah {} (commit {}, built {})",
+        env!("CARGO_PKG_VERSION"),
+        env!("INSPECTAH_COMMIT"),
+        env!("INSPECTAH_DATE"),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_version_string_not_empty() {
-        let version = env!("CARGO_PKG_VERSION");
-        assert!(!version.is_empty());
+    fn compile_time_vars_are_set() {
+        let commit = env!("INSPECTAH_COMMIT");
+        let date = env!("INSPECTAH_DATE");
+        assert!(!commit.is_empty(), "INSPECTAH_COMMIT must not be empty");
+        assert!(!date.is_empty(), "INSPECTAH_DATE must not be empty");
+        assert_ne!(commit, "unknown", "build.rs must set commit hash");
+        assert_ne!(date, "unknown", "build.rs must set build date");
     }
 }

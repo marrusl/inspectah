@@ -3,9 +3,19 @@ mod progress;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
+/// Version string with commit hash and build date, built at compile time.
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (commit ",
+    env!("INSPECTAH_COMMIT"),
+    ", built ",
+    env!("INSPECTAH_DATE"),
+    ")",
+);
+
 /// inspectah — inspect and prepare RHEL systems for image-mode migration.
 #[derive(Parser)]
-#[command(name = "inspectah", version, about)]
+#[command(name = "inspectah", version = LONG_VERSION, about)]
 struct Cli {
     /// Print full CLI reference in markdown format
     #[arg(long, hide = true)]

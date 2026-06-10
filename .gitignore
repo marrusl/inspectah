@@ -40,6 +40,7 @@ cmd/inspectah/inspector.test
 # Root-level build outputs
 /inspectah
 /inspectah-*
+/release-artifacts/
 # Rust workspace crates (not build outputs)
 !/crates/
 

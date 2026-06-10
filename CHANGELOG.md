@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6-beta.1] - 2026-06-09
+
+### Added
+- Build metadata in version output — `inspectah version` and `--version` now show commit hash and build date
+- Compile-time build script (`build.rs`) captures git revision and date
+
+### Known Issues
+- RHEL-subscribed builds (`--preserve-subscription`) do not work when inspectah runs on non-RHEL hosts. The subscription material is host-specific and cannot be transferred across distributions.
+
 ## [0.8.5-beta.2] - 2026-06-05
 
 ### Added
@@ -225,7 +234,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.2...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.1...HEAD
+[0.8.6-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.2...v0.8.6-beta.1
 [0.8.5-beta.2]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.1...v0.8.5-beta.2
 [0.8.5-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-alpha.1...v0.8.5-beta.1
 [0.8.5-alpha.1]: https://github.com/marrusl/inspectah/compare/v0.8.4-alpha.1...v0.8.5-alpha.1
