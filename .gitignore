@@ -4,7 +4,7 @@
 # Build artifacts
 build/
 !cmd/inspectah/internal/build/
-!inspectah-pipeline/src/build/
+!crates/pipeline/src/build/
 node_modules/
 .DS_Store
 .obsidian/
@@ -41,17 +41,11 @@ cmd/inspectah/inspector.test
 /inspectah
 /inspectah-*
 # Rust workspace crates (not build outputs)
-!/inspectah-core/
-!/inspectah-collect/
-!/inspectah-pipeline/
-!/inspectah-cli/
-!/inspectah-web/
-!/inspectah-refine/
-!/inspectah-tui/
+!/crates/
 
 # UI build artifacts (inspectah-web)
-inspectah-web/ui/node_modules/
-inspectah-web/ui/dist/
+crates/web/ui/node_modules/
+crates/web/ui/dist/
 
 # Test artifacts
 *.actual.json

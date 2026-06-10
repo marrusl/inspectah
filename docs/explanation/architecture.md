@@ -31,17 +31,19 @@ document explains both the structure and the reasoning behind it.
 
 ## The workspace at a glance
 
-The seven crates form a layered dependency graph:
+The seven crates live under `crates/` with the `inspectah-` prefix dropped from
+directory names. Cargo package names remain unchanged. They form a layered
+dependency graph:
 
-| Crate | Purpose | Depends on |
-|-------|---------|------------|
-| **inspectah-core** | Schema types, traits, snapshot model | Nothing (leaf crate) |
-| **inspectah-collect** | Host inspection, data gathering | core |
-| **inspectah-pipeline** | Orchestration, rendering, output generation | core, collect |
-| **inspectah-refine** | Interactive editing and re-rendering engine | core, pipeline |
-| **inspectah-web** | HTTP server, HTML reports, interactive UIs | core, pipeline, refine |
-| **inspectah-tui** | Terminal UI for interactive refinement | core, refine |
-| **inspectah-cli** | Binary entry point, argument parsing, subcommands | all of the above |
+| Crate | Directory | Purpose | Depends on |
+|-------|-----------|---------|------------|
+| **inspectah-core** | `crates/core/` | Schema types, traits, snapshot model | Nothing (leaf crate) |
+| **inspectah-collect** | `crates/collect/` | Host inspection, data gathering | core |
+| **inspectah-pipeline** | `crates/pipeline/` | Orchestration, rendering, output generation | core, collect |
+| **inspectah-refine** | `crates/refine/` | Interactive editing and re-rendering engine | core, pipeline |
+| **inspectah-web** | `crates/web/` | HTTP server, HTML reports, interactive UIs | core, pipeline, refine |
+| **inspectah-tui** | `crates/tui/` | Terminal UI for interactive refinement | core, refine |
+| **inspectah-cli** | `crates/cli/` | Binary entry point, argument parsing, subcommands | all of the above |
 
 Dependencies flow in one direction: from the CLI inward toward core. No crate
 depends on a crate above it in this table. This layering is what makes the

@@ -17,14 +17,14 @@
 ### Task 1: Add coverage metadata fields and wire into merge constructor
 
 **Files:**
-- Modify: `inspectah-core/src/types/rpm.rs` (RpmSection struct)
-- Modify: `inspectah-core/src/fleet/merge.rs` (RpmSection constructor in `merge_rpm_sections`)
+- Modify: `crates/core/src/types/rpm.rs` (RpmSection struct)
+- Modify: `crates/core/src/fleet/merge.rs` (RpmSection constructor in `merge_rpm_sections`)
 
 Task 1 modifies both files in one slice because `merge_rpm_sections` constructs `RpmSection` exhaustively — adding fields to the struct without updating the constructor does not compile.
 
 - [ ] **Step 1: Add the two new fields to RpmSection**
 
-In `inspectah-core/src/types/rpm.rs`, add after the `no_baseline` field:
+In `crates/core/src/types/rpm.rs`, add after the `no_baseline` field:
 
 ```rust
     /// Number of hosts with authoritative leaf classification data.
@@ -39,7 +39,7 @@ In `inspectah-core/src/types/rpm.rs`, add after the `no_baseline` field:
 
 - [ ] **Step 2: Update the RpmSection constructor in merge_rpm_sections**
 
-In `inspectah-core/src/fleet/merge.rs`, find the `Some((RpmSection { ... }` block at the end of `merge_rpm_sections`. Add `leaf_authority_hosts: None, leaf_total_hosts: None,` to the struct literal. These are placeholder values that Task 2 will replace with real computation.
+In `crates/core/src/fleet/merge.rs`, find the `Some((RpmSection { ... }` block at the end of `merge_rpm_sections`. Add `leaf_authority_hosts: None, leaf_total_hosts: None,` to the struct literal. These are placeholder values that Task 2 will replace with real computation.
 
 - [ ] **Step 3: Verify compilation and tests**
 
@@ -54,7 +54,7 @@ Expected: Clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add inspectah-core/src/types/rpm.rs inspectah-core/src/fleet/merge.rs
+git add crates/core/src/types/rpm.rs crates/core/src/fleet/merge.rs
 git commit -m "feat(core): add leaf_authority_hosts and leaf_total_hosts to RpmSection
 
 Coverage metadata for fleet leaf intersection. Tracks how many hosts
@@ -70,7 +70,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 2: Implement leaf intersection in merge_rpm_sections
 
 **Files:**
-- Modify: `inspectah-core/src/fleet/merge.rs` (replace first_host_option calls, add intersection logic, filter packages_added)
+- Modify: `crates/core/src/fleet/merge.rs` (replace first_host_option calls, add intersection logic, filter packages_added)
 
 The implementation has a strict order of operations:
 1. Compute authoritative host subset (hosts with `leaf_packages.is_some()`)
@@ -82,7 +82,7 @@ The implementation has a strict order of operations:
 
 - [ ] **Step 1: Write the failing test**
 
-In `inspectah-core/tests/fleet_merge_test.rs`, add:
+In `crates/core/tests/fleet_merge_test.rs`, add:
 
 ```rust
 #[test]
@@ -140,7 +140,7 @@ Expected: FAIL — packages_added still contains both packages.
 
 - [ ] **Step 3: Implement leaf intersection in merge_rpm_sections**
 
-In `inspectah-core/src/fleet/merge.rs`, replace the three `first_host_option` calls for leaf fields (around line 946-950) with the following block. This must go BEFORE the `packages_added` filtering and BEFORE the repo-conflict detection.
+In `crates/core/src/fleet/merge.rs`, replace the three `first_host_option` calls for leaf fields (around line 946-950) with the following block. This must go BEFORE the `packages_added` filtering and BEFORE the repo-conflict detection.
 
 ```rust
     // --- Leaf intersection across authoritative hosts ---
@@ -276,7 +276,7 @@ Expected: Clean.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add inspectah-core/src/fleet/merge.rs inspectah-core/tests/fleet_merge_test.rs
+git add crates/core/src/fleet/merge.rs crates/core/tests/fleet_merge_test.rs
 git commit -m "feat(fleet): leaf intersection replaces first-host-wins heuristic
 
 Compute intersection of all authoritative hosts' leaf classifications.
@@ -292,7 +292,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 3: Edge case tests
 
 **Files:**
-- Modify: `inspectah-core/tests/fleet_merge_test.rs`
+- Modify: `crates/core/tests/fleet_merge_test.rs`
 
 - [ ] **Step 1: Test — package leaf on some hosts, auto on others → excluded**
 
@@ -648,7 +648,7 @@ Expected: All pass, clean clippy.
 - [ ] **Step 12: Commit**
 
 ```bash
-git add inspectah-core/tests/fleet_merge_test.rs
+git add crates/core/tests/fleet_merge_test.rs
 git commit -m "test(fleet): comprehensive leaf intersection edge cases
 
 Covers: partial leaf, degraded hosts, all-degraded, authoritative empty,
@@ -663,12 +663,12 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 4: Gate render_service_intent for fleet
 
 **Files:**
-- Modify: `inspectah-pipeline/src/render/service_intent.rs:294`
-- Test: `inspectah-pipeline/tests/service_intent_test.rs`
+- Modify: `crates/pipeline/src/render/service_intent.rs:294`
+- Test: `crates/pipeline/tests/service_intent_test.rs`
 
 - [ ] **Step 1: Write failing test**
 
-In `inspectah-pipeline/tests/service_intent_test.rs`, add:
+In `crates/pipeline/tests/service_intent_test.rs`, add:
 
 ```rust
 #[test]
@@ -736,7 +736,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement the fleet guard**
 
-In `inspectah-pipeline/src/render/service_intent.rs`, in `render_service_intent()` (line 294), add `let is_fleet = snap.fleet_meta.is_some();` before the classify loop. Then replace the existing `match classify_service_presence(...)` with:
+In `crates/pipeline/src/render/service_intent.rs`, in `render_service_intent()` (line 294), add `let is_fleet = snap.fleet_meta.is_some();` before the classify loop. Then replace the existing `match classify_service_presence(...)` with:
 
 ```rust
         let presence = if is_fleet {
@@ -762,7 +762,7 @@ Expected: All pass, clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add inspectah-pipeline/src/render/service_intent.rs inspectah-pipeline/tests/service_intent_test.rs
+git add crates/pipeline/src/render/service_intent.rs crates/pipeline/tests/service_intent_test.rs
 git commit -m "fix(service_intent): gate package-based omission for fleet
 
 Fleet packages_added is leaf-only, so classify_service_presence would
@@ -778,10 +778,10 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 5: Surface partial authority metadata on operator-facing surfaces
 
 **Files:**
-- Modify: `inspectah-pipeline/src/render/containerfile.rs` — `packages_section_lines()` (line 263)
-- Modify: `inspectah-pipeline/src/render/report.rs` — `render_report()` context variables (around line 756)
+- Modify: `crates/pipeline/src/render/containerfile.rs` — `packages_section_lines()` (line 263)
+- Modify: `crates/pipeline/src/render/report.rs` — `render_report()` context variables (around line 756)
 - Modify: `inspectah-pipeline/templates/report/fleet-summary.html` — add metadata line
-- Modify: `inspectah-web/src/fleet_handlers.rs` — `FleetSummary` struct + `build_fleet_view_response()`
+- Modify: `crates/web/src/fleet_handlers.rs` — `FleetSummary` struct + `build_fleet_view_response()`
 
 The spec requires surfacing "Leaf classification: N/M hosts" on three surfaces when `leaf_authority_hosts < leaf_total_hosts`.
 
@@ -791,7 +791,7 @@ The partial authority comment goes in `packages_section_lines()` (line 263 of `c
 
 - [ ] **Step 1: Add coverage comment in packages_section_lines**
 
-In `inspectah-pipeline/src/render/containerfile.rs`, in `packages_section_lines()` (line 263), after the `FROM` line is pushed and the `rpm` is extracted (around line 276-278), add before the repo files section:
+In `crates/pipeline/src/render/containerfile.rs`, in `packages_section_lines()` (line 263), after the `FROM` line is pushed and the `rpm` is extracted (around line 276-278), add before the repo files section:
 
 ```rust
     // Partial leaf authority indicator for fleet snapshots
@@ -892,7 +892,7 @@ The report template uses scalar variables passed from `render_report()`, NOT an 
 
 - [ ] **Step 4: Add context variables in render_report()**
 
-In `inspectah-pipeline/src/render/report.rs`, find the fleet aggregate data section (around line 756, `// ── Fleet aggregate data`). Add two new scalar variables after the existing fleet variables:
+In `crates/pipeline/src/render/report.rs`, find the fleet aggregate data section (around line 756, `// ── Fleet aggregate data`). Add two new scalar variables after the existing fleet variables:
 
 ```rust
     let fleet_leaf_authority_hosts = snap
@@ -967,7 +967,7 @@ The fleet view API uses `FleetViewResponse` containing a `FleetSummary` struct (
 
 - [ ] **Step 7: Add fields to FleetSummary**
 
-In `inspectah-web/src/fleet_handlers.rs`, add to the `FleetSummary` struct (line 38). The existing struct has `host_count`, `actionable_variant_items`, and `informational_variant_count`:
+In `crates/web/src/fleet_handlers.rs`, add to the `FleetSummary` struct (line 38). The existing struct has `host_count`, `actionable_variant_items`, and `informational_variant_count`:
 
 ```rust
 pub struct FleetSummary {
@@ -1001,7 +1001,7 @@ The real construction seam is `build_fleet_summary()` (line 380), NOT `build_fle
 
 - [ ] **Step 9: Write fleet API regression test**
 
-In `inspectah-web/tests/fleet_api_test.rs`, follow the existing fleet API test patterns. Add a test that constructs a fleet snapshot with partial authority and asserts the view response JSON contains the metadata:
+In `crates/web/tests/fleet_api_test.rs`, follow the existing fleet API test patterns. Add a test that constructs a fleet snapshot with partial authority and asserts the view response JSON contains the metadata:
 
 ```rust
 #[test]
@@ -1026,7 +1026,7 @@ Expected: All pass, clean.
 - [ ] **Step 11: Commit**
 
 ```bash
-git add inspectah-pipeline/src/render/containerfile.rs inspectah-pipeline/src/render/report.rs inspectah-pipeline/templates/report/fleet-summary.html inspectah-web/src/fleet_handlers.rs
+git add crates/pipeline/src/render/containerfile.rs crates/pipeline/src/render/report.rs inspectah-pipeline/templates/report/fleet-summary.html crates/web/src/fleet_handlers.rs
 git commit -m "feat(fleet): surface partial leaf authority on operator-facing surfaces
 
 Containerfile: coverage comment in packages_section_lines() when
@@ -1043,7 +1043,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 6: Containerfile fleet snapshot test
 
 **Files:**
-- Modify: `inspectah-pipeline/src/render/containerfile.rs` (test module)
+- Modify: `crates/pipeline/src/render/containerfile.rs` (test module)
 
 - [ ] **Step 1: Write test — fleet Containerfile contains only leaf packages**
 
@@ -1095,7 +1095,7 @@ Expected: All pass, clean.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add inspectah-pipeline/src/render/containerfile.rs
+git add crates/pipeline/src/render/containerfile.rs
 git commit -m "test(containerfile): verify fleet install line is leaf-only
 
 Confirms renderer's leaf filter is a no-op for fleet snapshots
@@ -1109,7 +1109,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 7: Refine session regression
 
 **Files:**
-- Modify: `inspectah-refine/src/session.rs` (test module)
+- Modify: `crates/refine/src/session.rs` (test module)
 
 - [ ] **Step 1: Write test — pre-filtered fleet packages drive refine view**
 
@@ -1191,7 +1191,7 @@ Expected: All pass, clean.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add inspectah-refine/src/session.rs
+git add crates/refine/src/session.rs
 git commit -m "test(refine): fleet pre-filtered packages and authority metadata
 
 Proves refine view uses merge-layer's leaf-filtered packages_added

@@ -1,0 +1,17 @@
+[package]
+name = "inspectah-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+time = { version = "0.3", features = ["serde", "serde-well-known", "parsing", "formatting"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.10"

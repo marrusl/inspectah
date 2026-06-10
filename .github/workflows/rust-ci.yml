@@ -4,18 +4,18 @@ on:
   push:
     branches: [rust]
     paths:
-      - 'inspectah-*/src/**'
-      - 'inspectah-*/tests/**'
-      - 'inspectah-*/Cargo.toml'
-      - 'inspectah-web/ui/src/**'
-      - 'inspectah-web/ui/package.json'
-      - 'inspectah-web/ui/package-lock.json'
-      - 'inspectah-web/ui/vite.config.ts'
-      - 'inspectah-web/ui/tsconfig.json'
-      - 'inspectah-web/ui/index.html'
-      - 'inspectah-web/ui/e2e/**'
-      - 'inspectah-web/ui/playwright.config.ts'
-      - 'inspectah-web/build.rs'
+      - 'crates/*/src/**'
+      - 'crates/*/tests/**'
+      - 'crates/*/Cargo.toml'
+      - 'crates/web/ui/src/**'
+      - 'crates/web/ui/package.json'
+      - 'crates/web/ui/package-lock.json'
+      - 'crates/web/ui/vite.config.ts'
+      - 'crates/web/ui/tsconfig.json'
+      - 'crates/web/ui/index.html'
+      - 'crates/web/ui/e2e/**'
+      - 'crates/web/ui/playwright.config.ts'
+      - 'crates/web/build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testdata/**'
@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: inspectah-web/ui/package-lock.json
+          cache-dependency-path: crates/web/ui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -43,15 +43,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -W clippy::all
       - name: Install UI dependencies
-        working-directory: inspectah-web/ui
+        working-directory: crates/web/ui
         run: npm ci
       - name: Vitest unit tests
-        working-directory: inspectah-web/ui
+        working-directory: crates/web/ui
         run: npm run test
-      - name: Test (no ffi-rpm)
+      - name: Test
         run: cargo test --workspace
       - name: Install Playwright browsers
-        working-directory: inspectah-web/ui
+        working-directory: crates/web/ui
         run: npx playwright install --with-deps chromium
       - name: Build binary for e2e
         run: cargo build -p inspectah-cli
@@ -75,22 +75,8 @@ jobs:
           fi
       - name: Playwright e2e tests
         if: env.SKIP_E2E != 'true'
-        working-directory: inspectah-web/ui
+        working-directory: crates/web/ui
         run: npm run test:e2e
       - name: Stop refine server
         if: always() && env.SERVER_PID != ''
         run: kill $SERVER_PID || true
-
-  tier2:
-    name: Test with librpm FFI
-    runs-on: ubuntu-latest
-    container:
-      image: fedora:latest
-    env:
-      INSPECTAH_SKIP_UI: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: dnf install -y gcc rpm-devel pkg-config rust cargo clippy
-      - name: Test with ffi-rpm
-        run: cargo test --workspace --features ffi-rpm

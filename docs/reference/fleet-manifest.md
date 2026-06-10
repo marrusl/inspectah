@@ -9,7 +9,7 @@ nav_order: 6
 A fleet manifest is a TOML file that declares which host snapshots to aggregate
 into a fleet view. It is consumed by `inspectah fleet aggregate`.
 
-**Source:** `inspectah-core/src/fleet/manifest.rs`
+**Source:** `crates/core/src/fleet/manifest.rs`
 {: .text-grey-dk-000 }
 
 ## Format

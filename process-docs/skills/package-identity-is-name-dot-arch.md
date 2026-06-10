@@ -18,7 +18,7 @@ crate boundaries:
   the `RUN dnf install -y` line when multiarch disambiguation is needed.
 
 ```rust
-// inspectah-refine/src/session.rs
+// crates/refine/src/session.rs
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
 }
@@ -67,7 +67,7 @@ multiarch packages no longer collapse.
 
 ## See Also
 
-- `inspectah-refine/src/session.rs` -- `canonical_package_id()`
-- `inspectah-collect/src/inspectors/rpm/mod.rs` -- collector leaf output
-- `inspectah-refine/src/normalize.rs` -- `collect_dep_tree_names()`
+- `crates/refine/src/session.rs` -- `canonical_package_id()`
+- `crates/collect/src/inspectors/rpm/mod.rs` -- collector leaf output
+- `crates/refine/src/normalize.rs` -- `collect_dep_tree_names()`
 - `serde-include-default-ambiguity.md` -- related deserialization pitfall

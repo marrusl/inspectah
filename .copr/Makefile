@@ -23,7 +23,7 @@ srpm:
 	        > .cargo/config.toml
 
 	# Pre-build the web UI so Mock doesn't need nodejs
-	cd $(STAGING)/$(NAME)-$(VERSION)/inspectah-web/ui && \
+	cd $(STAGING)/$(NAME)-$(VERSION)/crates/web/ui && \
 	    npm ci && \
 	    npm run build && \
 	    rm -rf node_modules

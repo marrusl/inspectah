@@ -36,17 +36,19 @@ The resulting binary is at `target/release/inspectah`.
 
 ## Workspace structure
 
-inspectah is a Cargo workspace with seven member crates:
+inspectah is a Cargo workspace with seven member crates, all located under
+`crates/` with the `inspectah-` prefix dropped from directory names (e.g.,
+`crates/core/`, `crates/cli/`). The Cargo package names remain unchanged.
 
-| Crate | Purpose |
-|---|---|
-| `inspectah-core` | Shared traits (`Inspector`, `Executor`, `ProgressSink`), type definitions, and snapshot structures |
-| `inspectah-collect` | Inspector implementations -- each inspector gathers data from one system domain |
-| `inspectah-pipeline` | Orchestrates collection, rendering, and output generation |
-| `inspectah-refine` | Refinement engine -- decision persistence, fleet consensus, section promotion |
-| `inspectah-web` | Web UI (refine interface) for interactive triage |
-| `inspectah-tui` | Terminal UI for interactive triage (ratatui-based alternative to the web UI) |
-| `inspectah-cli` | Command-line interface and progress display |
+| Crate | Directory | Purpose |
+|---|---|---|
+| `inspectah-core` | `crates/core/` | Shared traits (`Inspector`, `Executor`, `ProgressSink`), type definitions, and snapshot structures |
+| `inspectah-collect` | `crates/collect/` | Inspector implementations -- each inspector gathers data from one system domain |
+| `inspectah-pipeline` | `crates/pipeline/` | Orchestrates collection, rendering, and output generation |
+| `inspectah-refine` | `crates/refine/` | Refinement engine -- decision persistence, fleet consensus, section promotion |
+| `inspectah-web` | `crates/web/` | Web UI (refine interface) for interactive triage |
+| `inspectah-tui` | `crates/tui/` | Terminal UI for interactive triage (ratatui-based alternative to the web UI) |
+| `inspectah-cli` | `crates/cli/` | Command-line interface and progress display |
 
 Dependencies flow downward: `inspectah-cli` depends on all other crates.
 `inspectah-web` and `inspectah-tui` both depend on `inspectah-refine` and

@@ -10,9 +10,9 @@ Each inspectah command produces a defined set of files. This reference lists
 every artifact by command, distinguishing always-written files from
 conditional ones.
 
-Source of truth: `inspectah-pipeline/src/render/mod.rs` (scan),
-`inspectah-refine/src/session.rs` (refine export),
-`inspectah-cli/src/commands/fleet.rs` (fleet aggregate).
+Source of truth: `crates/pipeline/src/render/mod.rs` (scan),
+`crates/refine/src/session.rs` (refine export),
+`crates/cli/src/commands/fleet.rs` (fleet aggregate).
 
 ---
 

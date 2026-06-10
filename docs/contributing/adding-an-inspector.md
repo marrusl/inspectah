@@ -18,11 +18,11 @@ failures gracefully, and feeds results into rendering.
 
 ## Step 1: Define your types
 
-Create a new file in `inspectah-core/src/types/` for your section's data
+Create a new file in `crates/core/src/types/` for your section's data
 structures. For example, if adding a `Firewall` inspector:
 
 ```rust
-// inspectah-core/src/types/firewall.rs
+// crates/core/src/types/firewall.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +57,7 @@ unified include-default model -- all items start included and are narrowed
 during triage and fleet aggregation. Locked items cannot be toggled in the
 refine UI.
 
-Then register the module in `inspectah-core/src/types/mod.rs`:
+Then register the module in `crates/core/src/types/mod.rs`:
 
 ```rust
 pub mod firewall;
@@ -65,7 +65,7 @@ pub mod firewall;
 
 ## Step 2: Add the InspectorId variant
 
-In `inspectah-core/src/types/completeness.rs`, add a variant to the
+In `crates/core/src/types/completeness.rs`, add a variant to the
 `InspectorId` enum:
 
 ```rust
@@ -100,11 +100,11 @@ pub enum SectionData {
 
 ## Step 3: Implement the inspector
 
-Create your inspector file in `inspectah-collect/src/inspectors/`. Use
+Create your inspector file in `crates/collect/src/inspectors/`. Use
 the `StorageInspector` (237 lines) as a minimal reference pattern.
 
 ```rust
-// inspectah-collect/src/inspectors/firewall.rs
+// crates/collect/src/inspectors/firewall.rs
 
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
@@ -212,7 +212,7 @@ let content = exec.read_file(Path::new("/etc/firewalld/firewalld.conf"))
 
 ## Step 4: Register the inspector module
 
-Add your module to `inspectah-collect/src/inspectors/mod.rs`:
+Add your module to `crates/collect/src/inspectors/mod.rs`:
 
 ```rust
 pub mod config;
@@ -232,7 +232,7 @@ pub mod users;
 ## Step 5: Wire into the pipeline
 
 Add your inspector to the pipeline's inspector list in
-`inspectah-pipeline/src/collect.rs`. The pipeline passes a
+`crates/pipeline/src/collect.rs`. The pipeline passes a
 `Vec<Box<dyn Inspector>>` to the `collect()` function. Add your
 inspector to wherever this list is constructed:
 
@@ -313,10 +313,10 @@ Key testing patterns:
 
 Before submitting your PR:
 
-- [ ] Types defined in `inspectah-core/src/types/`
+- [ ] Types defined in `crates/core/src/types/`
 - [ ] `InspectorId` variant added to `completeness.rs`
 - [ ] `SectionData` variant added to `completeness.rs`
-- [ ] Inspector struct created in `inspectah-collect/src/inspectors/`
+- [ ] Inspector struct created in `crates/collect/src/inspectors/`
 - [ ] Module registered in `inspectors/mod.rs`
 - [ ] Inspector wired into the pipeline's inspector list
 - [ ] Snapshot field added for the new section

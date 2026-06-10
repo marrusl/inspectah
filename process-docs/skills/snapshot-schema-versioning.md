@@ -5,7 +5,7 @@ description: Snapshot JSON schema is version-gated with no forward/backward comp
 
 # Snapshot Schema Versioning
 
-`InspectionSnapshot` in `inspectah-core/src/snapshot.rs` carries a
+`InspectionSnapshot` in `crates/core/src/snapshot.rs` carries a
 `schema_version` field (currently 18). The loading contract is strict:
 
 ```rust
@@ -72,6 +72,6 @@ right on the first commit.
 
 ## See Also
 
-- `inspectah-core/src/snapshot.rs` -- schema version, `load()`, all fields
-- `inspectah-core/src/types/` -- section types referenced by snapshot
-- `inspectah-core/src/types/fleet.rs` -- `FleetSnapshotMeta`
+- `crates/core/src/snapshot.rs` -- schema version, `load()`, all fields
+- `crates/core/src/types/` -- section types referenced by snapshot
+- `crates/core/src/types/fleet.rs` -- `FleetSnapshotMeta`

@@ -7,7 +7,7 @@ description: Fleet (merged) and single-host snapshots follow different rules for
 
 inspectah operates in two modes determined at snapshot load time by
 `fleet_meta` presence in the `InspectionSnapshot`. `RefineMode::Fleet`
-vs `RefineMode::SingleHost` is set in `inspectah-refine/src/session.rs`.
+vs `RefineMode::SingleHost` is set in `crates/refine/src/session.rs`.
 Code that does not check the mode produces silently wrong results.
 
 ## Key Behavioral Differences
@@ -31,7 +31,7 @@ Fleet merges set `merged.redaction_state = None` (per-host state is
 dropped). But boolean flags propagate with `any()` semantics:
 `sensitive_snapshot`, `preserved_credentials`, `preserved_ssh_keys`,
 `preserved_subscription`. Check these booleans, not `redaction_state`,
-on fleet snapshots. See `inspectah-core/src/fleet/mod.rs` line ~125.
+on fleet snapshots. See `crates/core/src/fleet/mod.rs` line ~125.
 
 ### 3. Containerfile rendering diverges
 
@@ -48,7 +48,7 @@ snapshots and silently does the wrong thing for fleet, or vice versa.
 Specific failure modes:
 
 - **Adding a new snapshot boolean** without updating the fleet merge
-  propagation in `inspectah-core/src/fleet/mod.rs`. The new field
+  propagation in `crates/core/src/fleet/mod.rs`. The new field
   defaults to `false` in the merged snapshot, hiding host-level truth.
 - **Leaf-filtering fleet data** causes migration work to disappear from
   the refine view and Containerfile.
@@ -65,7 +65,7 @@ prevent merged data from being incorrectly leaf-filtered.
 
 ## See Also
 
-- `inspectah-core/src/fleet/mod.rs` -- `merge_snapshots()` propagation
-- `inspectah-refine/src/session.rs` -- `RefineMode` detection
-- `inspectah-pipeline/src/render/containerfile.rs` -- fleet guard
+- `crates/core/src/fleet/mod.rs` -- `merge_snapshots()` propagation
+- `crates/refine/src/session.rs` -- `RefineMode` detection
+- `crates/pipeline/src/render/containerfile.rs` -- fleet guard
 - `package-identity-is-name-dot-arch.md` -- related identity issue
