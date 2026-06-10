@@ -9,9 +9,11 @@ use inspectah_core::types::progress::{MetricKind, ProbeId, StepId};
 
 /// Fixed display order for the scan checklist.
 ///
-/// Matches `scan.rs` inspector registration order. Only the 11
-/// inspectors that produce [`SectionData`] appear here — phase-2-only
-/// IDs (`Hardware`, `Ostree`, `OsRelease`) are excluded.
+/// Matches `scan.rs` inspector registration order. The 12 inspectors
+/// that produce [`SectionData`] appear here — phase-2-only IDs
+/// (`Hardware`, `Ostree`, `OsRelease`) are excluded. Subscription
+/// is last and only active when `--preserve subscription` or
+/// `--preserve all` is used; see [`active_display_order`].
 pub const DISPLAY_ORDER: &[(InspectorId, &str)] = &[
     (InspectorId::Rpm, "RPM packages"),
     (InspectorId::Services, "Services"),
@@ -24,7 +26,20 @@ pub const DISPLAY_ORDER: &[(InspectorId, &str)] = &[
     (InspectorId::Config, "Config files"),
     (InspectorId::Selinux, "SELinux"),
     (InspectorId::NonRpmSoftware, "Non-RPM packages"),
+    (InspectorId::Subscription, "Subscription"),
 ];
+
+/// Return the active slice of [`DISPLAY_ORDER`].
+///
+/// When `has_subscription` is false the trailing Subscription entry is
+/// excluded, keeping the checklist at 11 items.
+pub fn active_display_order(has_subscription: bool) -> &'static [(InspectorId, &'static str)] {
+    if has_subscription {
+        DISPLAY_ORDER
+    } else {
+        &DISPLAY_ORDER[..11]
+    }
+}
 
 /// Get the 1-based display position for an inspector.
 ///
@@ -118,8 +133,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_order_has_11_entries() {
-        assert_eq!(DISPLAY_ORDER.len(), 11);
+    fn display_order_has_12_entries() {
+        assert_eq!(DISPLAY_ORDER.len(), 12);
+    }
+
+    #[test]
+    fn active_display_order_without_subscription() {
+        assert_eq!(active_display_order(false).len(), 11);
+    }
+
+    #[test]
+    fn active_display_order_with_subscription() {
+        assert_eq!(active_display_order(true).len(), 12);
     }
 
     #[test]
@@ -176,6 +201,16 @@ mod tests {
         for p in &probes {
             assert!(!probe_name(p).is_empty());
         }
+    }
+
+    #[test]
+    fn display_position_subscription() {
+        assert_eq!(display_position(InspectorId::Subscription), 12);
+    }
+
+    #[test]
+    fn display_name_subscription() {
+        assert_eq!(display_name(InspectorId::Subscription), "Subscription");
     }
 
     #[test]
