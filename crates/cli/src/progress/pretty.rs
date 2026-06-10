@@ -216,13 +216,9 @@ impl PrettyRenderer {
                 // Transfer spinner to the next slowest inspector (if any).
                 state.maybe_start_spinner();
             }
-            ProgressEvent::StepStarted { inspector, step } => {
-                if state.verbose
-                    && let Some(tracker) = state.trackers.get_mut(&inspector)
-                {
-                    let name = display::step_name(&step);
-                    tracker.child_lines.push(format!("      \u{25b8} {name}"));
-                }
+            ProgressEvent::StepStarted { .. } => {
+                // Verbose mode: no starter line — only completion lines
+                // are pushed in StepFinished.
             }
             ProgressEvent::StepFinished {
                 inspector,
@@ -251,14 +247,11 @@ impl PrettyRenderer {
                     tracker.set_metric(kind, value);
                 }
             }
-            ProgressEvent::ProbeStarted { inspector, probe } => {
-                let verbose = state.verbose;
+            ProgressEvent::ProbeStarted { inspector, .. } => {
+                // Verbose mode: no starter line — only completion lines
+                // are pushed in ProbeFinished.
                 if let Some(tracker) = state.trackers.get_mut(&inspector) {
                     tracker.probes_started += 1;
-                    if verbose {
-                        let name = display::probe_name(&probe);
-                        tracker.child_lines.push(format!("      \u{25b8} {name}"));
-                    }
                 }
             }
             ProgressEvent::ProbeFinished {

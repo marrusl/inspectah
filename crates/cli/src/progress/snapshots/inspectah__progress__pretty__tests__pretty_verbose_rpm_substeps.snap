@@ -3,9 +3,6 @@ source: crates/cli/src/progress/pretty.rs
 expression: output_text(&buf)
 ---
   ✓ RPM packages                 847 packages, 8 repos
-      ▸ Querying installed packages
       ✓ Querying installed packages done
-      ▸ Resolving source repositories
       ✓ Resolving source repositories done
-      ▸ Classifying packages
       ✓ Classifying packages     done
