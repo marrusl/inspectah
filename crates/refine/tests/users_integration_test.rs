@@ -134,28 +134,30 @@ fn full_pipeline_users_groups_materialization() {
         .export_tarball(&tarball_path, session.generation())
         .unwrap();
 
-    // 5. Verify tarball contains expected user artifacts
+    // 5. Verify tarball contains expected user artifacts.
+    //    Tarball uses the filename stem as a top-level prefix —
+    //    "output.tar.gz" → prefix "output/".
     let files = tarball_file_set(&tarball_path);
 
     assert!(
-        files.contains("inspectah-users.ks"),
+        files.contains("output/inspectah-users.ks"),
         "tarball must contain inspectah-users.ks, got: {files:?}"
     );
     assert!(
-        files.contains("inspectah-users.toml"),
+        files.contains("output/inspectah-users.toml"),
         "tarball must contain inspectah-users.toml, got: {files:?}"
     );
     assert!(
-        files.contains("users/home/alice/.ssh/authorized_keys"),
+        files.contains("output/users/home/alice/.ssh/authorized_keys"),
         "tarball must contain users/home/alice/.ssh/authorized_keys, got: {files:?}"
     );
     assert!(
-        files.contains("Containerfile"),
+        files.contains("output/Containerfile"),
         "tarball must contain Containerfile, got: {files:?}"
     );
 
     // 6. Verify Containerfile content
-    let containerfile = read_tarball_file(&tarball_path, "Containerfile");
+    let containerfile = read_tarball_file(&tarball_path, "output/Containerfile");
 
     assert!(
         containerfile.contains("groupadd"),
@@ -179,7 +181,7 @@ fn full_pipeline_users_groups_materialization() {
     );
 
     // 7. Verify KS has groups before users
-    let ks = read_tarball_file(&tarball_path, "inspectah-users.ks");
+    let ks = read_tarball_file(&tarball_path, "output/inspectah-users.ks");
     let group_pos = ks
         .find("group --name=docker")
         .expect("KS must contain group directive");
@@ -242,10 +244,12 @@ fn preview_export_parity_for_user_artifacts() {
         .export_tarball(&tarball_path, session.generation())
         .unwrap();
 
-    // 5. Read the same files from the tarball
-    let export_containerfile = read_tarball_file(&tarball_path, "Containerfile");
-    let export_ks = read_tarball_file(&tarball_path, "inspectah-users.ks");
-    let export_toml = read_tarball_file(&tarball_path, "inspectah-users.toml");
+    // 5. Read the same files from the tarball.
+    //    Tarball uses the filename stem as a top-level prefix —
+    //    "output.tar.gz" → prefix "output/".
+    let export_containerfile = read_tarball_file(&tarball_path, "output/Containerfile");
+    let export_ks = read_tarball_file(&tarball_path, "output/inspectah-users.ks");
+    let export_toml = read_tarball_file(&tarball_path, "output/inspectah-users.toml");
 
     // 6. Assert byte-equality between preview and export
     assert_eq!(

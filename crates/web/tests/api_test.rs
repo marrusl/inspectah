@@ -745,7 +745,12 @@ async fn health_extended_fields() {
         host["os_name"], "Red Hat Enterprise Linux 9.4 (Plow)",
         "os_name uses pretty_name"
     );
-    assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
+    // version_id "9.4" already appears in pretty_name, so deduplicate_version
+    // returns "" to avoid redundancy in the UI.
+    assert_eq!(
+        host["os_version"], "",
+        "os_version is empty when version_id is already in os_name"
+    );
     assert_eq!(host["os_id"], "rhel");
     assert!(host.get("system_type").is_some());
     assert_eq!(

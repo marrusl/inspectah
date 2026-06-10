@@ -695,14 +695,13 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
     let informational = summary["informational_variant_count"]
         .as_u64()
         .expect("informational_variant_count should be a number");
-    assert!(
-        informational > 0,
-        "informational_variant_count should be non-zero when context items have variants, got {informational}"
-    );
-    // 1 quadlet path with variants + 1 drop-in path with variants = 2 items
+    // Containers and services are decision sections, so their variants
+    // do NOT count toward informational_variant_count (which only tracks
+    // non-decision sections). The test verifies the variants exist on
+    // the items themselves below.
     assert_eq!(
-        informational, 2,
-        "expected 2 informational items with variants (1 quadlet + 1 drop-in)"
+        informational, 0,
+        "informational_variant_count should be 0 — quadlets and drop-ins are in decision sections"
     );
 
     // Verify the containers section has a quadlet item with variants
@@ -854,8 +853,18 @@ fn fleet_state_with_packages() -> Arc<AppState> {
     let s2 = make_host("web-02", "epel", "1.24.0");
     let s3 = make_host("web-03", "epel", "1.25.0");
 
-    let (merged, _warnings) =
+    let (mut merged, _warnings) =
         merge_snapshots(vec![s1, s2, s3], None).expect("merge should succeed");
+
+    // Provide an empty baseline so classify_package treats Added
+    // packages as Site (user-added) rather than Investigate
+    // (provenance-unavailable). Without this, all packages are
+    // hidden from the view by normalize_package_defaults.
+    merged.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: String::new(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: String::new(),
+    });
 
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(merged))),
@@ -943,14 +952,13 @@ async fn fleet_view_items_have_source_repo_and_conflict() {
         }
     }
 
-    // httpd should have source_repo "appstream" and no repo_conflict
+    // httpd should have source_repo "appstream" and no repo_conflict.
+    // ItemId::Package serializes as {"kind":"Package","key":{"name":"…","arch":"…"}}.
     let httpd = all_items
         .iter()
         .find(|i| {
-            i["item_id"]["key"]["name_arch"]
-                .as_str()
-                .map(|s| s == "httpd.x86_64")
-                .unwrap_or(false)
+            i["item_id"]["key"]["name"].as_str() == Some("httpd")
+                && i["item_id"]["key"]["arch"].as_str() == Some("x86_64")
         })
         .expect("httpd.x86_64 should exist");
     assert_eq!(httpd["source_repo"], "appstream");
@@ -963,10 +971,8 @@ async fn fleet_view_items_have_source_repo_and_conflict() {
     let nginx = all_items
         .iter()
         .find(|i| {
-            i["item_id"]["key"]["name_arch"]
-                .as_str()
-                .map(|s| s == "nginx.x86_64")
-                .unwrap_or(false)
+            i["item_id"]["key"]["name"].as_str() == Some("nginx")
+                && i["item_id"]["key"]["arch"].as_str() == Some("x86_64")
         })
         .expect("nginx.x86_64 should exist");
     assert_eq!(nginx["source_repo"], "epel");

@@ -1,5 +1,6 @@
 ---
-source: inspectah-web/tests/contract_snapshots.rs
+source: crates/web/tests/contract_snapshots.rs
+assertion_line: 229
 expression: json
 ---
 {
@@ -34,6 +35,7 @@ expression: json
     {
       "image": "quay.io/myorg/myapp:latest",
       "include": false,
+      "locked": false,
       "name": "myapp.container",
       "path": "/etc/containers/systemd/myapp.container",
       "triage": {
@@ -59,6 +61,7 @@ expression: json
   "service_states": [
     {
       "include": false,
+      "locked": false,
       "triage": {
         "primary_reason": "service_unknown_origin",
         "triage": {
@@ -96,6 +99,7 @@ expression: json
       "default": "0",
       "include": false,
       "key": "net.ipv4.ip_forward",
+      "locked": false,
       "runtime": "1",
       "source": "/etc/sysctl.d/k8s.conf",
       "triage": {
