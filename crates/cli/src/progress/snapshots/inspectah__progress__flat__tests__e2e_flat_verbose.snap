@@ -2,9 +2,9 @@
 source: crates/cli/src/progress/flat.rs
 expression: "e2e_full_output(&r, &buf, &scan)"
 ---
-  [??/11.1] Querying installed packages... 613 found
-  [??/11.2] Resolving source repositories... 6 repos mapped
 [01/11] RPM packages... ok (613 packages, 6 repos)
+  [01/11.1] Querying installed packages... 613 found
+  [01/11.2] Resolving source repositories... 6 repos mapped
 [02/11] Services... ok (42 units)
 [03/11] Storage... ok (done)
 [04/11] Kernel & boot... ok (done)

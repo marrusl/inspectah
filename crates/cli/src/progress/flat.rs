@@ -37,8 +37,9 @@ struct InspectorTracker {
     probe_results: Vec<(String, usize)>,
     /// Total probes started (for "none found" detection).
     probes_started: usize,
-    /// Verbose-mode sub-step counter (resets per inspector).
-    sub_step_count: usize,
+    /// Verbose-mode buffered step results (name, result string).
+    /// Flushed atomically after parent line in `InspectorFinished`.
+    step_results: Vec<(String, String)>,
 }
 
 impl InspectorTracker {
@@ -47,7 +48,7 @@ impl InspectorTracker {
             metrics: Vec::new(),
             probe_results: Vec::new(),
             probes_started: 0,
-            sub_step_count: 0,
+            step_results: Vec::new(),
         }
     }
 
@@ -127,15 +128,27 @@ impl FlatRenderer {
                     "[{n:02}/{total:02}] {name}... {label}{suffix}"
                 );
 
-                // In verbose mode, print buffered sub-step lines.
+                // In verbose mode, flush buffered child lines after parent.
                 if state.verbose
                     && let Some(tracker) = state.trackers.get(&id)
                 {
-                    // Clone probe results to release the borrow on state
-                    // before writing (which needs &mut state.writer).
+                    // Clone to release the borrow on state before writing.
+                    let steps: Vec<_> = tracker.step_results.clone();
                     let probes: Vec<_> = tracker.probe_results.clone();
-                    for (probe_idx, (probe_name, count)) in probes.iter().enumerate() {
-                        let s = probe_idx + 1;
+
+                    // Steps first, then probes — both use real [N/total.S] numbering.
+                    let mut sub_idx = 0usize;
+                    for (step_name, step_result) in &steps {
+                        sub_idx += 1;
+                        let s = sub_idx;
+                        let _ = writeln!(
+                            state.writer,
+                            "  [{n:02}/{total:02}.{s}] {step_name}... {step_result}"
+                        );
+                    }
+                    for (probe_name, count) in &probes {
+                        sub_idx += 1;
+                        let s = sub_idx;
                         let _ = writeln!(
                             state.writer,
                             "  [{n:02}/{total:02}.{s}] {probe_name}... {count} found"
@@ -154,16 +167,12 @@ impl FlatRenderer {
                 step,
                 outcome,
             } => {
-                if state.verbose {
-                    // Extract total before borrowing trackers mutably.
-                    let total = state.display_order.len();
-                    if let Some(tracker) = state.trackers.get_mut(&inspector) {
-                        tracker.sub_step_count += 1;
-                        let s = tracker.sub_step_count;
-                        let name = display::step_name(&step);
-                        let result = format_step_result(&outcome, tracker);
-                        let _ = writeln!(state.writer, "  [??/{total:02}.{s}] {name}... {result}");
-                    }
+                if state.verbose
+                    && let Some(tracker) = state.trackers.get_mut(&inspector)
+                {
+                    let name = display::step_name(&step);
+                    let result = format_step_result(&outcome, tracker);
+                    tracker.step_results.push((name.to_string(), result));
                 }
             }
             ProgressEvent::Metric {
@@ -668,6 +677,69 @@ mod tests {
             "sub 2: {}",
             lines[2]
         );
+    }
+
+    #[test]
+    fn flat_verbose_steps_after_parent() {
+        // Verbose mode: step child lines print AFTER the parent receipt line
+        // with real [N/total.S] numbering, not [??/total.S].
+        let (r, buf) = test_renderer(true, false);
+
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 613,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 6,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        // Parent line first, then child lines with real numbering.
+        assert_eq!(lines.len(), 3, "expected 3 lines (parent + 2 steps), got: {text}");
+        assert!(
+            lines[0].contains("[01/11] RPM packages... ok"),
+            "parent first: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("[01/11.1] Querying installed packages"),
+            "step 1 with real numbering: {}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("[01/11.2] Resolving source repositories"),
+            "step 2 with real numbering: {}",
+            lines[2]
+        );
+        // No [??/...] placeholders anywhere.
+        assert!(!text.contains("[??/"), "no placeholder numbering: {text}");
     }
 
     #[test]
