@@ -1,0 +1,7 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: text
+---
+  ✓ Network                      done
+  ✓ Services                     42 units
+  ✓ RPM packages                 613 packages, 6 repos

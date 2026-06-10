@@ -3,11 +3,13 @@
 //! Writes sequential numbered lines to an arbitrary [`Write`] sink.
 //! No ANSI escapes, no cursor manipulation, no color — safe for piped
 //! output, CI logs, and `$TERM=dumb` environments.
+//!
+//! Uses the shared [`receipt`] data model so output cannot drift from
+//! [`PrettyRenderer`].
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use inspectah_core::types::completeness::InspectorId;
 use inspectah_core::types::progress::{
@@ -15,6 +17,9 @@ use inspectah_core::types::progress::{
 };
 
 use super::display;
+use super::receipt::{
+    InspectorState, ReceiptLine, ScanEndState, ScanFinalize, ScanSummary, TypedCounts,
+};
 
 /// Flat-mode progress renderer for non-TTY output.
 ///
@@ -24,33 +29,78 @@ pub struct FlatRenderer {
     inner: Mutex<FlatState>,
 }
 
+/// Per-inspector tracking during scan.
+struct InspectorTracker {
+    /// All metrics received.
+    metrics: Vec<(MetricKind, usize)>,
+    /// Probes with results (Non-RPM ecosystem counting).
+    probe_results: Vec<(String, usize)>,
+    /// Total probes started (for "none found" detection).
+    probes_started: usize,
+    /// Verbose-mode buffered step results (name, result string).
+    /// Flushed atomically after parent line in `InspectorFinished`.
+    step_results: Vec<(String, String)>,
+}
+
+impl InspectorTracker {
+    fn new() -> Self {
+        Self {
+            metrics: Vec::new(),
+            probe_results: Vec::new(),
+            probes_started: 0,
+            step_results: Vec::new(),
+        }
+    }
+
+    /// Get a metric value by kind.
+    fn metric(&self, kind: &MetricKind) -> Option<usize> {
+        self.metrics
+            .iter()
+            .find(|(k, _)| k == kind)
+            .map(|(_, v)| *v)
+    }
+
+    /// Insert or update a metric.
+    fn set_metric(&mut self, kind: MetricKind, value: usize) {
+        if let Some(entry) = self.metrics.iter_mut().find(|(k, _)| *k == kind) {
+            entry.1 = value;
+        } else {
+            self.metrics.push((kind, value));
+        }
+    }
+}
+
 struct FlatState {
     writer: Box<dyn Write + Send>,
-    total: usize,
-    start_times: HashMap<InspectorId, Instant>,
-    /// Per-inspector transient metric for the current step — consumed by StepFinished.
-    step_metrics: HashMap<InspectorId, (MetricKind, usize)>,
-    /// Per-inspector last metric — used by the parent completion line.
-    inspector_metrics: HashMap<InspectorId, (MetricKind, usize)>,
-    /// Per-inspector count of probes that found results — for "N ecosystems".
-    probes_found: HashMap<InspectorId, usize>,
+    verbose: bool,
+    /// Display order slice — used for total count and name lookup only.
+    display_order: &'static [(InspectorId, &'static str)],
+    /// Per-inspector tracking.
+    trackers: HashMap<InspectorId, InspectorTracker>,
+    /// Arrival-order completion counter (1-based, increments per finish).
+    completion_count: usize,
+    /// Built receipt lines, stored for finalize().
+    receipt_lines: Vec<ReceiptLine>,
 }
 
 impl FlatRenderer {
     /// Create a new flat renderer writing to `writer`.
     ///
-    /// `total` is the number of inspectors in the scan (used for `[N/total]`).
-    /// When `verbose` is true, all sub-steps are shown regardless of
-    /// any future fast-inspector optimizations.
-    pub fn new(writer: Box<dyn Write + Send>, total: usize, _verbose: bool) -> Self {
+    /// `display_order` is `active_display_order(has_subscription)` —
+    /// used for total count and name lookup, not for output ordering.
+    pub fn new(
+        writer: Box<dyn Write + Send>,
+        verbose: bool,
+        display_order: &'static [(InspectorId, &'static str)],
+    ) -> Self {
         Self {
             inner: Mutex::new(FlatState {
                 writer,
-                total,
-                start_times: HashMap::new(),
-                step_metrics: HashMap::new(),
-                inspector_metrics: HashMap::new(),
-                probes_found: HashMap::new(),
+                verbose,
+                display_order,
+                trackers: HashMap::new(),
+                completion_count: 0,
+                receipt_lines: Vec::new(),
             }),
         }
     }
@@ -58,140 +108,370 @@ impl FlatRenderer {
     /// Handle a progress event, writing output to the underlying writer.
     pub fn handle(&self, event: ProgressEvent) {
         let mut state = self.inner.lock().expect("FlatRenderer lock poisoned");
-        let total = state.total;
         match event {
             ProgressEvent::InspectorStarted(id) => {
-                state.start_times.insert(id, Instant::now());
-                state.step_metrics.remove(&id);
-                state.inspector_metrics.remove(&id);
-                state.probes_found.remove(&id);
-                let pos = display::display_position(id);
-                let name = display::display_name(id);
-                let _ = writeln!(state.writer, "[{pos}/{total}] {name}...");
+                state.trackers.insert(id, InspectorTracker::new());
             }
             ProgressEvent::InspectorFinished { id, outcome } => {
-                let pos = display::display_position(id);
-                let name = display::display_name(id);
-                let elapsed = state
-                    .start_times
-                    .remove(&id)
-                    .map(|t| t.elapsed().as_secs_f64());
-                let insp_metric = state.inspector_metrics.remove(&id);
-                let probes = state.probes_found.remove(&id);
-                let suffix = format_inspector_outcome(&outcome, elapsed, &insp_metric, probes);
-                let _ = writeln!(state.writer, "[{pos}/{total}] {name}... {suffix}");
-                state.step_metrics.remove(&id);
+                state.completion_count += 1;
+                let n = state.completion_count;
+                let total = state.display_order.len();
+
+                let line = state.build_receipt_line(id, &outcome);
+
+                // Print the receipt line.
+                let name = lookup_name(state.display_order, id);
+                let label = line.state.flat_label();
+                let suffix = format_flat_suffix(&line);
+                let _ = writeln!(
+                    state.writer,
+                    "[{n:02}/{total:02}] {name}... {label}{suffix}"
+                );
+
+                // In verbose mode, flush buffered child lines after parent.
+                if state.verbose
+                    && let Some(tracker) = state.trackers.get(&id)
+                {
+                    // Clone to release the borrow on state before writing.
+                    let steps: Vec<_> = tracker.step_results.clone();
+                    let probes: Vec<_> = tracker.probe_results.clone();
+
+                    // Steps first, then probes — both use real [N/total.S] numbering.
+                    let mut sub_idx = 0usize;
+                    for (step_name, step_result) in &steps {
+                        sub_idx += 1;
+                        let s = sub_idx;
+                        let _ = writeln!(
+                            state.writer,
+                            "  [{n:02}/{total:02}.{s}] {step_name}... {step_result}"
+                        );
+                    }
+                    for (probe_name, count) in &probes {
+                        sub_idx += 1;
+                        let s = sub_idx;
+                        let _ = writeln!(
+                            state.writer,
+                            "  [{n:02}/{total:02}.{s}] {probe_name}... {count} found"
+                        );
+                    }
+                }
+
+                state.receipt_lines.push(line);
+                state.trackers.remove(&id);
             }
-            ProgressEvent::StepStarted { step, .. } => {
-                let name = display::step_name(&step);
-                let _ = writeln!(state.writer, "  {name}...");
+            ProgressEvent::StepStarted { .. } => {
+                // Flat mode: no output on step start.
             }
             ProgressEvent::StepFinished {
                 inspector,
                 step,
                 outcome,
             } => {
-                let name = display::step_name(&step);
-                let step_metric = state.step_metrics.remove(&inspector);
-                let suffix = format_step_outcome(&outcome, &step_metric);
-                let _ = writeln!(state.writer, "  {name}... {suffix}");
+                if state.verbose
+                    && let Some(tracker) = state.trackers.get_mut(&inspector)
+                {
+                    let name = display::step_name(&step);
+                    let result = format_step_result(&outcome, tracker);
+                    tracker.step_results.push((name.to_string(), result));
+                }
             }
             ProgressEvent::Metric {
                 inspector,
                 kind,
                 value,
             } => {
-                state.step_metrics.insert(inspector, (kind.clone(), value));
-                state.inspector_metrics.insert(inspector, (kind, value));
+                if let Some(tracker) = state.trackers.get_mut(&inspector) {
+                    tracker.set_metric(kind, value);
+                }
             }
-            ProgressEvent::ProbeStarted { inspector, probe } => {
-                state.probes_found.entry(inspector).or_insert(0);
-                let name = display::probe_name(&probe);
-                let _ = writeln!(state.writer, "  {name}...");
+            ProgressEvent::ProbeStarted { inspector, .. } => {
+                if let Some(tracker) = state.trackers.get_mut(&inspector) {
+                    tracker.probes_started += 1;
+                }
             }
             ProgressEvent::ProbeFinished {
                 inspector,
                 probe,
                 outcome,
             } => {
-                if matches!(outcome, ProbeOutcome::Found { .. }) {
-                    *state.probes_found.entry(inspector).or_insert(0) += 1;
+                if let Some(tracker) = state.trackers.get_mut(&inspector)
+                    && let ProbeOutcome::Found { count } = outcome
+                {
+                    let name = display::probe_name(&probe);
+                    tracker.probe_results.push((name.to_string(), count));
                 }
-                let name = display::probe_name(&probe);
-                let suffix = format_probe_outcome(&outcome);
-                let _ = writeln!(state.writer, "  {name}... {suffix}");
             }
         }
     }
-}
 
-/// Format the suffix for an inspector finish line.
-///
-/// When the inspector has a last metric, the completion line uses the
-/// metric label instead of generic "done".
-fn format_inspector_outcome(
-    outcome: &InspectorOutcome,
-    elapsed: Option<f64>,
-    last_metric: &Option<(MetricKind, usize)>,
-    probes_found: Option<usize>,
-) -> String {
-    match outcome {
-        InspectorOutcome::Complete => {
-            let label = if let Some(count) = probes_found {
-                if count == 0 {
-                    "none found".to_string()
+    /// Finalize rendering — summary block + typed footer.
+    pub fn finalize(&self, scan: &ScanFinalize) {
+        let mut state = self.inner.lock().expect("finalize lock");
+
+        // Build summary from collected receipt lines.
+        let summary = ScanSummary::build(&state.receipt_lines, scan.version_changes.clone());
+
+        // Print summary block if there's anything to show.
+        if summary.has_content() {
+            let _ = writeln!(state.writer);
+            if let Some(ref vc) = summary.version_changes {
+                let _ = writeln!(state.writer, "  {}", vc.format());
+            }
+            for hotspot in &summary.hotspots {
+                let _ = writeln!(state.writer, "  {}", hotspot.format_flat());
+            }
+        }
+
+        // Footer zone.
+        let _ = writeln!(state.writer);
+        let secs = scan.elapsed.as_secs_f64();
+
+        match &scan.end_state {
+            ScanEndState::Completed { path, sensitivity } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
                 } else {
-                    if count == 1 {
-                        "1 ecosystem".to_string()
-                    } else {
-                        format!("{count} ecosystems")
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Report: {}", path.display());
+                let _ = writeln!(
+                    state.writer,
+                    "  To review: inspectah refine {}",
+                    path.display()
+                );
+                if let Some(notice) = sensitivity {
+                    for line in notice.lines() {
+                        let _ = writeln!(state.writer, "  {line}");
                     }
                 }
-            } else {
-                match last_metric {
-                    Some((kind, value)) => display::metric_label(kind, *value),
-                    None => "done".to_string(),
-                }
-            };
-            match elapsed {
-                Some(s) if s >= display::TIMER_THRESHOLD_SECS => format!("{label} ({s:.1}s)"),
-                _ => label,
+            }
+            ScanEndState::InspectOnly { path } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Output: {}", path.display());
+            }
+            ScanEndState::InspectOnlyStdout => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+            }
+            ScanEndState::WriteFailure { error } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Error: {error}");
+            }
+            ScanEndState::Interrupted { completed, total } => {
+                let _ = writeln!(
+                    state.writer,
+                    "  Interrupted after {secs:.1}s ({completed} of {total} inspectors completed)"
+                );
             }
         }
-        InspectorOutcome::Skipped { reason } => format!("skipped ({reason})"),
-        InspectorOutcome::Degraded { reason } => match elapsed {
-            Some(s) if s >= display::TIMER_THRESHOLD_SECS => {
-                format!("degraded: {reason} ({s:.1}s)")
-            }
-            _ => format!("degraded: {reason}"),
-        },
-        InspectorOutcome::Failed { reason } => format!("failed: {reason}"),
-        InspectorOutcome::Interrupted => "interrupted".to_string(),
+    }
+
+    /// Access built receipt lines (for summary computation).
+    pub fn receipt_lines(&self) -> Vec<ReceiptLine> {
+        let state = self.inner.lock().expect("FlatRenderer lock poisoned");
+        state.receipt_lines.clone()
     }
 }
 
-/// Format the suffix for a step finish line.
+// ── State helpers ──────────────────────────────────────────────────
+
+impl FlatState {
+    /// Build a `ReceiptLine` from the accumulated tracker state.
+    fn build_receipt_line(&self, id: InspectorId, outcome: &InspectorOutcome) -> ReceiptLine {
+        let tracker = self.trackers.get(&id);
+
+        let inspector_state = match outcome {
+            InspectorOutcome::Complete => InspectorState::Success,
+            InspectorOutcome::Degraded { .. } => InspectorState::Degraded,
+            InspectorOutcome::Skipped { .. } => InspectorState::Skipped,
+            InspectorOutcome::Failed { .. } => InspectorState::Failed,
+            InspectorOutcome::Interrupted => InspectorState::Interrupted,
+        };
+
+        let reason = match outcome {
+            InspectorOutcome::Degraded { reason } => Some(reason.clone()),
+            InspectorOutcome::Skipped { reason } => Some(reason.clone()),
+            InspectorOutcome::Failed { reason } => Some(reason.clone()),
+            _ => None,
+        };
+
+        // Build typed counts from metrics.
+        let typed_counts = tracker
+            .map(|t| build_typed_counts(t, id))
+            .unwrap_or_default();
+
+        // Build metric string.
+        let metric = tracker.and_then(|t| build_metric_string(t, id));
+
+        // Build sub_lines.
+        let sub_lines = tracker.map(|t| build_sub_lines(t, id)).unwrap_or_default();
+
+        ReceiptLine {
+            id,
+            state: inspector_state,
+            metric,
+            reason,
+            sub_lines,
+            typed_counts,
+        }
+    }
+}
+
+// ── Formatting helpers ─────────────────────────────────────────────
+
+/// Look up display name from the display-order slice.
+fn lookup_name(
+    display_order: &'static [(InspectorId, &'static str)],
+    id: InspectorId,
+) -> &'static str {
+    display_order
+        .iter()
+        .find(|(oid, _)| *oid == id)
+        .map(|(_, name)| *name)
+        .unwrap_or("Unknown")
+}
+
+/// Format the right-hand suffix for a flat receipt line.
 ///
-/// If a metric was received since the last step/inspector event,
-/// it replaces the generic "done" with a count (e.g. "847 found").
-fn format_step_outcome(outcome: &StepOutcome, last_metric: &Option<(MetricKind, usize)>) -> String {
+/// Returns the part after the status label: ` (metric)` and/or ` — reason`.
+fn format_flat_suffix(line: &ReceiptLine) -> String {
+    let mut parts = String::new();
+
+    // Metric in parentheses.
+    if let Some(ref metric) = line.metric {
+        parts.push_str(&format!(" ({metric})"));
+    } else if line.state == InspectorState::Success {
+        parts.push_str(" (done)");
+    }
+
+    // Non-success reason after em dash.
+    if let Some(ref reason) = line.reason {
+        parts.push_str(&format!(" \u{2014} {reason}"));
+    }
+
+    parts
+}
+
+/// Build the metric display string from tracker state.
+fn build_metric_string(tracker: &InspectorTracker, id: InspectorId) -> Option<String> {
+    // Non-RPM inspector uses probe-based ecosystem counting.
+    if id == InspectorId::NonRpmSoftware {
+        let found_count = tracker.probe_results.len();
+        if tracker.probes_started > 0 && found_count == 0 {
+            return Some("none found".to_string());
+        }
+        if found_count == 1 {
+            return Some("1 ecosystem".to_string());
+        }
+        if found_count > 1 {
+            return Some(format!("{found_count} ecosystems"));
+        }
+        return None;
+    }
+
+    // RPM inspector combines PackagesFound + ReposMapped.
+    if id == InspectorId::Rpm {
+        let mut parts = Vec::new();
+        if let Some(count) = tracker.metric(&MetricKind::PackagesFound) {
+            parts.push(format!("{count} packages"));
+        }
+        if let Some(count) = tracker.metric(&MetricKind::ReposMapped) {
+            if count == 1 {
+                parts.push("1 repo".to_string());
+            } else {
+                parts.push(format!("{count} repos"));
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        return Some(parts.join(", "));
+    }
+
+    // Other inspectors: use the last metric with spec label.
+    for kind in &[
+        MetricKind::ConfigsModified,
+        MetricKind::UnitsFound,
+        MetricKind::ContainersFound,
+        MetricKind::TimersFound,
+        MetricKind::PackagesFound,
+        MetricKind::ReposMapped,
+    ] {
+        if let Some(value) = tracker.metric(kind) {
+            return Some(display::metric_label(kind, value));
+        }
+    }
+
+    None
+}
+
+/// Build sub_lines for Non-RPM ecosystem breakdown.
+fn build_sub_lines(tracker: &InspectorTracker, id: InspectorId) -> Vec<String> {
+    if id == InspectorId::NonRpmSoftware && !tracker.probe_results.is_empty() {
+        let parts: Vec<String> = tracker
+            .probe_results
+            .iter()
+            .map(|(name, count)| format!("{name} {count}"))
+            .collect();
+        return vec![parts.join(", ")];
+    }
+    Vec::new()
+}
+
+/// Build TypedCounts from tracker metrics and probes.
+fn build_typed_counts(tracker: &InspectorTracker, id: InspectorId) -> TypedCounts {
+    let mut tc = TypedCounts::default();
+
+    if let Some(v) = tracker.metric(&MetricKind::ConfigsModified) {
+        tc.configs_modified = Some(v);
+    }
+
+    // Non-RPM probes populate typed counts from probe results.
+    if id == InspectorId::NonRpmSoftware {
+        for (name, count) in &tracker.probe_results {
+            match name.as_str() {
+                "pip packages" => tc.pip_packages = Some(*count),
+                "npm packages" => tc.npm_packages = Some(*count),
+                "gem packages" => tc.gem_packages = Some(*count),
+                "git repos" => tc.git_repos = Some(*count),
+                _ => {}
+            }
+        }
+    }
+
+    tc
+}
+
+/// Format the result portion of a verbose step line.
+fn format_step_result(outcome: &StepOutcome, tracker: &InspectorTracker) -> String {
     match outcome {
-        StepOutcome::Complete => match last_metric {
-            Some((kind, value)) => display::metric_label(kind, *value),
-            None => "done".to_string(),
-        },
+        StepOutcome::Complete => {
+            // Use last metric if available.
+            if let Some((kind, value)) = tracker.metrics.last() {
+                display::metric_label(kind, *value)
+            } else {
+                "done".to_string()
+            }
+        }
         StepOutcome::Degraded { reason } => format!("degraded: {reason}"),
         StepOutcome::Failed { reason } => format!("failed: {reason}"),
         StepOutcome::Skipped { reason } => format!("skipped ({reason})"),
         StepOutcome::Interrupted => "interrupted".to_string(),
-    }
-}
-
-/// Format the suffix for a probe finish line.
-fn format_probe_outcome(outcome: &ProbeOutcome) -> String {
-    match outcome {
-        ProbeOutcome::Found { count } => format!("{count} found"),
-        ProbeOutcome::Empty => "none".to_string(),
     }
 }
 
@@ -200,14 +480,6 @@ mod tests {
     use super::*;
     use inspectah_core::types::progress::{ProbeId, StepId};
     use std::sync::Arc;
-
-    /// Helper: create a `FlatRenderer` backed by a shared `Vec<u8>`.
-    fn test_renderer(total: usize) -> (FlatRenderer, Arc<Mutex<Vec<u8>>>) {
-        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let writer = SharedWriter(Arc::clone(&buf));
-        let renderer = FlatRenderer::new(Box::new(writer), total, false);
-        (renderer, buf)
-    }
 
     /// A `Write` adapter that writes into a shared `Vec<u8>`.
     struct SharedWriter(Arc<Mutex<Vec<u8>>>);
@@ -226,418 +498,773 @@ mod tests {
         String::from_utf8(buf.lock().expect("test lock").clone()).expect("valid utf8")
     }
 
-    #[test]
-    fn flat_renders_inspector_lifecycle() {
-        let (renderer, buf) = test_renderer(11);
+    /// Create a FlatRenderer backed by a shared buffer.
+    fn test_renderer(verbose: bool, has_subscription: bool) -> (FlatRenderer, Arc<Mutex<Vec<u8>>>) {
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = SharedWriter(Arc::clone(&buf));
+        let order = display::active_display_order(has_subscription);
+        let renderer = FlatRenderer::new(Box::new(writer), verbose, order);
+        (renderer, buf)
+    }
 
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        renderer.handle(ProgressEvent::InspectorFinished {
+    // ── Feed helpers ──────────────────────────────────────────────────
+
+    fn feed_simple_complete(r: &FlatRenderer, id: InspectorId) {
+        r.handle(ProgressEvent::InspectorStarted(id));
+        r.handle(ProgressEvent::InspectorFinished {
+            id,
+            outcome: InspectorOutcome::Complete,
+        });
+    }
+
+    fn feed_rpm(r: &FlatRenderer, packages: usize, repos: usize) {
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: packages,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: repos,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+    }
+
+    fn feed_with_metric(r: &FlatRenderer, id: InspectorId, kind: MetricKind, value: usize) {
+        r.handle(ProgressEvent::InspectorStarted(id));
+        r.handle(ProgressEvent::Metric {
+            inspector: id,
+            kind,
+            value,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id,
+            outcome: InspectorOutcome::Complete,
+        });
+    }
+
+    fn feed_nonrpm_probes(r: &FlatRenderer, probes: &[(&ProbeId, Option<usize>)]) {
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        for (probe, result) in probes {
+            r.handle(ProgressEvent::ProbeStarted {
+                inspector: InspectorId::NonRpmSoftware,
+                probe: (*probe).clone(),
+            });
+            let outcome = match result {
+                Some(count) => ProbeOutcome::Found { count: *count },
+                None => ProbeOutcome::Empty,
+            };
+            r.handle(ProgressEvent::ProbeFinished {
+                inspector: InspectorId::NonRpmSoftware,
+                probe: (*probe).clone(),
+                outcome,
+            });
+        }
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+    }
+
+    /// Capture only the finalize output (summary + footer).
+    fn finalize_output(r: &FlatRenderer, buf: &Arc<Mutex<Vec<u8>>>, scan: &ScanFinalize) -> String {
+        let pre_len = buf.lock().expect("test lock").len();
+        r.finalize(scan);
+        let full = buf.lock().expect("test lock").clone();
+        String::from_utf8(full[pre_len..].to_vec()).expect("valid utf8")
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn flat_normal_hides_substeps() {
+        // Default verbosity — sub-steps and probes suppressed.
+        let (r, buf) = test_renderer(false, false);
+
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 613,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 6,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
             id: InspectorId::Rpm,
             outcome: InspectorOutcome::Complete,
         });
 
         let text = output_text(&buf);
-        assert!(text.contains("[1/11] RPM packages..."));
-        assert!(text.contains("[1/11] RPM packages... done"));
-    }
-
-    #[test]
-    fn flat_renders_sub_steps() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-        });
-        renderer.handle(ProgressEvent::Metric {
-            inspector: InspectorId::Rpm,
-            kind: MetricKind::PackagesFound,
-            value: 847,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-            outcome: StepOutcome::Complete,
-        });
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::ClassifyingPackages,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::ClassifyingPackages,
-            outcome: StepOutcome::Complete,
-        });
-
-        let text = output_text(&buf);
+        // Should only have the parent line, no sub-step lines.
+        assert_eq!(text.lines().count(), 1, "expected 1 line, got: {text}");
         assert!(
-            text.contains("Querying installed packages... 847 found"),
-            "expected metric-enriched step finish, got: {text}"
-        );
-        assert!(
-            text.contains("Classifying packages... done"),
-            "expected plain done (no metric), got: {text}"
-        );
-    }
-
-    #[test]
-    fn flat_renders_probes() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PythonVenvs,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PythonVenvs,
-            outcome: ProbeOutcome::Found { count: 3 },
-        });
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::NpmPackages,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::NpmPackages,
-            outcome: ProbeOutcome::Empty,
-        });
-
-        let text = output_text(&buf);
-        assert!(
-            text.contains("Python virtualenvs... 3 found"),
+            text.contains("[01/11] RPM packages... ok (613 packages, 6 repos)"),
             "got: {text}"
         );
-        assert!(text.contains("npm packages... none"), "got: {text}");
     }
 
     #[test]
-    fn flat_renders_skipped_failed_degraded() {
-        let (renderer, buf) = test_renderer(11);
+    fn flat_verbose_shows_substeps() {
+        // Verbose mode — sub-steps shown with dot notation.
+        let (r, buf) = test_renderer(true, false);
 
-        // Skipped
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Selinux));
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Selinux,
-            outcome: InspectorOutcome::Skipped {
-                reason: "disabled".to_string(),
-            },
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        r.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        r.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Found { count: 23 },
+        });
+        r.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+        });
+        r.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+            outcome: ProbeOutcome::Found { count: 69 },
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
         });
 
+        let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        // Parent line + 2 probe sub-lines.
+        assert_eq!(lines.len(), 3, "expected 3 lines, got: {text}");
+        assert!(
+            lines[0].contains("[01/11] Non-RPM packages... ok (2 ecosystems)"),
+            "parent: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("[01/11.1] pip packages... 23 found"),
+            "sub 1: {}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("[01/11.2] npm packages... 69 found"),
+            "sub 2: {}",
+            lines[2]
+        );
+    }
+
+    #[test]
+    fn flat_verbose_steps_after_parent() {
+        // Verbose mode: step child lines print AFTER the parent receipt line
+        // with real [N/total.S] numbering, not [??/total.S].
+        let (r, buf) = test_renderer(true, false);
+
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::PackagesFound,
+            value: 613,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::QueryingPackages,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 6,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        // Parent line first, then child lines with real numbering.
+        assert_eq!(lines.len(), 3, "expected 3 lines (parent + 2 steps), got: {text}");
+        assert!(
+            lines[0].contains("[01/11] RPM packages... ok"),
+            "parent first: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("[01/11.1] Querying installed packages"),
+            "step 1 with real numbering: {}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("[01/11.2] Resolving source repositories"),
+            "step 2 with real numbering: {}",
+            lines[2]
+        );
+        // No [??/...] placeholders anywhere.
+        assert!(!text.contains("[??/"), "no placeholder numbering: {text}");
+    }
+
+    #[test]
+    fn flat_dynamic_count_12() {
+        // Subscription enabled → total is 12.
+        let (r, buf) = test_renderer(false, true);
+
+        feed_simple_complete(&r, InspectorId::Rpm);
+        feed_simple_complete(&r, InspectorId::Subscription);
+
+        let text = output_text(&buf);
+        assert!(
+            text.contains("[01/12]"),
+            "first completion should be [01/12]: {text}"
+        );
+        assert!(
+            text.contains("[02/12]"),
+            "second completion should be [02/12]: {text}"
+        );
+    }
+
+    #[test]
+    fn flat_summary_block() {
+        // Findings summary with ", " separators (not " · ").
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, false);
+
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(12.3),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-scan.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(super::super::receipt::VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        let footer = finalize_output(&r, &buf, &scan);
+        // Version changes line.
+        assert!(
+            footer.contains("58 version changes (54 target-newer, 4 host-newer)"),
+            "missing version changes: {footer}"
+        );
+        // Hotspot line with ", " separator (not " · ").
+        assert!(
+            footer.contains("37 modified configs, 23 pip packages, 69 npm packages"),
+            "missing hotspot with comma separators: {footer}"
+        );
+        // No " · " anywhere.
+        assert!(
+            !footer.contains(" \u{00b7} "),
+            "found pretty-mode separator in flat output: {footer}"
+        );
+    }
+
+    #[test]
+    fn flat_footer_completed() {
+        // Timing line + report path + refine hint.
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(12.3),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-scan.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        let footer = finalize_output(&r, &buf, &scan);
+        assert!(
+            footer.contains("Inspected in 12.3s"),
+            "missing timing: {footer}"
+        );
+        assert!(
+            footer.contains("Report: /tmp/inspectah-scan.tar.gz"),
+            "missing report path: {footer}"
+        );
+        assert!(
+            footer.contains("To review: inspectah refine /tmp/inspectah-scan.tar.gz"),
+            "missing refine hint: {footer}"
+        );
+    }
+
+    #[test]
+    fn flat_footer_interrupted() {
+        // Interrupted timing line.
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(3.7),
+            end_state: ScanEndState::Interrupted {
+                completed: 5,
+                total: 11,
+            },
+            version_changes: None,
+        };
+
+        let footer = finalize_output(&r, &buf, &scan);
+        assert!(
+            footer.contains("Interrupted after 3.7s (5 of 11 inspectors completed)"),
+            "missing interrupted footer: {footer}"
+        );
+    }
+
+    #[test]
+    fn flat_non_success_states() {
+        // ok/FAIL/WARN/skip/INT text labels.
+        let (r, buf) = test_renderer(false, false);
+
+        // Success
+        feed_simple_complete(&r, InspectorId::Rpm);
+
         // Failed
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Containers));
-        renderer.handle(ProgressEvent::InspectorFinished {
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Containers));
+        r.handle(ProgressEvent::InspectorFinished {
             id: InspectorId::Containers,
             outcome: InspectorOutcome::Failed {
                 reason: "podman not found".to_string(),
             },
         });
 
-        // Degraded
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Storage));
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Storage,
+        // Degraded (WARN)
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Config));
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Config,
+            kind: MetricKind::ConfigsModified,
+            value: 37,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Config,
             outcome: InspectorOutcome::Degraded {
-                reason: "lsblk partial".to_string(),
+                reason: "rpm verify timed out".to_string(),
             },
         });
 
-        let text = output_text(&buf);
-        assert!(
-            text.contains("SELinux... skipped (disabled)"),
-            "got: {text}"
-        );
-        assert!(
-            text.contains("Containers... failed: podman not found"),
-            "got: {text}"
-        );
-        assert!(
-            text.contains("Storage... degraded: lsblk partial"),
-            "got: {text}"
-        );
-    }
-
-    #[test]
-    fn flat_renders_step_degraded() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::VerifyingIntegrity,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::VerifyingIntegrity,
-            outcome: StepOutcome::Degraded {
-                reason: "rpm -V timed out".to_string(),
+        // Skipped
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Selinux,
+            outcome: InspectorOutcome::Skipped {
+                reason: "disabled".to_string(),
             },
         });
 
-        let text = output_text(&buf);
-        assert!(
-            text.contains("Verifying package integrity... degraded: rpm -V timed out"),
-            "got: {text}"
-        );
-    }
-
-    #[test]
-    fn flat_metric_resets_between_inspectors() {
-        let (renderer, buf) = test_renderer(11);
-
-        // First inspector: metric then finish
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-        });
-        renderer.handle(ProgressEvent::Metric {
-            inspector: InspectorId::Rpm,
-            kind: MetricKind::PackagesFound,
-            value: 500,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-            outcome: StepOutcome::Complete,
-        });
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Rpm,
-            outcome: InspectorOutcome::Complete,
-        });
-
-        // Second inspector: step without metric should say "done"
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Services));
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Services,
-            step: StepId::QueryingPackages, // reusing step for test
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Services,
-            step: StepId::QueryingPackages,
-            outcome: StepOutcome::Complete,
-        });
-
-        let text = output_text(&buf);
-        // The second inspector's step should NOT inherit the first's metric.
-        // We need the StepFinished line (has a suffix), not StepStarted.
-        let lines: Vec<&str> = text.lines().collect();
-        let services_step = lines
-            .iter()
-            .skip_while(|l| !l.contains("[2/11] Services..."))
-            .find(|l| {
-                l.contains("Querying installed packages...")
-                    && (l.contains("done") || l.contains("found"))
-            })
-            .expect("should find services step finish line");
-        assert!(
-            services_step.contains("done"),
-            "expected 'done' not metric, got: {services_step}"
-        );
-    }
-
-    #[test]
-    fn flat_metric_labels_match_spec() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        // PackagesFound step
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-        });
-        renderer.handle(ProgressEvent::Metric {
-            inspector: InspectorId::Rpm,
-            kind: MetricKind::PackagesFound,
-            value: 847,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::QueryingPackages,
-            outcome: StepOutcome::Complete,
-        });
-        // ReposMapped step
-        renderer.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Rpm,
-            step: StepId::ResolvingSourceRepos,
-        });
-        renderer.handle(ProgressEvent::Metric {
-            inspector: InspectorId::Rpm,
-            kind: MetricKind::ReposMapped,
-            value: 8,
-        });
-        renderer.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Rpm,
-            step: StepId::ResolvingSourceRepos,
-            outcome: StepOutcome::Complete,
-        });
-        // Inspector finishes — last metric was ReposMapped
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Rpm,
-            outcome: InspectorOutcome::Complete,
-        });
-
-        let text = output_text(&buf);
-        assert!(
-            text.contains("847 found"),
-            "PackagesFound should say '847 found', got: {text}"
-        );
-        assert!(
-            text.contains("8 repos mapped"),
-            "ReposMapped should say '8 repos mapped', got: {text}"
-        );
-        // Parent completion line should show last metric
-        assert!(
-            text.contains("RPM packages... 8 repos mapped"),
-            "parent completion should show last metric, got: {text}"
-        );
-    }
-
-    #[test]
-    fn flat_interrupted_outcome() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Network));
-        renderer.handle(ProgressEvent::InspectorFinished {
+        // Interrupted
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Network));
+        r.handle(ProgressEvent::InspectorFinished {
             id: InspectorId::Network,
             outcome: InspectorOutcome::Interrupted,
         });
 
         let text = output_text(&buf);
-        assert!(text.contains("Network... interrupted"), "got: {text}");
-    }
-
-    #[test]
-    fn display_position_used_correctly() {
-        // Services is position 2 in the display order
-        let (renderer, buf) = test_renderer(11);
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Services));
-
-        let text = output_text(&buf);
-        assert!(text.contains("[2/11]"), "got: {text}");
-    }
-
-    #[test]
-    fn flat_nonrpm_ecosystems_count() {
-        let (renderer, buf) = test_renderer(11);
-
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
-        // Two found, one empty
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PipPackages,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PipPackages,
-            outcome: ProbeOutcome::Found { count: 12 },
-        });
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::NpmPackages,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::NpmPackages,
-            outcome: ProbeOutcome::Found { count: 3 },
-        });
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::ElfBinaries,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::ElfBinaries,
-            outcome: ProbeOutcome::Empty,
-        });
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::NonRpmSoftware,
-            outcome: InspectorOutcome::Complete,
-        });
-
-        let text = output_text(&buf);
         assert!(
-            text.contains("2 ecosystems"),
-            "expected '2 ecosystems', got: {text}"
+            text.contains("RPM packages... ok"),
+            "missing ok label: {text}"
+        );
+        assert!(
+            text.contains("Containers... FAIL"),
+            "missing FAIL label: {text}"
+        );
+        assert!(
+            text.contains("Config files... WARN"),
+            "missing WARN label: {text}"
+        );
+        assert!(
+            text.contains("SELinux... skip"),
+            "missing skip label: {text}"
+        );
+        assert!(text.contains("Network... INT"), "missing INT label: {text}");
+        // Reason after em dash for non-success.
+        assert!(
+            text.contains("FAIL \u{2014} podman not found"),
+            "missing FAIL reason: {text}"
+        );
+        assert!(
+            text.contains("WARN (37 modified) \u{2014} rpm verify timed out"),
+            "missing WARN reason: {text}"
+        );
+        assert!(
+            text.contains("skip \u{2014} disabled"),
+            "missing skip reason: {text}"
         );
     }
 
     #[test]
-    fn flat_nonrpm_zero_result_shows_none_found() {
-        let (renderer, buf) = test_renderer(11);
+    fn flat_arrival_order() {
+        // Fast inspectors print before slow RPM.
+        let (r, buf) = test_renderer(false, false);
 
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::ElfBinaries,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::ElfBinaries,
-            outcome: ProbeOutcome::Empty,
-        });
-        renderer.handle(ProgressEvent::ProbeStarted {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PipPackages,
-        });
-        renderer.handle(ProgressEvent::ProbeFinished {
-            inspector: InspectorId::NonRpmSoftware,
-            probe: ProbeId::PipPackages,
-            outcome: ProbeOutcome::Empty,
-        });
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::NonRpmSoftware,
-            outcome: InspectorOutcome::Complete,
-        });
+        // Services finishes first.
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        // Network finishes second.
+        feed_simple_complete(&r, InspectorId::Network);
+        // RPM finishes last.
+        feed_rpm(&r, 613, 6);
 
         let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+
+        // Arrival order: Services → Network → RPM.
         assert!(
-            text.contains("none found"),
-            "expected 'none found', got: {text}"
+            lines[0].contains("[01/11]") && lines[0].contains("Services"),
+            "first should be Services [01/11]: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("[02/11]") && lines[1].contains("Network"),
+            "second should be Network [02/11]: {}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("[03/11]") && lines[2].contains("RPM"),
+            "third should be RPM [03/11]: {}",
+            lines[2]
         );
     }
 
     #[test]
-    fn flat_per_inspector_metric_isolation() {
-        // Two inspectors active simultaneously — metrics must not leak.
-        let (renderer, buf) = test_renderer(11);
+    fn flat_skipped_without_start() {
+        // Inapplicable inspector — Skipped without InspectorStarted.
+        let (r, buf) = test_renderer(false, false);
 
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
-        renderer.handle(ProgressEvent::InspectorStarted(InspectorId::Services));
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Selinux,
+            outcome: InspectorOutcome::Skipped {
+                reason: "disabled".to_string(),
+            },
+        });
 
-        // RPM gets a metric
-        renderer.handle(ProgressEvent::StepStarted {
+        let text = output_text(&buf);
+        assert!(
+            text.contains("[01/11] SELinux... skip"),
+            "expected skip line: {text}"
+        );
+        assert!(text.contains("disabled"), "expected reason: {text}");
+    }
+
+    #[test]
+    fn flat_completion_counter() {
+        // [N/total] increments per arrival, not by display position.
+        let (r, buf) = test_renderer(false, false);
+
+        // Services finishes first (display position 2), gets counter 1.
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        // Selinux finishes second (display position 10), gets counter 2.
+        feed_simple_complete(&r, InspectorId::Selinux);
+        // RPM finishes third (display position 1), gets counter 3.
+        feed_rpm(&r, 613, 6);
+
+        let text = output_text(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+
+        // Services is [01/11] despite being position 2 in display order.
+        assert!(
+            lines[0].contains("[01/11]") && lines[0].contains("Services"),
+            "Services should be [01/11]: {}",
+            lines[0]
+        );
+        // Selinux is [02/11] despite being position 10.
+        assert!(
+            lines[1].contains("[02/11]") && lines[1].contains("SELinux"),
+            "SELinux should be [02/11]: {}",
+            lines[1]
+        );
+        // RPM is [03/11] despite being position 1.
+        assert!(
+            lines[2].contains("[03/11]") && lines[2].contains("RPM"),
+            "RPM should be [03/11]: {}",
+            lines[2]
+        );
+    }
+
+    // ── End-to-end snapshot tests ──────────────────────────────────
+    //
+    // These test the complete output from receipt lines through
+    // finalize (summary + footer) for each spec scenario.
+
+    /// Helper: feed all inspectors, finalize, and return full output.
+    fn e2e_full_output(r: &FlatRenderer, buf: &Arc<Mutex<Vec<u8>>>, scan: &ScanFinalize) -> String {
+        r.finalize(scan);
+        output_text(buf)
+    }
+
+    #[test]
+    fn e2e_flat_arrival_order() {
+        // Completion counter reflects arrival order, not display position.
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, false);
+
+        // Inspectors arrive out of display order.
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_rpm(&r, 613, 6);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+                (&ProbeId::GemPackages, None),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(12.3),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_flat_verbose() {
+        // Verbose mode shows sub-steps with dot notation.
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(true, false);
+
+        // RPM with verbose sub-steps.
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        r.handle(ProgressEvent::StepStarted {
             inspector: InspectorId::Rpm,
             step: StepId::QueryingPackages,
         });
-        renderer.handle(ProgressEvent::Metric {
+        r.handle(ProgressEvent::Metric {
             inspector: InspectorId::Rpm,
             kind: MetricKind::PackagesFound,
-            value: 847,
+            value: 613,
         });
-        renderer.handle(ProgressEvent::StepFinished {
+        r.handle(ProgressEvent::StepFinished {
             inspector: InspectorId::Rpm,
             step: StepId::QueryingPackages,
             outcome: StepOutcome::Complete,
         });
-
-        // Services finishes without a metric — should say "done", not "847 found"
-        renderer.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Services,
+        r.handle(ProgressEvent::StepStarted {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+        });
+        r.handle(ProgressEvent::Metric {
+            inspector: InspectorId::Rpm,
+            kind: MetricKind::ReposMapped,
+            value: 6,
+        });
+        r.handle(ProgressEvent::StepFinished {
+            inspector: InspectorId::Rpm,
+            step: StepId::ResolvingSourceRepos,
+            outcome: StepOutcome::Complete,
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
             outcome: InspectorOutcome::Complete,
         });
 
-        let text = output_text(&buf);
-        let lines: Vec<&str> = text.lines().collect();
-        let svc_done = lines
-            .iter()
-            .find(|l| l.contains("Services...") && !l.ends_with("..."))
-            .expect("services done line");
-        assert!(
-            svc_done.contains("done"),
-            "Services should say 'done' not inherit RPM metric, got: {svc_done}"
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_simple_complete(&r, InspectorId::Containers);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_simple_complete(&r, InspectorId::ScheduledTasks);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+
+        // Non-RPM with verbose probes.
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::NonRpmSoftware));
+        r.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+        });
+        r.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::PipPackages,
+            outcome: ProbeOutcome::Found { count: 23 },
+        });
+        r.handle(ProgressEvent::ProbeStarted {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+        });
+        r.handle(ProgressEvent::ProbeFinished {
+            inspector: InspectorId::NonRpmSoftware,
+            probe: ProbeId::NpmPackages,
+            outcome: ProbeOutcome::Found { count: 69 },
+        });
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::NonRpmSoftware,
+            outcome: InspectorOutcome::Complete,
+        });
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(8.4),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_flat_12_inspectors() {
+        // Dynamic [N/12] numbering with subscription.
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, true);
+
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_with_metric(&r, InspectorId::Containers, MetricKind::ContainersFound, 3);
+        feed_simple_complete(&r, InspectorId::UsersGroups);
+        feed_with_metric(&r, InspectorId::ScheduledTasks, MetricKind::TimersFound, 5);
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_simple_complete(&r, InspectorId::Selinux);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+                (&ProbeId::GemPackages, None),
+            ],
         );
+        feed_simple_complete(&r, InspectorId::Subscription);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(14.2),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/inspectah-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn e2e_flat_interrupted() {
+        // Interrupted scan with text labels (INT, not triangle).
+        use crate::progress::receipt::ScanEndState;
+        use std::time::Duration;
+
+        let (r, buf) = test_renderer(false, false);
+
+        // 5 complete.
+        feed_rpm(&r, 613, 6);
+        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_simple_complete(&r, InspectorId::Storage);
+        feed_simple_complete(&r, InspectorId::KernelBoot);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        // 6 interrupted.
+        for id in [
+            InspectorId::Containers,
+            InspectorId::UsersGroups,
+            InspectorId::ScheduledTasks,
+            InspectorId::Config,
+            InspectorId::Selinux,
+            InspectorId::NonRpmSoftware,
+        ] {
+            r.handle(ProgressEvent::InspectorStarted(id));
+            r.handle(ProgressEvent::InspectorFinished {
+                id,
+                outcome: InspectorOutcome::Interrupted,
+            });
+        }
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(6.8),
+            end_state: ScanEndState::Interrupted {
+                completed: 5,
+                total: 11,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(e2e_full_output(&r, &buf, &scan));
     }
 }

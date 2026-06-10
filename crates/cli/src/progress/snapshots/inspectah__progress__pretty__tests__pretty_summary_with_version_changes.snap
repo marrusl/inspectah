@@ -1,0 +1,12 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "finalize_output(&r, &buf, &scan)"
+---
+
+  ┄┄┄
+  58 version changes (54 target-newer, 4 host-newer)
+  37 modified configs · 23 pip packages · 69 npm packages
+
+  Inspected in 4.2s
+  Report: /tmp/report.tar.gz
+  To review: inspectah refine /tmp/report.tar.gz

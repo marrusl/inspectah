@@ -1,0 +1,17 @@
+---
+source: crates/cli/src/progress/flat.rs
+expression: "e2e_full_output(&r, &buf, &scan)"
+---
+[01/11] RPM packages... ok (613 packages, 6 repos)
+[02/11] Services... ok (42 units)
+[03/11] Storage... ok (done)
+[04/11] Kernel & boot... ok (done)
+[05/11] Network... ok (done)
+[06/11] Containers... INT
+[07/11] Users & groups... INT
+[08/11] Scheduled tasks... INT
+[09/11] Config files... INT
+[10/11] SELinux... INT
+[11/11] Non-RPM packages... INT
+
+  Interrupted after 6.8s (5 of 11 inspectors completed)

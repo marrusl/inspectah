@@ -1174,6 +1174,7 @@ dependencies = [
  "inspectah-refine",
  "inspectah-tui",
  "inspectah-web",
+ "insta",
  "libc",
  "open",
  "pathdiff",

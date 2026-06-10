@@ -1,0 +1,6 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: text
+---
+  ✓ Non-RPM packages             4 ecosystems
+      pip packages 23 · npm packages 69 · gem packages 5 · git repos 12

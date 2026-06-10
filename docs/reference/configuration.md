@@ -13,7 +13,7 @@ CLI flags and environment variables.
 
 | Variable | Values | Default | Description |
 |:---------|:-------|:--------|:------------|
-| `INSPECTAH_PROGRESS` | `rich`, `plain`, `flat` | Auto-detected | Override progress display mode. Takes effect when no `--progress` CLI flag is provided. |
+| `INSPECTAH_PROGRESS` | `pretty`, `flat` | Auto-detected | Override progress display mode. Takes effect when no `--progress` CLI flag is provided. |
 | `NO_COLOR` | (any value) | Unset | Disable ANSI color output. Follows the [no-color.org](https://no-color.org/) convention. |
 | `TERM` | `dumb`, etc. | Varies | When set to `dumb`, forces `flat` progress mode (same as non-TTY detection). |
 
@@ -24,12 +24,11 @@ priority: **CLI flag** > **`INSPECTAH_PROGRESS` env** > **TTY auto-detection**.
 
 | Mode | Behavior | Best for |
 |:-----|:---------|:---------|
-| `rich` | Animated spinner with live sub-step updates. Requires a capable terminal. | Interactive terminal use |
-| `plain` | Durable scrollback-friendly output. No cursor manipulation. | Terminal sessions where you want persistent output |
-| `flat` | Numbered sequential lines, no ANSI escape codes. | CI/CD pipelines, piped output, non-TTY environments |
+| `pretty` | Append-only receipt with Unicode symbols. No cursor manipulation. Sub-step detail shown only with `--verbose`. | Interactive terminal use |
+| `flat` | Numbered sequential lines, no ANSI escape codes. Sub-step detail shown only with `--verbose`. | CI/CD pipelines, piped output, non-TTY environments |
 
 **Auto-detection logic:** If stderr is not a TTY or `TERM=dumb`, defaults to
-`flat`. Otherwise defaults to `rich`.
+`flat`. Otherwise defaults to `pretty`.
 
 ## CLI flags (scan)
 
@@ -45,7 +44,7 @@ for the full command reference.
 | `--preserve <ITEM>` | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable. |
 | `--no-redaction` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive). |
 | `--ack-sensitive` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`. |
-| `--progress <MODE>` | Override progress display: `rich`, `plain`, or `flat`. |
+| `--progress <MODE>` | Override progress display: `pretty` or `flat`. |
 | `-v, --verbose` | Show sub-step detail for all inspectors. Conflicts with `--quiet`. |
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
 

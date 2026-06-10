@@ -1,0 +1,15 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: output_text(&buf)
+---
+  ✓ RPM packages                 613 packages, 6 repos
+  ✓ Services                     42 units
+  ✓ Storage                      done
+  ✓ Kernel & boot                done
+  ✓ Network                      done
+  ✗ Containers                   failed: podman not found
+  ✓ Users & groups               done
+  ✓ Scheduled tasks              done
+  ⚠ Config files                 37 modified (rpm verify timed out)
+  ○ SELinux                      skipped (disabled)
+  ✓ Non-RPM packages             done

@@ -1,0 +1,22 @@
+---
+source: crates/cli/src/progress/flat.rs
+expression: "e2e_full_output(&r, &buf, &scan)"
+---
+[01/11] Services... ok (42 units)
+[02/11] Storage... ok (done)
+[03/11] Network... ok (done)
+[04/11] RPM packages... ok (613 packages, 6 repos)
+[05/11] Kernel & boot... ok (done)
+[06/11] Containers... ok (3 found)
+[07/11] Users & groups... ok (done)
+[08/11] Scheduled tasks... ok (5 timers)
+[09/11] Config files... ok (37 modified)
+[10/11] SELinux... ok (done)
+[11/11] Non-RPM packages... ok (2 ecosystems)
+
+  58 version changes (54 target-newer, 4 host-newer)
+  37 modified configs, 23 pip packages, 69 npm packages
+
+  Inspected in 12.3s
+  Report: /tmp/inspectah-report.tar.gz
+  To review: inspectah refine /tmp/inspectah-report.tar.gz

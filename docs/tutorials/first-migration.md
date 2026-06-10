@@ -59,27 +59,35 @@ SSH into your web server and run inspectah as root:
 sudo inspectah scan
 ```
 
-inspectah detects the OS (CentOS Stream 9), pulls the matching base image,
-and runs its inspection pipeline. You will see progress output as each
-inspector runs:
+inspectah detects the source system, resolves and pulls the target base
+image, then runs its inspection pipeline:
 
 ```
-Detecting OS... CentOS Stream 9 (x86_64)
-Resolving base image... quay.io/centos-bootc/centos-bootc:stream9
-Pulling base image... done (12.4s)
-Running inspectors...
-  packages        847 found, 812 baseline, 35 site
-  configs          14 found, 2 baseline, 9 site, 3 investigate
-  services          8 enabled, 3 baseline, 5 site
-  repos             4 configured
-  users             2 non-system users
-  containers        0 running
-  storage           3 mounts
-Rendering artifacts... done
-Scan complete (38.7s)
+Detecting source system...
+  CentOS Stream 9 (x86_64)
+Resolving target image...
+  quay.io/centos-bootc/centos-bootc:stream9 (OsRelease)
+Pulling quay.io/centos-bootc/centos-bootc:stream9...
+Inspecting host webserver01...
 
-Report: webserver01-20260527-091500.tar.gz
-To review: inspectah refine webserver01-20260527-091500.tar.gz
+  ✓ RPM packages               847 packages, 4 repos
+  ✓ Services                    8 units
+  ✓ Storage                     done
+  ✓ Kernel & boot               done
+  ✓ Network                     done
+  ✓ Containers                  none found
+  ✓ Users & groups              done
+  ✓ Scheduled tasks             1 timer
+  ✓ Config files                14 modified
+  ✓ SELinux                     done
+  ✓ Non-RPM packages            none found
+
+  ┄┄┄
+  14 modified configs
+
+  Inspected in 28.7s
+  Report: webserver01-20260610-093000.tar.gz
+  To review: inspectah refine webserver01-20260610-093000.tar.gz
 ```
 
 The scan typically takes 30--90 seconds. The base image is cached after
@@ -91,24 +99,24 @@ The scan produced a tarball named after your hostname and a timestamp.
 List its contents:
 
 ```bash
-tar tzf webserver01-20260527-091500.tar.gz
+tar tzf webserver01-20260610-093000.tar.gz
 ```
 
 You should see something like:
 
 ```
-webserver01-20260527-091500/
-webserver01-20260527-091500/Containerfile
-webserver01-20260527-091500/audit-report.md
-webserver01-20260527-091500/audit-report.html
-webserver01-20260527-091500/secrets-review.md
-webserver01-20260527-091500/README.md
-webserver01-20260527-091500/kickstart-suggestion.ks
-webserver01-20260527-091500/inspection-snapshot.json
-webserver01-20260527-091500/config/
-webserver01-20260527-091500/config/etc/httpd/conf.d/webapp.conf
-webserver01-20260527-091500/config/etc/cron.d/log-cleanup
-webserver01-20260527-091500/config/etc/logrotate.d/webapp
+webserver01-20260610-093000/
+webserver01-20260610-093000/Containerfile
+webserver01-20260610-093000/audit-report.md
+webserver01-20260610-093000/audit-report.html
+webserver01-20260610-093000/secrets-review.md
+webserver01-20260610-093000/README.md
+webserver01-20260610-093000/kickstart-suggestion.ks
+webserver01-20260610-093000/inspection-snapshot.json
+webserver01-20260610-093000/config/
+webserver01-20260610-093000/config/etc/httpd/conf.d/webapp.conf
+webserver01-20260610-093000/config/etc/cron.d/log-cleanup
+webserver01-20260610-093000/config/etc/logrotate.d/webapp
 ```
 
 Key files:
@@ -159,7 +167,7 @@ decide *what to do about it*.
 Start the refine server, pointing it at your scan tarball:
 
 ```bash
-inspectah refine webserver01-20260527-091500.tar.gz
+inspectah refine webserver01-20260610-093000.tar.gz
 ```
 
 You will see:
@@ -250,7 +258,7 @@ When you are done, stop the refine server with Ctrl-C in the terminal.
 The fastest way to build is with `inspectah build`:
 
 ```bash
-inspectah build webserver01-20260527-091500.tar.gz --tag my-webserver:v1
+inspectah build webserver01-20260610-093000.tar.gz --tag my-webserver:v1
 ```
 
 This extracts the tarball, handles RHEL subscription cert mounting
@@ -259,8 +267,8 @@ automatically (if needed), and runs `podman build` for you.
 To preview the generated Containerfile first, extract and inspect it:
 
 ```bash
-tar xzf webserver01-20260527-091500.tar.gz
-cd webserver01-20260527-091500
+tar xzf webserver01-20260610-093000.tar.gz
+cd webserver01-20260610-093000
 cat Containerfile
 ```
 

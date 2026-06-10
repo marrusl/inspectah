@@ -1,0 +1,8 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "finalize_output(&r, &buf, &scan)"
+---
+
+  Inspected in 4.5s (1 failed, 1 degraded)
+  Report: /tmp/report.tar.gz
+  To review: inspectah refine /tmp/report.tar.gz

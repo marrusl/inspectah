@@ -1,0 +1,6 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "finalize_output(&r, &buf, &scan)"
+---
+
+  Inspected in 1.0s

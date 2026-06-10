@@ -1,9 +1,8 @@
 //! Terminal progress rendering for scan output.
 //!
-//! Provides multiple rendering backends:
-//! - [`flat::FlatRenderer`] — sequential line output for non-TTY / dumb terminals.
-//! - [`plain::PlainRenderer`] — append-only output with Unicode symbols and optional ANSI color.
-//! - [`rich::RichRenderer`] — block-redraw checklist with spinners and elapsed timers.
+//! Provides two rendering backends:
+//! - [`pretty::PrettyRenderer`] — arrival-order receipt with spinners and ANSI color (TTY).
+//! - [`flat::FlatRenderer`] — sequential numbered lines, no ANSI (CI / piped output).
 //!
 //! [`TerminalProgress`] is the unified dispatcher that selects a backend
 //! based on CLI flags, environment variables, or TTY auto-detection.
@@ -11,22 +10,21 @@
 use std::sync::Mutex;
 
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::completeness::InspectorId;
 use inspectah_core::types::progress::ProgressEvent;
 
 pub mod display;
 pub mod flat;
-pub mod plain;
-pub mod rich;
+pub mod pretty;
+pub mod receipt;
 
 // ── Mode detection ──────────────────────────────────────────────────
 
 /// Progress display mode selectable via CLI `--progress` flag.
 #[derive(Clone, Debug, clap::ValueEnum)]
 pub enum ProgressMode {
-    /// Block-redraw checklist with spinners (default for TTY).
-    Rich,
-    /// Append-only lines with Unicode symbols (durable scrollback).
-    Plain,
+    /// Arrival-order receipt with spinners and ANSI color (default for TTY).
+    Pretty,
     /// Numbered sequential lines, no ANSI (CI / piped output).
     Flat,
 }
@@ -34,8 +32,7 @@ pub enum ProgressMode {
 /// Resolved rendering mode (internal, not user-facing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    Rich,
-    Plain,
+    Pretty,
     Flat,
 }
 
@@ -45,18 +42,16 @@ pub enum Mode {
 pub fn detect_mode(cli_flag: Option<&ProgressMode>) -> Mode {
     if let Some(flag) = cli_flag {
         return match flag {
-            ProgressMode::Rich => Mode::Rich,
-            ProgressMode::Plain => Mode::Plain,
+            ProgressMode::Pretty => Mode::Pretty,
             ProgressMode::Flat => Mode::Flat,
         };
     }
 
     if let Ok(val) = std::env::var("INSPECTAH_PROGRESS") {
         return match val.to_lowercase().as_str() {
-            "plain" => Mode::Plain,
+            "pretty" => Mode::Pretty,
             "flat" => Mode::Flat,
-            "rich" => Mode::Rich,
-            _ => Mode::Rich,
+            _ => Mode::Pretty,
         };
     }
 
@@ -66,7 +61,7 @@ pub fn detect_mode(cli_flag: Option<&ProgressMode>) -> Mode {
     if !is_tty || is_dumb {
         Mode::Flat
     } else {
-        Mode::Rich
+        Mode::Pretty
     }
 }
 
@@ -97,17 +92,16 @@ pub enum Verbosity {
 
 /// Unified terminal progress dispatcher.
 ///
-/// Wraps one of the three rendering backends behind [`ProgressSink`].
+/// Wraps one of the two rendering backends behind [`ProgressSink`].
 /// Thread-safe: the inner renderer is behind a [`Mutex`] to allow
-/// `finalize()` through a shared reference (rich mode needs `&mut self`
+/// `finalize()` through a shared reference (pretty mode needs `&mut self`
 /// internally to join the tick thread).
 pub struct TerminalProgress {
     inner: Mutex<TerminalProgressInner>,
 }
 
 enum TerminalProgressInner {
-    Rich(rich::RichRenderer),
-    Plain(plain::PlainRenderer),
+    Pretty(pretty::PrettyRenderer),
     Flat(flat::FlatRenderer),
     /// Quiet mode — swallows all events; completion block still prints.
     Null,
@@ -120,7 +114,7 @@ impl TerminalProgress {
     /// [`Verbosity::Quiet`] short-circuits to a null backend that
     /// swallows all events (completion/warnings are handled separately
     /// by the caller).
-    pub fn new(mode: Mode, use_color: bool, verbosity: Verbosity) -> Self {
+    pub fn new(mode: Mode, use_color: bool, verbosity: Verbosity, has_subscription: bool) -> Self {
         if verbosity == Verbosity::Quiet {
             return Self {
                 inner: Mutex::new(TerminalProgressInner::Null),
@@ -128,28 +122,19 @@ impl TerminalProgress {
         }
 
         let verbose = verbosity == Verbosity::Verbose;
+        let active_order = display::active_display_order(has_subscription);
 
         let inner = match mode {
-            Mode::Rich => {
-                let term_height = terminal_size::terminal_size()
-                    .map(|(_, h)| h.0 as usize)
-                    .unwrap_or(24);
-                TerminalProgressInner::Rich(rich::RichRenderer::new(
-                    Box::new(std::io::stderr()),
-                    use_color,
-                    term_height,
-                    verbose,
-                ))
-            }
-            Mode::Plain => TerminalProgressInner::Plain(plain::PlainRenderer::new(
+            Mode::Pretty => TerminalProgressInner::Pretty(pretty::PrettyRenderer::new(
                 Box::new(std::io::stderr()),
                 use_color,
                 verbose,
+                active_order,
             )),
             Mode::Flat => TerminalProgressInner::Flat(flat::FlatRenderer::new(
                 Box::new(std::io::stderr()),
-                display::DISPLAY_ORDER.len(),
                 verbose,
+                active_order,
             )),
         };
         Self {
@@ -157,24 +142,38 @@ impl TerminalProgress {
         }
     }
 
-    /// Finalize rendering (rich mode: stop tick thread, print scrollback).
+    /// Finalize rendering — print summary + footer via the active renderer.
     ///
-    /// No-op for plain, flat, and null modes.
-    pub fn finalize(&self) {
-        let mut inner = self.inner.lock().expect("TerminalProgress lock poisoned");
-        if let TerminalProgressInner::Rich(ref mut r) = *inner {
-            r.finalize();
+    /// No-op for null mode.
+    pub fn finalize(&self, scan: receipt::ScanFinalize) {
+        let inner = self.inner.lock().expect("TerminalProgress lock poisoned");
+        match &*inner {
+            TerminalProgressInner::Pretty(r) => r.finalize(&scan),
+            TerminalProgressInner::Flat(r) => r.finalize(&scan),
+            TerminalProgressInner::Null => {}
         }
     }
 
     /// Cancel rendering (SIGINT path). Stops the tick thread without
-    /// reprinting the checklist — leaves the terminal as-is.
+    /// printing summary/footer — leaves the terminal as-is.
     ///
-    /// No-op for plain, flat, and null modes (they don't have a tick thread).
+    /// No-op for flat and null modes (they don't have a tick thread).
     pub fn cancel(&self) {
-        let mut inner = self.inner.lock().expect("TerminalProgress lock poisoned");
-        if let TerminalProgressInner::Rich(ref mut r) = *inner {
-            r.cancel();
+        let inner = self.inner.lock().expect("TerminalProgress lock poisoned");
+        match &*inner {
+            TerminalProgressInner::Pretty(r) => r.cancel(),
+            TerminalProgressInner::Flat(_) => {}
+            TerminalProgressInner::Null => {}
+        }
+    }
+
+    /// Return the set of inspector IDs that have finished (for SIGINT reconciliation).
+    pub fn finished_inspectors(&self) -> Vec<InspectorId> {
+        let inner = self.inner.lock().expect("TerminalProgress lock poisoned");
+        match &*inner {
+            TerminalProgressInner::Pretty(r) => r.receipt_lines().iter().map(|l| l.id).collect(),
+            TerminalProgressInner::Flat(r) => r.receipt_lines().iter().map(|l| l.id).collect(),
+            TerminalProgressInner::Null => Vec::new(),
         }
     }
 }
@@ -183,8 +182,7 @@ impl ProgressSink for TerminalProgress {
     fn emit(&self, event: ProgressEvent) {
         let inner = self.inner.lock().expect("TerminalProgress lock poisoned");
         match &*inner {
-            TerminalProgressInner::Rich(r) => r.handle(event),
-            TerminalProgressInner::Plain(r) => r.handle(event),
+            TerminalProgressInner::Pretty(r) => r.handle(event),
             TerminalProgressInner::Flat(r) => r.handle(event),
             TerminalProgressInner::Null => {}
         }
@@ -210,19 +208,19 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         // CLI flag should win even when env is set.
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "flat") };
-        let mode = detect_mode(Some(&ProgressMode::Rich));
+        let mode = detect_mode(Some(&ProgressMode::Pretty));
         unsafe { std::env::remove_var("INSPECTAH_PROGRESS") };
-        assert_eq!(mode, Mode::Rich);
+        assert_eq!(mode, Mode::Pretty);
     }
 
     #[test]
     fn test_mode_detection_env_overrides_tty() {
         let _guard = ENV_LOCK.lock().unwrap();
         // Env var should override TTY auto-detection.
-        unsafe { std::env::set_var("INSPECTAH_PROGRESS", "plain") };
+        unsafe { std::env::set_var("INSPECTAH_PROGRESS", "pretty") };
         let mode = detect_mode(None);
         unsafe { std::env::remove_var("INSPECTAH_PROGRESS") };
-        assert_eq!(mode, Mode::Plain);
+        assert_eq!(mode, Mode::Pretty);
     }
 
     #[test]
@@ -235,12 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_detection_env_unknown_defaults_rich() {
+    fn test_mode_detection_env_unknown_defaults_pretty() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("INSPECTAH_PROGRESS", "unknown_value") };
         let mode = detect_mode(None);
         unsafe { std::env::remove_var("INSPECTAH_PROGRESS") };
-        assert_eq!(mode, Mode::Rich);
+        assert_eq!(mode, Mode::Pretty);
     }
 
     #[test]
@@ -266,7 +264,7 @@ mod tests {
     fn test_terminal_progress_flat_emits_without_panic() {
         use inspectah_core::types::completeness::InspectorId;
 
-        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Normal);
+        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Normal, false);
         tp.emit(ProgressEvent::InspectorStarted(InspectorId::Rpm));
         tp.emit(ProgressEvent::InspectorFinished {
             id: InspectorId::Rpm,
@@ -276,10 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_progress_plain_emits_without_panic() {
+    fn test_terminal_progress_pretty_emits_without_panic() {
         use inspectah_core::types::completeness::InspectorId;
 
-        let tp = TerminalProgress::new(Mode::Plain, false, Verbosity::Normal);
+        let tp = TerminalProgress::new(Mode::Pretty, false, Verbosity::Normal, false);
         tp.emit(ProgressEvent::InspectorStarted(InspectorId::Rpm));
         tp.emit(ProgressEvent::InspectorFinished {
             id: InspectorId::Rpm,
@@ -288,33 +286,38 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_progress_finalize_noop_for_flat() {
-        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Normal);
-        tp.finalize(); // Should not panic.
-    }
+    fn test_terminal_progress_finalize_noop_for_null() {
+        use receipt::{ScanEndState, ScanFinalize};
 
-    #[test]
-    fn test_terminal_progress_finalize_noop_for_plain() {
-        let tp = TerminalProgress::new(Mode::Plain, false, Verbosity::Normal);
-        tp.finalize(); // Should not panic.
+        let tp = TerminalProgress::new(Mode::Pretty, false, Verbosity::Quiet, false);
+        tp.finalize(ScanFinalize {
+            elapsed: std::time::Duration::from_secs(1),
+            end_state: ScanEndState::InspectOnlyStdout,
+            version_changes: None,
+        }); // Should not panic.
     }
 
     #[test]
     fn test_quiet_mode_swallows_events() {
         use inspectah_core::types::completeness::InspectorId;
+        use receipt::{ScanEndState, ScanFinalize};
 
-        let tp = TerminalProgress::new(Mode::Rich, false, Verbosity::Quiet);
+        let tp = TerminalProgress::new(Mode::Pretty, false, Verbosity::Quiet, false);
         tp.emit(ProgressEvent::InspectorStarted(InspectorId::Rpm));
         tp.emit(ProgressEvent::InspectorFinished {
             id: InspectorId::Rpm,
             outcome: inspectah_core::types::progress::InspectorOutcome::Complete,
         });
-        tp.finalize(); // No panic = success.
+        tp.finalize(ScanFinalize {
+            elapsed: std::time::Duration::from_secs(1),
+            end_state: ScanEndState::InspectOnlyStdout,
+            version_changes: None,
+        }); // No panic = success.
     }
 
     #[test]
     fn test_quiet_mode_cancel_noop() {
-        let tp = TerminalProgress::new(Mode::Plain, false, Verbosity::Quiet);
+        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Quiet, false);
         tp.cancel(); // Should not panic.
     }
 
@@ -322,12 +325,30 @@ mod tests {
     fn test_verbose_mode_creates_renderer() {
         use inspectah_core::types::completeness::InspectorId;
 
-        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Verbose);
+        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Verbose, false);
         tp.emit(ProgressEvent::InspectorStarted(InspectorId::Rpm));
         tp.emit(ProgressEvent::InspectorFinished {
             id: InspectorId::Rpm,
             outcome: inspectah_core::types::progress::InspectorOutcome::Complete,
         });
         // No panic = renderer was created (not null).
+    }
+
+    #[test]
+    fn test_finished_inspectors_tracks_completions() {
+        use inspectah_core::types::completeness::InspectorId;
+
+        let tp = TerminalProgress::new(Mode::Flat, false, Verbosity::Normal, false);
+        assert!(tp.finished_inspectors().is_empty());
+
+        tp.emit(ProgressEvent::InspectorStarted(InspectorId::Rpm));
+        tp.emit(ProgressEvent::InspectorFinished {
+            id: InspectorId::Rpm,
+            outcome: inspectah_core::types::progress::InspectorOutcome::Complete,
+        });
+
+        let finished = tp.finished_inspectors();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0], InspectorId::Rpm);
     }
 }

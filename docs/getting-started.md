@@ -108,7 +108,7 @@ inspectah runs a four-stage pipeline:
 1. **Detect** the OS and resolve a matching base image
 2. **Pull** the base image (you will see download progress)
 3. **Inspect** the system — RPMs, configs, services, users, repos,
-   containers, storage, and more (12 inspectors total)
+   containers, storage, and more (11 inspectors by default)
 4. **Render** migration artifacts and package them into a tarball
 
 A typical scan takes 30--90 seconds depending on the number of installed
@@ -118,9 +118,25 @@ the base image is cached locally.
 When the scan finishes, you will see output like:
 
 ```
-Scan complete (42.3s) — 847 packages, 12 configs, 4 services, 2 containers
-Report: myhost-20260527-143000.tar.gz
-To review: inspectah refine myhost-20260527-143000.tar.gz
+  ✓ RPM packages               847 packages, 6 repos
+  ✓ Services                    27 units
+  ✓ Storage                     done
+  ✓ Kernel & boot               done
+  ✓ Network                     done
+  ✓ Containers                  2 found
+  ✓ Users & groups              done
+  ✓ Scheduled tasks             done
+  ✓ Config files                12 modified
+  ✓ SELinux                     done
+  ✓ Non-RPM packages            2 ecosystems
+      pip packages 23 · npm packages 69
+
+  ┄┄┄
+  12 modified configs · 23 pip packages · 69 npm packages
+
+  Inspected in 42.3s
+  Report: myhost-20260527-143000.tar.gz
+  To review: inspectah refine myhost-20260527-143000.tar.gz
 ```
 
 The tarball is written to your current directory. The filename includes

@@ -301,9 +301,9 @@ CLI's modules:
 - **commands/** -- One module per subcommand: `scan.rs`, `build.rs`,
   `refine.rs`, `fleet.rs`, `version.rs`, and `pull_progress.rs` (image pull
   progress tracking for baseline resolution).
-- **progress/** -- Terminal progress display with multiple backends: `rich.rs`
-  (animated spinners and progress bars), `plain.rs` (line-by-line output for
-  non-TTY environments), `flat.rs` (minimal output), and `display.rs`
+- **progress/** -- Terminal progress display with multiple backends: `pretty.rs`
+  (append-only receipt with Unicode symbols), `flat.rs` (numbered sequential
+  lines for CI), `receipt.rs` (shared data model), and `display.rs`
   (display trait abstractions).
 
 ## Data flow: from scan to artifact

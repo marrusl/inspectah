@@ -1,0 +1,21 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: "e2e_full_output(&r, &buf, &scan)"
+---
+  ✓ RPM packages                 613 packages, 6 repos
+  ✓ Services                     42 units
+  ✓ Storage                      done
+  ✓ Kernel & boot                done
+  ✓ Network                      done
+  ✓ Containers                   3 found
+  ✓ Users & groups               done
+  ✓ Scheduled tasks              5 timers
+  ✓ Config files                 37 modified
+  ✓ SELinux                      done
+  ✓ Non-RPM packages             2 ecosystems
+      pip packages 23 · npm packages 69
+
+  ┄┄┄
+  37 modified configs · 23 pip packages · 69 npm packages
+
+  Inspected in 10.5s

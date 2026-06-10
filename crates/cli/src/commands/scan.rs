@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::progress::receipt::{ScanEndState, ScanFinalize, VersionChangeSummary};
 use crate::progress::{TerminalProgress, detect_mode, use_color};
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -28,9 +29,9 @@ use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::subscription::SubscriptionInspector;
 use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
-use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
+use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::OsRelease;
@@ -139,7 +140,7 @@ pub struct ScanArgs {
     #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
     pub ack_sensitive: bool,
 
-    /// Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)
+    /// Progress display mode: pretty (default TTY), flat (non-TTY/CI)
     #[arg(long, value_name = "MODE")]
     pub progress: Option<crate::progress::ProgressMode>,
 
@@ -295,7 +296,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         (Some(norm), false) => {
             eprintln!("Pulling {}...", norm.as_str());
 
-            let use_viewport = mode == crate::progress::Mode::Rich;
+            let use_viewport = mode == crate::progress::Mode::Pretty;
             let mut collected_lines: Vec<String> = Vec::new();
 
             let data = if use_viewport {
@@ -407,7 +408,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     };
 
     let color = use_color();
-    let progress = TerminalProgress::new(mode, color, verbosity);
+    let progress = TerminalProgress::new(mode, color, verbosity, has_subscription);
     let scan_start = std::time::Instant::now();
 
     // Install SIGINT handler so Ctrl-C exits cleanly with code 130.
@@ -427,15 +428,41 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         &cancelled,
     );
 
-    // SIGINT is a cancellation — no output, no partial counts.
-    // Check BEFORE finalize so rich mode doesn't reprint the checklist.
+    // SIGINT: stop the spinner, reconcile unfinished inspectors, finalize.
     if cancelled.load(Ordering::SeqCst) {
         progress.cancel();
-        eprintln!("Scan cancelled. No report written.");
+
+        // The renderer is the authoritative outcome ledger.
+        // Synthesize Interrupted events for any inspector that didn't finish.
+        let finished = progress.finished_inspectors();
+        let active_order = crate::progress::display::active_display_order(has_subscription);
+
+        for (id, _name) in active_order {
+            if !finished.contains(id) {
+                progress.emit(
+                    inspectah_core::types::progress::ProgressEvent::InspectorFinished {
+                        id: *id,
+                        outcome: inspectah_core::types::progress::InspectorOutcome::Interrupted,
+                    },
+                );
+            }
+        }
+
+        let end_state = ScanEndState::Interrupted {
+            completed: finished.len(),
+            total: active_order.len(),
+        };
+        progress.finalize(ScanFinalize {
+            elapsed: scan_start.elapsed(),
+            end_state: end_state.clone(),
+            version_changes: None,
+        });
+        if verbosity == crate::progress::Verbosity::Quiet {
+            print_quiet_footer(scan_start.elapsed(), &end_state, None);
+        }
+
         return Ok(ScanOutcome::Interrupted);
     }
-
-    progress.finalize();
 
     // Derive exit outcome from collection completeness
     let outcome = ScanOutcome::from_completeness(&collected.state.snapshot.completeness);
@@ -458,29 +485,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     snapshot.preserved_ssh_keys = has_ssh_keys;
     snapshot.preserved_subscription = has_subscription;
 
-    // Version comparison line (prints after collection, since version_changes
-    // is populated by the RPM inspector during collection)
-    if snapshot.baseline.is_some() {
-        let vc_display = baseline_fmt::version_changes_for_display(&snapshot);
-        let shared_count = match (snapshot.rpm.as_ref(), snapshot.baseline.as_ref()) {
-            (Some(rpm), Some(bl)) if baseline_fmt::is_rpm_comparison_available(&snapshot) => {
-                baseline_fmt::shared_package_count(bl, rpm)
-            }
-            _ => 0,
-        };
-        let not_in_base = snapshot
-            .rpm
-            .as_ref()
-            .map(|rpm| rpm.packages_added.len().saturating_sub(shared_count))
-            .unwrap_or(0);
-        let summary =
-            baseline_fmt::version_comparison_summary(vc_display, shared_count, not_in_base);
-        if vc_display.is_none() {
-            eprintln!("  Version comparison: {summary}");
-        } else {
-            eprintln!("  Version changes: {summary}");
-        }
-    }
+    // Build version change summary for renderer (populated by RPM inspector during collection).
+    let version_changes = build_version_change_summary(&snapshot);
 
     if args.no_redaction {
         snapshot.redaction_state = Some(RedactionState::Raw);
@@ -500,20 +506,40 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 }
                 match std::fs::write(path, &json) {
                     Ok(()) => {
-                        let elapsed = scan_start.elapsed();
-                        print_completion(&outcome, elapsed, &snapshot, Some(path.as_path()), true);
+                        let end_state = ScanEndState::InspectOnly { path: path.clone() };
+                        progress.finalize(ScanFinalize {
+                            elapsed: scan_start.elapsed(),
+                            end_state: end_state.clone(),
+                            version_changes: version_changes.clone(),
+                        });
+                        if verbosity == crate::progress::Verbosity::Quiet {
+                            print_quiet_footer(scan_start.elapsed(), &end_state, None);
+                        }
                     }
                     Err(e) => {
-                        let elapsed = scan_start.elapsed();
-                        print_completion(&outcome, elapsed, &snapshot, None, true);
+                        let end_state = ScanEndState::WriteFailure {
+                            error: e.to_string(),
+                        };
+                        progress.finalize(ScanFinalize {
+                            elapsed: scan_start.elapsed(),
+                            end_state,
+                            version_changes: version_changes.clone(),
+                        });
                         anyhow::bail!("failed to write output: {e}");
                     }
                 }
             }
             None => {
                 println!("{json}");
-                let elapsed = scan_start.elapsed();
-                print_completion(&outcome, elapsed, &snapshot, None, true);
+                let end_state = ScanEndState::InspectOnlyStdout;
+                progress.finalize(ScanFinalize {
+                    elapsed: scan_start.elapsed(),
+                    end_state: end_state.clone(),
+                    version_changes: version_changes.clone(),
+                });
+                if verbosity == crate::progress::Verbosity::Quiet {
+                    print_quiet_footer(scan_start.elapsed(), &end_state, None);
+                }
             }
         }
         return Ok(outcome);
@@ -542,13 +568,33 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
     match create_tarball(render_dir.path(), &tarball_path, &stamp) {
         Ok(()) => {
-            let elapsed = scan_start.elapsed();
-            print_completion(&outcome, elapsed, &snapshot, Some(&tarball_path), false);
+            let sensitivity = build_sensitivity_notice(&snapshot);
+            let end_state = ScanEndState::Completed {
+                path: tarball_path.clone(),
+                sensitivity: sensitivity.clone(),
+            };
+            progress.finalize(ScanFinalize {
+                elapsed: scan_start.elapsed(),
+                end_state: end_state.clone(),
+                version_changes,
+            });
+            if verbosity == crate::progress::Verbosity::Quiet {
+                print_quiet_footer(
+                    scan_start.elapsed(),
+                    &end_state,
+                    sensitivity.as_deref(),
+                );
+            }
             Ok(outcome)
         }
         Err(e) => {
-            let elapsed = scan_start.elapsed();
-            print_completion(&outcome, elapsed, &snapshot, None, false);
+            progress.finalize(ScanFinalize {
+                elapsed: scan_start.elapsed(),
+                end_state: ScanEndState::WriteFailure {
+                    error: e.to_string(),
+                },
+                version_changes,
+            });
             anyhow::bail!("failed to write report: {e}");
         }
     }
@@ -584,144 +630,105 @@ fn read_bootc_status_ref(executor: &dyn Executor) -> Option<String> {
         .map(String::from)
 }
 
-/// Build a human-readable summary of section item counts.
+/// Build a `VersionChangeSummary` from the snapshot's RPM version change data.
 ///
-/// Returns a comma-separated string like "847 packages, 12 configs, 4 services, 2 containers".
-/// Sections with zero items are omitted. Returns an empty string when all sections are absent
-/// or empty (used by the interrupted path to detect whether any inspectors completed).
-fn build_summary_counts(snapshot: &InspectionSnapshot) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(rpm) = &snapshot.rpm {
-        let count = rpm.packages_added.len();
-        if count > 0 {
-            parts.push(format!("{count} packages"));
-        }
+/// Returns `None` when baseline is absent or RPM comparison data is unavailable.
+fn build_version_change_summary(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Option<VersionChangeSummary> {
+    snapshot.baseline.as_ref()?;
+    let vcs = baseline_fmt::version_changes_for_display(snapshot)?;
+    if vcs.is_empty() {
+        return None;
     }
-    if let Some(config) = &snapshot.config {
-        let count = config.files.len();
-        if count > 0 {
-            parts.push(format!("{count} configs"));
-        }
-    }
-    if let Some(services) = &snapshot.services {
-        let count = services.state_changes.len();
-        if count > 0 {
-            parts.push(format!("{count} services"));
-        }
-    }
-    if let Some(containers) = &snapshot.containers {
-        let count = containers.running_containers.len();
-        if count > 0 {
-            parts.push(format!("{count} containers"));
-        }
-    }
-
-    parts.join(", ")
+    use inspectah_core::types::rpm::VersionChangeDirection;
+    let target_newer = vcs
+        .iter()
+        .filter(|vc| vc.direction == VersionChangeDirection::Upgrade)
+        .count();
+    let host_newer = vcs.len() - target_newer;
+    Some(VersionChangeSummary {
+        total: vcs.len(),
+        target_newer,
+        host_newer,
+    })
 }
 
-/// Render the scan completion block to stderr.
+/// Build the sensitivity notice string for the `Completed` footer.
 ///
-/// Output varies by `ScanOutcome`:
-/// - **Clean / Degraded / Incomplete**: summary counts, optional degraded/failed detail,
-///   report path and next-step hint.
-/// - **Interrupted**: partial counts (if any inspectors completed), no report written.
-fn print_completion(
-    outcome: &ScanOutcome,
+/// Returns `None` when the snapshot has no sensitive data.
+fn build_sensitivity_notice(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Option<String> {
+    if !snapshot.sensitive_snapshot {
+        return None;
+    }
+
+    let mut preserved_items = Vec::new();
+    if snapshot.preserved_credentials {
+        preserved_items.push("password-hashes");
+    }
+    if snapshot.preserved_ssh_keys {
+        preserved_items.push("ssh-keys");
+    }
+    if snapshot.preserved_subscription {
+        preserved_items.push("subscription");
+    }
+
+    let is_raw = matches!(snapshot.redaction_state, Some(RedactionState::Raw));
+
+    let mut lines = Vec::new();
+    lines.push("\u{26a0}  Snapshot contains sensitive data:".to_string());
+    if !preserved_items.is_empty() {
+        lines.push(format!("   Preserved: {}", preserved_items.join(", ")));
+    }
+    if is_raw {
+        lines.push("   Redaction: skipped (raw secrets retained)".to_string());
+    } else {
+        lines.push("   Redaction: active".to_string());
+    }
+
+    Some(lines.join("\n"))
+}
+
+/// Print a minimal footer for `--quiet` mode (Null renderer swallows finalize).
+///
+/// Matches `ScanEndState` variants so each end-state gets the right output:
+/// - Completed: timing + report path + refine hint + sensitivity notice
+/// - InspectOnly: timing + output path (no refine hint)
+/// - InspectOnlyStdout: timing only
+/// - WriteFailure: timing + error
+/// - Interrupted: cancellation message only
+fn print_quiet_footer(
     elapsed: std::time::Duration,
-    snapshot: &InspectionSnapshot,
-    output_path: Option<&std::path::Path>,
-    inspect_only: bool,
+    end_state: &ScanEndState,
+    sensitivity: Option<&str>,
 ) {
     let secs = elapsed.as_secs_f64();
-    let counts = build_summary_counts(snapshot);
-
-    match outcome {
-        ScanOutcome::Clean => {
-            eprintln!("Scan complete ({secs:.1}s) — {counts}");
-        }
-        ScanOutcome::Degraded => {
-            eprintln!("Scan complete ({secs:.1}s) — {counts}");
-            if let Completeness::Partial {
-                degraded_sections, ..
-            } = &snapshot.completeness
-            {
-                eprintln!(
-                    "  {} degraded (see report for details)",
-                    degraded_sections.len()
-                );
-            }
-        }
-        ScanOutcome::Incomplete => {
-            eprintln!("Scan complete ({secs:.1}s) — {counts}");
-            if let Completeness::Incomplete {
-                failed_sections,
-                degraded_sections,
-                ..
-            } = &snapshot.completeness
-            {
-                let mut detail = Vec::new();
-                if !failed_sections.is_empty() {
-                    detail.push(format!("{} failed", failed_sections.len()));
-                }
-                if !degraded_sections.is_empty() {
-                    detail.push(format!("{} degraded", degraded_sections.len()));
-                }
-                eprintln!("  {} (see report for details)", detail.join(", "));
-            }
-        }
-        ScanOutcome::Interrupted => {
-            // SIGINT path never reaches print_completion — the early
-            // return in run_scan() handles it directly. This arm exists
-            // only for exhaustive matching.
-            return;
-        }
-    }
-
-    // Sensitivity confirmation
-    if snapshot.sensitive_snapshot {
-        let mut preserved_items = Vec::new();
-        if snapshot.preserved_credentials {
-            preserved_items.push("password-hashes");
-        }
-        if snapshot.preserved_ssh_keys {
-            preserved_items.push("ssh-keys");
-        }
-        if snapshot.preserved_subscription {
-            preserved_items.push("subscription");
-        }
-
-        let is_raw = matches!(snapshot.redaction_state, Some(RedactionState::Raw));
-
-        let color = use_color();
-        let (warn, bold, reset) = if color {
-            ("\x1b[33m", "\x1b[1m", "\x1b[0m")
-        } else {
-            ("", "", "")
-        };
-
-        eprintln!();
-        eprintln!("  {warn}\u{26a0}  Snapshot contains sensitive data:{reset}");
-        if !preserved_items.is_empty() {
-            eprintln!(
-                "  {bold}   Preserved:{reset} {}",
-                preserved_items.join(", ")
-            );
-        }
-        if is_raw {
-            eprintln!("  {bold}   Redaction:{reset} {warn}skipped (raw secrets retained){reset}");
-        } else {
-            eprintln!("  {bold}   Redaction:{reset} active");
-        }
-    }
-
-    // Report path and next-step hint
-    if let Some(path) = output_path {
-        if inspect_only {
-            eprintln!("Output: {}", path.display());
-        } else {
+    match end_state {
+        ScanEndState::Completed { path, .. } => {
+            eprintln!("Scan complete ({secs:.1}s)");
             eprintln!("Report: {}", path.display());
             eprintln!("To review: inspectah refine {}", path.display());
+            if let Some(notice) = sensitivity {
+                for line in notice.lines() {
+                    eprintln!("  {line}");
+                }
+            }
+        }
+        ScanEndState::InspectOnly { path } => {
+            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Output: {}", path.display());
+        }
+        ScanEndState::InspectOnlyStdout => {
+            eprintln!("Scan complete ({secs:.1}s)");
+        }
+        ScanEndState::WriteFailure { error } => {
+            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Error: {error}");
+        }
+        ScanEndState::Interrupted { .. } => {
+            eprintln!("Scan cancelled. No report written.");
         }
     }
 }
@@ -775,91 +782,6 @@ VARIANT_ID="workstation"
             Box::new(NonRpmInspector::new()),
         ];
         assert_eq!(inspectors.len(), 11);
-    }
-
-    #[test]
-    fn test_build_summary_counts_full() {
-        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-        use inspectah_core::types::containers::{ContainerSection, RunningContainer};
-        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-        };
-
-        let svc = || ServiceStateChange {
-            unit: "test.service".into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Enable),
-            include: true,
-            locked: false,
-            owning_package: None,
-            fleet: None,
-            attention_reason: None,
-        };
-        let snapshot = InspectionSnapshot {
-            rpm: Some(RpmSection {
-                packages_added: vec![
-                    PackageEntry::default(),
-                    PackageEntry::default(),
-                    PackageEntry::default(),
-                ],
-                ..Default::default()
-            }),
-            config: Some(ConfigSection {
-                files: vec![ConfigFileEntry::default(), ConfigFileEntry::default()],
-            }),
-            services: Some(ServiceSection {
-                state_changes: vec![svc(), svc(), svc(), svc()],
-                ..Default::default()
-            }),
-            containers: Some(ContainerSection {
-                running_containers: vec![RunningContainer::default()],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            build_summary_counts(&snapshot),
-            "3 packages, 2 configs, 4 services, 1 containers"
-        );
-    }
-
-    #[test]
-    fn test_build_summary_counts_empty() {
-        let snapshot = InspectionSnapshot::default();
-        assert_eq!(build_summary_counts(&snapshot), "");
-    }
-
-    #[test]
-    fn test_build_summary_counts_partial() {
-        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-
-        let snapshot = InspectionSnapshot {
-            rpm: Some(RpmSection {
-                packages_added: (0..847).map(|_| PackageEntry::default()).collect(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        assert_eq!(build_summary_counts(&snapshot), "847 packages");
-    }
-
-    #[test]
-    fn test_build_summary_counts_skips_empty_sections() {
-        use inspectah_core::types::config::ConfigSection;
-        use inspectah_core::types::rpm::RpmSection;
-
-        let snapshot = InspectionSnapshot {
-            // RPM section present but no packages_added
-            rpm: Some(RpmSection::default()),
-            // Config section present but no files
-            config: Some(ConfigSection::default()),
-            ..Default::default()
-        };
-
-        assert_eq!(build_summary_counts(&snapshot), "");
     }
 
     #[test]
