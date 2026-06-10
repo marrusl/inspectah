@@ -129,6 +129,7 @@ When the scan finishes, you will see output like:
   ✓ Config files                12 modified
   ✓ SELinux                     done
   ✓ Non-RPM packages            2 ecosystems
+      pip packages 23 · npm packages 69
 
   ┄┄┄
   12 modified configs · 23 pip packages · 69 npm packages
