@@ -128,18 +128,18 @@ impl FlatRenderer {
                 );
 
                 // In verbose mode, print buffered sub-step lines.
-                if state.verbose {
-                    if let Some(tracker) = state.trackers.get(&id) {
-                        // Clone probe results to release the borrow on state
-                        // before writing (which needs &mut state.writer).
-                        let probes: Vec<_> = tracker.probe_results.clone();
-                        for (probe_idx, (probe_name, count)) in probes.iter().enumerate() {
-                            let s = probe_idx + 1;
-                            let _ = writeln!(
-                                state.writer,
-                                "  [{n:02}/{total:02}.{s}] {probe_name}... {count} found"
-                            );
-                        }
+                if state.verbose
+                    && let Some(tracker) = state.trackers.get(&id)
+                {
+                    // Clone probe results to release the borrow on state
+                    // before writing (which needs &mut state.writer).
+                    let probes: Vec<_> = tracker.probe_results.clone();
+                    for (probe_idx, (probe_name, count)) in probes.iter().enumerate() {
+                        let s = probe_idx + 1;
+                        let _ = writeln!(
+                            state.writer,
+                            "  [{n:02}/{total:02}.{s}] {probe_name}... {count} found"
+                        );
                     }
                 }
 
@@ -185,11 +185,11 @@ impl FlatRenderer {
                 probe,
                 outcome,
             } => {
-                if let Some(tracker) = state.trackers.get_mut(&inspector) {
-                    if let ProbeOutcome::Found { count } = outcome {
-                        let name = display::probe_name(&probe);
-                        tracker.probe_results.push((name.to_string(), count));
-                    }
+                if let Some(tracker) = state.trackers.get_mut(&inspector)
+                    && let ProbeOutcome::Found { count } = outcome
+                {
+                    let name = display::probe_name(&probe);
+                    tracker.probe_results.push((name.to_string(), count));
                 }
             }
         }

@@ -42,7 +42,7 @@ fn colored(text: &str, code: &str, use_color: bool) -> String {
 
 // ── Spinner constants ─────────────────────────────────────────────
 
-/// Braille spinner frames (same as RichRenderer).
+/// Braille spinner frames.
 const SPINNER: &[char] = &[
     '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
     '\u{2807}', '\u{280f}',
@@ -369,6 +369,12 @@ impl PrettyRenderer {
         }
     }
 
+    /// Cancel rendering (SIGINT path). Stops the tick thread without
+    /// printing summary/footer — leaves the terminal as-is.
+    pub fn cancel(&self) {
+        self.stop_tick.store(true, Ordering::Relaxed);
+    }
+
     /// Access built receipt lines (for T5 summary computation).
     pub fn receipt_lines(&self) -> Vec<ReceiptLine> {
         let state = self.state.lock().expect("PrettyRenderer lock poisoned");
@@ -465,11 +471,11 @@ impl PrettyState {
 
     /// If no spinner is active and a slow inspector exists, activate spinner.
     fn maybe_start_spinner(&mut self) {
-        if self.spinner_active.is_none() {
-            if let Some(id) = self.find_slowest_inspector() {
-                self.spinner_active = Some(id);
-                self.spinner_frame = 0;
-            }
+        if self.spinner_active.is_none()
+            && let Some(id) = self.find_slowest_inspector()
+        {
+            self.spinner_active = Some(id);
+            self.spinner_frame = 0;
         }
     }
 

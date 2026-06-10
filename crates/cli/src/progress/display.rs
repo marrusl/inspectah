@@ -45,6 +45,7 @@ pub fn active_display_order(has_subscription: bool) -> &'static [(InspectorId, &
 ///
 /// Returns `0` for inspectors not in the display order table
 /// (e.g. phase-2-only IDs).
+#[allow(dead_code)]
 pub fn display_position(id: InspectorId) -> usize {
     DISPLAY_ORDER
         .iter()
@@ -56,6 +57,7 @@ pub fn display_position(id: InspectorId) -> usize {
 /// Get the human-readable display name for an inspector.
 ///
 /// Returns `"Unknown"` for inspectors not in the display order table.
+#[allow(dead_code)]
 pub fn display_name(id: InspectorId) -> &'static str {
     DISPLAY_ORDER
         .iter()
@@ -126,6 +128,7 @@ pub fn metric_label(kind: &MetricKind, value: usize) -> String {
 }
 
 /// Minimum elapsed seconds before showing a timer on completion lines.
+#[allow(dead_code)]
 pub const TIMER_THRESHOLD_SECS: f64 = 3.0;
 
 #[cfg(test)]
