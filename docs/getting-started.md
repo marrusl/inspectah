@@ -131,7 +131,7 @@ When the scan finishes, you will see output like:
   ✓ Non-RPM packages            2 ecosystems
 
   ┄┄┄
-  12 modified configs · 23 pip packages
+  12 modified configs · 23 pip packages · 69 npm packages
 
   Inspected in 42.3s
   Report: myhost-20260527-143000.tar.gz

@@ -59,14 +59,15 @@ SSH into your web server and run inspectah as root:
 sudo inspectah scan
 ```
 
-inspectah detects the OS (CentOS Stream 9), pulls the matching base image,
-and runs its inspection pipeline. You will see progress output as each
-inspector runs:
+inspectah detects the source system, resolves and pulls the target base
+image, then runs its inspection pipeline:
 
 ```
-Detecting OS... CentOS Stream 9 (x86_64)
-Resolving base image... quay.io/centos-bootc/centos-bootc:stream9
-Pulling base image... done (12.4s)
+Detecting source system...
+  CentOS Stream 9 (x86_64)
+Resolving target image...
+  quay.io/centos-bootc/centos-bootc:stream9 (OsRelease)
+Pulling quay.io/centos-bootc/centos-bootc:stream9...
 Inspecting host webserver01...
 
   ✓ RPM packages               847 packages, 4 repos
@@ -84,9 +85,9 @@ Inspecting host webserver01...
   ┄┄┄
   14 modified configs
 
-  Inspected in 38.7s
-  Report: webserver01-20260527-091500.tar.gz
-  To review: inspectah refine webserver01-20260527-091500.tar.gz
+  Inspected in 28.7s
+  Report: webserver01-20260610-093000.tar.gz
+  To review: inspectah refine webserver01-20260610-093000.tar.gz
 ```
 
 The scan typically takes 30--90 seconds. The base image is cached after
