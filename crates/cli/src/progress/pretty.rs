@@ -69,6 +69,11 @@ struct InspectorTracker {
     probe_results: Vec<(String, usize)>,
     /// Total probes started (for "none found" detection).
     probes_started: usize,
+    /// Per-step metric: set on Metric events, consumed on StepFinished,
+    /// cleared on StepStarted.  Ensures each verbose child line shows
+    /// the metric that arrived *during that step*, not the inspector's
+    /// last-overall metric.
+    current_step_metric: Option<(MetricKind, usize)>,
     /// Verbose-mode child lines (sub-steps, probes), buffered for
     /// atomic flush with the parent line.
     child_lines: Vec<String>,
@@ -81,6 +86,7 @@ impl InspectorTracker {
             metrics: Vec::new(),
             probe_results: Vec::new(),
             probes_started: 0,
+            current_step_metric: None,
             child_lines: Vec::new(),
         }
     }
@@ -93,6 +99,7 @@ impl InspectorTracker {
             metrics: Vec::new(),
             probe_results: Vec::new(),
             probes_started: 0,
+            current_step_metric: None,
             child_lines: Vec::new(),
         }
     }
@@ -216,9 +223,12 @@ impl PrettyRenderer {
                 // Transfer spinner to the next slowest inspector (if any).
                 state.maybe_start_spinner();
             }
-            ProgressEvent::StepStarted { .. } => {
-                // Verbose mode: no starter line — only completion lines
-                // are pushed in StepFinished.
+            ProgressEvent::StepStarted { inspector, .. } => {
+                // Clear per-step metric so the next StepFinished picks
+                // up only metrics that arrived during this step.
+                if let Some(tracker) = state.trackers.get_mut(&inspector) {
+                    tracker.current_step_metric = None;
+                }
             }
             ProgressEvent::StepFinished {
                 inspector,
@@ -229,8 +239,9 @@ impl PrettyRenderer {
                     let use_color = state.use_color;
                     if let Some(tracker) = state.trackers.get_mut(&inspector) {
                         let name = display::step_name(&step);
-                        // Find the last metric received (most recent).
-                        let step_metric = tracker.metrics.last().map(|(k, v)| (k.clone(), *v));
+                        // Consume the per-step metric (set during this step's
+                        // lifetime, cleared on StepStarted).
+                        let step_metric = tracker.current_step_metric.take();
                         let (symbol, suffix) = format_step_line(&outcome, &step_metric, use_color);
                         tracker
                             .child_lines
@@ -244,7 +255,10 @@ impl PrettyRenderer {
                 value,
             } => {
                 if let Some(tracker) = state.trackers.get_mut(&inspector) {
-                    tracker.set_metric(kind, value);
+                    tracker.set_metric(kind.clone(), value);
+                    // Track the most recent metric for the current step
+                    // so StepFinished can show a step-specific label.
+                    tracker.current_step_metric = Some((kind, value));
                 }
             }
             ProgressEvent::ProbeStarted { inspector, .. } => {
@@ -635,13 +649,17 @@ fn build_typed_counts(tracker: &InspectorTracker, id: InspectorId) -> TypedCount
 /// Format a verbose step child line.
 fn format_step_line(
     outcome: &StepOutcome,
-    _metric: &Option<(MetricKind, usize)>,
+    metric: &Option<(MetricKind, usize)>,
     use_color: bool,
 ) -> (String, String) {
     match outcome {
         StepOutcome::Complete => {
             let sym = colored("\u{2713}", "\x1b[32m", use_color);
-            (sym, "done".to_string())
+            let label = match metric {
+                Some((kind, value)) => display::metric_label(kind, *value),
+                None => "done".to_string(),
+            };
+            (sym, label)
         }
         StepOutcome::Skipped { reason } => {
             let sym = colored("\u{25cb}", "\x1b[2m", use_color);
