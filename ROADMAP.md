@@ -295,6 +295,22 @@ A "clean export" option in the export modal that strips working-state files from
 
 Rust redaction pipeline now has parity with Go's heuristic detection layer. Shipped in v0.8.5-alpha.1: PasswordHash pattern matching, PEM block detection, false-positive filtering for non-secret patterns, and comment-line filtering to avoid redacting documentation.
 
+### NIC Naming Risk Detection (HIGH — needs spec)
+
+Detect `eth*` kernel-assigned NIC names on multi-NIC systems. After `bootc switch`, predictable naming kicks in and NIC assignment order may change, silently breaking networking. inspectah should detect multi-NIC hosts using kernel-assigned names and emit a HIGH severity warning with remediation guidance (configure persistent naming before migration). The `network.rs` inspector exists but has no `eth*` risk check today.
+
+### PAM Module Parsing (HIGH — needs spec)
+
+inspectah catches modified `pam.d` files but doesn't parse the module load list. Non-base-image PAM modules (`pam_radius`, `pam_duo`, `pam_ldap`, `pam_centrify`) will break authentication silently post-switch. Parse each pam.d file's module references, diff against the base image's module set, and flag missing modules as HIGH severity. This is the difference between "your PAM config changed" and "your authentication will break."
+
+### Scan Output Rethink (MEDIUM — pre-spec ready)
+
+Rethink the `inspectah scan` CLI progress output for the inspector section. The current output was designed for 12-minute scans; the Rust rewrite reduced this to ~10 seconds. Per-inspector spinners, sub-steps, and timers are noise at current speeds, and the in-place ANSI redraw causes rendering artifacts. Direction: streaming receipt (append-only, one line per inspector, sub-steps behind `--verbose`, slow-inspector safety valve). Pre-spec at `process-docs/specs/proposed/2026-06-10-scan-output-rethink.md`.
+
+### sshd_config Structured Parse (MEDIUM — needs spec)
+
+inspectah catches modified `sshd_config` but doesn't parse individual directives. Custom ports, AllowUsers, key-only auth settings are operator intent that must carry forward. Additionally, some directives are removed or deprecated across RHEL versions — these are silent footguns when the user doesn't know to check. Parse key directives, flag deprecated/removed ones against the target RHEL version, and surface custom settings as actionable triage items rather than a raw file diff.
+
 ### Tier 2 Section Promotion (MEDIUM — after Tier 1)
 
 Promote scheduled tasks (cron + systemd timers), SELinux booleans, and boot parameters (kargs) from Reference to Review. Follows the pattern established by Tier 1 but with additional complexity: SELinux booleans use JSON value dedup instead of prevalence-based merge, kargs need cmdline decomposition for per-argument prevalence, and scheduled tasks need RPM-owned vs user-created filtering. Separate spec after Tier 1 ships.
@@ -302,6 +318,10 @@ Promote scheduled tasks (cron + systemd timers), SELinux booleans, and boot para
 ### Internationalization (i18n) (MEDIUM — taking requests)
 
 Locale-aware output for HTML audit reports and CLI. Translate user-facing strings (headings, labels, recommendations, summary text) at the template/render boundary — internal data identifiers stay English. Initial language support driven by user demand.
+
+### Release Binary Size Optimization (LOW — before 1.0)
+
+Add `[profile.release]` settings to the workspace `Cargo.toml`: `lto = "thin"`, `strip = true`, `codegen-units = 1`. Expected 30-50% binary size reduction (current: 15-18 MB across platforms). Trade-off: slower release builds and stripped stack traces. Dev builds unaffected.
 
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 
