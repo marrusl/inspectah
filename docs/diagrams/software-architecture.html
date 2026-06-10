@@ -43,7 +43,7 @@ const crates = [
     sublabel: 'CLI entry point',
     tier: 'entry',
     color: 'green',
-    deps: ['core', 'collect', 'pipeline', 'web', 'refine'],
+    deps: ['core', 'collect', 'pipeline', 'web', 'refine', 'tui'],
     tooltip: 'Binary crate. Parses CLI arguments, orchestrates scan/fleet/refine commands, manages progress display, and launches the web server.',
     modules: [
       {
@@ -99,6 +99,20 @@ const crates = [
         desc: 'Static file serving',
         children: [
           { text: 'assets.rs', detail: 'rust-embed integration — serves compiled React UI from the binary' },
+        ],
+      },
+      {
+        name: 'adapter',
+        desc: 'Session bridge',
+        children: [
+          { text: 'adapter.rs', detail: 'Bridges refine session state to web response types' },
+        ],
+      },
+      {
+        name: 'web_types',
+        desc: 'Web types',
+        children: [
+          { text: 'web_types.rs', detail: 'Web-specific request and response types' },
         ],
       },
       {
@@ -217,12 +231,13 @@ const crates = [
         children: [
           { text: 'containerfile', detail: 'Generates Containerfile from triage decisions' },
           { text: 'kickstart', detail: 'Generates kickstart file for traditional installs' },
-          { text: 'report', detail: 'Human-readable migration report' },
+          { text: 'report', detail: 'Human-readable migration report (HTML)' },
+          { text: 'report_data', detail: 'Report data preparation and serialization' },
           { text: 'audit', detail: 'Audit trail of all changes and decisions' },
           { text: 'secrets', detail: 'Redacted secrets summary for review' },
           { text: 'tarball', detail: 'Snapshot archive (.tar.gz) packaging' },
           { text: 'users', detail: 'User/group materialization for Containerfile' },
-          { text: 'services', detail: 'Service intent rendering (systemd units)' },
+          { text: 'service_intent', detail: 'Service intent rendering (quadlet/systemd migration)' },
           { text: 'safety', detail: 'Safety checks and destructive-action warnings' },
           { text: 'configtree', detail: 'Config file tree visualization' },
           { text: 'baseline_fmt', detail: 'Baseline comparison formatting' },
@@ -288,12 +303,22 @@ const crates = [
         ],
       },
       {
+        name: 'projection/',
+        desc: 'Decision projection',
+        children: [
+          { text: 'decisions.rs', detail: 'Applies user decisions to snapshot items' },
+          { text: 'reference.rs', detail: 'Computes reference data for projected output' },
+          { text: 'types.rs', detail: 'Projection-specific types for renderer consumption' },
+        ],
+      },
+      {
         name: 'tarball + repo_index',
         desc: 'Archive & index',
         children: [
           { text: 'tarball.rs', detail: 'Read/write snapshot tarballs for refine sessions' },
           { text: 'repo_index.rs', detail: 'Repository-level index for multi-snapshot management' },
           { text: 'baseline_summary.rs', detail: 'Baseline comparison summary generation' },
+          { text: 'types.rs', detail: 'Refine-specific request/response types' },
         ],
       },
     ],
@@ -337,13 +362,6 @@ const crates = [
         ],
       },
       {
-        name: 'ffi/',
-        desc: 'Foreign function interface',
-        children: [
-          { text: 'rpm', detail: 'Optional FFI binding to librpm for direct RPM database queries' },
-        ],
-      },
-      {
         name: 'baseline',
         desc: 'Baseline comparison',
         children: [
@@ -371,15 +389,21 @@ const crates = [
           { text: 'rpm', detail: 'RPM package types — name, version, epoch, release, arch, source' },
           { text: 'config', detail: 'Config file types — path, owner, permissions, diff status' },
           { text: 'services', detail: 'Systemd service types — unit name, state, enabled, custom' },
+          { text: 'network', detail: 'Network types — interfaces, firewall rules, DNS, proxy' },
           { text: 'containers', detail: 'Container types — image, name, state, engine' },
-          { text: 'fleet', detail: 'Fleet types — consensus items, variant definitions' },
-          { text: 'users', detail: 'User/group types — uid, gid, shell, home, groups' },
+          { text: 'kernelboot', detail: 'Kernel/boot types — parameters, modules, sysctl' },
+          { text: 'storage', detail: 'Storage types — block devices, mounts, LVM' },
+          { text: 'scheduled', detail: 'Scheduled task types — cron jobs, systemd timers' },
           { text: 'selinux', detail: 'SELinux types — mode, policy version, custom modules' },
+          { text: 'nonrpm', detail: 'Non-RPM software types — pip, npm, go, standalone' },
+          { text: 'users', detail: 'User/group types — uid, gid, shell, home, groups' },
+          { text: 'fleet', detail: 'Fleet types — consensus items, variant definitions' },
           { text: 'repo', detail: 'Repository definitions — id, name, baseurl, enabled, gpgcheck' },
           { text: 'system / os', detail: 'System info — hostname, OS version, kernel, arch' },
           { text: 'subscription', detail: 'SubscriptionFile, SubscriptionSection, EntitlementPair types' },
           { text: 'redaction', detail: 'Redaction markers and scrubbed-field tracking' },
-          { text: 'warnings / preflight', detail: 'Warning types, preflight check results' },
+          { text: 'completeness / preflight', detail: 'Completeness tracking and preflight check results' },
+          { text: 'warnings', detail: 'Warning types for non-fatal issues during inspection' },
           { text: 'progress', detail: 'Progress reporting types for UI feedback' },
         ],
       },

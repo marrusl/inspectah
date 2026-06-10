@@ -42,16 +42,17 @@ inspectah is a Cargo workspace with seven member crates, all located under
 
 | Crate | Directory | Purpose |
 |---|---|---|
-| `inspectah-core` | `crates/core/` | Shared traits (`Inspector`, `Executor`, `ProgressSink`), type definitions, and snapshot structures |
+| `inspectah-core` | `crates/core/` | Shared traits (`Inspector`, `Executor`, `Renderer`), type definitions, snapshot structures, and fleet logic |
 | `inspectah-collect` | `crates/collect/` | Inspector implementations -- each inspector gathers data from one system domain |
-| `inspectah-pipeline` | `crates/pipeline/` | Orchestrates collection, rendering, and output generation |
-| `inspectah-refine` | `crates/refine/` | Refinement engine -- decision persistence, fleet consensus, section promotion |
+| `inspectah-pipeline` | `crates/pipeline/` | Orchestrates collection, rendering, output generation, and build planning |
+| `inspectah-refine` | `crates/refine/` | Refinement engine -- triage classification, decision projection, fleet consensus |
 | `inspectah-web` | `crates/web/` | Web UI (refine interface) for interactive triage |
 | `inspectah-tui` | `crates/tui/` | Terminal UI for interactive triage (ratatui-based alternative to the web UI) |
 | `inspectah-cli` | `crates/cli/` | Command-line interface and progress display |
 
 Dependencies flow downward: `inspectah-cli` depends on all other crates.
-`inspectah-web` and `inspectah-tui` both depend on `inspectah-refine` and
+`inspectah-web` depends on `inspectah-refine`, `inspectah-pipeline`, and
+`inspectah-core`. `inspectah-tui` depends on `inspectah-refine` and
 `inspectah-core`. `inspectah-refine` depends on `inspectah-pipeline` and
 `inspectah-core`.
 

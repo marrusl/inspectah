@@ -67,12 +67,13 @@ Core contains several important modules:
 
 - **types/** -- One module per domain: `rpm`, `config`, `services`, `network`,
   `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
-  `nonrpm`, `fleet`, `subscription`, and supporting types like `warnings`,
-  `redaction`, `completeness`, and `preflight`. Each defines the serializable
-  structs that flow through the entire pipeline. All 25 toggleable item types
-  use a unified include-default model: `include` fields default to `true`
-  via a `default_true` serde helper, and a `locked` boolean field prevents
-  toggling for non-negotiable decisions (e.g., baseline-subtracted items).
+  `nonrpm`, `fleet`, `subscription`, `repo`, `os`, `system`, and supporting
+  types like `warnings`, `redaction`, `completeness`, `preflight`, and
+  `progress`. Each defines the serializable structs that flow through the
+  entire pipeline. All 25 toggleable item types use a unified include-default
+  model: `include` fields default to `true` via a `default_true` serde
+  helper, and a `locked` boolean field prevents toggling for non-negotiable
+  decisions (e.g., baseline-subtracted items).
 - **traits/** -- The `Inspector`, `Renderer`, `Detector`, `Executor`, and
   `Progress` traits that define the contracts between crates. Collectors
   implement `Inspector`. Output generators implement `Renderer`. The executor
@@ -105,34 +106,36 @@ chroot), and `MockExecutor`, which returns canned output for testing. Every
 inspector accepts an executor, which means every inspector is testable without
 root access or a real system.
 
-Collect's inspectors mirror the domain types in core:
+Collect organizes inspectors under `inspectors/`, with subdirectories for
+complex domains and single files for simpler ones. An `executor/` module
+provides the host abstraction.
 
-- **rpm/** -- Package inventory, leaf/auto classification, version drift
-  detection, repo tracking, GPG key resolution, modified config detection via
-  `rpm -Va`, and unowned file scanning.
-- **config/** -- Configuration file discovery via filesystem walk, RPM
-  ownership classification, content diffing against package defaults, and
-  semantic category assignment.
-- **services.rs** -- Systemd unit enumeration, preset comparison, and
-  enablement state detection.
-- **network.rs** -- Firewall rules, hostname, DNS configuration, network
-  connection profiles, and proxy settings.
-- **kernelboot.rs** -- Kernel parameters, loaded modules, sysctl values with
-  source attribution, locale, and timezone detection.
-- **containers.rs**, **storage.rs**, **scheduled.rs**, **selinux.rs**,
-  **nonrpm.rs**, **users.rs** -- Domain-specific inspectors for containers,
-  storage mounts, cron/timers, SELinux policy, non-RPM software, and user
-  accounts.
-- **subscription.rs** -- RHEL subscription material collection: entitlement
-  cert/key pairs from `/etc/pki/entitlement`, CA certs from `/etc/rhsm/ca`,
-  `rhsm.conf`, and `redhat.repo`. Parses X.509 expiry dates, validates
-  bundle completeness, and extracts org metadata from consumer certs.
-  Activated by `--preserve subscription`.
+- **inspectors/rpm/** -- Package inventory, leaf/auto classification, version
+  drift detection, repo tracking, GPG key resolution, modified config
+  detection via `rpm -Va`, and unowned file scanning.
+- **inspectors/config/** -- Configuration file discovery via filesystem walk
+  (`walk.rs`), RPM ownership classification (`classify.rs`), and modified
+  config detection via `rpm -Va` (`rpmva.rs`).
+- **inspectors/services.rs** -- Systemd unit enumeration, preset comparison,
+  and enablement state detection.
+- **inspectors/network.rs** -- Firewall rules, hostname, DNS configuration,
+  network connection profiles, and proxy settings.
+- **inspectors/kernelboot.rs** -- Kernel parameters, loaded modules, sysctl
+  values with source attribution, locale, and timezone detection.
+- **inspectors/containers.rs**, **storage.rs**, **scheduled.rs**,
+  **selinux.rs**, **nonrpm.rs**, **users.rs** -- Domain-specific inspectors
+  for containers, storage mounts, cron/timers, SELinux policy, non-RPM
+  software, and user accounts.
+- **inspectors/subscription.rs** -- RHEL subscription material collection:
+  entitlement cert/key pairs from `/etc/pki/entitlement`, CA certs from
+  `/etc/rhsm/ca`, `rhsm.conf`, and `redhat.repo`. Parses X.509 expiry
+  dates, validates bundle completeness, and extracts org metadata from
+  consumer certs. Activated by `--preserve subscription`.
+- **executor/** -- The `RealExecutor` and `MockExecutor` implementations live
+  here, along with the executor selection logic.
 - **baseline.rs** -- Baseline image querying: runs `podman run` against the
   target image to extract its package list, service presets, and config
   defaults for subtraction.
-- **ffi/** -- Optional RPM FFI bindings for direct librpm access (behind the
-  `ffi-rpm` feature flag), avoiding the overhead of shelling out to `rpm`.
 
 ## inspectah-pipeline: from data to artifacts
 
@@ -174,6 +177,8 @@ Pipeline's modules:
   - `containerfile.rs` -- Generates a Containerfile with correctly ordered
     `RUN`, `COPY`, and `RUN dnf install` directives.
   - `report.rs` -- HTML audit report with PatternFly UI and full section parity.
+  - `report_data.rs` -- Report data preparation and serialization for the
+    HTML report.
   - `audit.rs` -- Machine-readable audit log of all inspection findings.
   - `kickstart.rs` -- Kickstart file generation for hosts that use that
     provisioning model.
@@ -215,10 +220,12 @@ Refine's modules:
 - **tarball.rs** -- Packages the current refine session state for export.
 - **types.rs** -- Refine-specific request/response types for the web API.
 - **projection/** -- Snapshot projection for refine: applies user decisions
-  to the snapshot, computes reference data, and produces the projected
-  types consumed by renderers and the export path.
-- **fleet/** -- Fleet-specific refine logic: classification across hosts,
-  variant diffing, and variant operations for the fleet refine UI.
+  (`decisions.rs`) to the snapshot, computes reference data
+  (`reference.rs`), and produces the projected types (`types.rs`) consumed
+  by renderers and the export path.
+- **fleet/** -- Fleet-specific refine logic: triage classification across
+  hosts (`classify.rs`), variant diffing (`diff.rs`), and variant operations
+  (`variant_ops.rs`) for the fleet refine UI.
 
 ## inspectah-web: serving the interface
 
