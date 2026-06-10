@@ -16,6 +16,7 @@ use inspectah_core::types::progress::ProgressEvent;
 pub mod display;
 pub mod flat;
 pub mod plain;
+pub mod receipt;
 pub mod rich;
 
 // ── Mode detection ──────────────────────────────────────────────────
