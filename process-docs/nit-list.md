@@ -83,9 +83,17 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 - [ ] **In-artifact warning for unredacted output:** Consider a report banner or tarball filename suffix (e.g., `-UNREDACTED`) for snapshots produced with `--no-redaction`, to reduce accidental oversharing. Not blocking for pre-1.0 alpha, but should land before GA or broader external sharing.
 
-## Workspace Layout
+## ~~Workspace Layout~~ (DONE — 2026-06-09)
 
-- [ ] **Move crates under `crates/` top-level directory:** Restructure the workspace so member crates live under `crates/` (e.g., `crates/core/`, `crates/collect/`) with prefix-dropped directory names. Package names stay `inspectah-*` in Cargo.toml. Plan at `process-docs/plans/crates-reorganization.md`.
+## Server Disconnected Overlay
+
+- [ ] **Show "Server disconnected" in the browser when the backend stops:** When the refine web server is killed (Ctrl-C), the page silently stops responding. Add a periodic heartbeat check in the frontend JS (fetch a lightweight endpoint, e.g., `/api/health`). When it fails, show a full-page overlay: "Server disconnected. Restart `inspectah refine` to continue." Prevents confusion when the backend goes away mid-session.
+
+## Scan Output Rethink Spec Polish (from R3 review)
+
+- [ ] **`--quiet` prose vs CLI behavior:** Spec carry-forward text says `--quiet` is a no-op in the new renderers. Current CLI behavior: `--quiet` suppresses the progress checklist (null renderer) but still prints completion + output path. Spec should either preserve the existing contract or explicitly declare a behavior change.
+- [ ] **Sensitivity-confirmation ordering:** Section 6a and the subscription example disagree on ordering (timing line → sensitivity → report path vs. timing line → report path → sensitivity). Pick one order and make prose, examples, and implementation match.
+- [ ] **Interrupted-path wording:** Spec says "only appears for wave-2 inspectors that never started because SIGINT arrived during wave 1." Actual cancellation boundary is more nuanced — SIGINT can arrive mid-wave, leaving some wave-1 inspectors without a completion result. Soften to "inspectors lacking a completion result by the cancellation boundary."
 
 ## TUI Input Handling
 
@@ -97,6 +105,50 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [ ] **FlashMessage tests:** No tests for FlashMessage time-based expiry behavior. Add `flash_not_expired_immediately` and `flash_expired_after_zero_duration`.
 - [ ] **Baseline group index constant:** `TuiState::new()` hardcodes `2` for baseline group. Define `const BASELINE_GROUP_INDEX: usize = 2;`.
 - [ ] **Help mode key mapping test:** No test for Help mode in keys.rs. Add coverage for Esc/q/? → CloseDetail.
+
+## Cloud Provider Detection
+
+- [ ] **DMI strings + cloud-agent detection:** Read `/sys/class/dmi/id/sys_vendor` and `/sys/class/dmi/id/product_name` to identify cloud provider. Lookup table: "Amazon EC2" -> aws, "Google Compute Engine" -> gcp, "Microsoft Corporation" -> azure, etc. Cross-reference with cloud-agent packages already in `packages_added` (`cloud-init`, `WALinuxAgent`, `amazon-ssm-agent`). Store as `Option<String>` on `InspectionSnapshot.meta` (or a dedicated `cloud_provider` field on `OsRelease`). No new inspector needed -- two `exec.read_file()` calls in the existing scan pipeline or a lightweight `system.rs` helper. ~80 lines including tests.
+
+## Multiarch (i686) Warning
+
+- [ ] **Populate `multiarch_packages` during single-host scans:** The `multiarch_packages: Vec<String>` field already exists on `RpmSection` (line 203 of `types/rpm.rs`) and is handled correctly in fleet merge (`merge.rs` line 881-882). It is never populated during single-host collection -- the `RpmSection` construction in `rpm/mod.rs` line 492-508 uses `..Default::default()`. Fix: after building `packages_added`, group by name, collect entries where >1 distinct arch exists, set `multiarch_packages` to those names. Emit a warning with the affected package names. ~40 lines.
+
+## Resource Limits (limits.conf)
+
+- [ ] **Parse limits.conf for operator intent:** `ConfigCategory::Limits` already classifies `/etc/security/limits.*` files (`classify.rs` line 59-62). Content is captured in `ConfigFileEntry.content`. Missing: parse the content for `domain type item value` tuples (one per non-comment, non-blank line) and surface structured entries in the report/audit output so users see "elasticsearch nofile 65535" rather than a raw file reference. Could be a post-processing step in `config/mod.rs` or a presentation enhancement in `pipeline/src/render/report.rs`. No schema changes needed -- `ConfigFileEntry.content` already carries the data, this is about presentation. ~60 lines.
+
+## Chrony/NTP Config
+
+- [ ] **Parse chrony.conf for custom NTP servers:** Config inspector already catches `/etc/chrony.conf` as rpm-owned-modified (confirmed by `config_test.rs` line 52/92). Content is captured. Missing: parse `server`, `pool`, and `peer` directives to surface custom NTP sources vs RHEL defaults. Straightforward line-by-line parse of the already-captured content, no external commands. Consider adding `ConfigCategory::TimeSync` variant for `/etc/chrony.conf` and `/etc/chrony.keys` (currently classified as `Other`). ~50 lines including a category addition and tests.
+
+## Duplicate Packages (same name+arch, multiple versions)
+
+- [ ] **Detect duplicate RPM installs:** Same package name and arch installed at multiple versions (e.g., `kernel` is expected, but `openssl-libs-1.1.1` and `openssl-libs-3.0.7` is a problem). Group `packages_added` by `(name, arch)`, flag entries with >1 version. Emit warning. Reference: convert2rhel `duplicate_packages.py`. Very low effort — group-by logic on existing data.
+
+## Tainted Kernel Modules
+
+- [ ] **Detect tainted kernel modules:** Parse `/proc/modules` flags column for out-of-tree or proprietary modules (taint flags `O`, `E`, `P`). These may not be available in the target image. Emit warning with module names and taint reasons. Reference: convert2rhel `tainted_kmods.py`. Low effort — file parse + flag lookup.
+
+## SSSD/Kerberos/IPA Identity Config
+
+- [ ] **Classify SSSD/Kerberos/IPA configs:** Config inspector already captures modified files under `/etc/sssd/`, `/etc/krb5.conf`, `/etc/ipa/`. Missing: add `ConfigCategory` variant (e.g., `Identity`) so these surface as a classified group rather than generic config. Very low effort — category addition in `classify.rs`.
+
+## firewalld.conf Coverage
+
+- [ ] **Verify firewalld.conf detection:** Likely already caught by rpm -Va as rpm-owned-modified. Verify coverage and confirm it surfaces in the config section. If the `CleanupModulesOnExit` directive changed between RHEL versions, flag it. Very low effort — verification pass.
+
+## System-Wide Crypto Policy
+
+- [ ] **Detect custom crypto policy:** Check `/etc/crypto-policies/config` for non-default policy (e.g., `FUTURE`, `FIPS`, custom). Default is `DEFAULT`. A custom policy is operator intent that must carry into the image. Very low effort — single file read + string compare.
+
+## nsswitch.conf
+
+- [ ] **Detect custom nsswitch.conf:** Parse `/etc/nsswitch.conf` for non-default name service switch entries (e.g., `sss`, `ldap`, `winbind`). These indicate external identity sources that need corresponding packages in the image. Likely already caught as modified config — verify and consider structured parsing. Very low effort.
+
+## kdump.conf Coverage
+
+- [ ] **Verify kdump.conf detection:** Likely already caught by rpm -Va as rpm-owned-modified. Verify coverage and confirm custom crash dump targets surface. Very low effort — verification pass. Reference: leapp kdump actor.
 
 ---
 
