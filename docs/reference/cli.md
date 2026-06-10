@@ -53,7 +53,7 @@ inspectah scan [OPTIONS]
 | `--preserve <ITEM>` | string | — | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable |
 | `--no-redaction` | bool | `false` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive) |
 | `--ack-sensitive` | bool | `false` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive` |
-| `--progress <MODE>` | enum | `pretty` | Progress display mode: `pretty` or `flat` |
+| `--progress <MODE>` | enum | `(auto)` | Progress display mode: `pretty` or `flat`. Auto-detected: TTY → `pretty`, non-TTY/CI → `flat`. Override with `INSPECTAH_PROGRESS` env var. |
 | `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors (works with both pretty and flat modes) |
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints) |
 
