@@ -2039,6 +2039,65 @@ impl RefineSession {
 /// Preview/export fidelity: both paths use `render_containerfile(snap,
 /// Some(&materialized_roots))` with the same materialized root set, so
 /// the exported Containerfile is byte-identical to what the preview shows.
+/// Write `fleet/variants/<path>/<hash>.content` files for every Alternative
+/// config entry, drop-in, and quadlet unit in a fleet snapshot.  Selected and
+/// Only variants are materialized in the normal config tree; alternatives are
+/// preserved here so the export tarball captures all variant content.
+fn write_fleet_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), RefineError> {
+    use inspectah_core::types::fleet::VariantSelection;
+    use sha2::{Digest, Sha256};
+
+    let mut wrote_any = false;
+
+    // Config file alternatives
+    if let Some(ref cfg) = snap.config {
+        for entry in &cfg.files {
+            if entry.variant_selection == VariantSelection::Alternative {
+                let hash = format!("{:x}", Sha256::digest(entry.content.as_bytes()));
+                let short = &hash[..12];
+                let rel = entry.path.strip_prefix('/').unwrap_or(&entry.path);
+                let dir = out.join("fleet/variants").join(rel);
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join(format!("{short}.content")), &entry.content)?;
+                wrote_any = true;
+            }
+        }
+    }
+
+    // Drop-in alternatives
+    if let Some(ref svc) = snap.services {
+        for dropin in &svc.drop_ins {
+            if dropin.variant_selection == VariantSelection::Alternative {
+                let hash = format!("{:x}", Sha256::digest(dropin.content.as_bytes()));
+                let short = &hash[..12];
+                let rel = dropin.path.strip_prefix('/').unwrap_or(&dropin.path);
+                let dir = out.join("fleet/variants").join(rel);
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join(format!("{short}.content")), &dropin.content)?;
+                wrote_any = true;
+            }
+        }
+    }
+
+    // Quadlet alternatives
+    if let Some(ref ctr) = snap.containers {
+        for quadlet in &ctr.quadlet_units {
+            if quadlet.variant_selection == VariantSelection::Alternative {
+                let hash = format!("{:x}", Sha256::digest(quadlet.content.as_bytes()));
+                let short = &hash[..12];
+                let rel = quadlet.path.strip_prefix('/').unwrap_or(&quadlet.path);
+                let dir = out.join("fleet/variants").join(rel);
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join(format!("{short}.content")), &quadlet.content)?;
+                wrote_any = true;
+            }
+        }
+    }
+
+    let _ = wrote_any; // suppress unused warning when no variants exist
+    Ok(())
+}
+
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
@@ -2068,7 +2127,13 @@ pub fn render_refine_export(
     inspectah_pipeline::render::users::stage_ssh_keys(snap, out)
         .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
 
-    // 2c. Remove any top-level artifacts outside the approved export contract.
+    // 2c. Materialize fleet variant files (conditional — only for fleet snapshots
+    //     with Alternative config entries, drop-ins, or quadlet units).
+    if snap.fleet_meta.is_some() {
+        write_fleet_variants(snap, out)?;
+    }
+
+    // 2d. Remove any top-level artifacts outside the approved export contract.
     //     "quadlet" is intentionally excluded — quadlet units are written by
     //     write_config_tree as a side effect but are NOT part of the refine
     //     export contract. The Containerfile references them via config/ paths.

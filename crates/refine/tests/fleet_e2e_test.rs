@@ -411,15 +411,22 @@ fn fleet_refine_full_lifecycle() {
         .export_tarball(&tarball_path, session.generation())
         .expect("export should succeed");
 
-    // Read tarball entries and check for fleet/variants/ content
+    // Read tarball entries (strip the archive prefix directory) and check
+    // for fleet/variants/ content.
     let f = std::fs::File::open(&tarball_path).expect("open tarball");
     let gz = flate2::read::GzDecoder::new(f);
     let mut archive = tar::Archive::new(gz);
+    let prefix_slash = "export/";
     let entry_paths: Vec<String> = archive
         .entries()
         .expect("read entries")
         .filter_map(|e| e.ok())
-        .map(|e| e.path().unwrap().to_string_lossy().to_string())
+        .map(|e| {
+            let raw = e.path().unwrap().to_string_lossy().to_string();
+            raw.strip_prefix(prefix_slash)
+                .unwrap_or(&raw)
+                .to_string()
+        })
         .collect();
 
     // Fleet snapshot with alternatives should produce fleet/variants/ entries

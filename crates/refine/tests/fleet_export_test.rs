@@ -13,7 +13,7 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 /// Build a single-host snapshot (no fleet_meta) with one config file.
 fn single_host_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot {
-        schema_version: 17,
+        schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
         ..Default::default()
     };
     snap.rpm = Some(RpmSection {
@@ -103,30 +103,63 @@ fn fleet_snapshot_with_variants() -> InspectionSnapshot {
 }
 
 /// Collect all file entries from a tarball as a sorted set of paths.
+/// The tarball prefix directory (derived from the archive filename stem)
+/// is stripped so tests can assert against logical paths like
+/// "fleet/variants/..." rather than "output/fleet/variants/...".
 fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
     let file = std::fs::File::open(tarball_path).unwrap();
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
+
+    let stem = tarball_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = stem
+        .strip_suffix(".tar.gz")
+        .or_else(|| stem.strip_suffix(".tgz"))
+        .unwrap_or(&stem);
+    let prefix_slash = format!("{prefix}/");
+
     let mut files = BTreeSet::new();
     for entry in archive.entries().unwrap() {
         let entry = entry.unwrap();
         if entry.header().entry_type() == tar::EntryType::Regular {
-            let path = entry.path().unwrap().to_string_lossy().to_string();
-            files.insert(path);
+            let raw = entry.path().unwrap().to_string_lossy().to_string();
+            let stripped = raw
+                .strip_prefix(&prefix_slash)
+                .unwrap_or(&raw)
+                .to_string();
+            files.insert(stripped);
         }
     }
     files
 }
 
-/// Read a specific file's content from a tarball.
+/// Read a specific file's content from a tarball.  The `target` path is
+/// matched after stripping the archive prefix directory.
 fn tarball_read_file(tarball_path: &std::path::Path, target: &str) -> Option<String> {
     let file = std::fs::File::open(tarball_path).unwrap();
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
+
+    let stem = tarball_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = stem
+        .strip_suffix(".tar.gz")
+        .or_else(|| stem.strip_suffix(".tgz"))
+        .unwrap_or(&stem);
+    let prefix_slash = format!("{prefix}/");
+
     for entry in archive.entries().unwrap() {
         let mut entry = entry.unwrap();
-        let path = entry.path().unwrap().to_string_lossy().to_string();
-        if path == target {
+        let raw = entry.path().unwrap().to_string_lossy().to_string();
+        let stripped = raw
+            .strip_prefix(&prefix_slash)
+            .unwrap_or(&raw);
+        if stripped == target {
             let mut content = String::new();
             std::io::Read::read_to_string(&mut entry, &mut content).unwrap();
             return Some(content);
