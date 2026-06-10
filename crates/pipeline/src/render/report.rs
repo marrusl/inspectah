@@ -16,13 +16,38 @@ const PF_CSS: &str = include_str!("../../assets/patternfly.min.css");
 const REPORT_CSS: &str = include_str!("../../assets/report.css");
 const REPORT_JS: &str = include_str!("../../assets/report.js");
 
+// Embed all report templates at compile time so the binary is self-contained.
+const TEMPLATES: &[(&str, &str)] = &[
+    ("report/base.html", include_str!("../../templates/report/base.html")),
+    ("report/baseline.html", include_str!("../../templates/report/baseline.html")),
+    ("report/completeness.html", include_str!("../../templates/report/completeness.html")),
+    ("report/config.html", include_str!("../../templates/report/config.html")),
+    ("report/fleet-summary.html", include_str!("../../templates/report/fleet-summary.html")),
+    ("report/header.html", include_str!("../../templates/report/header.html")),
+    ("report/incomplete.html", include_str!("../../templates/report/incomplete.html")),
+    ("report/kernel.html", include_str!("../../templates/report/kernel.html")),
+    ("report/nonrpm.html", include_str!("../../templates/report/nonrpm.html")),
+    ("report/packages.html", include_str!("../../templates/report/packages.html")),
+    ("report/redactions.html", include_str!("../../templates/report/redactions.html")),
+    ("report/scheduled.html", include_str!("../../templates/report/scheduled.html")),
+    ("report/section.html", include_str!("../../templates/report/section.html")),
+    ("report/security.html", include_str!("../../templates/report/security.html")),
+    ("report/services.html", include_str!("../../templates/report/services.html")),
+    ("report/source-info.html", include_str!("../../templates/report/source-info.html")),
+    ("report/storage.html", include_str!("../../templates/report/storage.html")),
+    ("report/summary-cards.html", include_str!("../../templates/report/summary-cards.html")),
+    ("report/toc.html", include_str!("../../templates/report/toc.html")),
+    ("report/users.html", include_str!("../../templates/report/users.html")),
+    ("report/warnings.html", include_str!("../../templates/report/warnings.html")),
+];
+
 /// Render a self-contained PatternFly HTML report from the snapshot.
 pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> String {
     let mut env = Environment::new();
-    env.set_loader(minijinja::path_loader(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/templates"
-    )));
+    for &(name, source) in TEMPLATES {
+        env.add_template_owned(name.to_string(), source.to_string())
+            .expect("embedded template must parse");
+    }
 
     let os_name = snap
         .os_release
