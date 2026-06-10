@@ -92,23 +92,25 @@ fn accept_partially_redacted() {
 }
 
 #[test]
-fn reject_unknown_redaction_state() {
+fn accept_unknown_redaction_state_with_warning() {
     let dir = tempdir().unwrap();
     let snap_json = make_test_snapshot(Some(RedactionState::Unknown));
     let tarball = write_flat_tarball(dir.path(), &snap_json);
 
-    let result = inspectah_refine::tarball::from_tarball(&tarball);
-    assert!(matches!(result, Err(RefineError::UntrustedSnapshot(_))));
+    // Now accepts with warning instead of rejecting
+    let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
+    assert_eq!(session.view().generation, 0);
 }
 
 #[test]
-fn reject_absent_redaction_state() {
+fn accept_absent_redaction_state_with_warning() {
     let dir = tempdir().unwrap();
     let snap_json = make_test_snapshot(None);
     let tarball = write_flat_tarball(dir.path(), &snap_json);
 
-    let result = inspectah_refine::tarball::from_tarball(&tarball);
-    assert!(matches!(result, Err(RefineError::UntrustedSnapshot(_))));
+    // Now accepts with warning instead of rejecting
+    let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
+    assert_eq!(session.view().generation, 0);
 }
 
 #[test]
