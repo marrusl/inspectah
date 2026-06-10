@@ -150,8 +150,8 @@ impl TerminalProgress {
             )),
             Mode::Flat => TerminalProgressInner::Flat(flat::FlatRenderer::new(
                 Box::new(std::io::stderr()),
-                display::DISPLAY_ORDER.len(),
                 verbose,
+                display::DISPLAY_ORDER,
             )),
         };
         Self {
