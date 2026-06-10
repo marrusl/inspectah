@@ -25,7 +25,7 @@ use inspectah_core::types::progress::{
 };
 
 use super::display;
-use super::receipt::{InspectorState, ReceiptLine, ScanFinalize, TypedCounts};
+use super::receipt::{InspectorState, ReceiptLine, ScanFinalize, ScanSummary, TypedCounts};
 
 // ── ANSI helpers ────────────────────────────────────────────────────
 
@@ -285,16 +285,87 @@ impl PrettyRenderer {
         }
     }
 
-    /// Finalize rendering.  Stub for T3 — T5 adds the real summary/footer logic.
-    pub fn finalize(&self, _scan: &ScanFinalize) {
+    /// Finalize rendering — summary block + typed footer.
+    pub fn finalize(&self, scan: &ScanFinalize) {
         // Stop the tick thread.
         self.stop_tick.store(true, Ordering::Relaxed);
-        // Clear any lingering spinner line.
+
         let mut state = self.state.lock().expect("finalize lock");
+        let mut writer = self.writer.lock().expect("finalize writer lock");
+
+        // Clear any lingering spinner line.
         if state.spinner_active.is_some() {
-            let mut writer = self.writer.lock().expect("finalize writer lock");
             let _ = write!(writer, "\x1b[2K\r");
             state.spinner_active = None;
+        }
+
+        // Build summary from collected receipt lines.
+        let summary = ScanSummary::build(&state.receipt_lines, scan.version_changes.clone());
+
+        // Print summary block (separator + content) if there's anything to show.
+        if summary.has_content() {
+            let _ = writeln!(writer);
+            let _ = writeln!(writer, "  \u{2504}\u{2504}\u{2504}");
+            if let Some(ref vc) = summary.version_changes {
+                let _ = writeln!(writer, "  {}", vc.format());
+            }
+            for hotspot in &summary.hotspots {
+                let _ = writeln!(writer, "  {}", hotspot.format_pretty());
+            }
+        }
+
+        // Footer zone.
+        let _ = writeln!(writer);
+        let secs = scan.elapsed.as_secs_f64();
+
+        match &scan.end_state {
+            super::receipt::ScanEndState::Completed { path, sensitivity } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Report: {}", path.display());
+                let _ = writeln!(writer, "  To review: inspectah refine {}", path.display());
+                if let Some(notice) = sensitivity {
+                    for line in notice.lines() {
+                        let _ = writeln!(writer, "  {line}");
+                    }
+                }
+            }
+            super::receipt::ScanEndState::InspectOnly { path } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Output: {}", path.display());
+            }
+            super::receipt::ScanEndState::InspectOnlyStdout => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+            }
+            super::receipt::ScanEndState::WriteFailure { error } => {
+                let tally = if summary.non_success_tally.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", summary.non_success_tally.format())
+                };
+                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Error: {error}");
+            }
+            super::receipt::ScanEndState::Interrupted { completed, total } => {
+                let _ = writeln!(
+                    writer,
+                    "  Interrupted after {secs:.1}s ({completed} of {total} inspectors completed)"
+                );
+            }
         }
     }
 
@@ -1107,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_stub_does_not_panic() {
+    fn finalize_does_not_panic() {
         let (r, _buf) = test_renderer(false, false, false);
         use crate::progress::receipt::ScanEndState;
         use std::path::PathBuf;
@@ -1121,6 +1192,227 @@ mod tests {
             version_changes: None,
         };
         r.finalize(&scan);
+    }
+
+    // ── Summary + footer snapshot tests (T5) ──────────────────────────
+
+    /// Helper: feed a typical scan and finalize, returning only the
+    /// summary + footer portion (everything after the receipt lines).
+    fn finalize_output(
+        r: &PrettyRenderer,
+        buf: &Arc<Mutex<Vec<u8>>>,
+        scan: &ScanFinalize,
+    ) -> String {
+        // Capture the buffer length before finalize to isolate footer output.
+        let pre_len = buf.lock().expect("test lock").len();
+        r.finalize(scan);
+        let full = buf.lock().expect("test lock").clone();
+        String::from_utf8(full[pre_len..].to_vec()).expect("valid utf8")
+    }
+
+    #[test]
+    fn pretty_summary_with_version_changes() {
+        use crate::progress::receipt::{ScanEndState, VersionChangeSummary};
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // Feed inspectors that produce hotspot counts.
+        feed_with_metric(&r, InspectorId::Config, MetricKind::ConfigsModified, 37);
+        feed_nonrpm_probes(
+            &r,
+            &[
+                (&ProbeId::PipPackages, Some(23)),
+                (&ProbeId::NpmPackages, Some(69)),
+            ],
+        );
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(4.2),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: Some(VersionChangeSummary {
+                total: 58,
+                target_newer: 54,
+                host_newer: 4,
+            }),
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_summary_clean_host() {
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // All inspectors succeed with no hotspot-bearing metrics.
+        feed_simple_complete(&r, InspectorId::Network);
+        feed_simple_complete(&r, InspectorId::Storage);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(1.3),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_completed() {
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(2.5),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/host-report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_inspect_only() {
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(3.7),
+            end_state: ScanEndState::InspectOnly {
+                path: PathBuf::from("/tmp/inspect.json"),
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_inspect_only_stdout() {
+        use crate::progress::receipt::ScanEndState;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(1.0),
+            end_state: ScanEndState::InspectOnlyStdout,
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_write_failure() {
+        use crate::progress::receipt::ScanEndState;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(2.0),
+            end_state: ScanEndState::WriteFailure {
+                error: "Permission denied: /opt/report.tar.gz".to_string(),
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_interrupted() {
+        use crate::progress::receipt::ScanEndState;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(1.8),
+            end_state: ScanEndState::Interrupted {
+                completed: 5,
+                total: 11,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_completed_with_sensitivity() {
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+        feed_simple_complete(&r, InspectorId::Network);
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(3.0),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/report.tar.gz"),
+                sensitivity: Some(
+                    "Note: Report may contain sensitive data.\nReview before sharing.".to_string(),
+                ),
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
+    }
+
+    #[test]
+    fn pretty_footer_non_success_tally() {
+        use crate::progress::receipt::ScanEndState;
+        use std::path::PathBuf;
+
+        let (r, buf) = test_renderer(false, false, false);
+
+        // One failed, one degraded — tally should appear on timing line.
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Containers));
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Containers,
+            outcome: InspectorOutcome::Failed {
+                reason: "podman not found".to_string(),
+            },
+        });
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Config));
+        r.handle(ProgressEvent::InspectorFinished {
+            id: InspectorId::Config,
+            outcome: InspectorOutcome::Degraded {
+                reason: "rpm verify timed out".to_string(),
+            },
+        });
+
+        let scan = ScanFinalize {
+            elapsed: Duration::from_secs_f64(4.5),
+            end_state: ScanEndState::Completed {
+                path: PathBuf::from("/tmp/report.tar.gz"),
+                sensitivity: None,
+            },
+            version_changes: None,
+        };
+
+        insta::assert_snapshot!(finalize_output(&r, &buf, &scan));
     }
 
     // ── Spinner state tests ───────────────────────────────────────────
