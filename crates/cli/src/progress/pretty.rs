@@ -4,13 +4,20 @@
 //! display order.  In verbose mode, sub-step and probe child lines are
 //! buffered per inspector and flushed atomically with the parent line.
 //!
+//! A background tick thread drives a safety-valve spinner: when any
+//! inspector exceeds [`SPINNER_THRESHOLD`], a braille animation appears
+//! on the line below the last receipt.  The spinner transfers between
+//! slow inspectors and is cleared when the final result arrives.
+//!
 //! Uses the shared [`receipt`] data model so output cannot drift from
 //! [`FlatRenderer`].
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use inspectah_core::types::completeness::InspectorId;
 use inspectah_core::types::progress::{
@@ -32,6 +39,17 @@ fn colored(text: &str, code: &str, use_color: bool) -> String {
         text.to_string()
     }
 }
+
+// ── Spinner constants ─────────────────────────────────────────────
+
+/// Braille spinner frames (same as RichRenderer).
+const SPINNER: &[char] = &[
+    '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+    '\u{2807}', '\u{280f}',
+];
+
+/// Elapsed time threshold — show spinner after this duration.
+const SPINNER_THRESHOLD: Duration = Duration::from_millis(3500);
 
 // ── Column widths ──────────────────────────────────────────────────
 
@@ -67,6 +85,18 @@ impl InspectorTracker {
         }
     }
 
+    /// Create a tracker with a custom start time (for testing).
+    #[cfg(test)]
+    fn with_started_at(started_at: Instant) -> Self {
+        Self {
+            started_at,
+            metrics: Vec::new(),
+            probe_results: Vec::new(),
+            probes_started: 0,
+            child_lines: Vec::new(),
+        }
+    }
+
     /// Get a metric value by kind.
     fn metric(&self, kind: &MetricKind) -> Option<usize> {
         self.metrics
@@ -88,7 +118,6 @@ impl InspectorTracker {
 // ── Inner state ────────────────────────────────────────────────────
 
 struct PrettyState {
-    writer: Box<dyn Write + Send>,
     use_color: bool,
     verbose: bool,
     /// Per-inspector tracking, keyed by InspectorId.
@@ -97,6 +126,10 @@ struct PrettyState {
     display_order: &'static [(InspectorId, &'static str)],
     /// Built receipt lines, stored for later use by finalize (T5).
     receipt_lines: Vec<ReceiptLine>,
+    /// Which inspector currently owns the spinner line (if any).
+    spinner_active: Option<InspectorId>,
+    /// Frame counter for braille animation.
+    spinner_frame: usize,
 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -104,9 +137,13 @@ struct PrettyState {
 /// Pretty-mode receipt renderer — arrival-order output with Unicode
 /// symbols, optional ANSI color, and typed receipt lines.
 ///
-/// Thread-safe via internal [`Mutex`].
+/// Thread-safe via `Arc<Mutex>` shared with a background tick thread
+/// that drives spinner animation for slow inspectors.
 pub struct PrettyRenderer {
-    inner: Mutex<PrettyState>,
+    state: Arc<Mutex<PrettyState>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    stop_tick: Arc<AtomicBool>,
+    tick_handle: Option<JoinHandle<()>>,
 }
 
 impl PrettyRenderer {
@@ -120,30 +157,64 @@ impl PrettyRenderer {
         verbose: bool,
         display_order: &'static [(InspectorId, &'static str)],
     ) -> Self {
+        let state = Arc::new(Mutex::new(PrettyState {
+            use_color,
+            verbose,
+            trackers: HashMap::new(),
+            display_order,
+            receipt_lines: Vec::new(),
+            spinner_active: None,
+            spinner_frame: 0,
+        }));
+        let writer = Arc::new(Mutex::new(writer));
+        let stop_tick = Arc::new(AtomicBool::new(false));
+
+        // Spawn background tick thread for spinner animation.
+        let tick_state = Arc::clone(&state);
+        let tick_writer = Arc::clone(&writer);
+        let tick_stop = Arc::clone(&stop_tick);
+        let tick_handle = std::thread::spawn(move || {
+            while !tick_stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(100));
+                if tick_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut st = tick_state.lock().expect("tick lock");
+                let mut wr = tick_writer.lock().expect("tick writer lock");
+                st.tick_spinner(&mut *wr);
+            }
+        });
+
         Self {
-            inner: Mutex::new(PrettyState {
-                writer,
-                use_color,
-                verbose,
-                trackers: HashMap::new(),
-                display_order,
-                receipt_lines: Vec::new(),
-            }),
+            state,
+            writer,
+            stop_tick,
+            tick_handle: Some(tick_handle),
         }
     }
 
     /// Handle a progress event.
     pub fn handle(&self, event: ProgressEvent) {
-        let mut state = self.inner.lock().expect("PrettyRenderer lock poisoned");
+        let mut state = self.state.lock().expect("PrettyRenderer lock poisoned");
+        let mut writer = self.writer.lock().expect("PrettyRenderer writer lock");
         match event {
             ProgressEvent::InspectorStarted(id) => {
                 state.trackers.insert(id, InspectorTracker::new());
             }
             ProgressEvent::InspectorFinished { id, outcome } => {
+                // If this inspector owns the spinner, clear the spinner line.
+                if state.spinner_active == Some(id) {
+                    let _ = write!(writer, "\x1b[2K\r");
+                    state.spinner_active = None;
+                }
+
                 let line = state.build_receipt_line(id, &outcome);
-                state.print_receipt_line(&line);
+                state.print_receipt_line(&line, &mut *writer);
                 state.receipt_lines.push(line);
                 state.trackers.remove(&id);
+
+                // Transfer spinner to the next slowest inspector (if any).
+                state.maybe_start_spinner();
             }
             ProgressEvent::StepStarted { inspector, step } => {
                 if state.verbose
@@ -216,13 +287,30 @@ impl PrettyRenderer {
 
     /// Finalize rendering.  Stub for T3 — T5 adds the real summary/footer logic.
     pub fn finalize(&self, _scan: &ScanFinalize) {
-        // T5 will implement summary and footer printing.
+        // Stop the tick thread.
+        self.stop_tick.store(true, Ordering::Relaxed);
+        // Clear any lingering spinner line.
+        let mut state = self.state.lock().expect("finalize lock");
+        if state.spinner_active.is_some() {
+            let mut writer = self.writer.lock().expect("finalize writer lock");
+            let _ = write!(writer, "\x1b[2K\r");
+            state.spinner_active = None;
+        }
     }
 
     /// Access built receipt lines (for T5 summary computation).
     pub fn receipt_lines(&self) -> Vec<ReceiptLine> {
-        let state = self.inner.lock().expect("PrettyRenderer lock poisoned");
+        let state = self.state.lock().expect("PrettyRenderer lock poisoned");
         state.receipt_lines.clone()
+    }
+}
+
+impl Drop for PrettyRenderer {
+    fn drop(&mut self) {
+        self.stop_tick.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.tick_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -270,18 +358,18 @@ impl PrettyState {
     }
 
     /// Print a receipt line (and any child lines in verbose mode) to the writer.
-    fn print_receipt_line(&mut self, line: &ReceiptLine) {
+    fn print_receipt_line(&mut self, line: &ReceiptLine, writer: &mut dyn Write) {
         let use_color = self.use_color;
         let name = lookup_name(self.display_order, line.id);
 
         // Build the formatted line.
         let symbol = colored(line.state.symbol(), line.state.color_code(), use_color);
         let suffix = format_suffix(line);
-        let _ = writeln!(self.writer, "  {symbol} {name:<NAME_WIDTH$} {suffix}");
+        let _ = writeln!(writer, "  {symbol} {name:<NAME_WIDTH$} {suffix}");
 
         // Print receipt sub_lines (e.g., Non-RPM ecosystem breakdown).
         for sub in &line.sub_lines {
-            let _ = writeln!(self.writer, "      {sub}");
+            let _ = writeln!(writer, "      {sub}");
         }
 
         // In verbose mode, print buffered child lines atomically with the parent.
@@ -289,7 +377,52 @@ impl PrettyState {
             && let Some(tracker) = self.trackers.get(&line.id)
         {
             for child in &tracker.child_lines {
-                let _ = writeln!(self.writer, "{child}");
+                let _ = writeln!(writer, "{child}");
+            }
+        }
+    }
+
+    /// Find the longest-running inspector that exceeds `SPINNER_THRESHOLD`.
+    fn find_slowest_inspector(&self) -> Option<InspectorId> {
+        let now = Instant::now();
+        self.trackers
+            .iter()
+            .filter(|(_, t)| now.duration_since(t.started_at) >= SPINNER_THRESHOLD)
+            .max_by_key(|(_, t)| now.duration_since(t.started_at))
+            .map(|(id, _)| *id)
+    }
+
+    /// If no spinner is active and a slow inspector exists, activate spinner.
+    fn maybe_start_spinner(&mut self) {
+        if self.spinner_active.is_none() {
+            if let Some(id) = self.find_slowest_inspector() {
+                self.spinner_active = Some(id);
+                self.spinner_frame = 0;
+            }
+        }
+    }
+
+    /// Called by the tick thread — advance spinner frame and redraw.
+    fn tick_spinner(&mut self, writer: &mut dyn Write) {
+        // If no spinner active, check if one should start.
+        if self.spinner_active.is_none() {
+            self.maybe_start_spinner();
+        }
+
+        if let Some(id) = self.spinner_active {
+            if let Some(tracker) = self.trackers.get(&id) {
+                let frame = SPINNER[self.spinner_frame % SPINNER.len()];
+                let name = lookup_name(self.display_order, id);
+                let elapsed = tracker.started_at.elapsed().as_secs_f64();
+                let _ = write!(
+                    writer,
+                    "\x1b[2K\r  {frame} {name:<NAME_WIDTH$} ({elapsed:.1}s)"
+                );
+                let _ = writer.flush();
+                self.spinner_frame += 1;
+            } else {
+                // Inspector was removed (finished) — clear.
+                self.spinner_active = None;
             }
         }
     }
@@ -988,5 +1121,151 @@ mod tests {
             version_changes: None,
         };
         r.finalize(&scan);
+    }
+
+    // ── Spinner state tests ───────────────────────────────────────────
+
+    /// Helper: build a PrettyState with injected trackers for spinner
+    /// state testing without real-time delays.
+    fn test_state(trackers: Vec<(InspectorId, InspectorTracker)>) -> PrettyState {
+        PrettyState {
+            use_color: false,
+            verbose: false,
+            trackers: trackers.into_iter().collect(),
+            display_order: display::active_display_order(false),
+            receipt_lines: Vec::new(),
+            spinner_active: None,
+            spinner_frame: 0,
+        }
+    }
+
+    #[test]
+    fn spinner_triggers_after_threshold() {
+        // An inspector that started 5s ago exceeds the 3.5s threshold.
+        let old_start = Instant::now() - Duration::from_secs(5);
+        let mut state = test_state(vec![(
+            InspectorId::Rpm,
+            InspectorTracker::with_started_at(old_start),
+        )]);
+
+        assert!(
+            state.spinner_active.is_none(),
+            "spinner should start inactive"
+        );
+
+        state.maybe_start_spinner();
+
+        assert_eq!(
+            state.spinner_active,
+            Some(InspectorId::Rpm),
+            "spinner should activate for slow inspector"
+        );
+    }
+
+    #[test]
+    fn spinner_replaced_by_result() {
+        // Spinner is active for RPM; RPM finishes → spinner clears,
+        // final output has no spinner residue (no ANSI clear sequences
+        // in the receipt line output).
+        let old_start = Instant::now() - Duration::from_secs(5);
+        let mut state = test_state(vec![(
+            InspectorId::Rpm,
+            InspectorTracker::with_started_at(old_start),
+        )]);
+        state.spinner_active = Some(InspectorId::Rpm);
+        state.spinner_frame = 3;
+
+        // Simulate InspectorFinished: clear spinner, print result.
+        let mut output = Vec::new();
+
+        // Clear spinner line (as handle() does).
+        let _ = write!(output, "\x1b[2K\r");
+        state.spinner_active = None;
+
+        // Build and print the receipt.
+        let line = state.build_receipt_line(InspectorId::Rpm, &InspectorOutcome::Complete);
+        state.print_receipt_line(&line, &mut output);
+        state.trackers.remove(&InspectorId::Rpm);
+
+        // No spinner should remain active.
+        assert!(state.spinner_active.is_none(), "spinner should be cleared");
+
+        // The receipt output should contain the result, not spinner frames.
+        let text = String::from_utf8(output).expect("valid utf8");
+        assert!(text.contains("RPM"), "output should contain receipt line");
+        // No braille spinner characters in the final output.
+        for &frame in SPINNER {
+            assert!(
+                !text.contains(frame),
+                "output should not contain spinner frame '{frame}'"
+            );
+        }
+    }
+
+    #[test]
+    fn spinner_interrupted_by_other_completion() {
+        // RPM is slow (spinner active). Services finishes → spinner
+        // is NOT cleared (Services doesn't own it), result prints,
+        // spinner stays on RPM.
+        let old_rpm = Instant::now() - Duration::from_secs(5);
+        let recent_svc = Instant::now() - Duration::from_millis(500);
+        let mut state = test_state(vec![
+            (InspectorId::Rpm, InspectorTracker::with_started_at(old_rpm)),
+            (
+                InspectorId::Services,
+                InspectorTracker::with_started_at(recent_svc),
+            ),
+        ]);
+        state.spinner_active = Some(InspectorId::Rpm);
+
+        // Services finishes — doesn't own spinner, so no clear.
+        // (In handle(), the clear only happens when spinner_active == id.)
+        let finishing_id = InspectorId::Services;
+        let owns_spinner = state.spinner_active == Some(finishing_id);
+        assert!(!owns_spinner, "Services should not own the spinner");
+
+        // Spinner stays on RPM.
+        assert_eq!(
+            state.spinner_active,
+            Some(InspectorId::Rpm),
+            "spinner should remain on RPM"
+        );
+
+        // Clean up Services tracker.
+        state.trackers.remove(&InspectorId::Services);
+
+        // RPM still has the spinner.
+        assert_eq!(
+            state.spinner_active,
+            Some(InspectorId::Rpm),
+            "spinner should still be on RPM after Services finishes"
+        );
+    }
+
+    #[test]
+    fn spinner_transfers_to_next_slow() {
+        // Both RPM and Config are slow.  RPM finishes → spinner
+        // transfers to Config.
+        let old_rpm = Instant::now() - Duration::from_secs(6);
+        let old_cfg = Instant::now() - Duration::from_secs(4);
+        let mut state = test_state(vec![
+            (InspectorId::Rpm, InspectorTracker::with_started_at(old_rpm)),
+            (
+                InspectorId::Config,
+                InspectorTracker::with_started_at(old_cfg),
+            ),
+        ]);
+        state.spinner_active = Some(InspectorId::Rpm);
+
+        // RPM finishes: clear spinner, remove tracker, transfer.
+        state.spinner_active = None;
+        state.trackers.remove(&InspectorId::Rpm);
+        state.maybe_start_spinner();
+
+        assert_eq!(
+            state.spinner_active,
+            Some(InspectorId::Config),
+            "spinner should transfer to the next slow inspector (Config)"
+        );
     }
 }
