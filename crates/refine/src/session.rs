@@ -2069,10 +2069,12 @@ pub fn render_refine_export(
         .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
 
     // 2c. Remove any top-level artifacts outside the approved export contract.
+    //     "quadlet" is intentionally excluded — quadlet units are written by
+    //     write_config_tree as a side effect but are NOT part of the refine
+    //     export contract. The Containerfile references them via config/ paths.
     let allowed_top_level: std::collections::HashSet<&str> = [
         "config",
         "drop-ins",
-        "quadlet",
         "flatpak",
         "sysctl",
         "tuned",
@@ -3363,12 +3365,13 @@ mod tests {
             entries.iter().any(|e| e.starts_with("export/drop-ins/")),
             "tarball must contain drop-ins/ root. entries: {entries:?}"
         );
+        // quadlet/ is intentionally excluded from the refine export
+        // (see export_excludes_extra_config_tree_artifacts contract test).
         assert!(
-            entries
+            !entries
                 .iter()
-                .any(|e| e == "export/quadlet/myapp.container"
-                    || e == "export/quadlet/myapp.container/"),
-            "tarball must contain quadlet/myapp.container. entries: {entries:?}"
+                .any(|e| e.contains("quadlet/")),
+            "tarball must NOT contain quadlet/. entries: {entries:?}"
         );
         assert!(
             entries.iter().any(|e| e.starts_with("export/flatpak/")),

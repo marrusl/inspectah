@@ -1,3 +1,4 @@
+use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
@@ -6,7 +7,7 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
@@ -43,21 +44,49 @@ fn test_snapshot() -> InspectionSnapshot {
         redacted_by: "inspectah 0.8.0".into(),
         config_hash: "abc123".into(),
     });
+    // Baseline data is required so classify_packages treats Added +
+    // known-repo packages as Site (user-added) rather than Investigate
+    // (provenance unavailable). Without it, normalization sets
+    // include=false on all packages.
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
     snap
 }
 
 /// Collect all file entries from a tarball as a sorted set of paths.
 /// Directories are excluded — only regular file paths.
+/// The tarball prefix directory (derived from the archive filename stem)
+/// is stripped so tests can assert against logical paths like
+/// "Containerfile" rather than "output/Containerfile".
 fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
     let file = std::fs::File::open(tarball_path).unwrap();
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
+
+    // Derive the prefix the exporter prepends (same logic as render_refine_export).
+    let stem = tarball_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = stem
+        .strip_suffix(".tar.gz")
+        .or_else(|| stem.strip_suffix(".tgz"))
+        .unwrap_or(&stem);
+    let prefix_slash = format!("{prefix}/");
+
     let mut files = BTreeSet::new();
     for entry in archive.entries().unwrap() {
         let entry = entry.unwrap();
         if entry.header().entry_type() == tar::EntryType::Regular {
-            let path = entry.path().unwrap().to_string_lossy().to_string();
-            files.insert(path);
+            let raw = entry.path().unwrap().to_string_lossy().to_string();
+            let stripped = raw
+                .strip_prefix(&prefix_slash)
+                .unwrap_or(&raw)
+                .to_string();
+            files.insert(stripped);
         }
     }
     files
@@ -248,17 +277,42 @@ fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
         auto_packages: Some(vec!["local-tool.x86_64".into(), "mystery.x86_64".into()]),
         ..Default::default()
     });
+    // Baseline required so httpd (Added + appstream) classifies as Site
+    // and stays included after normalization.
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
 
     let session = RefineSession::new(snap);
     let preview = session.view().containerfile_preview.clone();
-    let install_line = preview
-        .lines()
-        .find(|line| line.starts_with("RUN dnf install -y"))
-        .expect("preview must include an install line");
+
+    // The renderer uses backslash continuation, so the install block
+    // spans multiple lines.  Collect every line from the opening
+    // "RUN dnf install -y" through the last continuation.
+    let mut in_block = false;
+    let mut install_block = String::new();
+    for line in preview.lines() {
+        if line.starts_with("RUN dnf install -y") {
+            in_block = true;
+        }
+        if in_block {
+            install_block.push_str(line);
+            install_block.push('\n');
+            if !line.ends_with('\\') {
+                break;
+            }
+        }
+    }
+    assert!(
+        !install_block.is_empty(),
+        "preview must include an install block, got:\n{preview}"
+    );
 
     assert!(
-        install_line.contains("httpd") && !install_line.contains("local-tool"),
-        "preview must keep install line leaf-only, got: {install_line}"
+        install_block.contains("httpd") && !install_block.contains("local-tool"),
+        "preview must keep install block leaf-only, got: {install_block}"
     );
     assert!(
         preview.contains("# === Manual Follow-up Required ==="),
