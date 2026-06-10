@@ -1,0 +1,5 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: text
+---
+  ○ SELinux                      skipped (disabled)

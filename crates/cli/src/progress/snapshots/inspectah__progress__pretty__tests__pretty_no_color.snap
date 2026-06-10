@@ -1,0 +1,7 @@
+---
+source: crates/cli/src/progress/pretty.rs
+expression: text
+---
+  ✓ RPM packages                 613 packages, 6 repos
+  ○ SELinux                      skipped (disabled)
+  ✗ Containers                   failed: podman not found
