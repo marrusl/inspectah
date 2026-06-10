@@ -67,19 +67,22 @@ inspector runs:
 Detecting OS... CentOS Stream 9 (x86_64)
 Resolving base image... quay.io/centos-bootc/centos-bootc:stream9
 Pulling base image... done (12.4s)
-Running inspectors...
-  packages        847 found, 812 baseline, 35 site
-  configs          14 found, 2 baseline, 9 site, 3 investigate
-  services          8 enabled, 3 baseline, 5 site
-  repos             4 configured
-  users             2 non-system users
-  containers        0 running
-  storage           3 mounts
-Rendering artifacts... done
-Scan complete (38.7s)
 
-Report: webserver01-20260527-091500.tar.gz
-To review: inspectah refine webserver01-20260527-091500.tar.gz
+  ✓ RPM packages               847 packages, 4 repos
+  ✓ Services                     8 units
+  ✓ Storage                     3 mounts
+  ✓ Kernel & boot               done
+  ✓ Network                     done
+  ✓ Containers                  0 found
+  ✓ Users & groups              2 non-system
+  ✓ Scheduled tasks             1 found
+  ✓ Config files                14 modified
+  ✓ SELinux                     done
+  ✓ Non-RPM packages            none
+
+  Inspected in 38.7s
+  Report: webserver01-20260527-091500.tar.gz
+  To review: inspectah refine webserver01-20260527-091500.tar.gz
 ```
 
 The scan typically takes 30--90 seconds. The base image is cached after
