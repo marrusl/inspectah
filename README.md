@@ -103,9 +103,9 @@ Common flags for `inspectah scan`:
 - `--preserve <ITEM>` — Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable
 - `--no-redaction` — Skip the redaction pipeline, retaining raw secrets
 - `--ack-sensitive` — Acknowledge sensitive data in snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`
-- `--progress <MODE>` — Progress display: `rich` (default TTY), `plain` (durable scrollback), `flat` (CI/non-TTY)
+- `--progress <MODE>` — Progress display: `pretty` (default TTY), `flat` (CI/non-TTY)
 - `-o, --output <PATH>` — Output file path (tarball) or directory
-- `-v, --verbose` — Show sub-step detail for all inspectors
+- `-v, --verbose` — Show sub-step detail for all inspectors (works with both pretty and flat modes)
 - `-q, --quiet` — Suppress the scan progress checklist
 
 Run `inspectah scan --help` for the full list.
@@ -170,7 +170,7 @@ inspectah does not use a configuration file. Behavior is controlled through CLI 
 
 | Variable | Effect |
 |----------|--------|
-| `INSPECTAH_PROGRESS` | Override progress display mode (`rich`, `plain`, `flat`). Takes effect when no `--progress` CLI flag is provided. |
+| `INSPECTAH_PROGRESS` | Override progress display mode (`pretty`, `flat`). Takes effect when no `--progress` CLI flag is provided. |
 | `NO_COLOR` | Disable ANSI color output (follows [no-color.org](https://no-color.org/) convention). |
 
 ## Documentation

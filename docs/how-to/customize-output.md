@@ -16,29 +16,16 @@ The `--progress` flag controls how scan progress appears in your terminal.
 inspectah auto-detects the best mode based on your environment, but you can
 override it.
 
-### Rich mode (default for terminals)
+### Pretty mode (default for terminals)
 
 ```bash
-sudo inspectah scan --progress rich
+sudo inspectah scan --progress pretty
 ```
 
-Rich mode renders a block-redraw checklist with spinners. Each inspector
-gets a live status line that updates in place. This is the default when
-your terminal supports it.
-
-Rich mode requires a sufficiently wide terminal. On narrow terminals,
-inspectah falls back to plain mode automatically.
-
-### Plain mode
-
-```bash
-sudo inspectah scan --progress plain
-```
-
-Plain mode prints append-only lines with Unicode symbols. Each step writes
-a new line rather than redrawing in place. This preserves full scrollback
-history, which is useful when you want to review the complete scan log
-after it finishes.
+Pretty mode renders an append-only receipt with Unicode symbols. Each inspector
+gets a status line written as it completes. This is the default when your
+terminal supports it. Sub-step detail is hidden by default — use `--verbose`
+to show it.
 
 ### Flat mode (CI and pipes)
 
@@ -59,9 +46,10 @@ automatically when it detects a non-TTY environment.
 sudo inspectah scan -v
 ```
 
-Verbose mode (`-v` or `--verbose`) shows sub-step detail for all inspectors,
-including fast ones that normally complete silently. Use this when you want
-to see exactly what inspectah is doing at each stage.
+Verbose mode (`-v` or `--verbose`) shows sub-step detail for all inspectors.
+Works with both pretty and flat modes. Use this when you want to see exactly
+what inspectah is doing at each stage, including sub-steps that are normally
+hidden.
 
 ### Quiet output
 

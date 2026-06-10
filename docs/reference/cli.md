@@ -53,17 +53,16 @@ inspectah scan [OPTIONS]
 | `--preserve <ITEM>` | string | — | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable |
 | `--no-redaction` | bool | `false` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive) |
 | `--ack-sensitive` | bool | `false` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive` |
-| `--progress <MODE>` | enum | `rich` | Progress display mode: `rich`, `plain`, or `flat` |
-| `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors, including fast ones |
+| `--progress <MODE>` | enum | `pretty` | Progress display mode: `pretty` or `flat` |
+| `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors (works with both pretty and flat modes) |
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints) |
 
 ### Progress Modes
 
-| Mode    | Description                                            |
-|---------|--------------------------------------------------------|
-| `rich`  | Block-redraw checklist with spinners (default for TTY) |
-| `plain` | Append-only lines with Unicode symbols (durable scrollback) |
-| `flat`  | Numbered sequential lines, no ANSI (CI / piped output) |
+| Mode     | Description                                                |
+|----------|-----------------------------------------------------------|
+| `pretty` | Append-only receipt with Unicode symbols (default for TTY) |
+| `flat`   | Numbered sequential lines, no ANSI (CI / piped output)     |
 
 ### Examples
 

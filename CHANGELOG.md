@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Scan progress output redesigned as append-only streaming receipt
+- Progress modes simplified from three (rich/plain/flat) to two (pretty/flat)
+- Sub-step detail moved behind `--verbose` flag
+- Findings summary block added after inspector receipt
+- `--verbose` now works with both pretty and flat modes
+- Flat mode now respects `--verbose` (previously always showed sub-steps)
+
+### Removed
+- `--progress rich` and `--progress plain` modes (use `--progress pretty`)
+
 ## [0.8.6-beta.1] - 2026-06-09
 
 ### Added
