@@ -13,10 +13,12 @@
   platform plumbing is checked first, before the precedence gate.
   Split Tier 3 into high-confidence installer noise (soft-exclude) and
   ambiguous anaconda remainder (Investigate). Fixed chrono → chrony.
-- **R4 (2026-06-11):** Added group-install detection. New collection
-  step (`dnf group list --installed`), new promotion path (Path C),
-  and `dnf group install` rendering in Containerfile. Resolves
-  Tier 4 ambiguity for the most common case.
+- **R4 (2026-06-11):** Added group-install detection as a rendering
+  concern (not classification). New collection step (`dnf group list
+  --installed`), new `installed_groups` snapshot field, and `dnf group
+  install` rendering in Containerfile. Group membership affects how
+  packages are expressed in the Containerfile, not how they are
+  classified.
 
 ## Problem
 
@@ -132,7 +134,7 @@ Anaconda packages where the snapshot contains evidence of active user
 customization. These are classified as Site and included in the
 Containerfile.
 
-**Three distinct promotion paths with separate reason variants:**
+**Two distinct promotion paths with separate reason variants:**
 
 **Path A — Dual-signal promotion:**
 
@@ -173,29 +175,9 @@ Requires: at least one config file owned by this package has
 Reason: `TriageReason::PackageInstallerPromotedConfig`
 
 This list is intentionally conservative. Packages not on this list
-require both signals (Path A) or group membership (Path C) for
-promotion.
+require both signals (Path A) for promotion.
 
-**Path C — Group-install promotion:**
-
-Package belongs to a dnf group that is currently installed on the
-host. Group membership is the strongest install-time intent signal
-available — the user (or kickstart) explicitly selected a named
-group in Anaconda or via `dnf group install`.
-
-Detection: `dnf group list --installed` returns the list of installed
-groups. `dnf group info <group>` returns the member packages. A
-package that appears in any installed group's member list is promoted.
-
-Reason: `TriageReason::PackageInstallerPromotedGroup`
-
-The group name is captured as metadata for Containerfile rendering
-(see below).
-
-Example: `podman` installed via "Container Management" group →
-promoted to Site with group attribution.
-
-**All three paths:** `include: true`, `locked: false`.
+**Both paths:** `include: true`, `locked: false`.
 
 #### Tier 3: Soft Exclude (Baseline / installer_default)
 
@@ -282,12 +264,15 @@ For each package in `packages_added` where `source_repo == "anaconda"`:
    reason `package_installer_promoted_service`.
 5. If package is in `CONFIG_ONLY_PROMOTION` AND meets config
    signal → Tier 2, reason `package_installer_promoted_config`.
-6. If package belongs to an installed dnf group → Tier 2,
-   reason `package_installer_promoted_group`.
-7. If name matches `INSTALLER_NOISE_PATTERNS` → Tier 3 (soft
+6. If name matches `INSTALLER_NOISE_PATTERNS` → Tier 3 (soft
    exclude, toggleable), reason `package_installer_default`.
-8. Else → Tier 4 (Investigate, included by default), reason
+7. Else → Tier 4 (Investigate, included by default), reason
    `package_installer_ambiguous`.
+
+Note: group membership is NOT a classification signal — it is a
+rendering concern. Group-installed packages follow the same
+classification flow as any other package. See the Containerfile
+Renderer section for how group membership affects output.
 
 ## Pipeline Integration
 
@@ -355,8 +340,6 @@ existing `#[serde(rename_all = "snake_case")]` convention:
   `"package_installer_promoted_service"`
 - `PackageInstallerPromotedConfig` → wire:
   `"package_installer_promoted_config"`
-- `PackageInstallerPromotedGroup` → wire:
-  `"package_installer_promoted_group"`
 - `PackageInstallerAmbiguous` → wire:
   `"package_installer_ambiguous"`
 - `PackageInstallerEvidenceUnavailable` → wire:
@@ -368,29 +351,46 @@ strings.
 
 ### Containerfile Renderer
 
-Packages promoted via Path C (group membership) are rendered as
-`dnf group install` commands rather than individual `dnf install`
-lines. This preserves the user's original install-time intent and
-produces a cleaner, more maintainable Containerfile.
+**Group-install rendering (new).** When included packages belong to
+an installed dnf group, the renderer emits `dnf group install`
+commands instead of listing those packages individually. This
+preserves the user's original install-time intent and produces a
+cleaner, more maintainable Containerfile.
 
 ```dockerfile
 # === Package Groups (1) ===
 RUN dnf group install -y "Container Management" \
     && dnf clean all
+
+# === Packages (5) ===
+RUN dnf install -y \
+    bat \
+    htop \
+    ...
 ```
 
-Group-install rendering is a new section in the Containerfile,
-placed before the individual package `dnf install` block. Packages
-that belong to an installed group are excluded from the individual
-package list to avoid duplication.
+The group-install section is placed before the individual package
+`dnf install` block. Packages that belong to an installed group and
+are included are rendered via their group and excluded from the
+individual package list to avoid duplication.
 
 If a package belongs to multiple groups, it is attributed to the
-first group alphabetically (deterministic output).
+first group alphabetically (deterministic output). If a user
+excludes individual packages from a group in refine, those packages
+are excluded from the group — if all members of a group are
+excluded, the `dnf group install` line is dropped entirely.
 
-For packages promoted via Path A or B, or packages not in any group,
-the existing `dnf install` rendering is unchanged. The renderer
-already respects `include: true/false` on each package. The `locked`
-field is already enforced by `clamp_locked_items()` on export.
+Group membership is purely a rendering concern. It does not affect
+classification, triage, include/exclude defaults, or refine toggle
+behavior. A group-installed package follows the same classification
+flow as any other package — it may be baseline-suppressed, promoted
+via service/config signals, soft-excluded as installer noise, or
+sent to Investigate as ambiguous.
+
+For non-group packages, the existing `dnf install` rendering is
+unchanged. The renderer already respects `include: true/false` on
+each package. The `locked` field is already enforced by
+`clamp_locked_items()` on export.
 
 ### Refine UI (Web + TUI)
 
@@ -421,9 +421,9 @@ classification reasons are refine-layer metadata stored in
 - Anaconda gap classification post-pass in `classify_packages()`
 - Tier 1 platform plumbing checked first, always wins
 - Precedence rules preserving stronger existing signals (Tiers 2-4)
-- Three typed promotion paths (dual-signal, config-only, group-install)
-- `dnf group install` rendering in Containerfile for group-promoted
-  packages
+- Two typed promotion paths (dual-signal, config-only)
+- Group-install collection and `dnf group install` rendering in
+  Containerfile (rendering concern, not classification)
 - Installer-noise soft-exclude for high-confidence non-workload
 - Ambiguous-anaconda → Investigate for remaining unclassified packages
 - Missing-signal fallback to preserve/investigate
@@ -443,9 +443,8 @@ classification reasons are refine-layer metadata stored in
 ## Testing
 
 - Unit tests for each tier in `classify.rs`: platform-plumbing match,
-  dual-signal promotion, config-only promotion, group-install
-  promotion, installer-noise soft-exclude, ambiguous-anaconda →
-  Investigate
+  dual-signal promotion, config-only promotion, installer-noise
+  soft-exclude, ambiguous-anaconda → Investigate
 - **Precedence tests:** anaconda-sourced package with
   `PackageVersionChanged` keeps its existing classification (Tier 1
   exception: platform plumbing still wins). Anaconda-sourced package
@@ -466,7 +465,7 @@ classification reasons are refine-layer metadata stored in
   group info` output. Group-member packages are promoted with correct
   reason. Containerfile renders `dnf group install` before individual
   packages. Group members excluded from individual `dnf install` block.
-- **Serialization tests:** all seven new reason variants
+- **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
   installer-default packages, includes promoted and ambiguous packages.
