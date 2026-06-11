@@ -1,5 +1,15 @@
 # Anaconda Gap Classifier
 
+## Revision History
+
+- **R1 (2026-06-11):** Initial draft.
+- **R2 (2026-06-11):** Revised per review panel (Collins, Tang, Thorn).
+  Narrowed anaconda signal scope with precedence rules. Shrunk Tier 1
+  locked set to true bootloader/EFI only. Fixed wire format to
+  snake_case. Split Tier 2 into two typed promotion variants. Added
+  safe fallback for missing evidence. Scoped out UI grouping and audit
+  report annotations (follow-on).
+
 ## Problem
 
 When inspectah scans a bare-metal host installed via Anaconda, the OS
@@ -42,55 +52,67 @@ supports.
 
 More broadly: packages installed by Anaconda that the user never
 explicitly requested should be classified by intent signal, not treated
-as user workload by default.
+as user workload by default. However, install-time user intent IS still
+user intent — packages selected via Anaconda group selection (e.g.,
+container-tools) or kickstart `%packages` are deliberate choices and
+must not be silently excluded.
 
 ## Classification Model
 
-### Primary Signal
+### Primary Signal and Precedence
 
 `source_repo == "anaconda"` identifies packages installed at OS install
-time by the Anaconda installer, not explicitly added by the user via
-`dnf install`. This signal is reliable across RHEL, CentOS Stream, and
-Fedora (same Anaconda installer stack). The value comes from `dnf
-history` provenance tracking.
+time by the Anaconda installer. This signal is reliable across RHEL,
+CentOS Stream, and Fedora (same Anaconda installer stack).
 
-Packages where `source_repo != "anaconda"` are unaffected by this
-classifier. The existing Baseline/Site/Investigate classification
-continues to apply.
+**Critical constraint:** `source_repo == "anaconda"` is necessary but
+NOT sufficient for reclassification. It gates entry into the anaconda
+classifier, but stronger existing signals take precedence:
+
+1. **Existing stronger classifications are preserved.** If the
+   existing `classify_packages()` logic has already assigned a package
+   a reason of `PackageVersionChanged`, `PackageLocalInstall`,
+   `PackageNoRepoSource`, `PackageConfigCaptured`, or any other
+   investigate-class signal, the anaconda classifier does NOT override
+   it. Those signals indicate the package has a more specific story
+   than "installer default."
+
+2. **The anaconda classifier only applies to packages on the ordinary
+   user-added delta path** — packages that would otherwise receive
+   `PackageUserAdded` or `PackageProvenanceUnavailable` as their
+   reason. These are the packages where anaconda provenance is the
+   most informative signal available.
+
+Packages where `source_repo != "anaconda"` are completely unaffected.
 
 ### Three Tiers
 
-#### Tier 1: Hard Exclude (Baseline / platform-plumbing)
+#### Tier 1: Hard Exclude (Baseline / platform_plumbing)
 
-Packages matching boot-path prefixes that conflict with bootc's boot
-chain management. These are unconditionally excluded and locked — the
-user cannot toggle them back on in the refine UI.
+Packages that are true bootloader and EFI ownership — they conflict
+with bootc's boot chain management via bootupd and must not appear in
+a container workload layer.
 
 ```
 PLATFORM_PLUMBING_PREFIXES:
   grub2-*
   grubby
-  kernel-tools*
-  dracut-config-rescue
-  mtools
   shim-*
   efibootmgr
-  biosdevname
 ```
 
-Rationale: bootc owns the boot chain via bootupd. Including these
-packages in a Containerfile produces an image that may conflict with
-bootc's bootloader management on the next update. The arch-specific
-variants (grub2-efi-aa64-cdboot, shim-aa64) also break cross-arch
-builds.
+This list is intentionally narrow: only packages where bootc owns the
+lifecycle and including them would conflict with bootc's bootloader
+management or break cross-arch builds. The arch-specific variants
+(grub2-efi-aa64-cdboot, shim-aa64) are the primary motivation.
 
-Implementation: `include: false`, `locked: true`. The `locked` field
-and `clamp_locked_items()` enforcement already exist in the codebase.
+Implementation: `include: false`, `locked: true`.
 
-UI treatment: shown in a collapsed "Platform (not configurable)" group
-at the bottom of the packages section, grayed out, with reason text
-"Required by boot chain — excluded unconditionally." Visible for
-auditability but not interactive.
+Locking contract: a `SetInclude(true)` operation on a locked package
+is a silent no-op at the session layer. The UI disables the toggle.
+`clamp_locked_items()` enforces at export as defense-in-depth. Tests
+must assert the no-op behavior at the session and web API boundary,
+not just final export state.
 
 #### Tier 2: Promote to Site (user-intent detected)
 
@@ -98,104 +120,144 @@ Anaconda packages where the snapshot contains evidence of active user
 customization. These are classified as Site and included in the
 Containerfile.
 
-**Dual-signal promotion (default path):** Package has an associated
-systemd service that is currently enabled AND has user-modified
-configuration files. Both signals must be present.
+**Two distinct promotion paths with separate reason variants:**
 
-Example: firewalld with custom zones detected → service enabled + config
-modified → promoted to Site.
+**Path A — Dual-signal promotion:**
 
-**Config-only promotion (curated list):** Some packages have
-user-modified config but no systemd service (or a service that was
-default-enabled, making the enabled signal ambiguous). A curated list
-of known config-centric packages can promote on config signal alone.
+Package has an associated systemd service that is user-enabled (not
+just default-enabled) AND has user-modified configuration files
+(`ConfigFileKind::RpmOwnedModified`). Both signals must be present.
+
+- Service signal: `current_state` is enabled AND (`default_state` is
+  not `PresetDefault::Enable`, OR `default_state` is `None`). If
+  `default_state == PresetDefault::Enable`, the enabled state is
+  ambiguous — the user may not have enabled it. Treat as not meeting
+  the service signal.
+- Config signal: at least one config file owned by this package has
+  `ConfigFileKind::RpmOwnedModified`.
+
+Reason: `TriageReason::PackageInstallerPromotedService`
+
+Example: firewalld with user-enabled service + custom zones detected.
+
+**Path B — Config-only promotion (curated list):**
+
+Some packages have user-modified config but no systemd service, or a
+service that was default-enabled. A curated list of known
+config-centric packages can promote on config signal alone.
 
 ```
 CONFIG_ONLY_PROMOTION:
   sudo
   logrotate
-  chrony
+  chrono
   sssd
   pam
 ```
 
+Requires: at least one config file owned by this package has
+`ConfigFileKind::RpmOwnedModified`.
+
+Reason: `TriageReason::PackageInstallerPromotedConfig`
+
 This list is intentionally conservative. Packages not on this list
-require both signals for promotion.
+require both signals (Path A) for promotion.
 
-Implementation: classified as `Site`, reason
-`active-service-with-config`, `include: true`, `locked: false`.
+**Both paths:** `include: true`, `locked: false`.
 
-UI treatment: standard Site classification. Subtitle text showing
-signal evidence: "service enabled, custom zones detected" or "custom
-sudoers configuration detected."
+#### Tier 3: Soft Exclude (Baseline / installer_default)
 
-#### Tier 3: Soft Exclude (Baseline / installer-default)
+Everything else in the anaconda set that passed the precedence check
+(no stronger existing signal) and has no user-intent signal. Fonts,
+bare-metal hardware tools, initscripts, OS provisioning artifacts.
+Excluded by default but toggleable in the refine UI.
 
-Everything else in the anaconda set that has no user-intent signal.
-Fonts, bare-metal hardware tools, initscripts, OS provisioning
-artifacts. Excluded by default but toggleable in the refine UI.
+Typical packages: google-noto-* fonts, lshw, lsscsi, libsysfs,
+initscripts-*, prefixdevname, rootfiles, dnf-plugins-core,
+glibc-langpack-en, kernel-tools*, dracut-config-rescue, mtools,
+parted, biosdevname.
 
-Typical packages in this tier: google-noto-* fonts, lshw, lsscsi,
-libsysfs, initscripts-*, prefixdevname, rootfiles, dnf-plugins-core,
-glibc-langpack-en, parted.
+Implementation: `include: false`, `locked: false`.
 
-Implementation: classified as `Baseline`, reason `installer-default`,
-`include: false`, `locked: false`.
+Reason: `TriageReason::PackageInstallerDefault`
 
-UI treatment: standard Baseline classification with reason text
-"Installed by Anaconda, no active customization detected." Toggleable
-— user can re-include if they know they need a specific package.
+### Missing-Signal Fallback
+
+When the evidence required for promotion is unavailable — `snap.services`
+is `None`, `snap.config` is `None`, `owning_package` is missing, or
+config-to-package ownership joins fail — the classifier MUST NOT fall
+through to Tier 3.
+
+**Fallback behavior:** preserve the package's existing classification
+from the standard `classify_packages()` path. If no existing
+classification applies, classify as `Investigate` with reason
+`PackageInstallerEvidenceUnavailable`.
+
+The principle: when evidence collection is incomplete, the classifier
+becomes less confident, not more willing to exclude.
 
 ### Classification Flow
 
 For each package in `packages_added` where `source_repo == "anaconda"`:
 
-1. If name matches `PLATFORM_PLUMBING_PREFIXES` → Tier 1 (hard
-   exclude, locked)
-2. Else if package has enabled service AND modified config → Tier 2
-   (promote to Site)
-3. Else if package is in `CONFIG_ONLY_PROMOTION` AND has modified
-   config → Tier 2 (promote to Site)
-4. Else → Tier 3 (soft exclude, toggleable)
+1. **Precedence check:** If the package already has a reason other
+   than `PackageUserAdded` or `PackageProvenanceUnavailable`, skip —
+   the existing classification is stronger.
+2. If name matches `PLATFORM_PLUMBING_PREFIXES` → Tier 1 (hard
+   exclude, locked). Platform plumbing overrides even stronger
+   signals because these packages conflict with bootc regardless of
+   user intent.
+3. **Evidence availability check:** If service or config data is
+   missing or ownership joins fail → preserve existing classification
+   or `Investigate / installer_evidence_unavailable`.
+4. Else if package meets Path A (dual-signal promotion) → Tier 2,
+   reason `package_installer_promoted_service`.
+5. Else if package is in `CONFIG_ONLY_PROMOTION` AND meets config
+   signal → Tier 2, reason `package_installer_promoted_config`.
+6. Else → Tier 3 (soft exclude, toggleable), reason
+   `package_installer_default`.
 
 ## Pipeline Integration
 
 ### Where
 
-`crates/refine/src/classify.rs`, inside `classify_packages()`. This
-function already handles all package triage (Baseline/Site/Investigate
-decisions) and has access to the full `InspectionSnapshot` including
-service state and config data.
-
-The anaconda gap classification runs after baseline subtraction (which
-already removed packages present in the base image) and after leaf/auto
-classification.
+`crates/refine/src/classify.rs`, inside `classify_packages()`. The
+anaconda gap classification runs as a post-pass after the existing
+classification logic, respecting the precedence rules above.
 
 ### Cross-Referencing Service and Config Data
 
 Build two lookup structures at the start of the anaconda classification
 block:
 
-1. A set of package names that own an enabled, non-default-state
-   service (from `snap.services` via `owning_package` +
-   `current_state`)
-2. A set of package names that own modified config files (from
-   `snap.config` via RPM ownership)
+1. A map of package names to their service state (from
+   `snap.services` via `owning_package`, filtered to services where
+   `current_state` is enabled and `default_state` is not
+   `PresetDefault::Enable`).
+2. A set of package names that own at least one
+   `ConfigFileKind::RpmOwnedModified` config file (from `snap.config`
+   via RPM ownership).
 
-These are derived from existing snapshot fields — no new data
-collection.
+If `snap.services` or `snap.config` is `None`, the corresponding
+lookup is empty and the missing-signal fallback applies.
 
 ### New Type Variants
 
-In `inspectah-core` (where `TriageReason` is defined):
+In `inspectah-refine` (where `TriageReason` is defined), using the
+existing `#[serde(rename_all = "snake_case")]` convention:
 
-- `TriageReason::PackagePlatformPlumbing` — serde: `"platform-plumbing"`
-- `TriageReason::PackageInstallerDefault` — serde: `"installer-default"`
-- `TriageReason::PackageActiveServiceWithConfig` — serde:
-  `"active-service-with-config"`
+- `PackagePlatformPlumbing` → wire: `"package_platform_plumbing"`
+- `PackageInstallerDefault` → wire: `"package_installer_default"`
+- `PackageInstallerPromotedService` → wire:
+  `"package_installer_promoted_service"`
+- `PackageInstallerPromotedConfig` → wire:
+  `"package_installer_promoted_config"`
+- `PackageInstallerEvidenceUnavailable` → wire:
+  `"package_installer_evidence_unavailable"`
 
-All three use kebab-case serde rename strings, consistent with existing
-variants.
+All follow the existing `Package*` naming family and snake_case wire
+format. Serialization regression tests must assert the exact emitted
+strings.
 
 ### Containerfile Renderer
 
@@ -205,28 +267,14 @@ each package. The `locked` field is already enforced by
 
 ### Refine UI (Web + TUI)
 
-No structural changes to the refine UI. The new classification reasons
-surface through existing reason display mechanisms.
+The new reason variants surface through existing reason display
+mechanisms. No structural UI changes in this spec.
 
-- Platform-plumbing packages: shown grayed out in a collapsed group,
-  toggle hidden (locked). Reason: "Required by boot chain — excluded
-  unconditionally."
-- Installer-default packages: shown with standard Baseline styling,
-  toggle enabled. Reason: "Installed by Anaconda, no active
-  customization detected."
-- Promoted packages: shown with standard Site styling. Subtitle text
-  showing signal evidence (e.g., "service enabled, custom zones
-  detected").
-
-### Audit Report
-
-The HTML and markdown audit reports include an annotation in the
-packages section showing what was filtered:
-
-> **Installer defaults excluded (N packages):** [list]. These packages
-> were installed by Anaconda but are not part of your workload. Platform
-> packages (grub2, shim, efibootmgr) are excluded unconditionally.
-> Others can be re-included in the refine UI.
+**Deferred to follow-on:** Grouped display for platform-plumbing
+packages (collapsed grayed-out section), signal evidence subtitles for
+promoted packages, and audit report annotations. These require typed
+presentation metadata that the current refine projection and report
+renderer do not support.
 
 ### Snapshot Schema
 
@@ -238,42 +286,59 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
 
 ### In Scope
 
-- Anaconda gap classification in `classify_packages()`
-- Platform plumbing hard-exclude with `locked: true`
-- User-intent promotion (dual-signal + config-only curated list)
+- Anaconda gap classification post-pass in `classify_packages()`
+- Precedence rules preserving stronger existing signals
+- Platform plumbing hard-exclude with `locked: true` (narrow set)
+- Two typed promotion paths (dual-signal and config-only)
 - Soft-exclude default for remaining anaconda packages
-- Audit report annotation
-- Refine UI display (grayed-out locked group, signal evidence subtitles)
+- Missing-signal fallback to preserve/investigate
+- Serialization regression tests for new reason variants
+- Locking contract tests at session and API boundary
 
 ### Out of Scope
 
+- UI grouping for platform-plumbing (collapsed grayed-out section)
+- Audit report annotations for installer defaults
+- Signal evidence subtitles in refine UI
 - Fedora-specific validation (follow-on with Fedora tarballs)
 - New snapshot schema fields or data collection
 - Boot/kernel config merging into Containerfile output
 - Cross-distro (openSUSE) support — separate roadmap item
-- Enriching quadlet or kernel_boot with package-level dependency data
 
 ## Testing
 
-- Unit tests in `classify.rs` for each tier: platform-plumbing match,
-  promotion with dual signal, promotion with config-only, soft-exclude
-  fallback
-- Integration test with a snapshot fixture containing anaconda-sourced
-  packages across all three tiers
-- Verify `locked: true` enforcement: platform-plumbing packages cannot
-  be toggled via the refine API
-- Verify Containerfile output excludes platform-plumbing and
-  installer-default packages, includes promoted packages
-- Snapshot round-trip: new reason variants serialize/deserialize
-  correctly
+- Unit tests for each tier in `classify.rs`: platform-plumbing match,
+  dual-signal promotion, config-only promotion, soft-exclude fallback
+- **Precedence tests:** anaconda-sourced package with
+  `PackageVersionChanged` keeps its existing classification.
+  Anaconda-sourced package with `PackageLocalInstall` is not
+  reclassified. Anaconda-sourced package with `PackageUserAdded` IS
+  reclassified.
+- **Missing-signal tests:** `snap.services = None` → packages
+  preserve existing classification or move to Investigate.
+  `snap.config = None` → same. Missing `owning_package` on service →
+  same.
+- **Locking tests:** Tier 1 `SetInclude(true)` is a no-op at session
+  layer. Export clamps locked items. API returns unchanged state.
+- **Serialization tests:** all five new reason variants
+  serialize/deserialize to the expected snake_case strings.
+- Containerfile output excludes platform-plumbing and
+  installer-default packages, includes promoted packages.
+- Snapshot round-trip: new reason variants survive
+  serialize/deserialize cycle.
 
 ## Known Limitations
 
 - `CONFIG_ONLY_PROMOTION` is a curated list that may need expansion
   over time as new config-centric packages are identified.
-- `source_repo == "anaconda"` reliability on kickstart-minimal installs
-  has not been validated — the signal should degrade gracefully (fewer
-  matches, not wrong matches).
+- `source_repo == "anaconda"` does not distinguish between Anaconda
+  defaults and deliberate group-install/kickstart choices. The
+  precedence rules and promotion logic mitigate this, but some
+  group-installed packages without service/config signals may still
+  be soft-excluded. Users can toggle them back on in refine.
 - Fedora validation is deferred. The classification model is
   signal-based and should generalize, but needs confirmation with
   Fedora scan tarballs.
+- UI presentation improvements (grouped display, evidence subtitles,
+  audit annotations) are deferred to a follow-on spec that addresses
+  the typed presentation model gap.
