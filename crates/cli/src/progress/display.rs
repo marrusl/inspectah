@@ -116,7 +116,13 @@ pub fn metric_label(kind: &MetricKind, value: usize) -> String {
                 format!("{value} units")
             }
         }
-        MetricKind::ContainersFound => format!("{value} found"),
+        MetricKind::ContainersFound => {
+            if value == 0 {
+                "none found".to_string()
+            } else {
+                format!("{value} found")
+            }
+        }
         MetricKind::TimersFound => {
             if value == 1 {
                 "1 timer".to_string()
@@ -228,6 +234,10 @@ mod tests {
         assert_eq!(metric_label(&MetricKind::UnitsFound, 4), "4 units");
         assert_eq!(metric_label(&MetricKind::UnitsFound, 1), "1 unit");
         assert_eq!(metric_label(&MetricKind::ContainersFound, 3), "3 found");
+        assert_eq!(
+            metric_label(&MetricKind::ContainersFound, 0),
+            "none found"
+        );
         assert_eq!(metric_label(&MetricKind::TimersFound, 2), "2 timers");
         assert_eq!(metric_label(&MetricKind::TimersFound, 1), "1 timer");
     }

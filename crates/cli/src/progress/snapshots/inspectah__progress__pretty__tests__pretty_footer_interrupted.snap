@@ -3,4 +3,4 @@ source: crates/cli/src/progress/pretty.rs
 expression: "finalize_output(&r, &buf, &scan)"
 ---
 
-  Interrupted after 1.8s (5 of 11 inspectors completed)
+  Interrupted after 2s (5 of 11 inspectors completed)

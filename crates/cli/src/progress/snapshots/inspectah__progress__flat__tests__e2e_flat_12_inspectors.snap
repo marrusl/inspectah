@@ -18,6 +18,6 @@ expression: "e2e_full_output(&r, &buf, &scan)"
   58 version changes (54 target-newer, 4 host-newer)
   37 modified configs, 23 pip packages, 69 npm packages
 
-  Inspected in 14.2s
+  Inspected in 14s
   Report: /tmp/inspectah-report.tar.gz
   To review: inspectah refine /tmp/inspectah-report.tar.gz

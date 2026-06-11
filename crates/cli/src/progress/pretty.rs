@@ -332,7 +332,7 @@ impl PrettyRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(writer, "  Report: {}", path.display());
                 let _ = writeln!(writer, "  To review: inspectah refine {}", path.display());
                 if let Some(notice) = sensitivity {
@@ -347,7 +347,7 @@ impl PrettyRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(writer, "  Output: {}", path.display());
             }
             super::receipt::ScanEndState::InspectOnlyStdout => {
@@ -356,7 +356,7 @@ impl PrettyRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Inspected in {secs:.0}s{tally}");
             }
             super::receipt::ScanEndState::WriteFailure { error } => {
                 let tally = if summary.non_success_tally.is_empty() {
@@ -364,13 +364,13 @@ impl PrettyRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(writer, "  Error: {error}");
             }
             super::receipt::ScanEndState::Interrupted { completed, total } => {
                 let _ = writeln!(
                     writer,
-                    "  Interrupted after {secs:.1}s ({completed} of {total} inspectors completed)"
+                    "  Interrupted after {secs:.0}s ({completed} of {total} inspectors completed)"
                 );
             }
         }

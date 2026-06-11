@@ -3,5 +3,5 @@ source: crates/cli/src/progress/pretty.rs
 expression: "finalize_output(&r, &buf, &scan)"
 ---
 
-  Inspected in 3.7s
+  Inspected in 4s
   Output: /tmp/inspect.json

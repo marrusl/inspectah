@@ -18,6 +18,6 @@ expression: "e2e_full_output(&r, &buf, &scan)"
   ┄┄┄
   37 modified configs · 23 pip packages · 69 npm packages
 
-  Inspected in 18.5s (1 failed, 1 degraded, 1 skipped)
+  Inspected in 18s (1 failed, 1 degraded, 1 skipped)
   Report: /tmp/inspectah-report.tar.gz
   To review: inspectah refine /tmp/inspectah-report.tar.gz

@@ -14,4 +14,4 @@ expression: "e2e_full_output(&r, &buf, &scan)"
 [10/11] SELinux... INT
 [11/11] Non-RPM packages... INT
 
-  Interrupted after 6.8s (5 of 11 inspectors completed)
+  Interrupted after 7s (5 of 11 inspectors completed)

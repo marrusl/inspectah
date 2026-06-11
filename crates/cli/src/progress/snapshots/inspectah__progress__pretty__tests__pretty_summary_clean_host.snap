@@ -3,6 +3,6 @@ source: crates/cli/src/progress/pretty.rs
 expression: "finalize_output(&r, &buf, &scan)"
 ---
 
-  Inspected in 1.3s
+  Inspected in 1s
   Report: /tmp/report.tar.gz
   To review: inspectah refine /tmp/report.tar.gz

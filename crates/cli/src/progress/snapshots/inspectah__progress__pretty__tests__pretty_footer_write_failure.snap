@@ -3,5 +3,5 @@ source: crates/cli/src/progress/pretty.rs
 expression: "finalize_output(&r, &buf, &scan)"
 ---
 
-  Inspected in 2.0s
+  Inspected in 2s
   Error: Permission denied: /opt/report.tar.gz

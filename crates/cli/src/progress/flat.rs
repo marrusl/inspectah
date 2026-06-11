@@ -233,7 +233,7 @@ impl FlatRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(state.writer, "  Report: {}", path.display());
                 let _ = writeln!(
                     state.writer,
@@ -252,7 +252,7 @@ impl FlatRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(state.writer, "  Output: {}", path.display());
             }
             ScanEndState::InspectOnlyStdout => {
@@ -261,7 +261,7 @@ impl FlatRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Inspected in {secs:.0}s{tally}");
             }
             ScanEndState::WriteFailure { error } => {
                 let tally = if summary.non_success_tally.is_empty() {
@@ -269,13 +269,13 @@ impl FlatRenderer {
                 } else {
                     format!(" {}", summary.non_success_tally.format())
                 };
-                let _ = writeln!(state.writer, "  Inspected in {secs:.1}s{tally}");
+                let _ = writeln!(state.writer, "  Inspected in {secs:.0}s{tally}");
                 let _ = writeln!(state.writer, "  Error: {error}");
             }
             ScanEndState::Interrupted { completed, total } => {
                 let _ = writeln!(
                     state.writer,
-                    "  Interrupted after {secs:.1}s ({completed} of {total} inspectors completed)"
+                    "  Interrupted after {secs:.0}s ({completed} of {total} inspectors completed)"
                 );
             }
         }
@@ -829,7 +829,7 @@ mod tests {
 
         let footer = finalize_output(&r, &buf, &scan);
         assert!(
-            footer.contains("Inspected in 12.3s"),
+            footer.contains("Inspected in 12s"),
             "missing timing: {footer}"
         );
         assert!(
@@ -861,7 +861,7 @@ mod tests {
 
         let footer = finalize_output(&r, &buf, &scan);
         assert!(
-            footer.contains("Interrupted after 3.7s (5 of 11 inspectors completed)"),
+            footer.contains("Interrupted after 4s (5 of 11 inspectors completed)"),
             "missing interrupted footer: {footer}"
         );
     }

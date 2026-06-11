@@ -20,6 +20,6 @@ expression: "e2e_full_output(&r, &buf, &scan)"
 
   37 modified configs, 23 pip packages, 69 npm packages
 
-  Inspected in 8.4s
+  Inspected in 8s
   Report: /tmp/inspectah-report.tar.gz
   To review: inspectah refine /tmp/inspectah-report.tar.gz

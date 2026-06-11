@@ -707,7 +707,7 @@ fn print_quiet_footer(
     let secs = elapsed.as_secs_f64();
     match end_state {
         ScanEndState::Completed { path, .. } => {
-            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Scan complete ({secs:.0}s)");
             eprintln!("Report: {}", path.display());
             eprintln!("To review: inspectah refine {}", path.display());
             if let Some(notice) = sensitivity {
@@ -717,14 +717,14 @@ fn print_quiet_footer(
             }
         }
         ScanEndState::InspectOnly { path } => {
-            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Scan complete ({secs:.0}s)");
             eprintln!("Output: {}", path.display());
         }
         ScanEndState::InspectOnlyStdout => {
-            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Scan complete ({secs:.0}s)");
         }
         ScanEndState::WriteFailure { error } => {
-            eprintln!("Scan complete ({secs:.1}s)");
+            eprintln!("Scan complete ({secs:.0}s)");
             eprintln!("Error: {error}");
         }
         ScanEndState::Interrupted { .. } => {

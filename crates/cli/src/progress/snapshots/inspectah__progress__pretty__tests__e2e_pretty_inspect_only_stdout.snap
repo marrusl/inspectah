@@ -18,4 +18,4 @@ expression: "e2e_full_output(&r, &buf, &scan)"
   ┄┄┄
   37 modified configs · 23 pip packages · 69 npm packages
 
-  Inspected in 10.5s
+  Inspected in 10s
