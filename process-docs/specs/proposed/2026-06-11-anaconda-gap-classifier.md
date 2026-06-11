@@ -21,6 +21,9 @@
   and ungroup action to separate spec. This spec now covers classifier
   + group collection only. Group data accumulates in the snapshot for
   the follow-on rendering spec.
+- **R6 (2026-06-11):** Clarified `installed_groups` semantics: `None`
+  vs `Some([])`, classification-neutral failure, name-only matching.
+  Added regression test requirement. Approved by Tang and Thorn.
 
 ## Problem
 
@@ -302,13 +305,31 @@ pub installed_groups: Option<Vec<InstalledGroup>>
 
 pub struct InstalledGroup {
     pub name: String,
-    pub packages: Vec<String>,
+    pub packages: Vec<String>,  // name-only, no arch qualifier
 }
 ```
 
-The field is `Option` so that missing group data (e.g., dnf not
-available, or running on a system without group metadata) triggers
-the missing-signal fallback rather than false classification.
+**Absence semantics:**
+
+- `None` — group collection failed or was unavailable (dnf not
+  present, comps metadata missing, command timed out). This is a
+  collection failure, not a statement about the system.
+- `Some([])` — group collection succeeded and found no installed
+  groups. This is a positive signal: the system has no group-install
+  history.
+
+**Classification-neutral:** Group collection failure (`None`) does
+NOT affect Tier 1-4 classification outcomes. The classifier operates
+on `source_repo`, service state, and config data — none of which
+depend on `installed_groups`. Group data is collected for the future
+rendering spec; it is inert in this spec's classification logic.
+
+**Package matching:** `InstalledGroup.packages` contains package
+names only (e.g., `"podman"`, not `"podman.x86_64"`). Matching
+against `packages_added` uses name-only comparison, consistent with
+how baseline suppression and leaf classification already work.
+Multilib variants (same name, different arch) are treated as one
+logical package for group membership purposes.
 
 **Performance:** `dnf group list --installed` is fast (<1s). `dnf
 group info` for each group adds ~0.5s per group. Typical installs
@@ -438,6 +459,11 @@ classification reasons are refine-layer metadata stored in
 - **Group-install collection tests:** collection parses `dnf group
   list`/`dnf group info` output correctly. `installed_groups` field
   round-trips through serialization. Missing dnf → `None`, not error.
+  `None` vs `Some([])` distinguished correctly.
+- **Classification-neutral regression:** Tier 1-4 classification
+  outcomes are identical whether `installed_groups` is `None`,
+  `Some([])`, or `Some([...with groups...])`. Group data does not
+  influence classification in this spec.
 - **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
