@@ -349,22 +349,12 @@ fn apply_anaconda_classification(
             continue;
         }
 
-        // Per-package evidence: the service and config lookups above are
-        // conservative — a package whose owning_package is None simply
-        // won't appear in user_enabled_service_packages. That means it
-        // can't match Path A (dual-signal), which is correct: we don't
-        // have enough evidence to promote. It still reaches Tier 3/4:
-        // - Tier 3 (noise) is safe because noise-pattern packages
-        //   (fonts, lshw, etc.) don't have user-configurable services.
-        // - Tier 4 (ambiguous) defaults to include:true — the safe
-        //   fallback for packages we can't confidently classify.
-        //
-        // This means EvidenceUnavailable is only used when an explicit
-        // per-package evidence failure is detected that would otherwise
-        // cause a false-negative exclusion. Currently the lookup
-        // structure handles degradation implicitly via conservative
-        // set membership, so EvidenceUnavailable is reserved for future
-        // cases where a specific join failure needs to be surfaced.
+        // At this point both sections exist and file_ownership is
+        // available. The service and config lookups are authoritative:
+        // a package not in user_enabled_service_packages genuinely has
+        // no user-enabled service. A package not in
+        // modified_config_packages genuinely has no modified config.
+        // Proceed through Tiers 2-4 normally.
 
         // Tier 2 Path A: dual-signal promotion (user-enabled service + modified config)
         if user_enabled_service_packages.contains(name.as_str())
@@ -825,9 +815,16 @@ Note: `snap_with_anaconda_and_vc` is an extended helper that also accepts `versi
 
 - [ ] **Step 10: Write missing-signal fallback test**
 
+When service or config sections are missing, the anaconda post-pass
+skips the package entirely. The existing classification from
+`classify_packages()` is preserved — NOT overwritten.
+
 ```rust
     #[test]
-    fn anaconda_missing_evidence_falls_to_investigate() {
+    fn anaconda_missing_evidence_preserves_existing_classification() {
+        // firewalld with source_repo "anaconda", services=None, config=None.
+        // The existing classifier assigns PackageUserAdded (recognized repo).
+        // The anaconda post-pass must preserve it — NOT reclassify.
         let snap = snap_with_anaconda(
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("firewalld")],
@@ -837,8 +834,28 @@ Note: `snap_with_anaconda_and_vc` is an extended helper that also accepts `versi
         );
         let result = classify_packages(&snap);
         let fw = result.iter().find(|p| p.entry.name == "firewalld").unwrap();
-        assert_bucket(&fw.triage, TriageBucket::Investigate);
-        assert_eq!(fw.triage.primary_reason, TriageReason::PackageInstallerEvidenceUnavailable);
+        // Must keep the existing dominated classification, NOT EvidenceUnavailable
+        assert_eq!(fw.triage.primary_reason, TriageReason::PackageUserAdded,
+            "missing evidence must preserve existing classification, not reclassify");
+        assert!(fw.entry.include, "existing classification keeps include: true");
+    }
+
+    #[test]
+    fn anaconda_missing_file_ownership_preserves_existing() {
+        // Services exist but file_ownership is empty — config-to-package
+        // joins will fail. Same rule: preserve existing classification.
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("firewalld")],
+            Some(ServiceSection { state_changes: vec![], enabled_units: vec![], disabled_units: vec![], drop_ins: vec![], preset_matched_units: vec![] }),
+            Some(ConfigSection { files: vec![] }),
+            vec![],  // empty file_ownership
+        );
+        // has_config is false when file_ownership is empty — same gate
+        let result = classify_packages(&snap);
+        let fw = result.iter().find(|p| p.entry.name == "firewalld").unwrap();
+        assert_eq!(fw.triage.primary_reason, TriageReason::PackageUserAdded,
+            "missing file_ownership must preserve existing classification");
     }
 ```
 
