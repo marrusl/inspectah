@@ -387,21 +387,46 @@ flow as any other package — it may be baseline-suppressed, promoted
 via service/config signals, soft-excluded as installer noise, or
 sent to Investigate as ambiguous.
 
+**Repo assumption:** `dnf group install` works from standard RHEL
+BaseOS/AppStream repos (and Fedora equivalents). Group definitions
+are comps metadata shipped with the repo — no additional
+configuration required beyond what the `FROM` base image already
+provides. This is the same repo surface `dnf install` already uses.
+
 For non-group packages, the existing `dnf install` rendering is
 unchanged. The renderer already respects `include: true/false` on
 each package. The `locked` field is already enforced by
 `clamp_locked_items()` on export.
 
-### Refine UI (Web + TUI)
+### Refine UI (Web)
 
 The new reason variants surface through existing reason display
-mechanisms. No structural UI changes in this spec.
+mechanisms.
+
+**Group display (new).** When packages belong to installed dnf
+groups, the refine UI must reflect that grouping:
+
+- Group-member packages are visually grouped under a collapsible
+  group header (e.g., "Container Management (8 packages)").
+- The group header has a toggle that includes/excludes all member
+  packages as a unit.
+- Individual packages within the group retain their own toggles for
+  fine-grained control — excluding a single package removes it from
+  the group's `dnf group install` output without affecting the other
+  members.
+- If all members of a group are excluded, the group header shows as
+  excluded.
+- Packages not in any group display as they do today (flat list).
+
+This is necessary for consistency: if the Containerfile renders
+`dnf group install`, the refine UI must show the user what that
+group contains so they can make informed include/exclude decisions.
 
 **Deferred to follow-on:** Grouped display for platform-plumbing
-packages (collapsed grayed-out section), signal evidence subtitles for
-promoted packages, and audit report annotations. These require typed
-presentation metadata that the current refine projection and report
-renderer do not support.
+packages (collapsed grayed-out section), signal evidence subtitles
+for promoted packages, and audit report annotations. These require
+typed presentation metadata that the current refine projection and
+report renderer do not support.
 
 ### Snapshot Schema
 
@@ -424,6 +449,8 @@ classification reasons are refine-layer metadata stored in
 - Two typed promotion paths (dual-signal, config-only)
 - Group-install collection and `dnf group install` rendering in
   Containerfile (rendering concern, not classification)
+- Refine UI group display (collapsible group headers, group-level
+  and individual toggles)
 - Installer-noise soft-exclude for high-confidence non-workload
 - Ambiguous-anaconda → Investigate for remaining unclassified packages
 - Missing-signal fallback to preserve/investigate
@@ -462,9 +489,13 @@ classification reasons are refine-layer metadata stored in
 - **Locking tests:** Tier 1 `SetInclude(true)` is a no-op at session
   layer. Export clamps locked items. API returns unchanged state.
 - **Group-install tests:** collection parses `dnf group list`/`dnf
-  group info` output. Group-member packages are promoted with correct
-  reason. Containerfile renders `dnf group install` before individual
-  packages. Group members excluded from individual `dnf install` block.
+  group info` output. Containerfile renders `dnf group install` before
+  individual packages. Group members excluded from individual `dnf
+  install` block. Excluding one member removes it from group render
+  but keeps the group. Excluding all members drops the group line.
+- **Refine UI group tests:** group-member packages display under
+  group header. Group toggle includes/excludes all members. Individual
+  toggle overrides group state for that package.
 - **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
