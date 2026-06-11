@@ -481,7 +481,6 @@ classification reasons are refine-layer metadata stored in
 - Fedora-specific validation (follow-on with Fedora tarballs)
 - New snapshot schema fields beyond `installed_groups`
 - Boot/kernel config merging into Containerfile output
-- Cross-distro (openSUSE) support — separate roadmap item
 
 ## Testing
 
