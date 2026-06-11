@@ -13,6 +13,10 @@
   platform plumbing is checked first, before the precedence gate.
   Split Tier 3 into high-confidence installer noise (soft-exclude) and
   ambiguous anaconda remainder (Investigate). Fixed chrono → chrony.
+- **R4 (2026-06-11):** Added group-install detection. New collection
+  step (`dnf group list --installed`), new promotion path (Path C),
+  and `dnf group install` rendering in Containerfile. Resolves
+  Tier 4 ambiguity for the most common case.
 
 ## Problem
 
@@ -128,7 +132,7 @@ Anaconda packages where the snapshot contains evidence of active user
 customization. These are classified as Site and included in the
 Containerfile.
 
-**Two distinct promotion paths with separate reason variants:**
+**Three distinct promotion paths with separate reason variants:**
 
 **Path A — Dual-signal promotion:**
 
@@ -169,9 +173,29 @@ Requires: at least one config file owned by this package has
 Reason: `TriageReason::PackageInstallerPromotedConfig`
 
 This list is intentionally conservative. Packages not on this list
-require both signals (Path A) for promotion.
+require both signals (Path A) or group membership (Path C) for
+promotion.
 
-**Both paths:** `include: true`, `locked: false`.
+**Path C — Group-install promotion:**
+
+Package belongs to a dnf group that is currently installed on the
+host. Group membership is the strongest install-time intent signal
+available — the user (or kickstart) explicitly selected a named
+group in Anaconda or via `dnf group install`.
+
+Detection: `dnf group list --installed` returns the list of installed
+groups. `dnf group info <group>` returns the member packages. A
+package that appears in any installed group's member list is promoted.
+
+Reason: `TriageReason::PackageInstallerPromotedGroup`
+
+The group name is captured as metadata for Containerfile rendering
+(see below).
+
+Example: `podman` installed via "Container Management" group →
+promoted to Site with group attribution.
+
+**All three paths:** `include: true`, `locked: false`.
 
 #### Tier 3: Soft Exclude (Baseline / installer_default)
 
@@ -258,9 +282,11 @@ For each package in `packages_added` where `source_repo == "anaconda"`:
    reason `package_installer_promoted_service`.
 5. If package is in `CONFIG_ONLY_PROMOTION` AND meets config
    signal → Tier 2, reason `package_installer_promoted_config`.
-6. If name matches `INSTALLER_NOISE_PATTERNS` → Tier 3 (soft
+6. If package belongs to an installed dnf group → Tier 2,
+   reason `package_installer_promoted_group`.
+7. If name matches `INSTALLER_NOISE_PATTERNS` → Tier 3 (soft
    exclude, toggleable), reason `package_installer_default`.
-7. Else → Tier 4 (Investigate, included by default), reason
+8. Else → Tier 4 (Investigate, included by default), reason
    `package_installer_ambiguous`.
 
 ## Pipeline Integration
@@ -270,6 +296,37 @@ For each package in `packages_added` where `source_repo == "anaconda"`:
 `crates/refine/src/classify.rs`, inside `classify_packages()`. The
 anaconda gap classification runs as a post-pass after the existing
 classification logic, respecting the precedence rules above.
+
+### Group-Install Collection (New)
+
+A new collection step in the RPM inspector gathers installed dnf
+groups:
+
+1. Run `dnf group list --installed` to get the list of installed
+   group names.
+2. For each installed group, run `dnf group info <group>` to get the
+   member package list (mandatory + default + optional installed).
+3. Build a map: `package_name → Vec<group_name>` for all member
+   packages across all installed groups.
+
+This data is stored in a new field on the RPM snapshot section:
+
+```rust
+pub installed_groups: Option<Vec<InstalledGroup>>
+
+pub struct InstalledGroup {
+    pub name: String,
+    pub packages: Vec<String>,
+}
+```
+
+The field is `Option` so that missing group data (e.g., dnf not
+available, or running on a system without group metadata) triggers
+the missing-signal fallback rather than false classification.
+
+**Performance:** `dnf group list --installed` is fast (<1s). `dnf
+group info` for each group adds ~0.5s per group. Typical installs
+have 1-3 groups. Total: ~2-3s, acceptable within the scan budget.
 
 ### Cross-Referencing Service and Config Data
 
@@ -298,6 +355,8 @@ existing `#[serde(rename_all = "snake_case")]` convention:
   `"package_installer_promoted_service"`
 - `PackageInstallerPromotedConfig` → wire:
   `"package_installer_promoted_config"`
+- `PackageInstallerPromotedGroup` → wire:
+  `"package_installer_promoted_group"`
 - `PackageInstallerAmbiguous` → wire:
   `"package_installer_ambiguous"`
 - `PackageInstallerEvidenceUnavailable` → wire:
@@ -309,9 +368,29 @@ strings.
 
 ### Containerfile Renderer
 
-No changes. The renderer already respects `include: true/false` on
-each package. The `locked` field is already enforced by
-`clamp_locked_items()` on export.
+Packages promoted via Path C (group membership) are rendered as
+`dnf group install` commands rather than individual `dnf install`
+lines. This preserves the user's original install-time intent and
+produces a cleaner, more maintainable Containerfile.
+
+```dockerfile
+# === Package Groups (1) ===
+RUN dnf group install -y "Container Management" \
+    && dnf clean all
+```
+
+Group-install rendering is a new section in the Containerfile,
+placed before the individual package `dnf install` block. Packages
+that belong to an installed group are excluded from the individual
+package list to avoid duplication.
+
+If a package belongs to multiple groups, it is attributed to the
+first group alphabetically (deterministic output).
+
+For packages promoted via Path A or B, or packages not in any group,
+the existing `dnf install` rendering is unchanged. The renderer
+already respects `include: true/false` on each package. The `locked`
+field is already enforced by `clamp_locked_items()` on export.
 
 ### Refine UI (Web + TUI)
 
@@ -326,20 +405,27 @@ renderer do not support.
 
 ### Snapshot Schema
 
-No schema changes. `source_repo: "anaconda"` is already in the
-snapshot. The new classification reasons are refine-layer metadata
-stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
+One new field: `installed_groups: Option<Vec<InstalledGroup>>` on the
+RPM snapshot section. This is the only schema addition in this spec.
+
+`source_repo: "anaconda"` is already in the snapshot. The new
+classification reasons are refine-layer metadata stored in
+`RefinedPackage`, not in the raw `InspectionSnapshot`.
 
 ## Scope
 
 ### In Scope
 
+- Group-install collection (`dnf group list --installed` + member
+  resolution) and new `installed_groups` snapshot field
 - Anaconda gap classification post-pass in `classify_packages()`
 - Tier 1 platform plumbing checked first, always wins
 - Precedence rules preserving stronger existing signals (Tiers 2-4)
-- Two typed promotion paths (dual-signal and config-only)
+- Three typed promotion paths (dual-signal, config-only, group-install)
+- `dnf group install` rendering in Containerfile for group-promoted
+  packages
 - Installer-noise soft-exclude for high-confidence non-workload
-- Ambiguous-anaconda → Investigate for potential group-install choices
+- Ambiguous-anaconda → Investigate for remaining unclassified packages
 - Missing-signal fallback to preserve/investigate
 - Serialization regression tests for new reason variants
 - Locking contract tests at session and API boundary
@@ -350,15 +436,16 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
 - Audit report annotations for installer defaults
 - Signal evidence subtitles in refine UI
 - Fedora-specific validation (follow-on with Fedora tarballs)
-- New snapshot schema fields or data collection
+- New snapshot schema fields beyond `installed_groups`
 - Boot/kernel config merging into Containerfile output
 - Cross-distro (openSUSE) support — separate roadmap item
 
 ## Testing
 
 - Unit tests for each tier in `classify.rs`: platform-plumbing match,
-  dual-signal promotion, config-only promotion, installer-noise
-  soft-exclude, ambiguous-anaconda → Investigate
+  dual-signal promotion, config-only promotion, group-install
+  promotion, installer-noise soft-exclude, ambiguous-anaconda →
+  Investigate
 - **Precedence tests:** anaconda-sourced package with
   `PackageVersionChanged` keeps its existing classification (Tier 1
   exception: platform plumbing still wins). Anaconda-sourced package
@@ -375,10 +462,15 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
   same.
 - **Locking tests:** Tier 1 `SetInclude(true)` is a no-op at session
   layer. Export clamps locked items. API returns unchanged state.
-- **Serialization tests:** all six new reason variants
+- **Group-install tests:** collection parses `dnf group list`/`dnf
+  group info` output. Group-member packages are promoted with correct
+  reason. Containerfile renders `dnf group install` before individual
+  packages. Group members excluded from individual `dnf install` block.
+- **Serialization tests:** all seven new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
   installer-default packages, includes promoted and ambiguous packages.
+  Group-promoted packages appear as `dnf group install` commands.
 - Snapshot round-trip: new reason variants survive
   serialize/deserialize cycle.
 
@@ -387,11 +479,10 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
 - `CONFIG_ONLY_PROMOTION` and `INSTALLER_NOISE_PATTERNS` are curated
   lists that may need expansion over time as new packages are
   identified. The lists are intentionally conservative.
-- `source_repo == "anaconda"` does not distinguish between Anaconda
-  defaults and deliberate group-install/kickstart choices. Tier 4
-  (Investigate / ambiguous) addresses this by defaulting ambiguous
-  packages to included rather than excluded, but users still need to
-  review and confirm in refine.
+- Group-install detection resolves the most common install-time intent
+  ambiguity, but kickstart `%packages` entries that aren't part of a
+  named group still lack a detection signal. Tier 4 (Investigate /
+  ambiguous) handles these by defaulting to included.
 - Fedora validation is deferred. The classification model is
   signal-based and should generalize, but needs confirmation with
   Fedora scan tarballs.
