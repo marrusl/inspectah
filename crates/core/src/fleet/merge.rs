@@ -950,16 +950,25 @@ pub fn merge_rpm_sections(
     let leaf_authority_hosts = Some(authoritative_indices.len() as u32);
     let leaf_total_hosts = Some(total_hosts as u32);
 
-    let (leaf_packages, auto_packages, leaf_dep_tree) = if authoritative_indices.is_empty() {
-        // All hosts degraded — no leaf truth available.
-        (
-            None,
-            None,
-            serde_json::Value::Object(serde_json::Map::new()),
-        )
+    let (leaf_packages, leaf_union, auto_packages, leaf_dep_tree) =
+        if authoritative_indices.is_empty() {
+            // All hosts degraded — no leaf truth available.
+            (
+                None,
+                None,
+                None,
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
     } else {
-        // Compute intersection of authoritative hosts' leaf sets.
-        let mut leaf_sets: Vec<HashSet<String>> = authoritative_indices
+        // Compute intersection AND union of authoritative hosts' leaf sets.
+        // Intersection: packages that are leaves on ALL authoritative hosts
+        //   → used to filter universal packages (keeps only true leaves).
+        // Union: packages that are a leaf on ANY authoritative host
+        //   → used to filter partial-prevalence packages (a package present
+        //     on 2 of 3 hosts can't be in the intersection because host 3
+        //     doesn't have it, but it should survive if it's a leaf where
+        //     it exists).
+        let leaf_sets: Vec<HashSet<String>> = authoritative_indices
             .iter()
             .map(|&i| {
                 sections[i]
@@ -974,9 +983,11 @@ pub fn merge_rpm_sections(
             })
             .collect();
 
-        let mut intersection = leaf_sets.remove(0);
-        for set in &leaf_sets {
+        let mut intersection = leaf_sets[0].clone();
+        let mut union = leaf_sets[0].clone();
+        for set in &leaf_sets[1..] {
             intersection.retain(|pkg| set.contains(pkg));
+            union.extend(set.iter().cloned());
         }
         let mut sorted_leaf: Vec<String> = intersection.into_iter().collect();
         sorted_leaf.sort();
@@ -1009,7 +1020,7 @@ pub fn merge_rpm_sections(
             }
         };
 
-        (Some(sorted_leaf), auto, dep_tree)
+        (Some(sorted_leaf), Some(union), auto, dep_tree)
     };
 
     let versionlock_command_output =
@@ -1054,13 +1065,36 @@ pub fn merge_rpm_sections(
     // Filter packages_added to leaf-only when authoritative leaf data exists.
     // This MUST happen before repo-conflict detection so that auto/transitive
     // packages cannot appear in the repo_conflicts map.
+    //
+    // Two-tier filter:
+    //   - Universal packages (count >= total, i.e. present on all hosts):
+    //     keep only if in the leaf intersection (leaf on ALL authoritative
+    //     hosts). A universal package that is auto on some hosts is not a
+    //     user-intent package fleet-wide.
+    //   - Partial packages (count < total, i.e. not on every host): keep
+    //     if in the leaf union (leaf on ANY authoritative host). These
+    //     can't appear in the intersection because hosts that don't have
+    //     them won't list them as leaves. Without the union check they
+    //     would be silently deleted from the output.
     let packages_added = if let Some(ref leaf_set) = leaf_packages {
-        let leaf_ids: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
+        let leaf_intersection: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
+        let leaf_any: HashSet<&str> = leaf_union
+            .as_ref()
+            .map(|u| u.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
         packages_added
             .into_iter()
             .filter(|pkg| {
                 let id = format!("{}.{}", pkg.name, pkg.arch);
-                leaf_ids.contains(id.as_str())
+                let is_universal = pkg
+                    .fleet
+                    .as_ref()
+                    .is_some_and(|f| f.count >= f.total);
+                if is_universal {
+                    leaf_intersection.contains(id.as_str())
+                } else {
+                    leaf_any.contains(id.as_str())
+                }
             })
             .collect()
     } else {
@@ -1068,13 +1102,24 @@ pub fn merge_rpm_sections(
     };
 
     // Force include=true for leaf intersection survivors.
-    // narrow_non_universal() may have set include=false based on all-host
-    // prevalence, but the authoritative leaf subset has already decided
-    // these packages should be carried.
+    // Packages in the intersection are leaves on ALL authoritative hosts —
+    // they should be included in the Containerfile regardless of what
+    // narrow_non_universal() did (which uses total host count including
+    // degraded hosts, so a package can be in the intersection yet have
+    // count < total).
+    //
+    // Packages that survived via the leaf union but are NOT in the
+    // intersection keep their include flag as-is (narrow_non_universal set
+    // include=false for partials, and that's the correct Containerfile
+    // decision).
     let mut packages_added = packages_added;
-    if leaf_packages.is_some() {
+    if let Some(ref leaf_set) = leaf_packages {
+        let leaf_intersection: HashSet<&str> = leaf_set.iter().map(|s| s.as_str()).collect();
         for pkg in &mut packages_added {
-            pkg.include = true;
+            let id = format!("{}.{}", pkg.name, pkg.arch);
+            if leaf_intersection.contains(id.as_str()) {
+                pkg.include = true;
+            }
         }
     }
 
@@ -2569,5 +2614,89 @@ mod tests {
         let pkg = &result[0];
         assert!(pkg.include, "universal package must remain include=true");
         assert_eq!(pkg.fleet.as_ref().unwrap().count, 3);
+    }
+
+    #[test]
+    fn leaf_filter_preserves_partial_packages_with_include_false() {
+        // Scenario: 3 hosts, all authoritative for leaf classification.
+        //   - "vim" is a leaf on all 3 hosts (universal leaf) → kept, include=true
+        //   - "htop" is a leaf on hosts A and B only (partial leaf) → kept, include=false
+        //   - "glibc" is on all 3 hosts but NOT a leaf (transitive) → filtered out
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        let make_section = |pkgs: Vec<(&str, &str)>, leaves: Vec<&str>| -> RpmSection {
+            RpmSection {
+                packages_added: pkgs
+                    .into_iter()
+                    .map(|(name, arch)| PackageEntry {
+                        name: name.into(),
+                        arch: arch.into(),
+                        state: PackageState::Added,
+                        include: true,
+                        ..Default::default()
+                    })
+                    .collect(),
+                leaf_packages: Some(leaves.into_iter().map(String::from).collect()),
+                leaf_dep_tree: serde_json::json!({}),
+                ..Default::default()
+            }
+        };
+
+        // Host A: has vim, htop, glibc; leaves are vim and htop
+        let host_a = make_section(
+            vec![("vim", "x86_64"), ("htop", "x86_64"), ("glibc", "x86_64")],
+            vec!["vim.x86_64", "htop.x86_64"],
+        );
+        // Host B: has vim, htop, glibc; leaves are vim and htop
+        let host_b = make_section(
+            vec![("vim", "x86_64"), ("htop", "x86_64"), ("glibc", "x86_64")],
+            vec!["vim.x86_64", "htop.x86_64"],
+        );
+        // Host C: has vim, glibc (NO htop); leaves are vim only
+        let host_c = make_section(
+            vec![("vim", "x86_64"), ("glibc", "x86_64")],
+            vec!["vim.x86_64"],
+        );
+
+        let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+        let (merged, _conflicts) =
+            merge_rpm_sections(
+                vec![Some(host_a), Some(host_b), Some(host_c)],
+                3,
+                &hostnames,
+                None,
+            )
+            .expect("merge should succeed");
+
+        // vim: universal leaf → present with include=true
+        let vim = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "vim")
+            .expect("vim should survive leaf filter");
+        assert!(vim.include, "universal leaf vim must have include=true");
+        assert_eq!(vim.fleet.as_ref().unwrap().count, 3);
+
+        // htop: partial leaf (2/3 hosts) → present with include=false
+        let htop = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "htop")
+            .expect("partial leaf htop must survive leaf filter, not be deleted");
+        assert!(
+            !htop.include,
+            "partial leaf htop must have include=false (narrow_non_universal)"
+        );
+        assert_eq!(htop.fleet.as_ref().unwrap().count, 2);
+
+        // glibc: transitive on all hosts (not a leaf anywhere) → filtered out
+        let glibc = merged
+            .packages_added
+            .iter()
+            .find(|p| p.name == "glibc");
+        assert!(
+            glibc.is_none(),
+            "transitive package glibc must be filtered out by leaf filter"
+        );
     }
 }

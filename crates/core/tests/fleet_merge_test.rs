@@ -2495,10 +2495,15 @@ fn test_fleet_leaf_intersection_host_absent_package() {
     let hostnames = vec!["host-a".into(), "host-b".into()];
     let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
 
-    // Only vim survives intersection (git not leaf on host_b)
+    // Intersection is vim only (git not leaf on host_b because host_b
+    // doesn't have it at all).
     assert_eq!(merged.leaf_packages, Some(vec!["vim.x86_64".into()]));
-    assert_eq!(merged.packages_added.len(), 1);
-    assert_eq!(merged.packages_added[0].name, "vim");
+    // Both packages survive: vim (intersection leaf) + git (union leaf, partial)
+    assert_eq!(merged.packages_added.len(), 2);
+    let vim = merged.packages_added.iter().find(|p| p.name == "vim").unwrap();
+    let git = merged.packages_added.iter().find(|p| p.name == "git").unwrap();
+    assert!(vim.include, "intersection leaf vim must have include=true");
+    assert!(!git.include, "partial leaf git must have include=false");
 }
 
 #[test]
