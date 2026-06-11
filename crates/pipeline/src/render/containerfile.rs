@@ -490,22 +490,72 @@ fn packages_section_lines(
 
     if !install_names.is_empty() {
         install_names.sort();
-        let mut pkg_body: Vec<String> = Vec::new();
-        pkg_body.push("RUN dnf install -y \\".into());
-        for name in &install_names {
-            pkg_body.push(format!("    {} \\", name));
+
+        // Split repo-enabling packages (e.g. epel-release) from the rest.
+        // These must be installed first so their GPG keys and repo configs
+        // are present when DNF verifies signatures of packages from those repos.
+        let (repo_pkgs, other_pkgs): (Vec<_>, Vec<_>) =
+            install_names.iter().partition(|n| {
+                // Strip optional .arch suffix (e.g. "epel-release.noarch" -> "epel-release")
+                let base = n.split('.').next().unwrap_or(n);
+                base.ends_with("-release")
+            });
+
+        if !repo_pkgs.is_empty() && !other_pkgs.is_empty() {
+            // Emit repo-enabling packages first
+            let mut repo_body: Vec<String> = Vec::new();
+            repo_body.push("RUN dnf install -y \\".into());
+            for name in &repo_pkgs {
+                repo_body.push(format!("    {} \\", name));
+            }
+            repo_body.push("    && dnf clean all \\".into());
+            repo_body.push("    && rm -rf \\".into());
+            repo_body.push("        /var/cache/dnf \\".into());
+            repo_body.push("        /var/lib/dnf/history* \\".into());
+            repo_body.push("        /var/log/dnf* \\".into());
+            repo_body.push("        /var/log/hawkey.log \\".into());
+            repo_body.push("        /var/log/rhsm".into());
+            lines.extend(section(
+                &format!("Repo-enabling packages ({})", repo_pkgs.len()),
+                repo_body,
+            ));
+
+            // Then emit the remaining packages
+            let mut pkg_body: Vec<String> = Vec::new();
+            pkg_body.push("RUN dnf install -y \\".into());
+            for name in &other_pkgs {
+                pkg_body.push(format!("    {} \\", name));
+            }
+            pkg_body.push("    && dnf clean all \\".into());
+            pkg_body.push("    && rm -rf \\".into());
+            pkg_body.push("        /var/cache/dnf \\".into());
+            pkg_body.push("        /var/lib/dnf/history* \\".into());
+            pkg_body.push("        /var/log/dnf* \\".into());
+            pkg_body.push("        /var/log/hawkey.log \\".into());
+            pkg_body.push("        /var/log/rhsm".into());
+            lines.extend(section(
+                &format!("Packages ({})", other_pkgs.len()),
+                pkg_body,
+            ));
+        } else {
+            // All packages are the same kind — single block is fine
+            let mut pkg_body: Vec<String> = Vec::new();
+            pkg_body.push("RUN dnf install -y \\".into());
+            for name in &install_names {
+                pkg_body.push(format!("    {} \\", name));
+            }
+            pkg_body.push("    && dnf clean all \\".into());
+            pkg_body.push("    && rm -rf \\".into());
+            pkg_body.push("        /var/cache/dnf \\".into());
+            pkg_body.push("        /var/lib/dnf/history* \\".into());
+            pkg_body.push("        /var/log/dnf* \\".into());
+            pkg_body.push("        /var/log/hawkey.log \\".into());
+            pkg_body.push("        /var/log/rhsm".into());
+            lines.extend(section(
+                &format!("Packages ({})", install_names.len()),
+                pkg_body,
+            ));
         }
-        pkg_body.push("    && dnf clean all \\".into());
-        pkg_body.push("    && rm -rf \\".into());
-        pkg_body.push("        /var/cache/dnf \\".into());
-        pkg_body.push("        /var/lib/dnf/history* \\".into());
-        pkg_body.push("        /var/log/dnf* \\".into());
-        pkg_body.push("        /var/log/hawkey.log \\".into());
-        pkg_body.push("        /var/log/rhsm".into());
-        lines.extend(section(
-            &format!("Packages ({})", install_names.len()),
-            pkg_body,
-        ));
     }
 
     if !todo_lines.is_empty() {
@@ -2789,5 +2839,59 @@ mod tests {
             !output.contains("perl-libs"),
             "transitive dep 'perl-libs' must NOT appear (pre-filtered by merge)"
         );
+    }
+
+    #[test]
+    fn test_containerfile_repo_enabling_packages_split() {
+        let snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
+        let output = render_containerfile(&snap, None);
+
+        // epel-release must appear in its own install step before the other packages
+        let repo_pos = output
+            .find("Repo-enabling packages")
+            .expect("must have a repo-enabling section");
+        let pkg_pos = output
+            .find("Packages (2)")
+            .expect("must have a packages section with the remaining 2");
+        assert!(
+            repo_pos < pkg_pos,
+            "repo-enabling section must come before regular packages section"
+        );
+
+        // The repo-enabling section should contain epel-release
+        let repo_section = &output[repo_pos..pkg_pos];
+        assert!(
+            repo_section.contains("epel-release"),
+            "repo-enabling section must contain epel-release"
+        );
+
+        // The regular packages section should NOT contain epel-release
+        let pkg_section = &output[pkg_pos..];
+        assert!(
+            !pkg_section.contains("epel-release"),
+            "regular packages section must not contain epel-release"
+        );
+        assert!(pkg_section.contains("bat"), "must contain bat");
+        assert!(pkg_section.contains("htop"), "must contain htop");
+    }
+
+    #[test]
+    fn test_containerfile_no_repo_packages_single_block() {
+        let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git"]);
+        let output = render_containerfile(&snap, None);
+
+        // No repo-enabling section should exist
+        assert!(
+            !output.contains("Repo-enabling packages"),
+            "must not have a repo-enabling section when no -release packages"
+        );
+        // Single packages section with all 3
+        assert!(
+            output.contains("Packages (3)"),
+            "must have a single packages section with all 3 packages"
+        );
+        assert!(output.contains("httpd"), "must contain httpd");
+        assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
+        assert!(output.contains("git"), "must contain git");
     }
 }
