@@ -340,25 +340,31 @@ fn apply_anaconda_classification(
             continue;
         }
 
-        // Evidence availability check — per-package, not blanket.
-        // Missing sections OR missing file_ownership (needed for config-to-package
-        // joins) means we cannot determine promotion. Preserve the existing
-        // classification when it's meaningful; only fall to EvidenceUnavailable
-        // when the existing reason is truly uninformative.
+        // Evidence availability: if service or config sections are missing,
+        // or file_ownership is empty (needed for config-to-package joins),
+        // we cannot evaluate promotion. Preserve the existing classification
+        // (PackageUserAdded or PackageProvenanceUnavailable) — do NOT
+        // reclassify, do NOT fall through to Tiers 2-4.
         if !has_services || !has_config {
-            // Preserve PackageUserAdded or PackageProvenanceUnavailable —
-            // the existing classification is the best we have. Only override
-            // if neither applies (defensive — they always should at this point).
-            if dominated_reason {
-                pkg.triage = TriageTag {
-                    triage: Triage::SingleHost(TriageBucket::Investigate),
-                    primary_reason: TriageReason::PackageInstallerEvidenceUnavailable,
-                    annotations: vec![],
-                };
-            }
-            // Either way, do NOT fall through to Tiers 2-4 without evidence.
             continue;
         }
+
+        // Per-package evidence: the service and config lookups above are
+        // conservative — a package whose owning_package is None simply
+        // won't appear in user_enabled_service_packages. That means it
+        // can't match Path A (dual-signal), which is correct: we don't
+        // have enough evidence to promote. It still reaches Tier 3/4:
+        // - Tier 3 (noise) is safe because noise-pattern packages
+        //   (fonts, lshw, etc.) don't have user-configurable services.
+        // - Tier 4 (ambiguous) defaults to include:true — the safe
+        //   fallback for packages we can't confidently classify.
+        //
+        // This means EvidenceUnavailable is only used when an explicit
+        // per-package evidence failure is detected that would otherwise
+        // cause a false-negative exclusion. Currently the lookup
+        // structure handles degradation implicitly via conservative
+        // set membership, so EvidenceUnavailable is reserved for future
+        // cases where a specific join failure needs to be surfaced.
 
         // Tier 2 Path A: dual-signal promotion (user-enabled service + modified config)
         if user_enabled_service_packages.contains(name.as_str())
@@ -580,22 +586,43 @@ Expected: Compiles.
 
 - [ ] **Step 4: Write Tier 1 precedence test — platform plumbing overrides version change**
 
+This test proves that a platform-plumbing package with a version change
+(a stronger existing signal) is STILL hard-excluded. The version change
+creates a `PackageVersionChanged` classification that the anaconda
+post-pass must override for Tier 1 packages.
+
 ```rust
     #[test]
-    fn anaconda_tier1_overrides_stronger_signal() {
+    fn anaconda_tier1_overrides_version_changed() {
+        // grub2-tools-extra with a version change from baseline — the
+        // existing classifier assigns PackageVersionChanged (stronger),
+        // but Tier 1 must still win and hard-exclude.
         let mut grub = anaconda_pkg("grub2-tools-extra");
-        grub.source_repo = "anaconda".into();
-        let snap = snap_with_anaconda(
-            Some(vec!["glibc".into()]),
+        grub.state = PackageState::Modified;
+        let snap = snap_with_anaconda_and_vc(
+            Some(vec!["glibc".into(), "grub2-tools-extra".into()]),
             vec![grub],
+            vec![VersionChange {
+                name: "grub2-tools-extra".into(),
+                arch: "x86_64".into(),
+                host_version: "2.06".into(),
+                base_version: "2.04".into(),
+                host_epoch: "1".into(),
+                base_epoch: "1".into(),
+                direction: Some(VersionChangeDirection::Upgrade),
+                ..Default::default()
+            }],
             Some(ServiceSection { state_changes: vec![], enabled_units: vec![], disabled_units: vec![], drop_ins: vec![], preset_matched_units: vec![] }),
             Some(ConfigSection { files: vec![] }),
             vec![],
         );
         let result = classify_packages(&snap);
         let grub = result.iter().find(|p| p.entry.name == "grub2-tools-extra").unwrap();
-        assert_eq!(grub.triage.primary_reason, TriageReason::PackagePlatformPlumbing);
+        // Tier 1 must override the PackageVersionChanged signal
+        assert_eq!(grub.triage.primary_reason, TriageReason::PackagePlatformPlumbing,
+            "Tier 1 must override stronger signals for boot-chain packages");
         assert!(grub.entry.locked);
+        assert!(!grub.entry.include);
     }
 ```
 
@@ -606,11 +633,11 @@ Two tests: one for `PackageVersionChanged`, one for `PackageLocalInstall`. Both 
 ```rust
     #[test]
     fn anaconda_precedence_preserves_version_changed() {
-        // Create a package with anaconda source_repo that has a version
-        // change from baseline. classify_packages should assign
-        // PackageVersionChanged, and the anaconda post-pass must not
-        // override it.
+        // A package with anaconda source_repo AND a version change from
+        // baseline. The existing classifier must assign PackageVersionChanged
+        // (a stronger signal), and the anaconda post-pass must NOT override.
         let mut pkg = anaconda_pkg("tzdata");
+        pkg.state = PackageState::Modified;  // Modified state triggers version-change path
         let snap = snap_with_anaconda_and_vc(
             Some(vec!["glibc".into(), "tzdata".into()]),
             vec![pkg],
@@ -619,6 +646,8 @@ Two tests: one for `PackageVersionChanged`, one for `PackageLocalInstall`. Both 
                 arch: "x86_64".into(),
                 host_version: "2026b".into(),
                 base_version: "2026a".into(),
+                host_epoch: "0".into(),
+                base_epoch: "0".into(),
                 direction: Some(VersionChangeDirection::Upgrade),
                 ..Default::default()
             }],
@@ -628,9 +657,11 @@ Two tests: one for `PackageVersionChanged`, one for `PackageLocalInstall`. Both 
         );
         let result = classify_packages(&snap);
         let tz = result.iter().find(|p| p.entry.name == "tzdata").unwrap();
-        // Must be Site/PackageVersionChanged — NOT reclassified by anaconda post-pass
-        assert_bucket(&tz.triage, TriageBucket::Site);
-        assert_eq!(tz.triage.primary_reason, TriageReason::PackageVersionChanged);
+        // Must be PackageVersionChanged — NOT reclassified by anaconda post-pass.
+        // The exact bucket (Site for upgrades, Investigate for downgrades)
+        // depends on direction — assert the reason, not the bucket.
+        assert_eq!(tz.triage.primary_reason, TriageReason::PackageVersionChanged,
+            "anaconda post-pass must not override PackageVersionChanged");
     }
 
     #[test]
@@ -1137,18 +1168,31 @@ Add to the `#[cfg(test)]` module in `session.rs`. This test builds a snapshot wi
             ..Default::default()
         };
         let session = RefineSession::new(snap);
-        let result = session.apply(RefinementOp::SetInclude {
+        // Apply SetInclude(true) — should be a silent no-op
+        let _result = session.apply(RefinementOp::SetInclude {
             item_id: ItemId::Package("grub2-efi-aa64-cdboot.aarch64".into()),
             include: true,
         });
-        // The op should be accepted but have no effect
+
+        // Verify the op did not change the view state (not just export)
+        let view = session.view();
+        let view_pkg = view.rpm_packages().iter()
+            .find(|p| p.entry.name == "grub2-efi-aa64-cdboot")
+            .unwrap();
+        assert!(!view_pkg.entry.include, "view: locked package must stay excluded");
+        assert!(view_pkg.entry.locked, "view: locked flag must be preserved");
+
+        // Verify the op did not land in the op stack
+        // (adapt to however the session exposes op count or op list)
+
+        // Verify export also reflects the no-op
         let exported = session.export();
-        let pkg = exported.rpm.unwrap().packages_added
+        let exp_pkg = exported.rpm.unwrap().packages_added
             .iter()
             .find(|p| p.name == "grub2-efi-aa64-cdboot")
             .unwrap();
-        assert!(!pkg.include, "locked package should remain excluded after SetInclude(true)");
-        assert!(pkg.locked, "locked flag should be preserved");
+        assert!(!exp_pkg.include, "export: locked package must stay excluded");
+        assert!(exp_pkg.locked, "export: locked flag must be preserved");
     }
 ```
 
@@ -1174,7 +1218,7 @@ Add a test in `crates/web/src/` (find the existing API test file — likely `cra
     }
 ```
 
-Note: adapt to the actual web test harness pattern in the codebase. If no web API tests exist yet, add a comment documenting the expected behavior and verify manually in the Thorn checkpoint. The session-layer test is the primary contract proof; the API test is defense-in-depth.
+Note: adapt to the actual web test harness in the codebase. Both the session-layer and API-layer tests are required — the API test is not optional defense-in-depth, it is a mandatory contract proof. If no web API test harness exists yet, create one for this test — the locked-item contract at the API boundary is a spec requirement.
 
 - [ ] **Step 4: Run all tests**
 
