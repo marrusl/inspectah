@@ -303,9 +303,14 @@ fn apply_anaconda_classification(
     packages: &mut [RefinedPackage],
     snap: &InspectionSnapshot,
 ) {
+    // Build evidence lookups. These return empty sets (not errors) when
+    // the underlying snapshot sections are missing — the per-package
+    // evidence check below handles the distinction.
     let user_enabled_service_packages = build_user_enabled_service_set(snap);
     let modified_config_packages = build_modified_config_set(snap);
-    let evidence_available = snap.services.is_some() && snap.config.is_some();
+    let has_services = snap.services.is_some();
+    let has_config = snap.config.is_some()
+        && snap.rpm.as_ref().map_or(false, |r| !r.file_ownership.is_empty());
 
     for pkg in packages.iter_mut() {
         if pkg.entry.source_repo != "anaconda" {
@@ -335,13 +340,23 @@ fn apply_anaconda_classification(
             continue;
         }
 
-        // Evidence availability check
-        if !evidence_available {
-            pkg.triage = TriageTag {
-                triage: Triage::SingleHost(TriageBucket::Investigate),
-                primary_reason: TriageReason::PackageInstallerEvidenceUnavailable,
-                annotations: vec![],
-            };
+        // Evidence availability check — per-package, not blanket.
+        // Missing sections OR missing file_ownership (needed for config-to-package
+        // joins) means we cannot determine promotion. Preserve the existing
+        // classification when it's meaningful; only fall to EvidenceUnavailable
+        // when the existing reason is truly uninformative.
+        if !has_services || !has_config {
+            // Preserve PackageUserAdded or PackageProvenanceUnavailable —
+            // the existing classification is the best we have. Only override
+            // if neither applies (defensive — they always should at this point).
+            if dominated_reason {
+                pkg.triage = TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Investigate),
+                    primary_reason: TriageReason::PackageInstallerEvidenceUnavailable,
+                    annotations: vec![],
+                };
+            }
+            // Either way, do NOT fall through to Tiers 2-4 without evidence.
             continue;
         }
 
@@ -584,35 +599,73 @@ Expected: Compiles.
     }
 ```
 
-- [ ] **Step 5: Write precedence test — stronger signal preserved**
+- [ ] **Step 5: Write precedence tests — stronger signals preserved**
+
+Two tests: one for `PackageVersionChanged`, one for `PackageLocalInstall`. Both must prove the anaconda classifier does not override the existing signal.
 
 ```rust
     #[test]
     fn anaconda_precedence_preserves_version_changed() {
-        let snap = snap_with_anaconda(
+        // Create a package with anaconda source_repo that has a version
+        // change from baseline. classify_packages should assign
+        // PackageVersionChanged, and the anaconda post-pass must not
+        // override it.
+        let mut pkg = anaconda_pkg("tzdata");
+        let snap = snap_with_anaconda_and_vc(
             Some(vec!["glibc".into(), "tzdata".into()]),
-            vec![anaconda_pkg("tzdata")],
+            vec![pkg],
+            vec![VersionChange {
+                name: "tzdata".into(),
+                arch: "x86_64".into(),
+                host_version: "2026b".into(),
+                base_version: "2026a".into(),
+                direction: Some(VersionChangeDirection::Upgrade),
+                ..Default::default()
+            }],
             Some(ServiceSection { state_changes: vec![], enabled_units: vec![], disabled_units: vec![], drop_ins: vec![], preset_matched_units: vec![] }),
             Some(ConfigSection { files: vec![] }),
             vec![],
         );
-        // tzdata is in baseline with version change — classify_packages will
-        // assign PackageVersionChanged or PackageBaselineMatch depending on
-        // version_changes data. Since we didn't add version_changes, it will
-        // get PackageBaselineMatch. Use a non-baseline package with local-install
-        // state to test precedence.
+        let result = classify_packages(&snap);
+        let tz = result.iter().find(|p| p.entry.name == "tzdata").unwrap();
+        // Must be Site/PackageVersionChanged — NOT reclassified by anaconda post-pass
+        assert_bucket(&tz.triage, TriageBucket::Site);
+        assert_eq!(tz.triage.primary_reason, TriageReason::PackageVersionChanged);
+    }
+
+    #[test]
+    fn anaconda_precedence_preserves_local_install() {
         let mut local = anaconda_pkg("custom-rpm");
         local.state = PackageState::LocalInstall;
-        let snap2 = snap_with_anaconda(
+        let snap = snap_with_anaconda(
             Some(vec!["glibc".into()]),
             vec![local],
             Some(ServiceSection { state_changes: vec![], enabled_units: vec![], disabled_units: vec![], drop_ins: vec![], preset_matched_units: vec![] }),
             Some(ConfigSection { files: vec![] }),
             vec![],
         );
-        let result = classify_packages(&snap2);
+        let result = classify_packages(&snap);
         let custom = result.iter().find(|p| p.entry.name == "custom-rpm").unwrap();
         assert_eq!(custom.triage.primary_reason, TriageReason::PackageLocalInstall);
+    }
+```
+
+Note: `snap_with_anaconda_and_vc` is an extended helper that also accepts `version_changes`. Add it alongside `snap_with_anaconda` in Step 1:
+
+```rust
+    fn snap_with_anaconda_and_vc(
+        baseline_names: Option<Vec<String>>,
+        packages: Vec<PackageEntry>,
+        version_changes: Vec<VersionChange>,
+        services: Option<ServiceSection>,
+        config: Option<ConfigSection>,
+        file_ownership: Vec<FileOwnershipEntry>,
+    ) -> InspectionSnapshot {
+        let mut snap = snap_with_anaconda(baseline_names, packages, services, config, file_ownership);
+        if let Some(rpm) = &mut snap.rpm {
+            rpm.version_changes = version_changes;
+        }
+        snap
     }
 ```
 
@@ -804,7 +857,9 @@ Add after the existing `query_user_installed` function:
 
 ```rust
 fn collect_installed_groups(exec: &dyn Executor) -> Option<Vec<InstalledGroup>> {
-    let result = exec.run("dnf", &["group", "list", "--installed"]);
+    // Force C locale for deterministic parsing of dnf output headings
+    // ("Installed Groups:", "Mandatory Packages:", etc.)
+    let result = exec.run("env", &["LC_ALL=C", "dnf", "group", "list", "--installed"]);
     if result.exit_code != 0 {
         return None;
     }
@@ -830,8 +885,11 @@ fn collect_installed_groups(exec: &dyn Executor) -> Option<Vec<InstalledGroup>> 
 
     let mut groups = Vec::new();
     for group_name in &group_names {
-        let info_result = exec.run("dnf", &["group", "info", group_name]);
+        let info_result = exec.run("env", &["LC_ALL=C", "dnf", "group", "info", group_name]);
         if info_result.exit_code != 0 {
+            // Individual group info failure: skip this group, keep others.
+            // Partial data is better than None — None means "collection
+            // failed entirely" and disables group awareness.
             continue;
         }
         let packages = parse_group_info_packages(&info_result.stdout);
@@ -1096,16 +1154,38 @@ Add to the `#[cfg(test)]` module in `session.rs`. This test builds a snapshot wi
 
 Note: adapt the test to match the actual `RefineSession::new()` and `session.apply()` signatures in the codebase. The existing tests in session.rs (around line 2804+) show the pattern.
 
-- [ ] **Step 2: Run the test**
+- [ ] **Step 2: Run the session test**
 
 Run: `cargo test -p inspectah-refine locked_platform_plumbing_package -- --nocapture`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Write web API boundary lock test**
+
+Add a test in `crates/web/src/` (find the existing API test file — likely `crates/web/src/handlers.rs` or a test module). This test sends a `POST /api/op` with a `SetInclude(true)` for a locked package and verifies the response shows the package still excluded:
+
+```rust
+    #[tokio::test]
+    async fn locked_package_set_include_no_op_via_api() {
+        // Build a snapshot with a locked platform-plumbing package
+        // Start the refine server with this snapshot
+        // POST /api/op with SetInclude { item_id: Package("grub2-efi-aa64-cdboot.aarch64"), include: true }
+        // GET /api/view and verify the package is still include: false, locked: true
+        // GET /api/export and verify the package is not in the Containerfile
+    }
+```
+
+Note: adapt to the actual web test harness pattern in the codebase. If no web API tests exist yet, add a comment documenting the expected behavior and verify manually in the Thorn checkpoint. The session-layer test is the primary contract proof; the API test is defense-in-depth.
+
+- [ ] **Step 4: Run all tests**
+
+Run: `cargo test --workspace -- --nocapture`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/refine/src/session.rs
-git commit -m "test(refine): verify locked platform-plumbing package rejects SetInclude at session layer"
+git add crates/refine/src/session.rs crates/web/src/
+git commit -m "test(refine): verify locked platform-plumbing rejects SetInclude at session and API layers"
 ```
 
 ---
@@ -1143,9 +1223,25 @@ In the refine UI, check:
 - `google-noto-sans-vf-fonts` is Baseline (toggleable, excluded by default)
 - `cronie` is Investigate (included by default)
 
-Export and verify the Containerfile no longer contains `grub2-efi-aa64-cdboot` or font packages.
+Export and verify:
+- Containerfile does NOT contain `grub2-efi-aa64-cdboot` or font packages (excluded)
+- Containerfile DOES contain `cronie` and any other Tier 4 ambiguous packages (included by default)
+- If firewalld has custom config on the test tarball, verify it appears in the Containerfile (promoted)
+- The exported tarball round-trips cleanly: re-import into refine, verify classifications persist
 
-- [ ] **Step 5: Review git log**
+- [ ] **Step 5: Verify TS types are updated**
+
+Check `crates/web/ui/src/api/types.ts` for the `TriageReason` union type. Confirm all six new snake_case strings are present:
+- `package_platform_plumbing`
+- `package_installer_default`
+- `package_installer_promoted_service`
+- `package_installer_promoted_config`
+- `package_installer_ambiguous`
+- `package_installer_evidence_unavailable`
+
+If the TS union is auto-generated, verify the generation. If hand-maintained, confirm the update was included in Task 2 Step 4.
+
+- [ ] **Step 6: Review git log**
 
 Run: `git log --oneline -10`
 Verify commits are clean and follow conventional format.
