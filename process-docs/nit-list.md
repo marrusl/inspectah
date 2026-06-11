@@ -85,6 +85,11 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 ## ~~Workspace Layout~~ (DONE — 2026-06-09)
 
+## Fleet Aggregate Polish
+
+- [ ] **Stale scan dates warning fires on any timestamp difference:** `fleet/validate.rs` line 201 warns whenever `min != max` timestamps — even 13 minutes apart. Needs a reasonable threshold (e.g., 24h or 7d) before calling scans "stale."
+- [ ] **`fleet-fleet-` double prefix in output filename:** `fleet.rs` line 254 does `get_output_stamp(&format!("fleet-{label}"))`. When the default label is "fleet", the output is `fleet-fleet-timestamp.tar.gz`. Skip the prefix when label is "fleet", or use the label alone as the stamp prefix.
+
 ## Server Disconnected Overlay
 
 - [ ] **Show "Server disconnected" in the browser when the backend stops:** When the refine web server is killed (Ctrl-C), the page silently stops responding. Add a periodic heartbeat check in the frontend JS (fetch a lightweight endpoint, e.g., `/api/health`). When it fails, show a full-page overlay: "Server disconnected. Restart `inspectah refine` to continue." Prevents confusion when the backend goes away mid-session.
