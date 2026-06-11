@@ -32,6 +32,15 @@ sudo dnf install inspectah
 
 Requires podman >= 4.4 (installed as a dependency if not present).
 
+### macOS (Homebrew)
+
+```bash
+brew tap marrusl/inspectah
+brew install inspectah
+```
+
+Requires macOS on Apple Silicon (arm64). For Intel Macs, build from source.
+
 ### From source
 
 ```bash

@@ -36,6 +36,15 @@ sudo dnf copr enable mrussell/inspectah
 sudo dnf install inspectah
 ```
 
+### macOS (Homebrew)
+
+```bash
+brew tap marrusl/inspectah
+brew install inspectah
+```
+
+Apple Silicon only. For Intel Macs, build from source below.
+
 ### From source
 
 ```bash
