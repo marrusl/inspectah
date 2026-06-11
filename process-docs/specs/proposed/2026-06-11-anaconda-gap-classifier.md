@@ -404,23 +404,39 @@ The new reason variants surface through existing reason display
 mechanisms.
 
 **Group display (new).** When packages belong to installed dnf
-groups, the refine UI must reflect that grouping:
+groups, the group replaces its member packages in the list:
 
-- Group-member packages are visually grouped under a collapsible
-  group header (e.g., "Container Management (8 packages)").
-- The group header has a toggle that includes/excludes all member
-  packages as a unit.
-- Individual packages within the group retain their own toggles for
-  fine-grained control — excluding a single package removes it from
-  the group's `dnf group install` output without affecting the other
-  members.
-- If all members of a group are excluded, the group header shows as
-  excluded.
-- Packages not in any group display as they do today (flat list).
+- **Group row (collapsed):** Single row with chevron, group name
+  in semibold, package count as muted suffix ("12 packages"), and
+  one include/exclude toggle. Groups sort alphabetically alongside
+  individual packages — no separate section.
+- **Expanded view:** Clicking the chevron reveals the direct member
+  packages indented one level (name + version). No individual
+  toggles — the group is the unit of decision, matching the
+  Containerfile's `dnf group install` rendering.
+- **Search:** Searching "podman" surfaces the Container Management
+  group if podman is a member, with "contains: podman" subtitle.
+  The group expands in place to confirm the match.
+- **Summary line:** Top of the package list shows composition at a
+  glance: "4 groups, 47 individual packages."
+
+**Ungroup action.** An icon button on the group row (secondary to
+the toggle) dissolves the group into individual package rows:
+
+- Click replaces the group row with its member packages, each with
+  its own toggle, sorted alphabetically into the flat list.
+- The Containerfile switches from `dnf group install` to individual
+  `dnf install` lines for those packages.
+- Brief inline toast: "Container Management broken into 12 packages."
+- One-way door — no re-group action. Reset or re-scan to restore.
+- Optional: ungrouped rows show a muted provenance tag "(was:
+  Container Management)" for context.
 
 This is necessary for consistency: if the Containerfile renders
 `dnf group install`, the refine UI must show the user what that
 group contains so they can make informed include/exclude decisions.
+The ungroup action gives users an escape hatch for granular control
+when the group-as-unit model doesn't fit their needs.
 
 **Deferred to follow-on:** Grouped display for platform-plumbing
 packages (collapsed grayed-out section), signal evidence subtitles
@@ -493,9 +509,11 @@ classification reasons are refine-layer metadata stored in
   individual packages. Group members excluded from individual `dnf
   install` block. Excluding one member removes it from group render
   but keeps the group. Excluding all members drops the group line.
-- **Refine UI group tests:** group-member packages display under
-  group header. Group toggle includes/excludes all members. Individual
-  toggle overrides group state for that package.
+- **Refine UI group tests:** group-member packages hidden behind
+  group row. Group toggle includes/excludes all members. Search for
+  a member surfaces the group with "contains:" subtitle. Ungroup
+  dissolves group into individual package rows with own toggles.
+  Ungrouped packages render as individual `dnf install` lines.
 - **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
