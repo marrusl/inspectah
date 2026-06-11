@@ -9,6 +9,10 @@
   snake_case. Split Tier 2 into two typed promotion variants. Added
   safe fallback for missing evidence. Scoped out UI grouping and audit
   report annotations (follow-on).
+- **R3 (2026-06-11):** Resolved Tier 1 precedence contradiction —
+  platform plumbing is checked first, before the precedence gate.
+  Split Tier 3 into high-confidence installer noise (soft-exclude) and
+  ambiguous anaconda remainder (Investigate). Fixed chrono → chrony.
 
 ## Problem
 
@@ -67,25 +71,29 @@ CentOS Stream, and Fedora (same Anaconda installer stack).
 
 **Critical constraint:** `source_repo == "anaconda"` is necessary but
 NOT sufficient for reclassification. It gates entry into the anaconda
-classifier, but stronger existing signals take precedence:
+classifier, but the classifier has two precedence layers:
 
-1. **Existing stronger classifications are preserved.** If the
-   existing `classify_packages()` logic has already assigned a package
-   a reason of `PackageVersionChanged`, `PackageLocalInstall`,
+1. **Tier 1 (platform plumbing) is checked first and always wins.**
+   If a package matches `PLATFORM_PLUMBING_PREFIXES`, it is hard-
+   excluded regardless of any other signal. These packages conflict
+   with bootc's boot chain management and must never appear in a
+   container workload layer, even if the user explicitly installed
+   them or they have version-change signals.
+
+2. **For all other tiers, stronger existing classifications are
+   preserved.** If `classify_packages()` has already assigned a
+   reason of `PackageVersionChanged`, `PackageLocalInstall`,
    `PackageNoRepoSource`, `PackageConfigCaptured`, or any other
    investigate-class signal, the anaconda classifier does NOT override
    it. Those signals indicate the package has a more specific story
-   than "installer default."
-
-2. **The anaconda classifier only applies to packages on the ordinary
-   user-added delta path** — packages that would otherwise receive
-   `PackageUserAdded` or `PackageProvenanceUnavailable` as their
-   reason. These are the packages where anaconda provenance is the
-   most informative signal available.
+   than "installer default." The anaconda classifier only reclassifies
+   packages that would otherwise receive `PackageUserAdded` or
+   `PackageProvenanceUnavailable` — packages where anaconda provenance
+   is the most informative signal available.
 
 Packages where `source_repo != "anaconda"` are completely unaffected.
 
-### Three Tiers
+### Four Tiers
 
 #### Tier 1: Hard Exclude (Baseline / platform_plumbing)
 
@@ -150,7 +158,7 @@ config-centric packages can promote on config signal alone.
 CONFIG_ONLY_PROMOTION:
   sudo
   logrotate
-  chrono
+  chrony
   sssd
   pam
 ```
@@ -167,19 +175,56 @@ require both signals (Path A) for promotion.
 
 #### Tier 3: Soft Exclude (Baseline / installer_default)
 
-Everything else in the anaconda set that passed the precedence check
-(no stronger existing signal) and has no user-intent signal. Fonts,
-bare-metal hardware tools, initscripts, OS provisioning artifacts.
-Excluded by default but toggleable in the refine UI.
+High-confidence installer noise: packages that are clearly not user
+workload and would never be intentionally selected via group-install
+or kickstart. These are identified by a curated list of known
+installer-noise patterns.
 
-Typical packages: google-noto-* fonts, lshw, lsscsi, libsysfs,
-initscripts-*, prefixdevname, rootfiles, dnf-plugins-core,
-glibc-langpack-en, kernel-tools*, dracut-config-rescue, mtools,
-parted, biosdevname.
+```
+INSTALLER_NOISE_PATTERNS:
+  *-fonts           (font packages)
+  *-fonts-common
+  fonts-filesystem
+  default-fonts-*
+  lshw              (bare-metal HW inspection)
+  lsscsi
+  libsysfs
+  initscripts-*     (legacy init compat)
+  prefixdevname     (bare-metal NIC naming)
+  rootfiles         (default shell dotfiles)
+  kernel-tools*     (CPU frequency, bare-metal)
+  dracut-config-rescue
+  mtools            (floppy/EFI media tools)
+  biosdevname       (legacy BIOS device naming)
+```
+
+These are excluded by default but toggleable in the refine UI.
 
 Implementation: `include: false`, `locked: false`.
 
 Reason: `TriageReason::PackageInstallerDefault`
+
+#### Tier 4: Ambiguous Anaconda (Investigate / installer_ambiguous)
+
+Everything else in the anaconda set that passed the precedence check,
+has no promotion signal, and doesn't match the installer-noise list.
+These are packages where we cannot distinguish between "Anaconda
+dragged this in as a default" and "the user selected this group or
+package at install time."
+
+This is the critical safety net: group-install choices like
+container-tools, firewalld (without custom config), and other
+deliberate install-time selections land here instead of being silently
+excluded. The user reviews them in refine and makes the call.
+
+Implementation: classified as `Investigate`, `include: true`,
+`locked: false`.
+
+Reason: `TriageReason::PackageInstallerAmbiguous`
+
+The default is `include: true` because these packages may represent
+user intent. It is safer to include something the user can exclude
+than to exclude something the user intended to keep.
 
 ### Missing-Signal Fallback
 
@@ -200,22 +245,23 @@ becomes less confident, not more willing to exclude.
 
 For each package in `packages_added` where `source_repo == "anaconda"`:
 
-1. **Precedence check:** If the package already has a reason other
+1. If name matches `PLATFORM_PLUMBING_PREFIXES` → Tier 1 (hard
+   exclude, locked). Checked first — platform plumbing always wins
+   regardless of other signals.
+2. **Precedence check:** If the package already has a reason other
    than `PackageUserAdded` or `PackageProvenanceUnavailable`, skip —
    the existing classification is stronger.
-2. If name matches `PLATFORM_PLUMBING_PREFIXES` → Tier 1 (hard
-   exclude, locked). Platform plumbing overrides even stronger
-   signals because these packages conflict with bootc regardless of
-   user intent.
 3. **Evidence availability check:** If service or config data is
    missing or ownership joins fail → preserve existing classification
    or `Investigate / installer_evidence_unavailable`.
-4. Else if package meets Path A (dual-signal promotion) → Tier 2,
+4. If package meets Path A (dual-signal promotion) → Tier 2,
    reason `package_installer_promoted_service`.
-5. Else if package is in `CONFIG_ONLY_PROMOTION` AND meets config
+5. If package is in `CONFIG_ONLY_PROMOTION` AND meets config
    signal → Tier 2, reason `package_installer_promoted_config`.
-6. Else → Tier 3 (soft exclude, toggleable), reason
-   `package_installer_default`.
+6. If name matches `INSTALLER_NOISE_PATTERNS` → Tier 3 (soft
+   exclude, toggleable), reason `package_installer_default`.
+7. Else → Tier 4 (Investigate, included by default), reason
+   `package_installer_ambiguous`.
 
 ## Pipeline Integration
 
@@ -252,6 +298,8 @@ existing `#[serde(rename_all = "snake_case")]` convention:
   `"package_installer_promoted_service"`
 - `PackageInstallerPromotedConfig` → wire:
   `"package_installer_promoted_config"`
+- `PackageInstallerAmbiguous` → wire:
+  `"package_installer_ambiguous"`
 - `PackageInstallerEvidenceUnavailable` → wire:
   `"package_installer_evidence_unavailable"`
 
@@ -287,10 +335,11 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
 ### In Scope
 
 - Anaconda gap classification post-pass in `classify_packages()`
-- Precedence rules preserving stronger existing signals
-- Platform plumbing hard-exclude with `locked: true` (narrow set)
+- Tier 1 platform plumbing checked first, always wins
+- Precedence rules preserving stronger existing signals (Tiers 2-4)
 - Two typed promotion paths (dual-signal and config-only)
-- Soft-exclude default for remaining anaconda packages
+- Installer-noise soft-exclude for high-confidence non-workload
+- Ambiguous-anaconda → Investigate for potential group-install choices
 - Missing-signal fallback to preserve/investigate
 - Serialization regression tests for new reason variants
 - Locking contract tests at session and API boundary
@@ -308,34 +357,41 @@ stored in `RefinedPackage`, not in the raw `InspectionSnapshot`.
 ## Testing
 
 - Unit tests for each tier in `classify.rs`: platform-plumbing match,
-  dual-signal promotion, config-only promotion, soft-exclude fallback
+  dual-signal promotion, config-only promotion, installer-noise
+  soft-exclude, ambiguous-anaconda → Investigate
 - **Precedence tests:** anaconda-sourced package with
-  `PackageVersionChanged` keeps its existing classification.
-  Anaconda-sourced package with `PackageLocalInstall` is not
-  reclassified. Anaconda-sourced package with `PackageUserAdded` IS
-  reclassified.
+  `PackageVersionChanged` keeps its existing classification (Tier 1
+  exception: platform plumbing still wins). Anaconda-sourced package
+  with `PackageLocalInstall` is not reclassified. Anaconda-sourced
+  package with `PackageUserAdded` IS reclassified. Platform-plumbing
+  package with `PackageVersionChanged` IS still hard-excluded.
+- **Tier 4 tests:** anaconda-sourced package not matching noise
+  patterns and without promotion signals → `Investigate` with
+  `include: true`. Validates group-install packages are not silently
+  excluded.
 - **Missing-signal tests:** `snap.services = None` → packages
   preserve existing classification or move to Investigate.
   `snap.config = None` → same. Missing `owning_package` on service →
   same.
 - **Locking tests:** Tier 1 `SetInclude(true)` is a no-op at session
   layer. Export clamps locked items. API returns unchanged state.
-- **Serialization tests:** all five new reason variants
+- **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
-  installer-default packages, includes promoted packages.
+  installer-default packages, includes promoted and ambiguous packages.
 - Snapshot round-trip: new reason variants survive
   serialize/deserialize cycle.
 
 ## Known Limitations
 
-- `CONFIG_ONLY_PROMOTION` is a curated list that may need expansion
-  over time as new config-centric packages are identified.
+- `CONFIG_ONLY_PROMOTION` and `INSTALLER_NOISE_PATTERNS` are curated
+  lists that may need expansion over time as new packages are
+  identified. The lists are intentionally conservative.
 - `source_repo == "anaconda"` does not distinguish between Anaconda
-  defaults and deliberate group-install/kickstart choices. The
-  precedence rules and promotion logic mitigate this, but some
-  group-installed packages without service/config signals may still
-  be soft-excluded. Users can toggle them back on in refine.
+  defaults and deliberate group-install/kickstart choices. Tier 4
+  (Investigate / ambiguous) addresses this by defaulting ambiguous
+  packages to included rather than excluded, but users still need to
+  review and confirm in refine.
 - Fedora validation is deferred. The classification model is
   signal-based and should generalize, but needs confirmation with
   Fedora scan tarballs.
