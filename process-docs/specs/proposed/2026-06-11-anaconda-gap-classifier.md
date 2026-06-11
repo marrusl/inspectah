@@ -13,12 +13,14 @@
   platform plumbing is checked first, before the precedence gate.
   Split Tier 3 into high-confidence installer noise (soft-exclude) and
   ambiguous anaconda remainder (Investigate). Fixed chrono → chrony.
-- **R4 (2026-06-11):** Added group-install detection as a rendering
-  concern (not classification). New collection step (`dnf group list
-  --installed`), new `installed_groups` snapshot field, and `dnf group
-  install` rendering in Containerfile. Group membership affects how
-  packages are expressed in the Containerfile, not how they are
-  classified.
+- **R4 (2026-06-11):** Added group-install collection (`dnf group list
+  --installed`, `installed_groups` snapshot field). Group rendering
+  and refine UI grouping deferred to separate spec per panel + Ember +
+  Tang recommendation.
+- **R5 (2026-06-11):** Stripped group rendering, refine UI grouping,
+  and ungroup action to separate spec. This spec now covers classifier
+  + group collection only. Group data accumulates in the snapshot for
+  the follow-on rendering spec.
 
 ## Problem
 
@@ -270,9 +272,8 @@ For each package in `packages_added` where `source_repo == "anaconda"`:
    `package_installer_ambiguous`.
 
 Note: group membership is NOT a classification signal — it is a
-rendering concern. Group-installed packages follow the same
-classification flow as any other package. See the Containerfile
-Renderer section for how group membership affects output.
+rendering concern deferred to a separate spec. Group-installed
+packages follow the same classification flow as any other package.
 
 ## Pipeline Integration
 
@@ -351,103 +352,34 @@ strings.
 
 ### Containerfile Renderer
 
-**Group-install rendering (new).** When included packages belong to
-an installed dnf group, the renderer emits `dnf group install`
-commands instead of listing those packages individually. This
-preserves the user's original install-time intent and produces a
-cleaner, more maintainable Containerfile.
+No changes to rendering logic in this spec. The renderer already
+respects `include: true/false` on each package. The `locked` field
+is already enforced by `clamp_locked_items()` on export.
 
-```dockerfile
-# === Package Groups (1) ===
-RUN dnf group install -y "Container Management" \
-    && dnf clean all
+Group-aware rendering (`dnf group install` instead of individual
+`dnf install` lines for group-member packages) is deferred to the
+group rendering spec.
 
-# === Packages (5) ===
-RUN dnf install -y \
-    bat \
-    htop \
-    ...
-```
-
-The group-install section is placed before the individual package
-`dnf install` block. Packages that belong to an installed group and
-are included are rendered via their group and excluded from the
-individual package list to avoid duplication.
-
-If a package belongs to multiple groups, it is attributed to the
-first group alphabetically (deterministic output). If a user
-excludes individual packages from a group in refine, those packages
-are excluded from the group — if all members of a group are
-excluded, the `dnf group install` line is dropped entirely.
-
-Group membership is purely a rendering concern. It does not affect
-classification, triage, include/exclude defaults, or refine toggle
-behavior. A group-installed package follows the same classification
-flow as any other package — it may be baseline-suppressed, promoted
-via service/config signals, soft-excluded as installer noise, or
-sent to Investigate as ambiguous.
-
-**Repo assumption:** `dnf group install` works from standard RHEL
-BaseOS/AppStream repos (and Fedora equivalents). Group definitions
-are comps metadata shipped with the repo — no additional
-configuration required beyond what the `FROM` base image already
-provides. This is the same repo surface `dnf install` already uses.
-
-For non-group packages, the existing `dnf install` rendering is
-unchanged. The renderer already respects `include: true/false` on
-each package. The `locked` field is already enforced by
-`clamp_locked_items()` on export.
-
-### Refine UI (Web)
+### Refine UI (Web + TUI)
 
 The new reason variants surface through existing reason display
-mechanisms.
+mechanisms. No structural UI changes in this spec.
 
-**Group display (new).** When packages belong to installed dnf
-groups, the group replaces its member packages in the list:
-
-- **Group row (collapsed):** Single row with chevron, group name
-  in semibold, package count as muted suffix ("12 packages"), and
-  one include/exclude toggle. Groups sort alphabetically alongside
-  individual packages — no separate section.
-- **Expanded view:** Clicking the chevron reveals the direct member
-  packages indented one level (name + version). No individual
-  toggles — the group is the unit of decision, matching the
-  Containerfile's `dnf group install` rendering.
-- **Search:** Searching "podman" surfaces the Container Management
-  group if podman is a member, with "contains: podman" subtitle.
-  The group expands in place to confirm the match.
-- **Summary line:** Top of the package list shows composition at a
-  glance: "4 groups, 47 individual packages."
-
-**Ungroup action.** An icon button on the group row (secondary to
-the toggle) dissolves the group into individual package rows:
-
-- Click replaces the group row with its member packages, each with
-  its own toggle, sorted alphabetically into the flat list.
-- The Containerfile switches from `dnf group install` to individual
-  `dnf install` lines for those packages.
-- Brief inline toast: "Container Management broken into 12 packages."
-- One-way door — no re-group action. Reset or re-scan to restore.
-- Optional: ungrouped rows show a muted provenance tag "(was:
-  Container Management)" for context.
-
-This is necessary for consistency: if the Containerfile renders
-`dnf group install`, the refine UI must show the user what that
-group contains so they can make informed include/exclude decisions.
-The ungroup action gives users an escape hatch for granular control
-when the group-as-unit model doesn't fit their needs.
+Group-aware display (collapsible group rows, ungroup action, search
+by member name) is deferred to the group rendering spec.
 
 **Deferred to follow-on:** Grouped display for platform-plumbing
 packages (collapsed grayed-out section), signal evidence subtitles
-for promoted packages, and audit report annotations. These require
-typed presentation metadata that the current refine projection and
-report renderer do not support.
+for promoted packages, audit report annotations, and group-aware
+package display. These require typed presentation metadata that the
+current refine projection and report renderer do not support.
 
 ### Snapshot Schema
 
 One new field: `installed_groups: Option<Vec<InstalledGroup>>` on the
 RPM snapshot section. This is the only schema addition in this spec.
+This field is collected now so the data is available when the group
+rendering spec ships — no re-scan required.
 
 `source_repo: "anaconda"` is already in the snapshot. The new
 classification reasons are refine-layer metadata stored in
@@ -463,10 +395,6 @@ classification reasons are refine-layer metadata stored in
 - Tier 1 platform plumbing checked first, always wins
 - Precedence rules preserving stronger existing signals (Tiers 2-4)
 - Two typed promotion paths (dual-signal, config-only)
-- Group-install collection and `dnf group install` rendering in
-  Containerfile (rendering concern, not classification)
-- Refine UI group display (collapsible group headers, group-level
-  and individual toggles)
 - Installer-noise soft-exclude for high-confidence non-workload
 - Ambiguous-anaconda → Investigate for remaining unclassified packages
 - Missing-signal fallback to preserve/investigate
@@ -475,6 +403,10 @@ classification reasons are refine-layer metadata stored in
 
 ### Out of Scope
 
+- Group-aware Containerfile rendering (`dnf group install`) — separate
+  spec
+- Group-aware refine UI (collapsible group rows, ungroup action,
+  search by member, group-level toggle) — same separate spec
 - UI grouping for platform-plumbing (collapsed grayed-out section)
 - Audit report annotations for installer defaults
 - Signal evidence subtitles in refine UI
@@ -503,21 +435,13 @@ classification reasons are refine-layer metadata stored in
   same.
 - **Locking tests:** Tier 1 `SetInclude(true)` is a no-op at session
   layer. Export clamps locked items. API returns unchanged state.
-- **Group-install tests:** collection parses `dnf group list`/`dnf
-  group info` output. Containerfile renders `dnf group install` before
-  individual packages. Group members excluded from individual `dnf
-  install` block. Excluding one member removes it from group render
-  but keeps the group. Excluding all members drops the group line.
-- **Refine UI group tests:** group-member packages hidden behind
-  group row. Group toggle includes/excludes all members. Search for
-  a member surfaces the group with "contains:" subtitle. Ungroup
-  dissolves group into individual package rows with own toggles.
-  Ungrouped packages render as individual `dnf install` lines.
+- **Group-install collection tests:** collection parses `dnf group
+  list`/`dnf group info` output correctly. `installed_groups` field
+  round-trips through serialization. Missing dnf → `None`, not error.
 - **Serialization tests:** all six new reason variants
   serialize/deserialize to the expected snake_case strings.
 - Containerfile output excludes platform-plumbing and
   installer-default packages, includes promoted and ambiguous packages.
-  Group-promoted packages appear as `dnf group install` commands.
 - Snapshot round-trip: new reason variants survive
   serialize/deserialize cycle.
 
@@ -533,6 +457,11 @@ classification reasons are refine-layer metadata stored in
 - Fedora validation is deferred. The classification model is
   signal-based and should generalize, but needs confirmation with
   Fedora scan tarballs.
-- UI presentation improvements (grouped display, evidence subtitles,
-  audit annotations) are deferred to a follow-on spec that addresses
-  the typed presentation model gap.
+- Group-aware rendering and refine UI are deferred to a separate
+  spec. Until that ships, group-member packages render as individual
+  `dnf install` lines (correct but less expressive than `dnf group
+  install`). The `installed_groups` snapshot data is collected now so
+  no re-scan is needed when rendering ships.
+- UI presentation improvements (evidence subtitles, audit
+  annotations, platform-plumbing collapsed section) are deferred to
+  a follow-on that addresses the typed presentation model gap.
