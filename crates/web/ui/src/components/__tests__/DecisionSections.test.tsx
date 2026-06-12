@@ -1540,14 +1540,6 @@ describe("Unified package view in MainContent", () => {
     expect(screen.getByText("appstream")).toBeInTheDocument();
   });
 
-  it("shows baseline unavailable banner when baseline_summary is absent", () => {
-    const view = makeViewResponse({
-      stats: { baseline_available: false },
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
-  });
-
   it("shows baseline info banner when baseline_summary is present", () => {
     const view = makeViewResponse({
       baseline_summary: {

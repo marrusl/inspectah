@@ -304,28 +304,16 @@ export function MainContent({
   if (activeSection === "packages") {
     const baselineSummary = viewData?.baseline_summary;
 
-    // Render verification banner
-    let banner: JSX.Element | null = null;
-    if (baselineSummary) {
-      const digestPrefix = baselineSummary.image_digest.substring(0, 12);
-      banner = (
-        <Alert
-          variant="info"
-          isInline
-          title={`Baseline compared against ${baselineSummary.image_ref} (${digestPrefix}…) — ${baselineSummary.baseline_count} in base image, ${baselineSummary.user_added_count} user-installed, ${baselineSummary.review_count} require review`}
-          style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
-        />
-      );
-    } else {
-      banner = (
-        <Alert
-          variant="warning"
-          isInline
-          title="Baseline unavailable — all added packages shown as NeedsReview"
-          style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
-        />
-      );
-    }
+    // Render verification banner (baseline is always present in schema v19)
+    const digestPrefix = baselineSummary?.image_digest.substring(0, 12) ?? "";
+    const banner = baselineSummary ? (
+      <Alert
+        variant="info"
+        isInline
+        title={`Baseline compared against ${baselineSummary.image_ref} (${digestPrefix}…) — ${baselineSummary.baseline_count} in base image, ${baselineSummary.user_added_count} user-installed, ${baselineSummary.review_count} require review`}
+        style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
+      />
+    ) : null;
 
     return (
       <>
@@ -504,8 +492,6 @@ export function MainContent({
 
     if (section.items.length === 0 && section.empty_reason) {
       const copyMap: Record<string, string> = {
-        no_baseline:
-          "Version comparison requires a baseline. Run with --baseline to enable.",
         zero_drift: "All packages match the target baseline versions.",
         data_unavailable:
           "Version change data is not available for this snapshot.",

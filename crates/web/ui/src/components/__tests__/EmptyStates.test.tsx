@@ -353,31 +353,6 @@ describe("Packages section renders unified components", () => {
 });
 
 describe("Version Changes empty states", () => {
-  it("renders no_baseline empty state", async () => {
-    const { MainContent } = await import("../MainContent");
-    const sections = [
-      {
-        id: "version_changes",
-        display_name: "Version Changes",
-        items: [],
-        empty_reason: "no_baseline",
-      },
-    ];
-    render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={{ ...MOCK_VIEW }}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
-      />,
-    );
-    expect(screen.getByText(/requires a baseline/)).toBeInTheDocument();
-  });
-
   it("renders zero_drift empty state", async () => {
     const { MainContent } = await import("../MainContent");
     const sections = [
