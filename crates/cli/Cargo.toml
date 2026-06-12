@@ -37,6 +37,8 @@ tempfile = "3"
 tar = "0.4"
 flate2 = "1"
 insta.workspace = true
+assert_cmd = "2"
+predicates = "3"
 
 [[bin]]
 name = "inspectah"
