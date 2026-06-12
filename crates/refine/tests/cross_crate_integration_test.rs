@@ -55,8 +55,6 @@ fn snapshot_with_full_baseline() -> InspectionSnapshot {
         packages,
         extracted_at: "2026-05-17T00:00:00Z".to_string(),
     });
-    snap.no_baseline = false;
-
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["bash".into(), "systemd".into()]),
         packages_added: vec![
@@ -120,9 +118,6 @@ fn snapshot_roundtrip_with_nevra_baseline() {
     assert_eq!(systemd.epoch, None);
     assert_eq!(systemd.version, "256.7");
 
-    // no_baseline flag
-    assert!(!parsed.no_baseline);
-
     // schema_version
     assert_eq!(parsed.schema_version, SCHEMA_VERSION);
 }
@@ -139,7 +134,6 @@ fn degraded_target_image_present_cross_crate() {
         strategy: ResolutionStrategy::OsRelease,
     });
     snap.baseline = None;
-    snap.no_baseline = true;
 
     // Round-trip
     let json = serde_json::to_string(&snap).unwrap();
@@ -163,7 +157,6 @@ fn degraded_target_image_null_cross_crate() {
     let mut snap = InspectionSnapshot::new();
     snap.target_image = None;
     snap.baseline = None;
-    snap.no_baseline = true;
 
     let json = serde_json::to_string(&snap).unwrap();
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();

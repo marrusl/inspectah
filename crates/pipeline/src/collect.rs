@@ -560,15 +560,6 @@ mod tests {
         let rpm = pipeline.state.snapshot.rpm.unwrap();
         assert_eq!(rpm.packages_added.len(), 2);
 
-        // Warnings should include the no-baseline warning from RpmInspector
-        assert!(
-            pipeline
-                .state
-                .snapshot
-                .warnings
-                .iter()
-                .any(|w| w.message.contains("no baseline"))
-        );
     }
 
     #[test]

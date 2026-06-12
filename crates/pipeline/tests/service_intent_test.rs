@@ -115,7 +115,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["firewalld".into()]),
         packages_added: vec![],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -168,7 +168,7 @@ fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
             source_repo: "appstream".into(),
             ..Default::default()
         }],
-        no_baseline: true,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -193,10 +193,7 @@ fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
     assert_eq!(plan.advisories.len(), 1);
     assert_eq!(
         plan.advisories[0].reasons,
-        vec![
-            AdvisoryReason::PackageExcluded,
-            AdvisoryReason::BaselineUnavailable
-        ]
+        vec![AdvisoryReason::PackageExcluded]
     );
     // Service must still be emitted
     assert!(
@@ -221,7 +218,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
             source_repo: String::new(),
             ..Default::default()
         }],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -260,7 +257,7 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["firewalld".into()]),
         packages_added: vec![],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -300,7 +297,7 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["firewalld".into()]),
         packages_added: vec![],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -369,7 +366,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
             source_repo: "appstream".into(),
             ..Default::default()
         }],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -421,7 +418,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: None, // no baseline at all
         packages_added: vec![],
-        no_baseline: true,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -462,7 +459,7 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: None,
         packages_added: vec![],
-        no_baseline: true,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -527,7 +524,7 @@ fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
             source_repo: "appstream".into(),
             ..Default::default()
         }],
-        no_baseline: true,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -550,13 +547,8 @@ fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
     let advisory = &plan.advisories[0];
     assert_eq!(advisory.unit, "stacked-pkg.service");
     assert_eq!(advisory.owning_package, "stacked-pkg");
-    assert_eq!(advisory.reasons.len(), 2);
+    assert_eq!(advisory.reasons.len(), 1);
     assert!(advisory.reasons.contains(&AdvisoryReason::PackageExcluded));
-    assert!(
-        advisory
-            .reasons
-            .contains(&AdvisoryReason::BaselineUnavailable)
-    );
     assert!(
         plan.lines.iter().any(|l| l.contains("stacked-pkg.service")),
         "stacked-advisory service must be emitted"
@@ -571,7 +563,7 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["timer-pkg".into()]),
         packages_added: vec![],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {
@@ -645,7 +637,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
                 ..Default::default()
             },
         ],
-        no_baseline: false,
+
         ..Default::default()
     });
     snap.services = Some(ServiceSection {

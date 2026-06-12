@@ -482,8 +482,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     // Set Phase 6 fields on snapshot
     snapshot.target_image = target_image;
     snapshot.baseline = baseline_data;
-    snapshot.no_baseline = args.no_baseline;
-
     // Set sensitivity metadata from CLI flags
     snapshot.sensitive_snapshot =
         has_password_hashes || has_ssh_keys || has_subscription || args.no_redaction;

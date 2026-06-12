@@ -120,7 +120,6 @@ pub fn merge_snapshots(
     merged.fleet_meta = Some(fleet_meta);
     merged.target_image = target_image;
     merged.baseline = baseline;
-    merged.no_baseline = merged.baseline.is_none();
     merged.completeness = completeness;
     // Redaction state is per-host; fleet merges don't carry it.
     merged.redaction_state = None;

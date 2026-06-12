@@ -558,7 +558,6 @@ pub fn web_version_changes_section(data: &RefVersionChanges) -> ReferenceSection
     if data.downgrades.is_empty() && data.upgrades.is_empty() {
         let reason = data.empty_reason.as_ref().map(|r| match r {
             EmptyReason::DataUnavailable => "data_unavailable".to_string(),
-            EmptyReason::NoBaseline => "no_baseline".to_string(),
             EmptyReason::ZeroDrift => "zero_drift".to_string(),
         });
         return ReferenceSection {

@@ -313,8 +313,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     };
 
     let target_packages = effective_target_packages(rpm);
-    let baseline_unavailable =
-        rpm.no_baseline || rpm.baseline_package_names.is_none() || snap.no_baseline;
+    let baseline_unavailable = rpm.baseline_package_names.is_none();
 
     let included_changes: Vec<_> = services
         .state_changes
