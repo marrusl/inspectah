@@ -1,5 +1,3 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
-     Running `target/debug/inspectah completions fish`
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_inspectah_global_optspecs
 	string join \n markdown-help h/help V/version

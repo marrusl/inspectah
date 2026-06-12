@@ -1,5 +1,3 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
-     Running `target/debug/inspectah completions zsh`
 #compdef inspectah
 
 autoload -U is-at-least

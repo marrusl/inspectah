@@ -258,8 +258,9 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
     }
 
     msg.push_str(
-        "\nIf this system is disconnected or air-gapped, use --no-baseline to skip\n\
-         the pull and run inspectah without baseline comparison.",
+        "\n  Disconnected? You can load images from a tarball:\n    \
+         podman save -o baseline.tar <image-ref>\n    \
+         podman load -i baseline.tar",
     );
 
     msg
@@ -270,14 +271,13 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
 /// Guides the user to provide `--base-image` explicitly with example references.
 pub fn format_resolution_error(cause: &str) -> String {
     format!(
-        "Could not determine target image for baseline comparison.\n\
-         Cause: {cause}\n\n\
-         Provide the target image explicitly:\n\
-         \n\
-           inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream10\n\
-           inspectah scan --base-image registry.redhat.io/rhel10/rhel-bootc:10.2\n\
-         \n\
-         Use --no-baseline to skip baseline comparison entirely."
+        "Error: could not determine target base image\n\n  \
+         Cause:  {cause}\n\n  \
+         Specify the target image explicitly:\n    \
+         inspectah scan --base-image <registry>/<image>:<tag>\n\n  \
+         Example:\n    \
+         inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream10\n    \
+         inspectah scan --base-image registry.redhat.io/rhel10/rhel-bootc:10.2"
     )
 }
 
@@ -442,8 +442,9 @@ mod tests {
     #[test]
     fn format_always_has_disconnect_hint() {
         let msg = format_pull_error(&PullFailureKind::Unknown, "example.com/image:v1", "error");
-        assert!(msg.contains("--no-baseline"));
-        assert!(msg.contains("disconnected"));
+        assert!(msg.contains("podman save"));
+        assert!(msg.contains("podman load"));
+        assert!(msg.contains("Disconnected"));
     }
 
     #[test]
@@ -468,7 +469,7 @@ mod tests {
         let headline_pos = msg.find("Failed to pull").expect("headline");
         let stderr_pos = msg.find("unauthorized").expect("stderr");
         let remediation_pos = msg.find("Remediation").expect("remediation");
-        let disconnect_pos = msg.find("disconnected").expect("disconnect");
+        let disconnect_pos = msg.find("Disconnected").expect("disconnect");
         assert!(headline_pos < stderr_pos);
         assert!(stderr_pos < remediation_pos);
         assert!(remediation_pos < disconnect_pos);
@@ -482,7 +483,7 @@ mod tests {
         assert!(msg.contains("--base-image"));
         assert!(msg.contains("quay.io/centos-bootc/centos-bootc:stream10"));
         assert!(msg.contains("registry.redhat.io/rhel10/rhel-bootc:10.2"));
-        assert!(msg.contains("--no-baseline"));
+        assert!(!msg.contains("--no-baseline"), "must not reference removed flag");
         assert!(msg.contains("os-release missing IMAGE_REF"));
     }
 
