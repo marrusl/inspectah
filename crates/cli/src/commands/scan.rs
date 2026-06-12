@@ -124,10 +124,6 @@ pub struct ScanArgs {
     #[arg(long)]
     pub base_image: Option<String>,
 
-    /// Skip baseline extraction (degraded classification mode)
-    #[arg(long)]
-    pub no_baseline: bool,
-
     /// Preserve sensitive data in the snapshot
     #[arg(long, value_delimiter = ',', value_name = "ITEM")]
     pub preserve: Vec<PreserveItem>,
@@ -231,14 +227,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
         std::process::exit(1);
     }
 
-    // Flag validation
-    if args.base_image.is_some() && args.no_baseline {
-        anyhow::bail!(
-            "Cannot specify both --base-image and --no-baseline. \
-             Use --base-image to set the target image, or --no-baseline to skip baseline extraction."
-        );
-    }
-
     validate_sensitivity_flags(args)?;
 
     let preserved = PreserveItem::expand(&args.preserve);
@@ -280,11 +268,11 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
             };
             (Some(ti), Some(norm))
         }
-        Err(e) if args.no_baseline => {
-            eprintln!("  not found ({}), continuing without baseline", e);
-            (None, None)
+        Err(e) => {
+            let msg = super::pull_failure::format_resolution_error(&e.to_string());
+            eprint!("{msg}");
+            std::process::exit(1);
         }
-        Err(e) => return Err(e.into()),
     };
 
     // Resolve rendering mode early — governs both pull viewport and scan progress.
@@ -292,8 +280,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
     let mode = detect_mode(args.progress.as_ref());
 
     // Step 3: Extract baseline
-    let baseline_data = match (&normalized_ref, args.no_baseline) {
-        (Some(norm), false) => {
+    let baseline_data = match &normalized_ref {
+        Some(norm) => {
             eprintln!("Pulling {}...", norm.as_str());
 
             let use_viewport = mode == crate::progress::Mode::Pretty;
@@ -327,26 +315,84 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                             &mut callback,
                         )
                     };
-                    // Only clear viewport if lines were actually rendered.
-                    if ring_pos > 0 {
-                        pull_progress::viewport_cleanup(viewport_lines);
+                    match result {
+                        Ok(data) => {
+                            // Only clear viewport if lines were actually rendered.
+                            if ring_pos > 0 {
+                                pull_progress::viewport_cleanup(viewport_lines);
+                            }
+                            data
+                        }
+                        Err(_e) => {
+                            if ring_pos > 0 {
+                                pull_progress::viewport_cleanup(viewport_lines);
+                            }
+                            let stderr_combined = collected_lines.join("\n");
+                            let kind =
+                                super::pull_failure::classify_pull_failure(&stderr_combined);
+                            let msg = super::pull_failure::format_pull_error(
+                                &kind,
+                                norm.as_str(),
+                                &stderr_combined,
+                            );
+                            eprint!("{msg}");
+                            std::process::exit(3);
+                        }
                     }
-                    result.context("baseline extraction failed")?
                 } else {
                     // Narrow terminal — fall back to non-TTY
-                    let mut stderr_out = std::io::stderr().lock();
-                    let mut callback =
-                        pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
-                    inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
-                        .context("baseline extraction failed")?
+                    let result = {
+                        let mut stderr_out = std::io::stderr().lock();
+                        let mut callback =
+                            pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
+                        inspectah_collect::baseline::extract_baseline(
+                            &executor,
+                            norm,
+                            &mut callback,
+                        )
+                    };
+                    match result {
+                        Ok(data) => data,
+                        Err(_e) => {
+                            let stderr_combined = collected_lines.join("\n");
+                            let kind =
+                                super::pull_failure::classify_pull_failure(&stderr_combined);
+                            let msg = super::pull_failure::format_pull_error(
+                                &kind,
+                                norm.as_str(),
+                                &stderr_combined,
+                            );
+                            eprint!("{msg}");
+                            std::process::exit(3);
+                        }
+                    }
                 }
             } else {
                 // Non-TTY: prefixed passthrough
-                let mut stderr_out = std::io::stderr().lock();
-                let mut callback =
-                    pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
-                inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
-                    .context("baseline extraction failed")?
+                let result = {
+                    let mut stderr_out = std::io::stderr().lock();
+                    let mut callback =
+                        pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
+                    inspectah_collect::baseline::extract_baseline(
+                        &executor,
+                        norm,
+                        &mut callback,
+                    )
+                };
+                match result {
+                    Ok(data) => data,
+                    Err(_e) => {
+                        let stderr_combined = collected_lines.join("\n");
+                        let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
+                        let msg = super::pull_failure::format_pull_error(
+                            &kind,
+                            norm.as_str(),
+                            &stderr_combined,
+                        );
+                        eprint!("{msg}");
+                        std::process::exit(3);
+                    }
+                }
             };
 
             // Pull summary line
@@ -367,12 +413,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
 
             Some(data)
         }
-        (Some(_norm), true) => {
-            // --no-baseline: show degraded message
-            eprintln!("  Baseline: skipped (--no-baseline)");
-            None
-        }
-        _ => None,
+        None => None,
     };
 
     // Step 4: Collect — run all inspectors
@@ -817,7 +858,6 @@ VARIANT_ID="workstation"
             inspect_only: false,
             output: None,
             base_image: None,
-            no_baseline: false,
             preserve: vec![],
             no_redaction: false,
             ack_sensitive: false,

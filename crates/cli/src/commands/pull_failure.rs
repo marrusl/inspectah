@@ -5,14 +5,13 @@
 //! sanitizes sensitive tokens, and formats user-friendly messages with
 //! per-category remediation guidance.
 //!
-//! Nothing calls the classifier/formatter yet — Task 3 wires them into
-//! the scan flow. The sanitizer is used by `pull_progress` callbacks.
+//! The classifier and formatter are called from `scan.rs` on pull failure
+//! (exit 3) and resolution failure (exit 1). The sanitizer is also used
+//! by `pull_progress` callbacks.
 
 use std::fmt;
 
 /// Classified pull failure categories, ordered by diagnostic priority.
-// Used by Task 3 (scan flow integration); not yet wired.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullFailureKind {
     /// TLS certificate verification failed (self-signed, expired, etc.)
@@ -44,8 +43,6 @@ impl fmt::Display for PullFailureKind {
 /// Priority order: TLS > Auth > Registry > NotFound > Unknown.
 /// This order matters — a TLS error may also mention auth, but the root
 /// cause is the certificate, not the credentials.
-// Used by Task 3 (scan flow integration); not yet wired.
-#[allow(dead_code)]
 pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
     let lower = stderr.to_lowercase();
 
@@ -155,7 +152,6 @@ pub fn sanitize_stderr(s: &str) -> String {
 /// Extract the registry hostname (with optional port) from an image reference.
 ///
 /// Returns `None` for bare names without a registry prefix (e.g., `fedora:latest`).
-#[allow(dead_code)]
 fn registry_from_ref(image_ref: &str) -> Option<&str> {
     // Strip digest (@sha256:...) first
     let name = image_ref.split('@').next().unwrap_or(image_ref);
@@ -187,7 +183,6 @@ fn registry_from_ref(image_ref: &str) -> Option<&str> {
 /// Truncate stderr to a reasonable length for display.
 ///
 /// Keeps the first `max_lines` lines and appends a count of omitted lines.
-#[allow(dead_code)]
 fn truncate_stderr(stderr: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = stderr.lines().collect();
     if lines.len() <= max_lines {
@@ -205,8 +200,6 @@ fn truncate_stderr(stderr: &str, max_lines: usize) -> String {
 /// - Sanitized stderr excerpt
 /// - Remediation steps specific to the error category
 /// - A disconnected-system hint (inspectah may run on air-gapped hosts)
-// Used by Task 3 (scan flow integration); not yet wired.
-#[allow(dead_code)]
 pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &str) -> String {
     let sanitized = sanitize_stderr(raw_stderr);
     let truncated = truncate_stderr(&sanitized, 10);
@@ -275,8 +268,6 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
 /// Format an error message for when the target image cannot be resolved.
 ///
 /// Guides the user to provide `--base-image` explicitly with example references.
-// Used by Task 3 (scan flow integration); not yet wired.
-#[allow(dead_code)]
 pub fn format_resolution_error(cause: &str) -> String {
     format!(
         "Could not determine target image for baseline comparison.\n\
