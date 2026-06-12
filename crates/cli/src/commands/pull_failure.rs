@@ -222,6 +222,8 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
         PullFailureKind::TlsCertError => {
             msg.push_str(&format!(
                 "\nRemediation:\n\
+                 - Verify the image reference is correct (a wrong registry can look like a TLS error):\n\
+                   inspectah scan --base-image <correct-registry>/<image>:<tag>\n\
                  - Verify the TLS certificate for {registry}\n\
                  - If using a private registry, ensure its CA is trusted on this host\n\
                  - For testing only: podman pull --tls-verify=false (not recommended)\n"
@@ -230,6 +232,8 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
         PullFailureKind::AuthRequired => {
             msg.push_str(&format!(
                 "\nRemediation:\n\
+                 - Verify the image reference is correct (a wrong registry can look like an auth error):\n\
+                   inspectah scan --base-image <correct-registry>/<image>:<tag>\n\
                  - Run: podman login {registry}\n\
                  - Check that credentials are current and have pull access\n\
                  - For Red Hat registries: verify subscription or token at access.redhat.com\n"
@@ -547,6 +551,42 @@ mod tests {
         assert_eq!(
             registry_from_ref("myhost:5000/image:tag"),
             Some("myhost:5000")
+        );
+    }
+
+    // ── Ordering tests for --base-image verification ────────────
+
+    #[test]
+    fn format_auth_leads_with_base_image() {
+        let msg = format_pull_error(
+            &PullFailureKind::AuthRequired,
+            "registry.example.com/image:latest",
+            "unauthorized",
+        );
+        // Find positions of key remediation steps
+        let base_image_pos = msg.find("--base-image").expect("--base-image not found");
+        let podman_login_pos = msg.find("podman login").expect("podman login not found");
+        // --base-image verification must come before podman login
+        assert!(
+            base_image_pos < podman_login_pos,
+            "Auth remediation must lead with --base-image verification before podman login"
+        );
+    }
+
+    #[test]
+    fn format_tls_leads_with_base_image() {
+        let msg = format_pull_error(
+            &PullFailureKind::TlsCertError,
+            "registry.example.com/image:latest",
+            "x509: certificate error",
+        );
+        // Find positions of key remediation steps
+        let base_image_pos = msg.find("--base-image").expect("--base-image not found");
+        let ca_trust_pos = msg.find("CA is trusted").expect("CA trust not found");
+        // --base-image verification must come before CA trust check
+        assert!(
+            base_image_pos < ca_trust_pos,
+            "TLS remediation must lead with --base-image verification before CA trust check"
         );
     }
 }
