@@ -959,69 +959,69 @@ pub fn merge_rpm_sections(
                 None,
                 serde_json::Value::Object(serde_json::Map::new()),
             )
-    } else {
-        // Compute intersection AND union of authoritative hosts' leaf sets.
-        // Intersection: packages that are leaves on ALL authoritative hosts
-        //   → used to filter universal packages (keeps only true leaves).
-        // Union: packages that are a leaf on ANY authoritative host
-        //   → used to filter partial-prevalence packages (a package present
-        //     on 2 of 3 hosts can't be in the intersection because host 3
-        //     doesn't have it, but it should survive if it's a leaf where
-        //     it exists).
-        let leaf_sets: Vec<HashSet<String>> = authoritative_indices
-            .iter()
-            .map(|&i| {
-                sections[i]
-                    .as_ref()
-                    .unwrap()
-                    .leaf_packages
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .cloned()
-                    .collect()
-            })
-            .collect();
-
-        let mut intersection = leaf_sets[0].clone();
-        let mut union = leaf_sets[0].clone();
-        for set in &leaf_sets[1..] {
-            intersection.retain(|pkg| set.contains(pkg));
-            union.extend(set.iter().cloned());
-        }
-        let mut sorted_leaf: Vec<String> = intersection.into_iter().collect();
-        sorted_leaf.sort();
-
-        // Fleet auto_packages: None (not independently meaningful).
-        let auto = None;
-
-        // Dep tree from first authoritative host (sorted by hostname),
-        // filtered to intersection entries only.
-        let leaf_ids: HashSet<&str> = sorted_leaf.iter().map(|s| s.as_str()).collect();
-        let dep_tree = {
-            let mut auth_pairs: Vec<(usize, &str)> = authoritative_indices
+        } else {
+            // Compute intersection AND union of authoritative hosts' leaf sets.
+            // Intersection: packages that are leaves on ALL authoritative hosts
+            //   → used to filter universal packages (keeps only true leaves).
+            // Union: packages that are a leaf on ANY authoritative host
+            //   → used to filter partial-prevalence packages (a package present
+            //     on 2 of 3 hosts can't be in the intersection because host 3
+            //     doesn't have it, but it should survive if it's a leaf where
+            //     it exists).
+            let leaf_sets: Vec<HashSet<String>> = authoritative_indices
                 .iter()
-                .map(|&i| (i, hostnames.get(i).map(|s| s.as_str()).unwrap_or("")))
+                .map(|&i| {
+                    sections[i]
+                        .as_ref()
+                        .unwrap()
+                        .leaf_packages
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .cloned()
+                        .collect()
+                })
                 .collect();
-            auth_pairs.sort_by_key(|(_, h)| *h);
 
-            let donor_idx = auth_pairs[0].0;
-            let donor_tree = &sections[donor_idx].as_ref().unwrap().leaf_dep_tree;
-
-            if let Some(obj) = donor_tree.as_object() {
-                let filtered: serde_json::Map<String, serde_json::Value> = obj
-                    .iter()
-                    .filter(|(k, _)| leaf_ids.contains(k.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                serde_json::Value::Object(filtered)
-            } else {
-                serde_json::Value::Object(serde_json::Map::new())
+            let mut intersection = leaf_sets[0].clone();
+            let mut union = leaf_sets[0].clone();
+            for set in &leaf_sets[1..] {
+                intersection.retain(|pkg| set.contains(pkg));
+                union.extend(set.iter().cloned());
             }
-        };
+            let mut sorted_leaf: Vec<String> = intersection.into_iter().collect();
+            sorted_leaf.sort();
 
-        (Some(sorted_leaf), Some(union), auto, dep_tree)
-    };
+            // Fleet auto_packages: None (not independently meaningful).
+            let auto = None;
+
+            // Dep tree from first authoritative host (sorted by hostname),
+            // filtered to intersection entries only.
+            let leaf_ids: HashSet<&str> = sorted_leaf.iter().map(|s| s.as_str()).collect();
+            let dep_tree = {
+                let mut auth_pairs: Vec<(usize, &str)> = authoritative_indices
+                    .iter()
+                    .map(|&i| (i, hostnames.get(i).map(|s| s.as_str()).unwrap_or("")))
+                    .collect();
+                auth_pairs.sort_by_key(|(_, h)| *h);
+
+                let donor_idx = auth_pairs[0].0;
+                let donor_tree = &sections[donor_idx].as_ref().unwrap().leaf_dep_tree;
+
+                if let Some(obj) = donor_tree.as_object() {
+                    let filtered: serde_json::Map<String, serde_json::Value> = obj
+                        .iter()
+                        .filter(|(k, _)| leaf_ids.contains(k.as_str()))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    serde_json::Value::Object(filtered)
+                } else {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+            };
+
+            (Some(sorted_leaf), Some(union), auto, dep_tree)
+        };
 
     let versionlock_command_output =
         first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
@@ -1086,10 +1086,7 @@ pub fn merge_rpm_sections(
             .into_iter()
             .filter(|pkg| {
                 let id = format!("{}.{}", pkg.name, pkg.arch);
-                let is_universal = pkg
-                    .fleet
-                    .as_ref()
-                    .is_some_and(|f| f.count >= f.total);
+                let is_universal = pkg.fleet.as_ref().is_some_and(|f| f.count >= f.total);
                 if is_universal {
                     leaf_intersection.contains(id.as_str())
                 } else {
@@ -1218,6 +1215,7 @@ pub fn merge_rpm_sections(
             leaf_total_hosts,
             baseline_suppressed,
             file_ownership,
+            installed_groups: None,
         },
         repo_conflicts,
     ))
@@ -2659,14 +2657,13 @@ mod tests {
         );
 
         let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
-        let (merged, _conflicts) =
-            merge_rpm_sections(
-                vec![Some(host_a), Some(host_b), Some(host_c)],
-                3,
-                &hostnames,
-                None,
-            )
-            .expect("merge should succeed");
+        let (merged, _conflicts) = merge_rpm_sections(
+            vec![Some(host_a), Some(host_b), Some(host_c)],
+            3,
+            &hostnames,
+            None,
+        )
+        .expect("merge should succeed");
 
         // vim: universal leaf → present with include=true
         let vim = merged
@@ -2690,10 +2687,7 @@ mod tests {
         assert_eq!(htop.fleet.as_ref().unwrap().count, 2);
 
         // glibc: transitive on all hosts (not a leaf anywhere) → filtered out
-        let glibc = merged
-            .packages_added
-            .iter()
-            .find(|p| p.name == "glibc");
+        let glibc = merged.packages_added.iter().find(|p| p.name == "glibc");
         assert!(
             glibc.is_none(),
             "transitive package glibc must be filtered out by leaf filter"

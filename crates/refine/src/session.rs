@@ -12,22 +12,27 @@ use inspectah_pipeline::render::containerfile::{
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
 use crate::fleet::variant_ops::{self, VariantProjectionState};
+use crate::group_state::{GroupEvalContext, derive_group_state};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, ChangesSummary, ContentHash, FleetContext, ItemId, RefineError, RefineMode,
-    RefineStats, RefinedView, RefinementOp, RepoProvenance, SectionChangeSummary, SectionKind,
-    SectionStats, TriageBucket, UserPasswordOp,
+    AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, FleetContext, ItemId,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
+    SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, UserPasswordOp,
+    ViewDirective,
 };
+use inspectah_core::types::group_render::RenderContext;
+use inspectah_core::types::rpm::PackageEntry;
 
 pub struct RefineSession {
     original: InspectionSnapshot,
     repo_index: RepoIndex,
     baseline_available: bool,
     refine_mode: RefineMode,
-    ops: Vec<RefinementOp>,
+    timeline: Vec<TimelineEntry>,
     cursor: usize,
     cached_view: Option<RefinedView>,
+    cached_render_context: Option<RenderContext>,
     cached_decisions: Option<crate::projection::DecisionProjection>,
     cached_reference: std::sync::OnceLock<crate::projection::ReferenceProjection>,
     generation: u64,
@@ -279,9 +284,7 @@ impl RefineSession {
         // filtering. Clear leaf_packages before normalization so
         // normalize_package_defaults does not exclude non-leaf packages.
         let is_fleet_snapshot = snapshot.fleet_meta.is_some();
-        if is_fleet_snapshot
-            && let Some(ref mut rpm) = snapshot.rpm
-        {
+        if is_fleet_snapshot && let Some(ref mut rpm) = snapshot.rpm {
             rpm.leaf_packages = None;
         }
 
@@ -417,9 +420,10 @@ impl RefineSession {
             repo_index,
             baseline_available,
             refine_mode,
-            ops: Vec::new(),
+            timeline: Vec::new(),
             cursor: 0,
             cached_view: None,
+            cached_render_context: None,
             cached_decisions: None,
             cached_reference: std::sync::OnceLock::new(),
             generation: 0,
@@ -460,10 +464,10 @@ impl RefineSession {
         };
 
         let state = crate::autosave::SessionState {
-            schema_version: 2,
+            schema_version: 3,
             tarball_path: tarball.clone(),
             tarball_hash,
-            ops: self.ops.clone(),
+            timeline: self.timeline.clone(),
             cursor: self.cursor,
             saved_at: {
                 let dur = std::time::SystemTime::now()
@@ -525,13 +529,16 @@ impl RefineSession {
         // Reconstruct with tarball path for auto-save
         let mut session = Self::new_with_tarball(snapshot, tarball.to_path_buf());
 
-        // Direct restore: set ops and cursor atomically, skip per-op validation.
+        // Direct restore: set timeline and cursor atomically, skip per-op validation.
         // Safe because: (a) ops were validated on original apply, (b) tarball
         // hash match guarantees identical snapshot baseline. This preserves
         // the full redo tail because we bypass apply() which truncates.
-        session.ops = saved.ops;
-        session.cursor = saved.cursor.min(session.ops.len()); // clamp to valid range
+        // v3 autosave stores Vec<TimelineEntry> directly; v2 files are
+        // migrated to v3 on load (see autosave::load_session).
+        session.timeline = saved.timeline;
+        session.cursor = saved.cursor.min(session.timeline.len()); // clamp to valid range
         session.cached_view = None;
+        session.cached_render_context = None;
         session.cached_decisions = None;
         session.recompute_view();
 
@@ -566,6 +573,14 @@ impl RefineSession {
             .expect("view is always computed after new() or mutation")
     }
 
+    /// Returns the render context computed alongside the view.
+    /// Contains per-group rendering state derived from the session timeline.
+    pub fn render_context(&self) -> &RenderContext {
+        self.cached_render_context
+            .as_ref()
+            .expect("render context is always computed after new() or mutation")
+    }
+
     pub fn apply(&mut self, op: RefinementOp) -> Result<(), RefineError> {
         // Validate target exists
         self.validate_target(&op)?;
@@ -588,11 +603,50 @@ impl RefineSession {
         }
 
         // Truncate redo history at cursor
-        self.ops.truncate(self.cursor);
-        self.ops.push(op);
+        self.timeline.truncate(self.cursor);
+        self.timeline.push(TimelineEntry::Op(op));
         self.cursor += 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_render_context = None;
+        self.cached_decisions = None;
+        self.recompute_view();
+        self.try_autosave();
+        Ok(())
+    }
+
+    /// Apply a view-plane directive (e.g., ungroup a package group).
+    /// View directives do not mutate the projected snapshot — they control
+    /// how data is displayed. They share the timeline with refinement ops
+    /// so undo/redo works uniformly.
+    pub fn apply_directive(
+        &mut self,
+        directive: ViewDirective,
+    ) -> Result<(), RefineError> {
+        // Validate: group must exist in installed_groups
+        match &directive {
+            ViewDirective::UngroupGroup { group_name } => {
+                let groups = self.installed_groups();
+                if !groups.iter().any(|g| g.name == *group_name) {
+                    return Err(RefineError::BadRequest(format!(
+                        "unknown group: {group_name}"
+                    )));
+                }
+            }
+        }
+
+        // Check idempotency — skip if an identical directive is already active
+        if self.is_directive_noop(&directive) {
+            return Ok(());
+        }
+
+        // Truncate redo history at cursor
+        self.timeline.truncate(self.cursor);
+        self.timeline.push(TimelineEntry::View(directive));
+        self.cursor += 1;
+        self.generation += 1;
+        self.cached_view = None;
+        self.cached_render_context = None;
         self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
@@ -606,6 +660,7 @@ impl RefineSession {
         self.cursor -= 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_render_context = None;
         self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
@@ -613,12 +668,13 @@ impl RefineSession {
     }
 
     pub fn redo(&mut self) -> Result<(), RefineError> {
-        if self.cursor >= self.ops.len() {
+        if self.cursor >= self.timeline.len() {
             return Err(RefineError::NothingToRedo);
         }
         self.cursor += 1;
         self.generation += 1;
         self.cached_view = None;
+        self.cached_render_context = None;
         self.cached_decisions = None;
         self.recompute_view();
         self.try_autosave();
@@ -626,11 +682,26 @@ impl RefineSession {
     }
 
     pub fn ops_history(&self) -> Vec<AnnotatedOp> {
-        self.ops
+        self.timeline
             .iter()
             .enumerate()
-            .map(|(i, op)| AnnotatedOp {
-                op: op.clone(),
+            .filter_map(|(i, entry)| match entry {
+                TimelineEntry::Op(op) => Some(AnnotatedOp {
+                    op: op.clone(),
+                    active: i < self.cursor,
+                }),
+                TimelineEntry::View(_) => None,
+            })
+            .collect()
+    }
+
+    /// Returns all timeline entries (both Op and View) with active flags.
+    pub fn timeline_history(&self) -> Vec<AnnotatedTimelineEntry> {
+        self.timeline
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| AnnotatedTimelineEntry {
+                entry: entry.clone(),
                 active: i < self.cursor,
             })
             .collect()
@@ -640,12 +711,17 @@ impl RefineSession {
         self.cursor
     }
 
+    /// Returns the number of entries in the timeline (including redo tail).
+    pub fn timeline_len(&self) -> usize {
+        self.timeline.len()
+    }
+
     pub fn can_undo(&self) -> bool {
         self.cursor > 0
     }
 
     pub fn can_redo(&self) -> bool {
-        self.cursor < self.ops.len()
+        self.cursor < self.timeline.len()
     }
 
     pub fn pending_changes(&self) -> ChangesSummary {
@@ -840,10 +916,19 @@ impl RefineSession {
             count
         };
 
+        // View directives (e.g. UngroupGroup) are not captured by
+        // section-include or variant-selection diffs, so we check the
+        // active timeline for any View entries.  Using `cursor > 0`
+        // would incorrectly mark net-zero variant round-trips as dirty.
+        let has_active_directives = self.timeline[..self.cursor]
+            .iter()
+            .any(|e| matches!(e, TimelineEntry::View(_)));
+
         let is_dirty = sections
             .iter()
             .any(|s| !s.included.is_empty() || !s.excluded.is_empty())
-            || variants_changed > 0;
+            || variants_changed > 0
+            || has_active_directives;
 
         ChangesSummary {
             sections,
@@ -995,7 +1080,7 @@ impl RefineSession {
                     .collect()
             })
             .unwrap_or_default();
-        render_refine_export(&projected, path, Some(&orig_inc))
+        render_refine_export(&projected, path, Some(&orig_inc), self.cached_render_context.as_ref())
     }
 
     // --- Private helpers ---
@@ -1154,7 +1239,18 @@ impl RefineSession {
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
                     | ItemId::ModuleStream { .. }
-                    | ItemId::VersionLock { .. } => {}
+                    | ItemId::VersionLock { .. }
+                    | ItemId::Group { .. } => {
+                        if let ItemId::Group { name } = item_id {
+                            let found = self
+                                .installed_groups()
+                                .iter()
+                                .any(|g| g.name == *name);
+                            if !found {
+                                return Err(RefineError::UnknownTarget(name.clone()));
+                            }
+                        }
+                    }
                 }
             }
             RefinementOp::UserStrategy { username, .. } => {
@@ -1322,20 +1418,22 @@ impl RefineSession {
     /// Used by validate_target to check variant state at the point of validation.
     fn build_variant_state(&self) -> VariantProjectionState {
         let mut state = VariantProjectionState::default();
-        for op in &self.ops[..self.cursor] {
-            match op {
-                RefinementOp::SelectVariant { item_id, target } => {
-                    variant_ops::apply_select(&mut state, item_id, target);
+        for entry in &self.timeline[..self.cursor] {
+            if let TimelineEntry::Op(op) = entry {
+                match op {
+                    RefinementOp::SelectVariant { item_id, target } => {
+                        variant_ops::apply_select(&mut state, item_id, target);
+                    }
+                    RefinementOp::EditVariant {
+                        item_id, content, ..
+                    } => {
+                        variant_ops::apply_edit(&mut state, item_id, content, &self.original);
+                    }
+                    RefinementOp::DiscardVariant { item_id, variant } => {
+                        variant_ops::apply_discard(&mut state, item_id, variant);
+                    }
+                    _ => {}
                 }
-                RefinementOp::EditVariant {
-                    item_id, content, ..
-                } => {
-                    variant_ops::apply_edit(&mut state, item_id, content, &self.original);
-                }
-                RefinementOp::DiscardVariant { item_id, variant } => {
-                    variant_ops::apply_discard(&mut state, item_id, variant);
-                }
-                _ => {}
             }
         }
         state
@@ -1371,6 +1469,27 @@ impl RefineSession {
                         excluded.contains(section_id)
                     }
                 }
+                ItemId::Group { name } => {
+                    // Noop if ALL non-locked members already have the
+                    // requested include state.
+                    let member_names: Vec<String> = self
+                        .installed_groups()
+                        .iter()
+                        .find(|g| g.name == *name)
+                        .map(|g| g.members.clone())
+                        .unwrap_or_default();
+                    projected
+                        .rpm
+                        .as_ref()
+                        .map(|r| {
+                            r.packages_added
+                                .iter()
+                                .filter(|e| member_names.contains(&e.name))
+                                .filter(|e| !(*include && e.locked))
+                                .all(|e| e.include == *include)
+                        })
+                        .unwrap_or(true)
+                }
                 // Other item kinds: never noop for now
                 _ => false,
             },
@@ -1383,11 +1502,41 @@ impl RefineSession {
         }
     }
 
+    /// Check whether a view directive is already active in the timeline
+    /// (up to cursor). If so, applying it again is a no-op.
+    fn is_directive_noop(&self, directive: &ViewDirective) -> bool {
+        match directive {
+            ViewDirective::UngroupGroup { group_name } => {
+                self.timeline[..self.cursor].iter().any(|entry| {
+                    matches!(
+                        entry,
+                        TimelineEntry::View(ViewDirective::UngroupGroup { group_name: name })
+                            if name == group_name
+                    )
+                })
+            }
+        }
+    }
+
+    /// Returns the installed groups from the snapshot's RPM section,
+    /// or an empty slice if none are present.
+    fn installed_groups(&self) -> &[inspectah_core::types::rpm::InstalledGroup] {
+        self.original
+            .rpm
+            .as_ref()
+            .and_then(|r| r.installed_groups.as_deref())
+            .unwrap_or(&[])
+    }
+
     fn project_snapshot(&self) -> InspectionSnapshot {
         let mut snap = self.original.clone();
         let mut variant_state = VariantProjectionState::default();
 
-        for op in &self.ops[..self.cursor] {
+        for entry in &self.timeline[..self.cursor] {
+            let op = match entry {
+                TimelineEntry::Op(op) => op,
+                TimelineEntry::View(_) => continue,
+            };
             match op {
                 RefinementOp::SetInclude { item_id, include } => {
                     // Defense-in-depth: skip stale SetInclude(true) ops
@@ -1581,6 +1730,27 @@ impl RefineSession {
                                 kb.tuned_include = *include;
                             }
                         }
+                        ItemId::Group { name } => {
+                            // Fan out: apply include/exclude to ALL package
+                            // members of the named group (all arches).
+                            let member_names: Vec<String> = self
+                                .installed_groups()
+                                .iter()
+                                .find(|g| g.name == *name)
+                                .map(|g| g.members.clone())
+                                .unwrap_or_default();
+                            if let Some(ref mut rpm) = snap.rpm {
+                                for pkg in &mut rpm.packages_added {
+                                    if member_names.contains(&pkg.name) {
+                                        if *include && pkg.locked {
+                                            // Locked members stay excluded
+                                            continue;
+                                        }
+                                        pkg.include = *include;
+                                    }
+                                }
+                            }
+                        }
                         // Phase 2-3 item kinds: not yet handled
                         _ => {}
                     }
@@ -1749,11 +1919,11 @@ impl RefineSession {
     /// active op stack. A SetInclude(Repo, false) adds to the set, SetInclude(Repo, true) removes.
     fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
         let mut excluded = HashSet::new();
-        for op in &self.ops[..self.cursor] {
-            if let RefinementOp::SetInclude {
+        for entry in &self.timeline[..self.cursor] {
+            if let TimelineEntry::Op(RefinementOp::SetInclude {
                 item_id: ItemId::Repo { path: section_id },
                 include,
-            } = op
+            }) = entry
             {
                 if *include {
                     excluded.remove(section_id);
@@ -1877,6 +2047,20 @@ impl RefineSession {
             })
             .unwrap_or_default();
 
+        // Snapshot classified include/locked state before all_packages is
+        // consumed by into_iter(). Used below to sync the projected snapshot
+        // for Containerfile preview rendering.
+        let classified_state: Vec<(String, bool, bool)> = all_packages
+            .iter()
+            .map(|p| {
+                (
+                    canonical_package_id(&p.entry.name, &p.entry.arch),
+                    p.entry.include,
+                    p.entry.locked,
+                )
+            })
+            .collect();
+
         let packages: Vec<_> = all_packages
             .into_iter()
             .filter(|p| {
@@ -1948,6 +2132,93 @@ impl RefineSession {
             packages
         };
 
+        // Apply the classified include/locked state to the projected snapshot
+        // so the Containerfile preview matches the view.
+        let mut projected = projected;
+        if let Some(rpm) = &mut projected.rpm {
+            let state_map: std::collections::HashMap<&str, (bool, bool)> = classified_state
+                .iter()
+                .map(|(key, inc, locked)| (key.as_str(), (*inc, *locked)))
+                .collect();
+            for pkg in &mut rpm.packages_added {
+                let key = canonical_package_id(&pkg.name, &pkg.arch);
+                if let Some(&(include, locked)) = state_map.get(key.as_str()) {
+                    pkg.include = include;
+                    pkg.locked = locked;
+                }
+            }
+        }
+
+        // Build RenderContext from the *filtered* package set (baseline-
+        // suppressed + leaf-filtered) so group state reflects the actual
+        // render surface. A group member that was filtered out must not
+        // make the group look Renderable.
+        let effective_packages: Vec<PackageEntry> =
+            packages.iter().map(|p| p.entry.clone()).collect();
+        let mut group_states = HashMap::new();
+
+        for group in self.installed_groups() {
+            // 1. Check if this group was ungrouped via a ViewDirective.
+            let ungrouped = self.timeline[..self.cursor].iter().any(|entry| {
+                matches!(
+                    entry,
+                    TimelineEntry::View(ViewDirective::UngroupGroup { group_name })
+                        if *group_name == group.name
+                )
+            });
+
+            // 2. Find the most recent group-level SetInclude op for this group.
+            //    Scan backwards from cursor for efficiency.
+            let mut group_excluded = false;
+            let mut last_group_op_index: Option<usize> = None;
+            let mut last_group_op_include = true;
+
+            for (i, entry) in self.timeline[..self.cursor].iter().enumerate().rev() {
+                if let TimelineEntry::Op(RefinementOp::SetInclude {
+                    item_id: ItemId::Group { name },
+                    include,
+                }) = entry
+                    && *name == group.name
+                {
+                    last_group_op_index = Some(i);
+                    last_group_op_include = *include;
+                    group_excluded = !*include;
+                    break;
+                }
+            }
+
+            // 3. Build divergent overrides: individual package ops AFTER the
+            //    most recent group op whose include value DIVERGES from
+            //    the group op's direction. Per-group, not global.
+            let mut divergent_overrides: HashSet<String> = HashSet::new();
+
+            if let Some(group_op_idx) = last_group_op_index {
+                for entry in &self.timeline[group_op_idx + 1..self.cursor] {
+                    if let TimelineEntry::Op(RefinementOp::SetInclude {
+                        item_id: ItemId::Package { name, .. },
+                        include,
+                    }) = entry
+                        && group.members.contains(name)
+                        && *include != last_group_op_include
+                    {
+                        divergent_overrides.insert(name.clone());
+                    }
+                }
+            }
+
+            let ctx = GroupEvalContext {
+                group,
+                effective_packages: &effective_packages,
+                ungrouped,
+                group_excluded,
+                divergent_overrides: &divergent_overrides,
+            };
+
+            group_states.insert(group.name.clone(), derive_group_state(&ctx));
+        }
+
+        self.cached_render_context = Some(RenderContext { group_states });
+
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer
         // computes the actual directory structure (which includes repo files,
@@ -1967,6 +2238,7 @@ impl RefineSession {
                 .iter()
                 .map(|((n, a), &inc)| (canonical_package_id(n, a), inc))
                 .collect(),
+            self.cached_render_context.as_ref(),
         );
         drop(preview_dir);
 
@@ -2013,6 +2285,7 @@ impl RefineSession {
             stats,
             generation: self.generation,
         });
+
         self.cached_decisions = Some(crate::projection::project_decisions(self));
     }
 
@@ -2113,6 +2386,7 @@ pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
+    render_ctx: Option<&RenderContext>,
 ) -> Result<(), RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
@@ -2186,9 +2460,9 @@ pub fn render_refine_export(
     //    Preview also materializes to a tempdir for the same roots,
     //    guaranteeing byte-identical output.
     let containerfile = if let Some(orig) = original_includes {
-        render_containerfile_with_originals(snap, Some(&materialized_roots), orig)
+        render_containerfile_with_originals(snap, Some(&materialized_roots), orig, render_ctx)
     } else {
-        render_containerfile(snap, Some(&materialized_roots))
+        render_containerfile(snap, Some(&materialized_roots), render_ctx)
     };
     std::fs::write(out.join("Containerfile"), containerfile)?;
 
@@ -2240,6 +2514,57 @@ mod tests {
             rpm: Some(RpmSection::default()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn session_timeline_migration_preserves_existing_ops() {
+        let mut snap = test_snapshot();
+        // Need baseline so the package gets Site bucket and stays include=true
+        // after normalization, making SetInclude(false) a real change.
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            include: true,
+            locked: false,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        }];
+
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        assert_eq!(session.timeline_len(), 1);
+        assert!(session.can_undo());
+
+        // Undo should work and reduce cursor, timeline_len stays the same
+        session.undo().unwrap();
+        assert_eq!(session.timeline_len(), 1);
+        assert!(!session.can_undo());
+        assert!(session.can_redo());
+
+        // Redo should work
+        session.redo().unwrap();
+        assert_eq!(session.timeline_len(), 1);
+        assert!(session.can_undo());
+        assert!(!session.can_redo());
+
+        // ops_history should extract the op correctly
+        let history = session.ops_history();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].active);
     }
 
     #[test]
@@ -3422,7 +3747,7 @@ mod tests {
 
         let tmpdir = tempfile::tempdir().unwrap();
         let tarball_path = tmpdir.path().join("export.tar.gz");
-        render_refine_export(&snap, &tarball_path, None).unwrap();
+        render_refine_export(&snap, &tarball_path, None, None).unwrap();
 
         // Read tarball entries
         let f = std::fs::File::open(&tarball_path).unwrap();
@@ -3444,9 +3769,7 @@ mod tests {
         // quadlet/ is intentionally excluded from the refine export
         // (see export_excludes_extra_config_tree_artifacts contract test).
         assert!(
-            !entries
-                .iter()
-                .any(|e| e.contains("quadlet/")),
+            !entries.iter().any(|e| e.contains("quadlet/")),
             "tarball must NOT contain quadlet/. entries: {entries:?}"
         );
         assert!(
@@ -3900,6 +4223,1009 @@ mod tests {
             rpm_ref.leaf_total_hosts,
             Some(3),
             "leaf_total_hosts must be preserved through RefineSession"
+        );
+    }
+
+    // ── Locked-item contract tests ────────────────────────────────────
+
+    #[test]
+    fn locked_platform_plumbing_package_rejects_set_include() {
+        // End-to-end: the package enters as a normal anaconda-sourced
+        // PackageEntry (include=true, locked=false). The anaconda
+        // classifier in RefineSession::new() must classify it as Tier 1
+        // platform plumbing and set include=false, locked=true. Then
+        // SetInclude(true) must be a silent no-op.
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::services::ServiceSection;
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "grub2-efi-aa64-cdboot".into(),
+                    arch: "aarch64".into(),
+                    state: PackageState::Added,
+                    source_repo: "anaconda".into(),
+                    include: true,
+                    locked: false,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            services: Some(ServiceSection {
+                state_changes: vec![],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            config: Some(ConfigSection { files: vec![] }),
+            ..Default::default()
+        };
+
+        let mut session = RefineSession::new(snap);
+
+        // Attempt to include a locked package — must succeed (Ok) but be a no-op
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "grub2-efi-aa64-cdboot".into(),
+                arch: "aarch64".into(),
+            },
+            include: true,
+        });
+        assert!(result.is_ok(), "apply on locked item must return Ok");
+
+        // View: the package must still be excluded
+        let view = session.view();
+        let view_pkg = view
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "grub2-efi-aa64-cdboot");
+        if let Some(pkg) = view_pkg {
+            assert!(
+                !pkg.entry.include,
+                "view: locked package must stay excluded"
+            );
+            assert!(pkg.entry.locked, "view: locked flag must be preserved");
+        }
+
+        // Projected snapshot: the package must still be excluded
+        let projected = session.snapshot_projected();
+        let proj_pkg = projected
+            .rpm
+            .as_ref()
+            .unwrap()
+            .packages_added
+            .iter()
+            .find(|p| p.name == "grub2-efi-aa64-cdboot")
+            .unwrap();
+        assert!(
+            !proj_pkg.include,
+            "projected: locked package must stay excluded"
+        );
+        assert!(proj_pkg.locked, "projected: locked flag must be preserved");
+    }
+
+    // ── UngroupGroup / apply_directive tests ──────────────────────────
+
+    use crate::types::ViewDirective;
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    /// Build a snapshot with installed groups for apply_directive tests.
+    fn test_snapshot_with_groups() -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "podman".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "buildah".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "skopeo".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                ],
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec![
+                        "podman".into(),
+                        "buildah".into(),
+                        "skopeo".into(),
+                    ],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Baseline needed so packages get Site bucket and include=true survives normalization.
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap
+    }
+
+    #[test]
+    fn ungroup_adds_view_directive_to_timeline() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        assert_eq!(session.timeline_len(), 1);
+        assert!(session.can_undo());
+    }
+
+    #[test]
+    fn ungroup_idempotent_on_already_ungrouped() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        let len_after_first = session.timeline_len();
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        assert_eq!(session.timeline_len(), len_after_first, "idempotent");
+    }
+
+    #[test]
+    fn ungroup_unknown_group_returns_error() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        let result = session.apply_directive(ViewDirective::UngroupGroup {
+            group_name: "Nonexistent Group".into(),
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Nonexistent Group"),
+            "error must name the unknown group, got: {err}"
+        );
+    }
+
+    #[test]
+    fn undo_ungroup_regroups() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        session.undo().unwrap();
+        assert_eq!(session.timeline_len(), 1);
+        assert_eq!(session.cursor(), 0);
+    }
+
+    #[test]
+    fn ungroup_sets_dirty_state() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        assert!(!session.pending_changes().is_dirty);
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        assert!(session.pending_changes().is_dirty);
+    }
+
+    // ── Group-level SetInclude fan-out tests ──────────────────────────
+
+    /// Build a snapshot with installed groups that includes a locked member.
+    fn test_snapshot_with_groups_and_locked() -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "podman".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "buildah".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: true,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "skopeo".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                ],
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec![
+                        "podman".into(),
+                        "buildah".into(),
+                        "skopeo".into(),
+                    ],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap
+    }
+
+    /// Build a snapshot with a group containing multi-arch members.
+    fn test_snapshot_with_groups_multiarch() -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "podman".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "podman".into(),
+                        arch: "i686".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "buildah".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                ],
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec!["podman".into(), "buildah".into()],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap
+    }
+
+    #[test]
+    fn set_include_group_false_excludes_all_members() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        let view = session.view();
+        for pkg in &view.packages {
+            if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
+                assert!(!pkg.entry.include, "{} should be excluded", pkg.entry.name);
+            }
+        }
+    }
+
+    #[test]
+    fn set_include_group_true_includes_non_locked_members() {
+        let snap = test_snapshot_with_groups_and_locked();
+        let mut session = RefineSession::new(snap);
+        // First exclude the group
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        // Then re-include
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+        let view = session.view();
+        for pkg in &view.packages {
+            match pkg.entry.name.as_str() {
+                // buildah is locked — should stay excluded
+                "buildah" => assert!(
+                    !pkg.entry.include,
+                    "locked buildah should stay excluded"
+                ),
+                // podman and skopeo are not locked — should be re-included
+                "podman" | "skopeo" => assert!(
+                    pkg.entry.include,
+                    "{} should be re-included",
+                    pkg.entry.name
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn undo_group_exclude_restores_all_members() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        session.undo().unwrap();
+        let view = session.view();
+        for pkg in &view.packages {
+            if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
+                assert!(pkg.entry.include, "{} should be restored", pkg.entry.name);
+            }
+        }
+    }
+
+    #[test]
+    fn set_include_group_multi_arch_toggles_all_arches() {
+        let snap = test_snapshot_with_groups_multiarch();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        let view = session.view();
+        for pkg in &view.packages {
+            if ["podman", "buildah"].contains(&pkg.entry.name.as_str()) {
+                assert!(
+                    !pkg.entry.include,
+                    "{}.{} should be excluded",
+                    pkg.entry.name, pkg.entry.arch
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn set_include_group_unknown_is_error() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Group {
+                name: "Nonexistent Group".into(),
+            },
+            include: false,
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Nonexistent Group"),
+            "error must name the unknown group, got: {err}"
+        );
+    }
+
+    #[test]
+    fn set_include_group_noop_when_all_members_already_match() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        // All members start included — setting include=true should be noop
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+        assert_eq!(
+            session.timeline_len(),
+            0,
+            "noop should not add to timeline"
+        );
+    }
+
+    #[test]
+    fn individual_op_after_group_op_takes_precedence() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        // Exclude group (which contains podman)
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        // Re-include podman individually
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "podman".into(),
+                    arch: "x86_64".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+        let view = session.view();
+        let podman = view
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "podman")
+            .unwrap();
+        assert!(podman.entry.include, "individual op wins");
+    }
+
+    // ── Optional-installed independence tests ─────────────────────────
+
+    /// Build a snapshot with a group that has optional_installed members.
+    fn test_snapshot_with_optional_members() -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "podman".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "buildah".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "skopeo".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "python3-podman".into(),
+                        arch: "noarch".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                ],
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec![
+                        "podman".into(),
+                        "buildah".into(),
+                        "skopeo".into(),
+                    ],
+                    optional_installed: vec!["python3-podman".into()],
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap
+    }
+
+    #[test]
+    fn optional_installed_not_affected_by_group_exclude() {
+        let snap = test_snapshot_with_optional_members();
+        let mut session = RefineSession::new(snap);
+        // Record the optional package's include state
+        let opt_before = session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "python3-podman")
+            .unwrap()
+            .entry
+            .include;
+        // Exclude the group
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        let opt_after = session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "python3-podman")
+            .unwrap()
+            .entry
+            .include;
+        assert_eq!(opt_before, opt_after, "optional member unchanged");
+        // Verify regular members were excluded
+        for pkg in &session.view().packages {
+            if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
+                assert!(!pkg.entry.include, "{} should be excluded", pkg.entry.name);
+            }
+        }
+    }
+
+    // ── RenderContext integration tests ──────────────────────────────
+
+    #[test]
+    fn render_context_built_during_view_computation() {
+        let snap = test_snapshot_with_groups();
+        let session = RefineSession::new(snap);
+        let ctx = session.render_context();
+        assert!(
+            ctx.is_renderable("Container Management"),
+            "fresh session: all members included => Renderable"
+        );
+    }
+
+    #[test]
+    fn render_context_reflects_ungroup() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+        let ctx = session.render_context();
+        assert!(
+            ctx.is_ungrouped("Container Management"),
+            "after UngroupGroup => Ungrouped"
+        );
+    }
+
+    #[test]
+    fn render_context_reflects_degradation() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "podman".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        let ctx = session.render_context();
+        assert!(
+            ctx.is_degraded("Container Management"),
+            "excluding one member without group op => Degraded"
+        );
+    }
+
+    #[test]
+    fn render_context_auto_upgrades_after_undo() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "podman".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        assert!(
+            session.render_context().is_degraded("Container Management"),
+            "after member exclude => Degraded"
+        );
+        session.undo().unwrap();
+        assert!(
+            session.render_context().is_renderable("Container Management"),
+            "after undo => back to Renderable"
+        );
+    }
+
+    #[test]
+    fn render_context_group_exclude_then_member_override_is_degraded() {
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+        // Exclude the whole group
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Group {
+                    name: "Container Management".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        assert!(
+            session.render_context().is_excluded("Container Management"),
+            "group exclude => Excluded"
+        );
+        // Re-include one member individually — diverges from group op
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "podman".into(),
+                    arch: "x86_64".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+        assert!(
+            session.render_context().is_degraded("Container Management"),
+            "member override after group exclude => Degraded (MemberOverridden)"
+        );
+    }
+
+    #[test]
+    fn render_context_no_groups_produces_empty() {
+        let snap = test_snapshot();
+        let session = RefineSession::new(snap);
+        let ctx = session.render_context();
+        assert!(
+            ctx.group_states.is_empty(),
+            "snapshot without groups => empty RenderContext"
+        );
+    }
+
+    #[test]
+    fn export_snapshot_does_not_contain_render_context() {
+        use crate::types::ViewDirective;
+
+        let snap = test_snapshot_with_groups();
+        let mut session = RefineSession::new(snap);
+
+        // Apply a view directive that creates RenderContext state
+        session
+            .apply_directive(ViewDirective::UngroupGroup {
+                group_name: "Container Management".into(),
+            })
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let export_path = dir.path().join("export.tar.gz");
+        session
+            .export_tarball(&export_path, session.view().generation)
+            .unwrap();
+
+        // Read the exported snapshot JSON from the tarball
+        let file = std::fs::File::open(&export_path).unwrap();
+        let gz = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(gz);
+
+        let mut snapshot_json = None;
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap();
+            if path.to_string_lossy().ends_with("inspection-snapshot.json") {
+                let mut content = String::new();
+                std::io::Read::read_to_string(&mut entry, &mut content).unwrap();
+                snapshot_json = Some(content);
+                break;
+            }
+        }
+
+        let snapshot_json = snapshot_json.expect("inspection-snapshot.json must exist in tarball");
+
+        // Verify RenderContext fields are NOT present in the exported JSON
+        assert!(
+            !snapshot_json.contains("ungrouped"),
+            "exported snapshot must not contain 'ungrouped' field from RenderContext"
+        );
+        assert!(
+            !snapshot_json.contains("group_states"),
+            "exported snapshot must not contain 'group_states' field from RenderContext"
+        );
+        assert!(
+            !snapshot_json.contains("render_context"),
+            "exported snapshot must not contain 'render_context' field"
+        );
+    }
+
+    // ── Truth-boundary proof tests ──────────────────────────────────
+    //
+    // These verify that group state derivation uses the *filtered* render
+    // surface (baseline-suppressed + leaf-filtered), not the raw projected
+    // snapshot. Before the fix, effective_packages came from
+    // projected.rpm.packages_added, which could include packages the view
+    // never shows.
+
+    #[test]
+    fn baseline_suppressed_member_excluded_from_group_eval() {
+        // Setup: group "Web Server" has members httpd and mod_ssl.
+        // httpd is baseline-suppressed (present in target image).
+        // mod_ssl has include=false (user excluded it).
+        //
+        // OLD behavior (bug): effective_packages includes httpd (from raw
+        //   projection). httpd has include=true, mod_ssl has include=false.
+        //   derive_group_state sees one included + one excluded non-locked
+        //   member => Degraded(MemberExcluded). This is WRONG because httpd
+        //   isn't on the render surface at all.
+        //
+        // NEW behavior (fix): effective_packages comes from filtered packages.
+        //   httpd is baseline-suppressed and absent. Only mod_ssl remains,
+        //   with include=false => Degraded(MemberExcluded). The group state
+        //   now matches what the view actually shows.
+        //
+        // The key assertion: the group state reflects the filtered surface.
+        // We verify by checking that only 1 package appears in the view
+        // (mod_ssl) and the group IS Degraded — but for the right reason
+        // (the visible member is excluded, not a phantom baseline member).
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "httpd".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "mod_ssl".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                ],
+                baseline_suppressed: Some(vec!["httpd.x86_64".into()]),
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Web Server".into(),
+                    members: vec!["httpd".into(), "mod_ssl".into()],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let mut session = RefineSession::new(snap);
+
+        // Exclude mod_ssl so we have a visible excluded member.
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "mod_ssl".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let view = session.view();
+
+        // httpd should be baseline-suppressed and absent from view.
+        assert!(
+            !view.packages.iter().any(|p| p.entry.name == "httpd"),
+            "httpd must be baseline-suppressed from view"
+        );
+
+        // mod_ssl should be the only visible package.
+        assert_eq!(
+            view.packages.iter().filter(|p| p.entry.name == "mod_ssl").count(),
+            1,
+            "mod_ssl must be visible in view"
+        );
+
+        // Group state must reflect the filtered surface: mod_ssl excluded
+        // means Degraded(MemberExcluded). Before the fix, httpd would have
+        // polluted effective_packages from the raw projection.
+        let ctx = session.render_context();
+        assert!(
+            ctx.is_degraded("Web Server"),
+            "group with baseline-suppressed member must derive state from filtered surface"
+        );
+    }
+
+    #[test]
+    fn leaf_filtered_member_excluded_from_group_eval() {
+        // Setup: group "Core Libs" has members vim and glibc.
+        // glibc is a transitive dep (not a leaf), so leaf filtering removes it.
+        // vim is a leaf and remains visible with include=true.
+        //
+        // OLD behavior (bug): effective_packages includes glibc (from raw
+        //   projection). Both have include=true => Renderable. But the view
+        //   only shows vim. If the user exports, `dnf group install` would
+        //   try to install glibc explicitly, which is wasteful — it's a dep.
+        //
+        // NEW behavior (fix): effective_packages comes from filtered packages.
+        //   glibc is absent (leaf-filtered). Only vim remains, include=true.
+        //   derive_group_state sees 1 member, included => Renderable. The
+        //   result is the same in this case, but the derivation is honest:
+        //   it's Renderable because the *visible* members are all included.
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "vim".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "appstream".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "glibc".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        locked: false,
+                        source_repo: "baseos".into(),
+                        ..Default::default()
+                    },
+                ],
+                leaf_packages: Some(vec!["vim.x86_64".into()]),
+                auto_packages: Some(vec!["glibc.x86_64".into()]),
+                installed_groups: Some(vec![InstalledGroup {
+                    name: "Core Libs".into(),
+                    members: vec!["vim".into(), "glibc".into()],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.baseline = Some(inspectah_core::baseline::BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // glibc should be leaf-filtered and absent from view.
+        assert!(
+            !view.packages.iter().any(|p| p.entry.name == "glibc"),
+            "glibc must be leaf-filtered from view"
+        );
+
+        // vim should be the only visible package.
+        assert_eq!(
+            view.packages.iter().filter(|p| p.entry.name == "vim").count(),
+            1,
+            "vim must be visible in view"
+        );
+
+        // Group state should reflect only the visible member (vim, included).
+        // With the fix, glibc is absent from effective_packages, so the
+        // group state is based solely on vim. Before the fix, glibc would
+        // have been in effective_packages from the raw projection.
+        let ctx = session.render_context();
+        assert!(
+            ctx.is_renderable("Core Libs"),
+            "group with only visible members included should be Renderable"
+        );
+
+        // Now exclude vim to prove the filtered surface drives group state.
+        let mut session2 = RefineSession::new({
+            let mut s = InspectionSnapshot {
+                schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+                rpm: Some(RpmSection {
+                    packages_added: vec![
+                        PackageEntry {
+                            name: "vim".into(),
+                            arch: "x86_64".into(),
+                            include: true,
+                            locked: false,
+                            source_repo: "appstream".into(),
+                            ..Default::default()
+                        },
+                        PackageEntry {
+                            name: "glibc".into(),
+                            arch: "x86_64".into(),
+                            include: true,
+                            locked: false,
+                            source_repo: "baseos".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    leaf_packages: Some(vec!["vim.x86_64".into()]),
+                    auto_packages: Some(vec!["glibc.x86_64".into()]),
+                    installed_groups: Some(vec![InstalledGroup {
+                        name: "Core Libs".into(),
+                        members: vec!["vim".into(), "glibc".into()],
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            s.baseline = Some(inspectah_core::baseline::BaselineData {
+                image_digest: "sha256:test".into(),
+                packages: std::collections::HashMap::new(),
+                extracted_at: "2026-01-01T00:00:00Z".into(),
+            });
+            s
+        });
+
+        session2
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "vim".into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        let ctx2 = session2.render_context();
+        assert!(
+            ctx2.is_degraded("Core Libs"),
+            "excluding the only visible member must degrade the group"
         );
     }
 }

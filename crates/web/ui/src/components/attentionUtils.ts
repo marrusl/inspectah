@@ -161,6 +161,12 @@ export function formatTriageReason(reason: TriageReason): string {
     tuned_custom_profile: "Custom Profile",
     tuned_unusual_state: "Unusual State",
     sensitive_path: "Sensitive Path",
+    package_platform_plumbing: "Platform Plumbing",
+    package_installer_default: "Installer Default",
+    package_installer_promoted_service: "Promoted (Service)",
+    package_installer_promoted_config: "Promoted (Config)",
+    package_installer_ambiguous: "Installer (Review)",
+    package_installer_evidence_unavailable: "Evidence Unavailable",
   };
   return (
     map[reason] ??

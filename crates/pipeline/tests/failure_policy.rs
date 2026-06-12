@@ -243,7 +243,7 @@ impl Inspector for PanickingInspector {
 #[test]
 fn degraded_section_contributes_to_containerfile_with_fixme() {
     let snap = snapshot_with_degraded_services();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Services content IS present (partial data was routed)
     assert!(
@@ -262,7 +262,7 @@ fn degraded_section_contributes_to_containerfile_with_fixme() {
 #[test]
 fn failed_section_excluded_from_containerfile() {
     let snap = snapshot_with_failed_services();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Services content must NOT appear (data is None)
     assert!(

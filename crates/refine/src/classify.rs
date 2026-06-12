@@ -10,7 +10,9 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
 };
-use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
+use inspectah_core::types::services::{
+    PresetDefault, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+};
 
 const SENSITIVE_PATHS: &[&str] = &[
     "/etc/shadow",
@@ -64,6 +66,221 @@ fn is_os_default_sensitive(path: &str) -> bool {
         || OS_DEFAULT_SENSITIVE_EXACT.contains(&path)
 }
 
+/// Boot-chain packages that conflict with bootc's bootloader management.
+/// These are unconditionally excluded and locked.
+const PLATFORM_PLUMBING_PREFIXES: &[&str] = &["grub2-", "grubby", "shim-", "efibootmgr"];
+
+/// High-confidence installer noise that would never be intentionally
+/// selected via group-install or kickstart.
+const INSTALLER_NOISE_PATTERNS: &[&str] = &[
+    "-fonts",
+    "-fonts-common",
+    "fonts-filesystem",
+    "default-fonts-",
+    "lshw",
+    "lsscsi",
+    "libsysfs",
+    "initscripts-",
+    "prefixdevname",
+    "rootfiles",
+    "kernel-tools",
+    "dracut-config-rescue",
+    "mtools",
+    "biosdevname",
+];
+
+/// Packages that can promote on config-modified signal alone
+/// (no service signal required).
+const CONFIG_ONLY_PROMOTION: &[&str] = &["sudo", "logrotate", "chrony", "sssd", "pam"];
+
+fn is_platform_plumbing(name: &str) -> bool {
+    PLATFORM_PLUMBING_PREFIXES
+        .iter()
+        .any(|p| name.starts_with(p) || name == *p)
+}
+
+fn is_installer_noise(name: &str) -> bool {
+    INSTALLER_NOISE_PATTERNS.iter().any(|pattern| {
+        if pattern.starts_with('-') {
+            // suffix match: "-fonts" matches "google-noto-sans-vf-fonts"
+            name.ends_with(pattern)
+        } else if pattern.ends_with('-') {
+            // prefix match: "initscripts-" matches "initscripts-service"
+            name.starts_with(pattern)
+        } else {
+            // exact or prefix match: "kernel-tools" matches "kernel-tools" and "kernel-tools-libs"
+            name == *pattern || name.starts_with(&format!("{}-", pattern))
+        }
+    })
+}
+
+fn is_config_only_promotable(name: &str) -> bool {
+    CONFIG_ONLY_PROMOTION.contains(&name)
+}
+
+/// Reclassify anaconda-sourced packages that survived baseline subtraction.
+/// Runs as a post-pass after the main classify_packages logic.
+fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &InspectionSnapshot) {
+    let user_enabled_service_packages = build_user_enabled_service_set(snap);
+    let modified_config_packages = build_modified_config_set(snap);
+    let has_services = snap.services.is_some();
+    let has_config = snap.config.is_some()
+        && snap
+            .rpm
+            .as_ref()
+            .is_some_and(|r| !r.file_ownership.is_empty());
+
+    // Detect per-package evidence degradation: services with missing
+    // owning_package or modified configs without a file_ownership join.
+    // When degraded, Tier 3 (noise exclusion) is unsafe because we
+    // can't rule out that the package has a promotable service/config
+    // we simply failed to attribute.
+    let has_unattributed_services = snap
+        .services
+        .as_ref()
+        .is_some_and(|svc| svc.state_changes.iter().any(|s| s.owning_package.is_none()));
+    let has_orphaned_modified_configs = has_config
+        && snap.config.as_ref().is_some_and(|config| {
+            let owned_paths: std::collections::HashSet<&str> = snap
+                .rpm
+                .as_ref()
+                .map(|r| {
+                    r.file_ownership
+                        .iter()
+                        .flat_map(|o| o.paths.iter().map(|p| p.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            config.files.iter().any(|f| {
+                f.kind == ConfigFileKind::RpmOwnedModified && !owned_paths.contains(f.path.as_str())
+            })
+        });
+    let evidence_degraded = has_unattributed_services || has_orphaned_modified_configs;
+
+    for pkg in packages.iter_mut() {
+        if pkg.entry.source_repo != "anaconda" {
+            continue;
+        }
+
+        let name = &pkg.entry.name;
+
+        // Tier 1: platform plumbing — always wins, even over stronger signals
+        if is_platform_plumbing(name) {
+            pkg.entry.include = false;
+            pkg.entry.locked = true;
+            pkg.triage = TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Baseline),
+                primary_reason: TriageReason::PackagePlatformPlumbing,
+                annotations: vec![],
+            };
+            continue;
+        }
+
+        // Precedence check: skip if existing classification is stronger
+        let dominated_reason = matches!(
+            pkg.triage.primary_reason,
+            TriageReason::PackageUserAdded | TriageReason::PackageProvenanceUnavailable
+        );
+        if !dominated_reason {
+            continue;
+        }
+
+        // Evidence availability: if service or config sections are missing,
+        // or file_ownership is empty (needed for config-to-package joins),
+        // we cannot evaluate promotion. Preserve the existing classification
+        // (PackageUserAdded or PackageProvenanceUnavailable) — do NOT
+        // reclassify, do NOT fall through to Tiers 2-4.
+        if !has_services || !has_config {
+            continue;
+        }
+
+        // Tier 2 Path A: dual-signal promotion (user-enabled service + modified config)
+        if user_enabled_service_packages.contains(name.as_str())
+            && modified_config_packages.contains(name.as_str())
+        {
+            pkg.entry.include = true;
+            pkg.triage = TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Site),
+                primary_reason: TriageReason::PackageInstallerPromotedService,
+                annotations: vec![],
+            };
+            continue;
+        }
+
+        // Tier 2 Path B: config-only promotion (curated list)
+        if is_config_only_promotable(name) && modified_config_packages.contains(name.as_str()) {
+            pkg.entry.include = true;
+            pkg.triage = TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Site),
+                primary_reason: TriageReason::PackageInstallerPromotedConfig,
+                annotations: vec![],
+            };
+            continue;
+        }
+
+        // Tier 3: installer noise — only safe when evidence is complete.
+        // When evidence is degraded (missing owning_package or orphaned
+        // modified configs), we can't rule out that this package has a
+        // promotable service/config we failed to attribute. Fall to
+        // Tier 4 (include=true) instead of excluding.
+        if is_installer_noise(name) && !evidence_degraded {
+            pkg.entry.include = false;
+            pkg.triage = TriageTag {
+                triage: Triage::SingleHost(TriageBucket::Baseline),
+                primary_reason: TriageReason::PackageInstallerDefault,
+                annotations: vec![],
+            };
+            continue;
+        }
+
+        // Tier 4: ambiguous — may be group-install or kickstart intent.
+        // Also catches noise-pattern packages when evidence is degraded.
+        pkg.entry.include = true;
+        pkg.triage = TriageTag {
+            triage: Triage::SingleHost(TriageBucket::Investigate),
+            primary_reason: if evidence_degraded && is_installer_noise(name) {
+                TriageReason::PackageInstallerEvidenceUnavailable
+            } else {
+                TriageReason::PackageInstallerAmbiguous
+            },
+            annotations: vec![],
+        };
+    }
+}
+
+fn build_user_enabled_service_set(snap: &InspectionSnapshot) -> std::collections::HashSet<&str> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(services) = &snap.services {
+        for svc in &services.state_changes {
+            if svc.current_state == ServiceUnitState::Enabled
+                && svc.default_state != Some(PresetDefault::Enable)
+                && let Some(pkg) = &svc.owning_package
+            {
+                set.insert(pkg.as_str());
+            }
+        }
+    }
+    set
+}
+
+fn build_modified_config_set(snap: &InspectionSnapshot) -> std::collections::HashSet<&str> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(config) = &snap.config
+        && let Some(rpm) = &snap.rpm
+    {
+        for ownership in &rpm.file_ownership {
+            for config_file in &config.files {
+                if config_file.kind == ConfigFileKind::RpmOwnedModified
+                    && ownership.paths.contains(&config_file.path)
+                {
+                    set.insert(ownership.package_name.as_str());
+                }
+            }
+        }
+    }
+    set
+}
+
 pub fn classify_packages(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
     let rpm = match &snap.rpm {
         Some(r) => r,
@@ -97,7 +314,8 @@ pub fn classify_packages(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
         .map(|e| (e.package_name.as_str(), e.paths.as_slice()))
         .collect();
 
-    rpm.packages_added
+    let mut result: Vec<RefinedPackage> = rpm
+        .packages_added
         .iter()
         .map(|entry| {
             let canonical_id = format!("{}.{}", entry.name, entry.arch);
@@ -142,7 +360,11 @@ pub fn classify_packages(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
 
             refined
         })
-        .collect()
+        .collect();
+
+    apply_anaconda_classification(&mut result, snap);
+
+    result
 }
 
 fn classify_package(
@@ -1356,6 +1578,639 @@ mod tests {
             matches!(result[0].triage.primary_reason, TriageReason::Custom(_)),
             "SensitiveRetained with unresolved hints must surface Investigate"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_update)]
+mod anaconda_classification {
+    use super::*;
+    use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+    use inspectah_core::types::config::{
+        ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+    };
+    use inspectah_core::types::rpm::{
+        FileOwnershipEntry, RpmSection, VersionChange, VersionChangeDirection,
+    };
+    use inspectah_core::types::services::{
+        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+    };
+
+    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
+        match &tag.triage {
+            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
+            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+        }
+    }
+
+    fn snap_with_anaconda(
+        baseline_names: Option<Vec<String>>,
+        packages: Vec<PackageEntry>,
+        services: Option<ServiceSection>,
+        config: Option<ConfigSection>,
+        file_ownership: Vec<FileOwnershipEntry>,
+    ) -> InspectionSnapshot {
+        let baseline = baseline_names.map(|names| {
+            let pkgs = names
+                .into_iter()
+                .map(|n| {
+                    let key = format!("{}.x86_64", n);
+                    let entry = BaselinePackageEntry {
+                        name: n,
+                        epoch: None,
+                        version: "1.0".into(),
+                        release: "1.el10".into(),
+                        arch: "x86_64".into(),
+                    };
+                    (key, entry)
+                })
+                .collect();
+            BaselineData {
+                image_digest: "sha256:test".to_string(),
+                packages: pkgs,
+                extracted_at: "2026-01-01T00:00:00Z".to_string(),
+            }
+        });
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: packages,
+                file_ownership,
+                ..Default::default()
+            }),
+            services,
+            config,
+            baseline,
+            ..Default::default()
+        }
+    }
+
+    fn snap_with_anaconda_and_vc(
+        baseline_names: Option<Vec<String>>,
+        packages: Vec<PackageEntry>,
+        version_changes: Vec<VersionChange>,
+        services: Option<ServiceSection>,
+        config: Option<ConfigSection>,
+        file_ownership: Vec<FileOwnershipEntry>,
+    ) -> InspectionSnapshot {
+        let mut snap =
+            snap_with_anaconda(baseline_names, packages, services, config, file_ownership);
+        if let Some(rpm) = &mut snap.rpm {
+            rpm.version_changes = version_changes;
+        }
+        snap
+    }
+
+    fn anaconda_pkg(name: &str) -> PackageEntry {
+        PackageEntry {
+            name: name.into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "anaconda".into(),
+            include: true, // serde default_true doesn't apply to Default::default()
+            ..Default::default()
+        }
+    }
+
+    fn empty_service_section() -> ServiceSection {
+        ServiceSection {
+            state_changes: vec![],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        }
+    }
+
+    // --- Tier 1: platform plumbing hard exclude ---
+
+    #[test]
+    fn anaconda_tier1_platform_plumbing_hard_excluded() {
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("grub2-efi-aa64-cdboot"), anaconda_pkg("httpd")],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let grub = result
+            .iter()
+            .find(|p| p.entry.name == "grub2-efi-aa64-cdboot")
+            .unwrap();
+        assert_bucket(&grub.triage, TriageBucket::Baseline);
+        assert_eq!(
+            grub.triage.primary_reason,
+            TriageReason::PackagePlatformPlumbing
+        );
+        assert!(!grub.entry.include);
+        assert!(grub.entry.locked);
+    }
+
+    #[test]
+    fn anaconda_tier1_overrides_version_changed() {
+        let mut grub = anaconda_pkg("grub2-tools-extra");
+        grub.state = PackageState::Modified;
+        let snap = snap_with_anaconda_and_vc(
+            Some(vec!["glibc".into(), "grub2-tools-extra".into()]),
+            vec![grub],
+            vec![VersionChange {
+                name: "grub2-tools-extra".into(),
+                arch: "x86_64".into(),
+                host_version: "2.06".into(),
+                base_version: "2.04".into(),
+                host_epoch: "1".into(),
+                base_epoch: "1".into(),
+                direction: VersionChangeDirection::Upgrade,
+                ..Default::default()
+            }],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let grub = result
+            .iter()
+            .find(|p| p.entry.name == "grub2-tools-extra")
+            .unwrap();
+        assert_eq!(
+            grub.triage.primary_reason,
+            TriageReason::PackagePlatformPlumbing,
+            "Tier 1 must override stronger signals for boot-chain packages"
+        );
+        assert!(grub.entry.locked);
+        assert!(!grub.entry.include);
+    }
+
+    // --- Precedence: anaconda post-pass must not override version-changed or local-install ---
+
+    #[test]
+    fn anaconda_precedence_preserves_version_changed() {
+        let mut pkg = anaconda_pkg("tzdata");
+        pkg.state = PackageState::Modified;
+        let snap = snap_with_anaconda_and_vc(
+            Some(vec!["glibc".into(), "tzdata".into()]),
+            vec![pkg],
+            vec![VersionChange {
+                name: "tzdata".into(),
+                arch: "x86_64".into(),
+                host_version: "2026b".into(),
+                base_version: "2026a".into(),
+                host_epoch: "0".into(),
+                base_epoch: "0".into(),
+                direction: VersionChangeDirection::Upgrade,
+                ..Default::default()
+            }],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let tz = result.iter().find(|p| p.entry.name == "tzdata").unwrap();
+        assert_eq!(
+            tz.triage.primary_reason,
+            TriageReason::PackageVersionChanged,
+            "anaconda post-pass must not override PackageVersionChanged"
+        );
+    }
+
+    #[test]
+    fn anaconda_precedence_preserves_local_install() {
+        let mut local = anaconda_pkg("custom-rpm");
+        local.state = PackageState::LocalInstall;
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![local],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let custom = result
+            .iter()
+            .find(|p| p.entry.name == "custom-rpm")
+            .unwrap();
+        assert_eq!(
+            custom.triage.primary_reason,
+            TriageReason::PackageLocalInstall
+        );
+    }
+
+    // --- Tier 2 Path A: dual-signal promotion (service + config) ---
+
+    #[test]
+    fn anaconda_tier2_dual_signal_promotes_to_site() {
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("firewalld")],
+            Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("firewalld".into()),
+                    locked: false,
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/firewalld/zones/custom.xml".into(),
+                    kind: ConfigFileKind::RpmOwnedModified,
+                    category: ConfigCategory::Other,
+                    content: String::new(),
+                    include: true,
+                    ..Default::default()
+                }],
+            }),
+            vec![FileOwnershipEntry {
+                package_name: "firewalld".into(),
+                paths: vec!["/etc/firewalld/zones/custom.xml".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+        let fw = result.iter().find(|p| p.entry.name == "firewalld").unwrap();
+        assert_bucket(&fw.triage, TriageBucket::Site);
+        assert_eq!(
+            fw.triage.primary_reason,
+            TriageReason::PackageInstallerPromotedService
+        );
+        assert!(fw.entry.include);
+    }
+
+    // --- Tier 2 Path B: config-only promotion ---
+
+    #[test]
+    fn anaconda_tier2_config_only_promotes_curated_package() {
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("sudo")],
+            Some(empty_service_section()),
+            Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/sudoers".into(),
+                    kind: ConfigFileKind::RpmOwnedModified,
+                    category: ConfigCategory::Other,
+                    content: String::new(),
+                    include: true,
+                    ..Default::default()
+                }],
+            }),
+            vec![FileOwnershipEntry {
+                package_name: "sudo".into(),
+                paths: vec!["/etc/sudoers".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+        let sudo = result.iter().find(|p| p.entry.name == "sudo").unwrap();
+        assert_bucket(&sudo.triage, TriageBucket::Site);
+        assert_eq!(
+            sudo.triage.primary_reason,
+            TriageReason::PackageInstallerPromotedConfig
+        );
+    }
+
+    // --- Tier 3: installer noise (soft exclude) ---
+
+    #[test]
+    fn anaconda_tier3_installer_noise_soft_excluded() {
+        // file_ownership must be non-empty for has_config to be true
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![
+                anaconda_pkg("google-noto-sans-vf-fonts"),
+                anaconda_pkg("lshw"),
+                anaconda_pkg("kernel-tools"),
+                anaconda_pkg("biosdevname"),
+            ],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/etc/dummy".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+        for name in &[
+            "google-noto-sans-vf-fonts",
+            "lshw",
+            "kernel-tools",
+            "biosdevname",
+        ] {
+            let pkg = result.iter().find(|p| p.entry.name == *name).unwrap();
+            assert_bucket(&pkg.triage, TriageBucket::Baseline);
+            assert_eq!(
+                pkg.triage.primary_reason,
+                TriageReason::PackageInstallerDefault,
+                "wrong reason for {}",
+                name
+            );
+            assert!(!pkg.entry.include, "{} should be excluded", name);
+            assert!(!pkg.entry.locked, "{} should not be locked", name);
+        }
+    }
+
+    // --- Tier 4: ambiguous (defaults to investigate, included) ---
+
+    #[test]
+    fn anaconda_tier4_ambiguous_defaults_to_investigate_included() {
+        // file_ownership must be non-empty for has_config to be true
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("cronie"), anaconda_pkg("audit")],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/etc/dummy".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+        for name in &["cronie", "audit"] {
+            let pkg = result.iter().find(|p| p.entry.name == *name).unwrap();
+            assert_bucket(&pkg.triage, TriageBucket::Investigate);
+            assert_eq!(
+                pkg.triage.primary_reason,
+                TriageReason::PackageInstallerAmbiguous
+            );
+            assert!(pkg.entry.include, "{} should be included by default", name);
+        }
+    }
+
+    // --- Missing evidence: preserves existing classification ---
+
+    #[test]
+    fn anaconda_missing_evidence_preserves_existing_classification() {
+        // No services, no config → missing evidence
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("firewalld")],
+            None,
+            None,
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let fw = result.iter().find(|p| p.entry.name == "firewalld").unwrap();
+        assert_eq!(
+            fw.triage.primary_reason,
+            TriageReason::PackageUserAdded,
+            "missing evidence must preserve existing classification, not reclassify"
+        );
+        assert!(fw.entry.include);
+    }
+
+    #[test]
+    fn anaconda_missing_file_ownership_preserves_existing() {
+        // Services and config present but file_ownership empty → missing evidence
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("firewalld")],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![], // empty file_ownership
+        );
+        let result = classify_packages(&snap);
+        let fw = result.iter().find(|p| p.entry.name == "firewalld").unwrap();
+        assert_eq!(
+            fw.triage.primary_reason,
+            TriageReason::PackageUserAdded,
+            "missing file_ownership must preserve existing classification"
+        );
+    }
+
+    // --- Non-anaconda packages unaffected ---
+
+    #[test]
+    fn non_anaconda_package_unaffected_by_classifier() {
+        let mut httpd = anaconda_pkg("grub2-tools-extra");
+        httpd.source_repo = "appstream".into();
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![httpd],
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![],
+        );
+        let result = classify_packages(&snap);
+        let pkg = result
+            .iter()
+            .find(|p| p.entry.name == "grub2-tools-extra")
+            .unwrap();
+        assert_ne!(
+            pkg.triage.primary_reason,
+            TriageReason::PackagePlatformPlumbing
+        );
+    }
+
+    #[test]
+    fn anaconda_classification_neutral_with_installed_groups() {
+        use inspectah_core::types::rpm::InstalledGroup;
+
+        let packages = vec![
+            anaconda_pkg("grub2-efi-aa64-cdboot"),
+            anaconda_pkg("google-noto-sans-vf-fonts"),
+            anaconda_pkg("cronie"),
+        ];
+
+        // Run with installed_groups = None
+        let snap_none = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            packages.clone(),
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/dummy".into()],
+            }],
+        );
+        let result_none = classify_packages(&snap_none);
+
+        // Run with installed_groups = Some([]) (no groups)
+        let mut snap_empty = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            packages.clone(),
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/dummy".into()],
+            }],
+        );
+        if let Some(rpm) = &mut snap_empty.rpm {
+            rpm.installed_groups = Some(vec![]);
+        }
+        let result_empty = classify_packages(&snap_empty);
+
+        // Run with installed_groups = Some([group with cronie])
+        let mut snap_groups = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            packages.clone(),
+            Some(empty_service_section()),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/dummy".into()],
+            }],
+        );
+        if let Some(rpm) = &mut snap_groups.rpm {
+            rpm.installed_groups = Some(vec![InstalledGroup {
+                name: "Base".into(),
+                members: vec!["cronie".into()],
+                ..Default::default()
+            }]);
+        }
+        let result_groups = classify_packages(&snap_groups);
+
+        // All three must produce identical classification outcomes
+        for (name, expected_reason) in &[
+            (
+                "grub2-efi-aa64-cdboot",
+                TriageReason::PackagePlatformPlumbing,
+            ),
+            (
+                "google-noto-sans-vf-fonts",
+                TriageReason::PackageInstallerDefault,
+            ),
+            ("cronie", TriageReason::PackageInstallerAmbiguous),
+        ] {
+            let r_none = result_none.iter().find(|p| p.entry.name == *name).unwrap();
+            let r_empty = result_empty.iter().find(|p| p.entry.name == *name).unwrap();
+            let r_groups = result_groups
+                .iter()
+                .find(|p| p.entry.name == *name)
+                .unwrap();
+            assert_eq!(
+                r_none.triage.primary_reason, *expected_reason,
+                "None: {}",
+                name
+            );
+            assert_eq!(
+                r_empty.triage.primary_reason, *expected_reason,
+                "Empty: {}",
+                name
+            );
+            assert_eq!(
+                r_groups.triage.primary_reason, *expected_reason,
+                "Groups: {}",
+                name
+            );
+            assert_eq!(
+                r_none.entry.include, r_empty.entry.include,
+                "include mismatch for {}",
+                name
+            );
+            assert_eq!(
+                r_none.entry.include, r_groups.entry.include,
+                "include mismatch for {}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn anaconda_degraded_evidence_blocks_tier3_noise_exclusion() {
+        // When a service has missing owning_package, evidence is degraded.
+        // Tier 3 noise packages must NOT be soft-excluded — they should
+        // fall to Tier 4 (include=true) with EvidenceUnavailable reason.
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("kernel-tools"), anaconda_pkg("cronie")],
+            Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "mystery.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: None, // degraded — missing attribution
+                    locked: false,
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/dummy".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+
+        // kernel-tools matches INSTALLER_NOISE_PATTERNS but evidence is
+        // degraded — must NOT be Tier 3 excluded. Should get
+        // EvidenceUnavailable and include=true.
+        let kt = result
+            .iter()
+            .find(|p| p.entry.name == "kernel-tools")
+            .unwrap();
+        assert_eq!(
+            kt.triage.primary_reason,
+            TriageReason::PackageInstallerEvidenceUnavailable,
+            "noise package with degraded evidence must not be soft-excluded"
+        );
+        assert!(
+            kt.entry.include,
+            "noise package with degraded evidence must be included"
+        );
+
+        // cronie is not a noise pattern — should still be Tier 4 ambiguous
+        let cr = result.iter().find(|p| p.entry.name == "cronie").unwrap();
+        assert_eq!(
+            cr.triage.primary_reason,
+            TriageReason::PackageInstallerAmbiguous
+        );
+        assert!(cr.entry.include);
+    }
+
+    #[test]
+    fn anaconda_clean_evidence_allows_tier3_noise_exclusion() {
+        // When all services have owning_package, evidence is clean.
+        // Tier 3 noise packages should be soft-excluded normally.
+        let snap = snap_with_anaconda(
+            Some(vec!["glibc".into()]),
+            vec![anaconda_pkg("kernel-tools")],
+            Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    owning_package: Some("openssh-server".into()),
+                    locked: false,
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            }),
+            Some(ConfigSection { files: vec![] }),
+            vec![FileOwnershipEntry {
+                package_name: "dummy".into(),
+                paths: vec!["/dummy".into()],
+            }],
+        );
+        let result = classify_packages(&snap);
+        let kt = result
+            .iter()
+            .find(|p| p.entry.name == "kernel-tools")
+            .unwrap();
+        assert_eq!(
+            kt.triage.primary_reason,
+            TriageReason::PackageInstallerDefault,
+            "noise package with clean evidence should be soft-excluded"
+        );
+        assert!(!kt.entry.include);
     }
 }
 

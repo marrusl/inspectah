@@ -6,7 +6,7 @@ use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinementOp, RepoProvenance, UserPasswordOp};
+use inspectah_refine::types::{RefinementOp, RepoProvenance, TimelineEntry, UserPasswordOp};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -236,13 +236,16 @@ pub async fn apply_op(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let op: RefinementOp = serde_json::from_slice(&body).map_err(|e| {
+    let entry: TimelineEntry = serde_json::from_slice(&body).map_err(|e| {
         AppError(inspectah_refine::types::RefineError::BadRequest(format!(
-            "invalid operation: {e}"
+            "invalid timeline entry: {e}"
         )))
     })?;
     let mut session = state.session.lock().unwrap();
-    session.apply(op).map_err(AppError)?;
+    match entry {
+        TimelineEntry::Op(op) => session.apply(op).map_err(AppError)?,
+        TimelineEntry::View(dir) => session.apply_directive(dir).map_err(AppError)?,
+    }
     Ok(Json(
         serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
     ))
@@ -284,7 +287,7 @@ pub async fn redo(
 
 pub async fn get_ops(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
-    Json(serde_json::to_value(session.ops_history()).unwrap())
+    Json(serde_json::to_value(session.timeline_history()).unwrap())
 }
 
 pub async fn get_changes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -373,6 +376,7 @@ pub async fn export_tarball(
                 &projected,
                 &tarball_path,
                 Some(&original_includes),
+                None,
             )?;
             Ok(std::fs::read(&tarball_path)?)
         },

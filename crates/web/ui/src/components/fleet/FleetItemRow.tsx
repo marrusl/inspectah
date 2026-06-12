@@ -75,6 +75,8 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.mount_point;
     case "NonRpm":
       return itemId.key.name;
+    case "Group":
+      return itemId.key.name;
   }
 }
 

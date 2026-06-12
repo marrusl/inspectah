@@ -230,9 +230,17 @@ Shared `baseline_fmt` presentation helpers render baseline comparison sections a
 
 Applied strict intersection default to all 14 section types. Items below full prevalence start excluded but remain visible in the UI. Stock tuned profiles (14 recognized) suppressed by default.
 
-### Package Group Detection (MEDIUM — future)
+### Anaconda Gap Classifier (IN PROGRESS)
 
-Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
+Four-tier classification for packages Anaconda installs beyond the base container image: platform plumbing (locked exclude), promoted (user-intent via service+config signals), installer noise (soft exclude), ambiguous (Investigate, included by default). Group data collected via `dnf group list --installed`. Spec: `process-docs/specs/proposed/2026-06-11-anaconda-gap-classifier.md`. Plan: `process-docs/plans/2026-06-11-anaconda-gap-classifier.md`. Implementation on `feature/anaconda-gap-classifier` branch.
+
+### Group-Aware Rendering (MEDIUM — after anaconda classifier)
+
+Render group-installed packages as `dnf group install` in the Containerfile instead of individual `dnf install` lines. Refine UI shows groups as collapsible rows with ungroup action. Pre-spec: `process-docs/specs/proposed/2026-06-11-group-rendering-pre-spec.md`. Depends on anaconda gap classifier (provides `installed_groups` snapshot data).
+
+### Classification Logic Developer Docs (MEDIUM — after anaconda classifier)
+
+Developer-facing explanation doc covering the full classification pipeline: baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, fleet consensus. Audience: developers working on inspectah. Location: `docs/explanation/classification-logic.md`.
 
 ### Driftify E2E Fixture Coverage Audit (MEDIUM — after testing expansion)
 
@@ -306,6 +314,10 @@ inspectah catches modified `pam.d` files but doesn't parse the module load list.
 ### Scan Output Rethink (MEDIUM — pre-spec ready)
 
 Rethink the `inspectah scan` CLI progress output for the inspector section. The current output was designed for 12-minute scans; the Rust rewrite reduced this to ~10 seconds. Per-inspector spinners, sub-steps, and timers are noise at current speeds, and the in-place ANSI redraw causes rendering artifacts. Direction: streaming receipt (append-only, one line per inspector, sub-steps behind `--verbose`, slow-inspector safety valve). Pre-spec at `process-docs/specs/proposed/2026-06-10-scan-output-rethink.md`.
+
+### Autosave UX Improvements (MEDIUM — needs spec)
+
+Rethink the autosave resume experience. Currently the resume prompt (`[r] Resume [f] Fresh [q] Quit`) is functional but doesn't communicate enough. At minimum: inform the user that they're resuming an autosaved session and show the autosave path. Possibly add a "reset to original tarball" button in the web UI so users can start fresh mid-session without restarting the CLI. Scope TBD — may be a small UX pass or a larger rethink of session lifecycle.
 
 ### sshd_config Structured Parse (MEDIUM — needs spec)
 

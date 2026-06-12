@@ -1012,6 +1012,7 @@ async fn fleet_exclude_repo_round_trip() {
         &app,
         "/api/op",
         serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Repo", "key": {"path": "epel"}},
@@ -1047,6 +1048,7 @@ async fn fleet_exclude_repo_round_trip() {
         &app,
         "/api/op",
         serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Repo", "key": {"path": "epel"}},

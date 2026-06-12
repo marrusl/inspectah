@@ -1,10 +1,13 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Skeleton,
   EmptyState,
   EmptyStateBody,
   Button,
   Alert,
+  AlertGroup,
+  AlertActionCloseButton,
+  AlertVariant,
 } from "@patternfly/react-core";
 import type {
   ViewResponse,
@@ -13,7 +16,7 @@ import type {
   RefinementOp,
   ReferenceSection,
 } from "../api/types";
-import { applyOp } from "../api/client";
+import { applyOp, ungroupGroup } from "../api/client";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
@@ -60,6 +63,14 @@ export interface MainContentProps {
   filterClearCounter?: number;
   /** When set, auto-expands any collapsed summary containing this item ID. */
   revealItemId?: string;
+  /** Called with test ID when an action needs focus restoration after undo. */
+  onSetUndoFocusTarget?: (testId: string | null) => void;
+}
+
+interface ToastEntry {
+  id: number;
+  message: string;
+  variant: AlertVariant;
 }
 
 function toConfigItems(configs: RefinedConfig[]): DecisionItemKind[] {
@@ -89,13 +100,44 @@ export function MainContent({
   onViewedChange,
   filterClearCounter = 0,
   revealItemId,
+  onSetUndoFocusTarget,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
+  const toastIdRef = useRef(0);
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
 
   // Clear stale filter when switching sections or when global search navigates within same section
   useEffect(() => {
     setFilterText("");
   }, [activeSection, filterClearCounter]);
+
+  // Deferred post-ungroup focus: waits for the re-render with new package rows
+  // before attempting querySelector, fixing the timing race where the DOM hasn't
+  // updated yet after the API round-trip.
+  useEffect(() => {
+    if (!pendingFocusTarget) return;
+    // Use exact-match selectors for each known RPM arch to avoid prefix collisions.
+    // Example: "python3" should match "python3.x86_64" but NOT "python3.11.x86_64".
+    const RPM_ARCHES = ['x86_64', 'noarch', 'i686', 'aarch64', 's390x', 'ppc64le', 'src'];
+    let focused = false;
+    for (const arch of RPM_ARCHES) {
+      const selector = `[data-testid="package-row-${CSS.escape(pendingFocusTarget)}.${arch}"]`;
+      const el = document.querySelector<HTMLElement>(selector);
+      if (el) {
+        el.focus();
+        focused = true;
+        break;
+      }
+    }
+    if (focused) {
+      setPendingFocusTarget(null);
+    }
+  }, [pendingFocusTarget, viewData]);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Reset filter when section changes or search closes
   const handleSearchClose = useCallback(() => {
@@ -175,6 +217,70 @@ export function MainContent({
     [viewData, onViewUpdate, onMutationError],
   );
 
+  // Group toggle: SetInclude with ItemId::Group
+  const handleGroupToggle = useCallback(
+    (groupName: string, include: boolean) => {
+      const op: RefinementOp = {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Group", key: { name: groupName } },
+          include,
+        },
+      };
+      applyOp(op)
+        .then((updatedView) => onViewUpdate(updatedView))
+        .catch((err) =>
+          onMutationError(err instanceof Error ? err : new Error(String(err))),
+        );
+    },
+    [onViewUpdate, onMutationError],
+  );
+
+  // Group ungroup: UngroupGroup directive
+  const handleGroupUngroup = useCallback(
+    (groupName: string) => {
+      // Find the group to get member count and first member for focus restoration
+      const group = viewData?.package_groups?.find((g) => g.name === groupName);
+      const memberCount = group?.member_count ?? 0;
+      // Get first member for focus target after ungroup.
+      // GroupMemberInfo carries bare names (e.g. "httpd") but rendered package
+      // rows use canonical "name.arch" (e.g. "package-row-httpd.x86_64").
+      // Use a prefix-match selector to bridge the gap.
+      const firstMember = group?.members?.[0];
+      const firstMemberName = firstMember?.name ?? null;
+
+      // Set focus target for undo: the group row
+      onSetUndoFocusTarget?.(`group-row-${groupName}`);
+
+      ungroupGroup(groupName)
+        .then((updatedView) => {
+          onViewUpdate(updatedView);
+          // Show success toast
+          const id = ++toastIdRef.current;
+          const message = `Group ungrouped into ${memberCount} package${memberCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
+          setToasts((prev) => [
+            ...prev,
+            { id, message, variant: AlertVariant.success },
+          ]);
+          // Auto-dismiss after 5 seconds
+          setTimeout(() => {
+            setToasts((prev) => prev.filter((t) => t.id !== id));
+          }, 5000);
+
+          // Defer focus to post-render via useEffect — the DOM doesn't have
+          // the individual package rows yet until React re-renders with the
+          // updated viewData from the API response.
+          if (firstMemberName) {
+            setPendingFocusTarget(firstMemberName);
+          }
+        })
+        .catch((err) =>
+          onMutationError(err instanceof Error ? err : new Error(String(err))),
+        );
+    },
+    [viewData, onViewUpdate, onMutationError, onSetUndoFocusTarget],
+  );
+
   const handleArrowDown = useCallback(() => {
     // Focus the first decision item in the list
     const firstItem = document.querySelector(
@@ -227,6 +333,15 @@ export function MainContent({
           <h2>{SECTION_LABELS.packages}</h2>
         </Content>
         {banner}
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={0}
+          />
+        )}
         <RepoBar
           repos={viewData?.repo_groups ?? []}
           onToggle={handleRepoToggle}
@@ -235,9 +350,28 @@ export function MainContent({
           mode="single"
           packages={packageListPackages}
           repoGroups={viewData?.repo_groups ?? []}
+          packageGroups={viewData?.package_groups}
+          packageProvenances={viewData?.package_provenances}
+          searchQuery={filterText}
           onToggle={handlePackageToggle}
           onRepoToggle={handleRepoToggle}
+          onGroupToggle={handleGroupToggle}
+          onGroupUngroup={handleGroupUngroup}
         />
+        {toasts.length > 0 && (
+          <AlertGroup isToast isLiveRegion>
+            {toasts.map((toast) => (
+              <Alert
+                key={toast.id}
+                variant={toast.variant}
+                title={toast.message}
+                actionClose={
+                  <AlertActionCloseButton onClose={() => dismissToast(toast.id)} />
+                }
+              />
+            ))}
+          </AlertGroup>
+        )}
       </>
     );
   }

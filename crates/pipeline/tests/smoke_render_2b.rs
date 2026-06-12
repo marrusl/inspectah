@@ -234,7 +234,7 @@ fn snapshot_with_quadlets_and_compose() -> InspectionSnapshot {
 #[test]
 fn containerfile_network_firewall_copy_comment() {
     let snap = snapshot_with_firewall();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Must mention zone count
     assert!(
@@ -261,7 +261,7 @@ fn containerfile_network_firewall_copy_comment() {
 #[test]
 fn containerfile_network_static_routes() {
     let snap = snapshot_with_routes_hosts_proxy();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("Static Routes"),
@@ -281,7 +281,7 @@ fn containerfile_network_static_routes() {
 #[test]
 fn containerfile_network_hosts_additions() {
     let snap = snapshot_with_routes_hosts_proxy();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("/etc/hosts Additions"),
@@ -305,7 +305,7 @@ fn containerfile_network_hosts_additions() {
 #[test]
 fn containerfile_network_proxy() {
     let snap = snapshot_with_routes_hosts_proxy();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("Proxy Configuration"),
@@ -329,7 +329,7 @@ fn containerfile_network_proxy() {
 #[test]
 fn containerfile_containers_quadlet_copy() {
     let snap = snapshot_with_quadlets();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("Container Workloads"),
@@ -350,7 +350,7 @@ fn containerfile_containers_quadlet_copy() {
 #[test]
 fn containerfile_containers_no_compose_comments() {
     let snap = snapshot_with_compose_only();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Compose-only section has no included quadlets and no included flatpaks,
     // so containers_section_lines returns empty (the guard checks both).
@@ -368,7 +368,7 @@ fn containerfile_containers_no_compose_comments() {
 #[test]
 fn containerfile_users_useradd_override() {
     let snap = snapshot_with_useradd_users();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("Users and Groups"),
@@ -388,7 +388,7 @@ fn containerfile_users_useradd_override() {
 #[test]
 fn containerfile_users_sysusers_comment() {
     let snap = snapshot_with_sysusers();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Skip-strategy users produce no Users and Groups section
     assert!(
@@ -405,7 +405,7 @@ fn containerfile_users_sysusers_comment() {
 #[test]
 fn containerfile_users_blueprint_fixme() {
     let snap = snapshot_with_blueprint_users();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Skip-strategy users produce no Users and Groups section
     assert!(
@@ -531,7 +531,7 @@ fn configtree_flatpak_manifest_and_service() {
 #[test]
 fn containerfile_containers_flatpak_copy_and_enable() {
     let snap = snapshot_with_flatpaks();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("COPY flatpak/"),
@@ -669,7 +669,7 @@ fn containerfile_empty_sections() {
     snap.users_groups = Some(UserGroupSection::default());
 
     // Must not panic
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Empty sections must not produce section headings
     assert!(
@@ -719,7 +719,7 @@ fn containerfile_degraded_sections() {
         ..Default::default()
     });
 
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("FIXME: network data may be incomplete"),

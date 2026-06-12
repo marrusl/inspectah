@@ -164,6 +164,16 @@ pub struct FileOwnershipEntry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct InstalledGroup {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, alias = "packages")]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub optional_installed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpmSection {
     #[serde(default)]
     pub packages_added: Vec<PackageEntry>,
@@ -227,6 +237,8 @@ pub struct RpmSection {
     /// Each entry maps a package name to the filesystem paths it owns.
     #[serde(default)]
     pub file_ownership: Vec<FileOwnershipEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_groups: Option<Vec<InstalledGroup>>,
 }
 
 #[cfg(test)]
@@ -370,5 +382,58 @@ mod tests {
         assert_eq!(json["leaf_packages"], serde_json::Value::Null);
         assert_eq!(json["auto_packages"], serde_json::Value::Null);
         assert_eq!(json["leaf_dep_tree"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_installed_group_roundtrip() {
+        let group = InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into(), "buildah".into(), "skopeo".into()],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&group).unwrap();
+        let parsed: InstalledGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(group, parsed);
+    }
+
+    #[test]
+    fn installed_group_new_fields_round_trip() {
+        let group = InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into(), "buildah".into()],
+            optional_installed: vec!["python3-podman".into()],
+        };
+        let json = serde_json::to_string(&group).unwrap();
+        let back: InstalledGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "Container Management");
+        assert_eq!(back.members, vec!["podman", "buildah"]);
+        assert_eq!(back.optional_installed, vec!["python3-podman"]);
+    }
+
+    #[test]
+    fn installed_group_old_format_loads_via_alias() {
+        // Old snapshots use "packages" instead of "members"
+        let json = r#"{"name":"Dev Tools","packages":["gcc","make"]}"#;
+        let group: InstalledGroup = serde_json::from_str(json).unwrap();
+        assert_eq!(group.members, vec!["gcc", "make"]);
+        assert!(group.optional_installed.is_empty());
+    }
+
+    #[test]
+    fn test_rpm_section_installed_groups_none_vs_empty() {
+        let section_none = RpmSection {
+            ..Default::default()
+        };
+        let json_none = serde_json::to_string(&section_none).unwrap();
+        let parsed_none: RpmSection = serde_json::from_str(&json_none).unwrap();
+        assert!(parsed_none.installed_groups.is_none());
+
+        let section_empty = RpmSection {
+            installed_groups: Some(vec![]),
+            ..Default::default()
+        };
+        let json_empty = serde_json::to_string(&section_empty).unwrap();
+        let parsed_empty: RpmSection = serde_json::from_str(&json_empty).unwrap();
+        assert_eq!(parsed_empty.installed_groups, Some(vec![]));
     }
 }

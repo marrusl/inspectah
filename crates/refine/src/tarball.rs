@@ -148,18 +148,24 @@ fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
         | Some(RedactionState::PartiallyRedacted { .. })
         | Some(RedactionState::SensitiveRetained { .. }) => Ok(()),
         Some(RedactionState::Raw) => {
-            eprintln!("warning: snapshot was scanned with --no-redaction. Sensitive data may be present.");
+            eprintln!(
+                "warning: snapshot was scanned with --no-redaction. Sensitive data may be present."
+            );
             Ok(())
         }
         Some(RedactionState::Unknown) => {
-            eprintln!("warning: snapshot has unknown redaction state. It may contain unredacted sensitive data.");
+            eprintln!(
+                "warning: snapshot has unknown redaction state. It may contain unredacted sensitive data."
+            );
             Ok(())
         }
         None => {
             if snap.fleet_meta.is_some() {
                 Ok(())
             } else {
-                eprintln!("warning: snapshot has no redaction metadata. It may contain unredacted sensitive data.");
+                eprintln!(
+                    "warning: snapshot has no redaction metadata. It may contain unredacted sensitive data."
+                );
                 Ok(())
             }
         }

@@ -423,9 +423,7 @@ fn fleet_refine_full_lifecycle() {
         .filter_map(|e| e.ok())
         .map(|e| {
             let raw = e.path().unwrap().to_string_lossy().to_string();
-            raw.strip_prefix(prefix_slash)
-                .unwrap_or(&raw)
-                .to_string()
+            raw.strip_prefix(prefix_slash).unwrap_or(&raw).to_string()
         })
         .collect();
 

@@ -579,11 +579,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                 version_changes,
             });
             if verbosity == crate::progress::Verbosity::Quiet {
-                print_quiet_footer(
-                    scan_start.elapsed(),
-                    &end_state,
-                    sensitivity.as_deref(),
-                );
+                print_quiet_footer(scan_start.elapsed(), &end_state, sensitivity.as_deref());
             }
             Ok(outcome)
         }

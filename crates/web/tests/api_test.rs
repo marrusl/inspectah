@@ -120,6 +120,7 @@ async fn apply_valid_op() {
         &app,
         "/api/op",
         serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Package", "key": {"name": "httpd", "arch": "x86_64"}},
@@ -147,6 +148,7 @@ async fn apply_unknown_target_returns_422() {
         &app,
         "/api/op",
         serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Package", "key": {"name": "nonexistent", "arch": "x86_64"}},
@@ -156,6 +158,65 @@ async fn apply_unknown_target_returns_422() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(json.get("error").is_some());
+}
+
+#[tokio::test]
+async fn api_op_accepts_ungroup_directive() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    // Build a snapshot with an installed group so UngroupGroup has a valid target
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "podman".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: true,
+            locked: false,
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "View",
+            "directive": "UngroupGroup",
+            "group_name": "Container Management"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // The response should include a generation bump
+    assert_eq!(json["generation"], 1);
+}
+
+#[tokio::test]
+async fn api_op_rejects_unknown_timeline_kind() {
+    let app = app(test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Unknown",
+            "foo": "bar"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json.get("error").is_some());
 }
 
@@ -1415,4 +1476,359 @@ async fn fallback_serves_spa_for_unknown_paths() {
         "SPA fallback must serve text/html, got: {}",
         content_type
     );
+}
+
+// --- Locked-item API contract test -------------------------------------------
+
+/// Build an AppState with an anaconda-sourced platform-plumbing package.
+/// The package is NOT pre-locked — it enters as a normal PackageEntry and
+/// must be locked by the anaconda classifier during RefineSession::new().
+fn locked_package_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "grub2-efi-aa64-cdboot".into(),
+            arch: "aarch64".into(),
+            state: PackageState::Added,
+            source_repo: "anaconda".into(),
+            include: true,
+            locked: false,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        state_changes: vec![],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+    snap.config = Some(ConfigSection { files: vec![] });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+#[tokio::test]
+async fn locked_package_rejects_set_include_via_api() {
+    let state = locked_package_state();
+    let app = app(state.clone());
+
+    // POST SetInclude(true) on a locked package — should succeed (200) but be a no-op
+    let (status, _json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": "grub2-efi-aa64-cdboot", "arch": "aarch64"}},
+                "include": true
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "SetInclude on locked item must return 200"
+    );
+
+    // GET /api/view and verify the package is still excluded
+    let (view_status, view_json) = get_json(&app, "/api/view").await;
+    assert_eq!(view_status, StatusCode::OK);
+
+    // Generation must be 0 — the op was a no-op, so no mutation occurred
+    assert_eq!(
+        view_json["generation"], 0,
+        "generation must stay 0 after no-op on locked item"
+    );
+
+    // Verify via the underlying session that the package is still excluded
+    let session = state.session.lock().unwrap();
+    let projected = session.snapshot_projected();
+    let pkg = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "grub2-efi-aa64-cdboot")
+        .unwrap();
+    assert!(
+        !pkg.include,
+        "API: locked package must stay excluded after SetInclude(true)"
+    );
+    assert!(pkg.locked, "API: locked flag must be preserved");
+}
+
+// --- Package group and provenance API tests ---------------------------------
+
+#[tokio::test]
+async fn api_view_includes_package_groups() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "gcc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "make".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: true,
+                ..Default::default()
+            },
+        ],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Development Tools".into(),
+            members: vec!["gcc".into(), "make".into()],
+            optional_installed: vec!["valgrind".into()],
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let groups = json["package_groups"]
+        .as_array()
+        .expect("package_groups must be array");
+    assert_eq!(groups.len(), 1, "one installed group");
+    assert_eq!(groups[0]["name"], "Development Tools");
+    assert_eq!(groups[0]["member_count"], 2);
+    assert_eq!(groups[0]["optional_spillover_count"], 1);
+
+    // Render state reflects the session's classification of members.
+    let state = groups[0]["render_state"].as_str().unwrap();
+    assert!(
+        ["renderable", "excluded", "ungrouped", "degraded"].contains(&state),
+        "render_state must be a known state, got: {state}"
+    );
+
+    let members = groups[0]["members"].as_array().expect("members array");
+    assert_eq!(members.len(), 2);
+    // Each member has the expected shape
+    for m in members {
+        assert!(m.get("name").is_some());
+        assert!(m.get("locked").is_some());
+        assert!(m["overlap_groups"].is_array());
+    }
+}
+
+#[tokio::test]
+async fn api_view_populates_optional_spillover_provenance() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "gcc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "valgrind".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: false,
+                ..Default::default()
+            },
+        ],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Development Tools".into(),
+            members: vec!["gcc".into()],
+            optional_installed: vec!["valgrind".into()],
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let provenances = json
+        .get("package_provenances")
+        .expect("package_provenances field");
+    let valgrind_prov = provenances
+        .get("valgrind.x86_64")
+        .expect("valgrind should have provenance");
+    assert_eq!(valgrind_prov["kind"], "optional_spillover");
+    assert_eq!(valgrind_prov["group_name"], "Development Tools");
+}
+
+#[tokio::test]
+async fn api_view_populates_ungrouped_member_provenance() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "podman".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: true,
+            locked: false,
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    // Apply UngroupGroup directive
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "View",
+            "directive": "UngroupGroup",
+            "group_name": "Container Management"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Now GET /api/view — podman should have ungrouped_member provenance
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let provenances = json
+        .get("package_provenances")
+        .expect("package_provenances field");
+    let podman_prov = provenances
+        .get("podman.x86_64")
+        .expect("podman should have provenance after ungroup");
+    assert_eq!(podman_prov["kind"], "ungrouped_member");
+    assert_eq!(podman_prov["group_name"], "Container Management");
+
+    // Verify group render_state is ungrouped
+    let groups = json["package_groups"].as_array().unwrap();
+    let cm = groups
+        .iter()
+        .find(|g| g["name"] == "Container Management")
+        .unwrap();
+    assert_eq!(cm["render_state"], "ungrouped");
+}
+
+#[tokio::test]
+async fn api_ops_returns_timeline_entries_with_active_flag() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    // Build a snapshot with a package and a group
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "podman".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: true,
+            locked: false,
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    // Apply an op
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {
+                    "kind": "Package",
+                    "key": {"name": "podman", "arch": "x86_64"}
+                },
+                "include": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Apply a view directive
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "View",
+            "directive": "UngroupGroup",
+            "group_name": "Container Management"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/ops — should return timeline entries with active: true
+    let (status, json) = get_json(&app, "/api/ops").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let entries = json.as_array().expect("ops should be an array");
+    assert!(!entries.is_empty(), "timeline should have at least one entry");
+
+    // Verify the View directive entry has correct structure
+    let view_entry = entries.iter().find(|e| e["kind"] == "View");
+    assert!(view_entry.is_some(), "timeline should contain a View entry");
+    let view_entry = view_entry.unwrap();
+    assert_eq!(view_entry["directive"], "UngroupGroup");
+    assert_eq!(view_entry["group_name"], "Container Management");
+    assert_eq!(view_entry["active"], true);
+
+    // Undo the directive
+    let (status, _) = post_json(&app, "/api/undo", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/ops again — the entry should now have active: false
+    let (status, json) = get_json(&app, "/api/ops").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let entries = json.as_array().expect("ops should be an array");
+    let view_entry = entries.iter().find(|e| e["kind"] == "View").unwrap();
+
+    // Entry now inactive (in redo tail)
+    assert_eq!(view_entry["active"], false);
 }

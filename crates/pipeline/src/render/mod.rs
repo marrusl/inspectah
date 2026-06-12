@@ -51,7 +51,7 @@ pub fn render_all(
     configtree::write_env_files(snap, output_dir)?;
 
     // 1. Containerfile — COPY lines derived from materialized config tree roots
-    let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots));
+    let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots), None);
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;
 
     // 2. audit-report.html

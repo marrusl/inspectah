@@ -272,7 +272,7 @@ fn service_surface_agreement() {
     );
 
     // Cross-crate: render_containerfile on the normalized snapshot
-    let containerfile = render_containerfile(&normalized, None);
+    let containerfile = render_containerfile(&normalized, None, None);
 
     // systemctl enable must NOT mention dnf-makecache.service
     assert!(
@@ -298,7 +298,7 @@ fn preview_export_from_line_parity() {
     let session = RefineSession::new(snap);
 
     let projected = session.snapshot_projected();
-    let containerfile = render_containerfile(&projected, None);
+    let containerfile = render_containerfile(&projected, None, None);
 
     // FROM line must match target_image.image_ref
     assert!(

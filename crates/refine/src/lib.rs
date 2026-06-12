@@ -2,6 +2,7 @@ pub mod autosave;
 pub mod baseline_summary;
 pub mod classify;
 pub mod fleet;
+pub mod group_state;
 pub mod normalize;
 pub mod projection;
 pub mod repo_index;

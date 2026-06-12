@@ -4,6 +4,8 @@
 // so that contract snapshot tests and future consumers can reference them
 // without pulling in handler internals.
 
+use std::collections::HashMap;
+
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::types::{RefinedView, RepoProvenance, RepoTier, TriageTag};
@@ -135,6 +137,37 @@ pub struct TunedDecisionDto {
     pub locked: bool,
 }
 
+// -- Package group DTOs (group rendering for the web view) ------------------
+
+/// Summary of an installed DNF group and its rendering state.
+#[derive(Serialize, Clone, Debug)]
+pub struct GroupInfo {
+    pub name: String,
+    pub member_count: usize,
+    pub locked_count: usize,
+    pub optional_spillover_count: usize,
+    pub render_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degradation_reason: Option<String>,
+    pub members: Vec<GroupMemberInfo>,
+}
+
+/// A single member of an installed group.
+#[derive(Serialize, Clone, Debug)]
+pub struct GroupMemberInfo {
+    pub name: String,
+    pub locked: bool,
+    pub overlap_groups: Vec<String>,
+}
+
+/// Provenance of a package that appears in the individual zone due to
+/// group rendering decisions (spillover, ungrouped, or degraded).
+#[derive(Serialize, Clone, Debug)]
+pub struct PackageProvenance {
+    pub kind: String,
+    pub group_name: String,
+}
+
 #[derive(Serialize)]
 pub struct ViewResponse {
     #[serde(flatten)]
@@ -149,6 +182,11 @@ pub struct ViewResponse {
     pub sysctls: Vec<SysctlDecisionDto>,
     pub tuned: Vec<TunedDecisionDto>,
     pub users_groups_decisions: Vec<UserGroupDecision>,
+    pub package_groups: Vec<GroupInfo>,
+    /// Per-package provenance keyed by `"name.arch"` for packages that appear
+    /// in the individual zone due to group rendering decisions.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub package_provenances: HashMap<String, PackageProvenance>,
     pub session_is_sensitive: bool,
 }
 

@@ -722,7 +722,11 @@ mod tests {
         let text = output_text(&buf);
         let lines: Vec<&str> = text.lines().collect();
         // Parent line first, then child lines with real numbering.
-        assert_eq!(lines.len(), 3, "expected 3 lines (parent + 2 steps), got: {text}");
+        assert_eq!(
+            lines.len(),
+            3,
+            "expected 3 lines (parent + 2 steps), got: {text}"
+        );
         assert!(
             lines[0].contains("[01/11] RPM packages... ok"),
             "parent first: {}",

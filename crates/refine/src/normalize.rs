@@ -1,7 +1,19 @@
-use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket};
+use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, TriageReason};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use serde_json::Value;
+
+fn is_anaconda_classified(reason: &TriageReason) -> bool {
+    matches!(
+        reason,
+        TriageReason::PackagePlatformPlumbing
+            | TriageReason::PackageInstallerDefault
+            | TriageReason::PackageInstallerPromotedService
+            | TriageReason::PackageInstallerPromotedConfig
+            | TriageReason::PackageInstallerAmbiguous
+            | TriageReason::PackageInstallerEvidenceUnavailable
+    )
+}
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
@@ -117,6 +129,15 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         if i >= rpm.packages_added.len() {
             break;
         }
+
+        // Anaconda classifier already made tier-specific include/locked
+        // decisions — respect them instead of applying generic bucket defaults.
+        if is_anaconda_classified(&refined.triage.primary_reason) {
+            rpm.packages_added[i].include = refined.entry.include;
+            rpm.packages_added[i].locked = refined.entry.locked;
+            continue;
+        }
+
         let bucket = refined.triage.bucket();
         match bucket {
             TriageBucket::Baseline => {

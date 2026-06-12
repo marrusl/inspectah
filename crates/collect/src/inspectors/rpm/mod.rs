@@ -10,7 +10,9 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{
+    FileOwnershipEntry, InstalledGroup, PackageEntry, PackageState, RpmSection,
+};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
@@ -408,7 +410,10 @@ impl Inspector for RpmInspector {
             names
         });
 
-        // 8. Build warnings
+        // 8. Collect installed dnf groups
+        let installed_groups = collect_installed_groups(exec);
+
+        // 9. Build warnings
         let mut warnings = Vec::new();
         let no_baseline = ctx.baseline_data.is_none();
         if no_baseline {
@@ -428,7 +433,7 @@ impl Inspector for RpmInspector {
             });
         }
 
-        // 9. Build RpmSection
+        // 10. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -445,6 +450,7 @@ impl Inspector for RpmInspector {
             auto_packages: leaf_classification.auto_packages,
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
             baseline_suppressed,
+            installed_groups,
             ..Default::default()
         };
 
@@ -479,6 +485,76 @@ fn query_user_installed(exec: &dyn Executor) -> Option<HashSet<String>> {
         .filter(|l| !l.is_empty())
         .collect();
     Some(names)
+}
+
+fn collect_installed_groups(exec: &dyn Executor) -> Option<Vec<InstalledGroup>> {
+    let result = exec.run("env", &["LC_ALL=C", "dnf", "group", "list", "--installed"]);
+    if result.exit_code != 0 {
+        return None;
+    }
+
+    let mut group_names = Vec::new();
+    let mut in_installed = false;
+    for line in result.stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Installed") {
+            in_installed = true;
+            continue;
+        }
+        if trimmed.starts_with("Available") || trimmed.is_empty() {
+            if in_installed {
+                break;
+            }
+            continue;
+        }
+        if in_installed && !trimmed.is_empty() {
+            group_names.push(trimmed.to_string());
+        }
+    }
+
+    let mut groups = Vec::new();
+    for group_name in &group_names {
+        let info_result = exec.run("env", &["LC_ALL=C", "dnf", "group", "info", group_name]);
+        if info_result.exit_code != 0 {
+            continue;
+        }
+        let packages = parse_group_info_packages(&info_result.stdout);
+        groups.push(InstalledGroup {
+            name: group_name.clone(),
+            members: packages,
+            ..Default::default()
+        });
+    }
+
+    Some(groups)
+}
+
+fn parse_group_info_packages(stdout: &str) -> Vec<String> {
+    let mut packages = Vec::new();
+    let mut in_package_section = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Mandatory Packages:")
+            || trimmed.starts_with("Default Packages:")
+            || trimmed.starts_with("Optional Packages:")
+        {
+            in_package_section = true;
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.ends_with(':') {
+            in_package_section = false;
+            continue;
+        }
+        if in_package_section {
+            let name = trimmed.trim_start_matches("  ");
+            if !name.is_empty() {
+                packages.push(name.to_string());
+            }
+        }
+    }
+    packages.sort();
+    packages.dedup();
+    packages
 }
 
 /// Build a dependency graph from `dnf repoquery --requires --resolve --recursive --installed`.
@@ -2724,5 +2800,42 @@ mod tests {
             serde_json::from_value(tree.get("httpd.x86_64").unwrap().clone()).unwrap();
         assert!(httpd_deps.contains(&"apr.x86_64".to_string()));
         assert!(httpd_deps.contains(&"glibc.x86_64".to_string()));
+    }
+
+    #[test]
+    fn test_parse_group_info_packages() {
+        let stdout = "\
+Group: Container Management
+ Description: Tools for managing Linux containers
+ Mandatory Packages:
+   podman
+   buildah
+   skopeo
+ Default Packages:
+   containernetworking-plugins
+   crun
+ Optional Packages:
+   toolbox
+   udica
+";
+        let packages = parse_group_info_packages(stdout);
+        assert_eq!(
+            packages,
+            vec![
+                "buildah",
+                "containernetworking-plugins",
+                "crun",
+                "podman",
+                "skopeo",
+                "toolbox",
+                "udica",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_group_info_empty() {
+        let packages = parse_group_info_packages("");
+        assert!(packages.is_empty());
     }
 }

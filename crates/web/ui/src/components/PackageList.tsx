@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
+import { GroupRow } from "./GroupRow";
 import { RepoConflictPopover } from "./fleet/RepoConflictPopover";
-import type { RepoGroupInfo, RepoTier } from "../api/types";
+import type {
+  GroupInfo,
+  PackageProvenance,
+  RepoGroupInfo,
+  RepoTier,
+} from "../api/types";
 
 // --- Types ---
 
@@ -18,8 +24,18 @@ export interface PackageListProps {
   mode: "single" | "fleet";
   packages: PackageListPackage[];
   repoGroups: RepoGroupInfo[];
+  /** Groups from the view response (package_groups). */
+  packageGroups?: GroupInfo[];
+  /** Package provenance data for spillover badges. */
+  packageProvenances?: Record<string, PackageProvenance>;
+  /** Current section search text. Groups with matching members auto-expand. */
+  searchQuery?: string;
   onToggle: (packageName: string) => void;
   onRepoToggle: (sectionId: string) => void;
+  /** Called when a group's include toggle changes. */
+  onGroupToggle?: (groupName: string, include: boolean) => void;
+  /** Called when a group is ungrouped (dissolved into individual packages). */
+  onGroupUngroup?: (groupName: string) => void;
   onDismissedCountChange?: (count: number) => void;
   /** When toggled from false to true, clears all dismissed conflicts. */
   onRestoreDismissed?: boolean;
@@ -59,8 +75,13 @@ export function PackageList({
   mode,
   packages,
   repoGroups,
+  packageGroups,
+  packageProvenances,
+  searchQuery = "",
   onToggle,
   onRepoToggle: _onRepoToggle,
+  onGroupToggle,
+  onGroupUngroup,
   onDismissedCountChange,
   onRestoreDismissed,
 }: PackageListProps) {
@@ -69,6 +90,11 @@ export function PackageList({
     mode === "fleet" ? "right" : "left",
   );
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
+
+  // Track groups the user manually expanded (persists across search changes)
+  const [userExpandedGroups, setUserExpandedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Dismissed conflicts state (owned by PackageList)
   const [dismissedConflicts, setDismissedConflicts] = useState<Set<string>>(
@@ -214,11 +240,252 @@ export function PackageList({
     });
   }, []);
 
+  // All non-ungrouped groups are visible: renderable, excluded, and degraded
+  const visibleGroups = useMemo(
+    () =>
+      (packageGroups ?? []).filter((g) => g.render_state !== "ungrouped"),
+    [packageGroups],
+  );
+
+  // Build suppression set: renderable group members should not appear individually
+  const renderableMemberSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const group of visibleGroups) {
+      if (group.render_state === "renderable") {
+        for (const member of group.members) {
+          set.add(member.name);
+        }
+      }
+    }
+    return set;
+  }, [visibleGroups]);
+
+  // Compute which groups should be auto-expanded by search
+  const searchLower = searchQuery.trim().toLowerCase();
+  const autoExpandedGroups = useMemo(() => {
+    if (!searchLower) return new Set<string>();
+    const set = new Set<string>();
+    for (const group of visibleGroups) {
+      // Only auto-expand if search matches a member name, NOT the group name
+      const groupNameMatches = group.name.toLowerCase().includes(searchLower);
+      if (groupNameMatches) continue;
+
+      const hasMemberMatch = group.members.some((m) =>
+        m.name.toLowerCase().includes(searchLower),
+      );
+      if (hasMemberMatch) {
+        set.add(group.name);
+      }
+    }
+    return set;
+  }, [visibleGroups, searchLower]);
+
+  // Handler for user manual expand/collapse
+  const handleGroupExpandChange = useCallback(
+    (groupName: string, expanded: boolean) => {
+      setUserExpandedGroups((prev) => {
+        const next = new Set(prev);
+        if (expanded) {
+          next.add(groupName);
+        } else {
+          next.delete(groupName);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Remove renderable group members from the individual zone.
+  // Package names use canonical "name.arch" format (e.g. "httpd.x86_64")
+  // while GroupMemberInfo carries bare names (e.g. "httpd").  Extract the
+  // bare portion before the last dot for suppression comparison.
+  const individualPackages = useMemo(() => {
+    return sortedPackages.filter((pkg) => {
+      const bare = extractBareName(pkg.name);
+      return !renderableMemberSet.has(bare);
+    });
+  }, [sortedPackages, renderableMemberSet]);
+
+  // Filter individual packages by search
+  const filteredIndividualPackages = useMemo(() => {
+    if (!searchLower) return individualPackages;
+    return individualPackages.filter((pkg) =>
+      pkg.name.toLowerCase().includes(searchLower),
+    );
+  }, [individualPackages, searchLower]);
+
+  // Summary counts - unique packages across renderable groups (deduplicates overlaps)
+  const renderableOnly = useMemo(
+    () => visibleGroups.filter((g) => g.render_state === "renderable"),
+    [visibleGroups],
+  );
+  const groupPackageCount = useMemo(() => {
+    const uniquePackages = new Set<string>();
+    for (const group of renderableOnly) {
+      for (const member of group.members) {
+        uniquePackages.add(member.name);
+      }
+    }
+    return uniquePackages.size;
+  }, [renderableOnly]);
+  const optionalSpilloverCount = useMemo(
+    () =>
+      renderableOnly.reduce(
+        (sum, g) => sum + g.optional_spillover_count,
+        0,
+      ),
+    [renderableOnly],
+  );
+
+  // Filter groups by search: show group if its name or any member matches
+  const filteredGroups = useMemo(() => {
+    if (!searchLower) return visibleGroups;
+    return visibleGroups.filter((g) => {
+      if (g.name.toLowerCase().includes(searchLower)) return true;
+      return g.members.some((m) =>
+        m.name.toLowerCase().includes(searchLower),
+      );
+    });
+  }, [visibleGroups, searchLower]);
+
+  // Determine which groups and packages to display
+  const displayGroups = searchLower ? filteredGroups : visibleGroups;
+  const displayPackages = searchLower ? filteredIndividualPackages : individualPackages;
+
+  // Group toggle handler
+  const handleGroupToggle = useCallback(
+    (groupName: string, include: boolean) => {
+      onGroupToggle?.(groupName, include);
+    },
+    [onGroupToggle],
+  );
+
+  // Group ungroup handler
+  const handleGroupUngroup = useCallback(
+    (groupName: string) => {
+      onGroupUngroup?.(groupName);
+    },
+    [onGroupUngroup],
+  );
+
+  // Focus on first match when search changes
+  useEffect(() => {
+    if (!searchLower) return;
+
+    // Check if search matches a group name (focus group row, don't expand)
+    for (const group of displayGroups) {
+      if (group.name.toLowerCase().includes(searchLower)) {
+        const groupRow = document.querySelector(
+          `[data-testid="group-row-${CSS.escape(group.name)}"]`
+        ) as HTMLElement;
+        if (groupRow) {
+          groupRow.focus();
+          groupRow.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+          return;
+        }
+      }
+    }
+
+    // Check if search matches a member name (focus member row inside auto-expanded group)
+    for (const group of displayGroups) {
+      for (const member of group.members) {
+        if (member.name.toLowerCase().includes(searchLower)) {
+          const memberRow = document.querySelector(
+            `[data-testid="group-member-${CSS.escape(member.name)}"]`
+          ) as HTMLElement;
+          if (memberRow) {
+            memberRow.focus();
+            memberRow.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+            return;
+          }
+        }
+      }
+    }
+
+    // If no group/member match, try individual packages
+    for (const pkg of displayPackages) {
+      if (pkg.name.toLowerCase().includes(searchLower)) {
+        const row = document.querySelector(
+          `[data-testid="package-row-${CSS.escape(pkg.name)}"]`
+        ) as HTMLElement;
+        if (row) {
+          row.focus();
+          row.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+          return;
+        }
+      }
+    }
+  }, [searchLower, displayGroups, displayPackages]);
+
   // Labels by mode
   const rightLabel = mode === "single" ? "Repo" : "Prevalence";
 
+  const hasGroups = visibleGroups.length > 0;
+  const showGroupsZone = hasGroups && displayGroups.length > 0;
+
   return (
     <div data-testid="package-list">
+      {hasGroups && (
+        <div
+          data-testid="package-list-summary"
+          className="inspectah-package-list__summary"
+        >
+          {searchLower ? (
+            // Filtered view during search
+            <>
+              {displayGroups.length}{" "}
+              {displayGroups.length === 1 ? "group" : "groups"} &middot;{" "}
+              {displayPackages.length} individual{" "}
+              {displayPackages.length === 1 ? "package" : "packages"}
+            </>
+          ) : (
+            // Full view when not searching
+            <>
+              {visibleGroups.length}{" "}
+              {visibleGroups.length === 1 ? "group" : "groups"} (
+              {groupPackageCount}{" "}
+              {groupPackageCount === 1 ? "package" : "packages"}) &middot;{" "}
+              {individualPackages.length} individual{" "}
+              {individualPackages.length === 1 ? "package" : "packages"}
+              {optionalSpilloverCount > 0 && (
+                <>
+                  {" "}
+                  &middot; {optionalSpilloverCount} optional from groups
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {showGroupsZone && (
+        <div data-testid="groups-zone" role="list">
+          {displayGroups.map((group) => (
+            <GroupRow
+              key={group.name}
+              group={group}
+              searchQuery={searchQuery}
+              isIncluded={group.render_state !== "excluded"}
+              forceExpanded={autoExpandedGroups.has(group.name)}
+              defaultExpanded={userExpandedGroups.has(group.name)}
+              onExpandChange={handleGroupExpandChange}
+              onToggle={handleGroupToggle}
+              onUngroup={handleGroupUngroup}
+            />
+          ))}
+        </div>
+      )}
+
+      {hasGroups && (
+        <div
+          data-testid="zone-divider"
+          className="inspectah-package-list__zone-divider"
+        >
+          Individual Packages
+        </div>
+      )}
+
       <SortHeader
         leftLabel="Packages"
         rightLabel={rightLabel}
@@ -227,14 +494,15 @@ export function PackageList({
         onSort={handleSort}
       />
 
-      <div role="list">
-        {sortedPackages.map((pkg) => (
+      <div role="list" data-testid="individual-packages-zone">
+        {displayPackages.map((pkg) => (
           <PackageRow
             key={pkg.name}
             pkg={pkg}
             mode={mode}
             tier={repoTierMap.get(pkg.source_repo) ?? "distro"}
             dismissed={dismissedConflicts.has(pkg.name)}
+            packageProvenances={packageProvenances}
             onToggle={onToggle}
             onDismiss={handleDismiss}
           />
@@ -256,6 +524,7 @@ interface PackageRowProps {
   mode: "single" | "fleet";
   tier: RepoTier;
   dismissed: boolean;
+  packageProvenances?: Record<string, PackageProvenance>;
   onToggle: (name: string) => void;
   onDismiss: (key: string) => void;
 }
@@ -273,15 +542,43 @@ function PackageRow({
   mode,
   tier,
   dismissed,
+  packageProvenances,
   onToggle,
   onDismiss,
 }: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
   const checkboxRef = useRef<HTMLInputElement>(null);
 
+  // Look up provenance for this package.  The map is keyed by "name.arch"
+  // but PackageListPackage carries only name, so do a direct lookup with a
+  // dot-boundary guard to avoid "foo" matching "foobar.x86_64".
+  const provenance = packageProvenances
+    ? Object.entries(packageProvenances).find(
+        ([key]) =>
+          key === pkg.name ||
+          (key.startsWith(pkg.name) && key[pkg.name.length] === "."),
+      )?.[1]
+    : undefined;
+
+  // Generate badge text from provenance
+  const provenanceBadge = (() => {
+    if (!provenance) return null;
+    switch (provenance.kind) {
+      case "optional_spillover":
+        return `optional from "${provenance.group_name}"`;
+      case "ungrouped_member":
+        return `ungrouped from "${provenance.group_name}"`;
+      case "degraded_member":
+        return `from "${provenance.group_name}" (rendered individually)`;
+      default:
+        return null;
+    }
+  })();
+
   return (
     <div
       role="listitem"
+      tabIndex={-1}
       data-testid={`package-row-${pkg.name}`}
       className="inspectah-package-row"
     >
@@ -294,7 +591,17 @@ function PackageRow({
           aria-label={pkg.name}
           onChange={() => onToggle(pkg.name)}
         />
-        <span className="inspectah-package-row__name">{pkg.name}</span>
+        <div className="inspectah-package-row__name-container">
+          <span className="inspectah-package-row__name">{pkg.name}</span>
+          {provenanceBadge && (
+            <span
+              data-testid="provenance-badge"
+              className="inspectah-package-row__provenance-badge"
+            >
+              {provenanceBadge}
+            </span>
+          )}
+        </div>
         {mode === "fleet" && (
           <>
             <span
@@ -342,6 +649,29 @@ function PackageRow({
 }
 
 // --- Helpers ---
+
+/** Known RPM architecture suffixes used in canonical "name.arch" identifiers. */
+const RPM_ARCHES = new Set([
+  "x86_64",
+  "noarch",
+  "i686",
+  "aarch64",
+  "s390x",
+  "ppc64le",
+  "src",
+]);
+
+/**
+ * Extract the bare package name from a canonical "name.arch" string.
+ * Falls back to the full string when no recognised arch suffix is present,
+ * so plain bare names pass through unchanged.
+ */
+function extractBareName(nameArch: string): string {
+  const dotIdx = nameArch.lastIndexOf(".");
+  if (dotIdx === -1) return nameArch;
+  const suffix = nameArch.slice(dotIdx + 1);
+  return RPM_ARCHES.has(suffix) ? nameArch.slice(0, dotIdx) : nameArch;
+}
 
 function hasUndismissedConflict(
   pkg: PackageListPackage,

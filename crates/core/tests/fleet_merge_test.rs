@@ -2500,8 +2500,16 @@ fn test_fleet_leaf_intersection_host_absent_package() {
     assert_eq!(merged.leaf_packages, Some(vec!["vim.x86_64".into()]));
     // Both packages survive: vim (intersection leaf) + git (union leaf, partial)
     assert_eq!(merged.packages_added.len(), 2);
-    let vim = merged.packages_added.iter().find(|p| p.name == "vim").unwrap();
-    let git = merged.packages_added.iter().find(|p| p.name == "git").unwrap();
+    let vim = merged
+        .packages_added
+        .iter()
+        .find(|p| p.name == "vim")
+        .unwrap();
+    let git = merged
+        .packages_added
+        .iter()
+        .find(|p| p.name == "git")
+        .unwrap();
     assert!(vim.include, "intersection leaf vim must have include=true");
     assert!(!git.include, "partial leaf git must have include=false");
 }

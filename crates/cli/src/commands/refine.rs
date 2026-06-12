@@ -96,9 +96,9 @@ fn read_session_choice(tarball: &Path) -> anyhow::Result<SessionChoice> {
             eprintln!("Found saved session:");
             eprintln!(
                 "  Operations: {} ({} active, {} redo)",
-                state.ops.len(),
+                state.timeline.len(),
                 state.cursor,
-                state.ops.len() - state.cursor
+                state.timeline.len() - state.cursor
             );
             eprintln!("  Saved at: {}", state.saved_at);
             eprintln!();
@@ -122,7 +122,7 @@ fn read_fresh_confirm(tarball: &Path) -> anyhow::Result<bool> {
 
     match inspectah_refine::autosave::load_session(tarball) {
         Ok(Some(state)) => {
-            eprint!("Discard {} saved operations? [y/N]: ", state.ops.len());
+            eprint!("Discard {} saved operations? [y/N]: ", state.timeline.len());
             std::io::stderr().flush()?;
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
@@ -249,10 +249,10 @@ mod tests {
         session.set_tarball_path(tarball.clone());
         // Force a session file by saving directly
         let state = inspectah_refine::autosave::SessionState {
-            schema_version: 2,
+            schema_version: 3,
             tarball_path: tarball.clone(),
             tarball_hash: inspectah_refine::autosave::compute_tarball_hash(&tarball).unwrap(),
-            ops: vec![],
+            timeline: vec![],
             cursor: 0,
             saved_at: "2026-05-21T00:00:00Z".into(),
         };

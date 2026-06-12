@@ -143,6 +143,11 @@ pub enum ItemId {
     NonRpm {
         name: String,
     },
+
+    // Group section (new — group-aware rendering)
+    Group {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +192,34 @@ pub enum UserPasswordOp {
     Preserve {
         username: String,
     },
+}
+
+/// A single entry in the session timeline — either a refinement operation
+/// (mutates the projected snapshot) or a view directive (controls display
+/// without changing the data plane).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TimelineEntry {
+    Op(RefinementOp),
+    View(ViewDirective),
+}
+
+/// View-plane directives that control how data is displayed without
+/// modifying the projected snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "directive")]
+pub enum ViewDirective {
+    UngroupGroup { group_name: String },
+}
+
+/// Timeline entry with active flag for undo/redo UI.
+/// The `#[serde(flatten)]` ensures the JSON is flat:
+/// `{"kind":"Op","op":"SetInclude",...,"active":true}` instead of nested.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnotatedTimelineEntry {
+    #[serde(flatten)]
+    pub entry: TimelineEntry,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +317,12 @@ pub enum TriageReason {
     TunedCustomProfile,
     TunedUnusualState,
     SensitivePath,
+    PackagePlatformPlumbing,
+    PackageInstallerDefault,
+    PackageInstallerPromotedService,
+    PackageInstallerPromotedConfig,
+    PackageInstallerAmbiguous,
+    PackageInstallerEvidenceUnavailable,
     Custom(String),
 }
 
@@ -318,6 +357,20 @@ impl TriageReason {
             Self::TunedCustomProfile => "Custom profile in /etc/tuned/",
             Self::TunedUnusualState => "Tuned in unusual state",
             Self::SensitivePath => "Security-sensitive path \u{2014} verify before including",
+            Self::PackagePlatformPlumbing => "Platform plumbing \u{2014} excluded by boot chain",
+            Self::PackageInstallerDefault => {
+                "Installed by Anaconda, no active customization detected"
+            }
+            Self::PackageInstallerPromotedService => {
+                "Installer package with active service and config"
+            }
+            Self::PackageInstallerPromotedConfig => "Installer package with modified configuration",
+            Self::PackageInstallerAmbiguous => {
+                "Installed by Anaconda \u{2014} review for user intent"
+            }
+            Self::PackageInstallerEvidenceUnavailable => {
+                "Installer package \u{2014} evidence unavailable"
+            }
             Self::Custom(_) => "See detail",
         }
     }
@@ -712,5 +765,89 @@ mod item_id_tests {
         let json = serde_json::to_string(&id).unwrap();
         let back: ItemId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, back);
+    }
+
+    #[test]
+    fn item_id_group_round_trip() {
+        let id = ItemId::Group {
+            name: "Development Tools".into(),
+        };
+        let json = serde_json::to_string(&id).unwrap();
+        assert!(json.contains("Group"));
+        let back: ItemId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn test_anaconda_reason_serialization() {
+        let cases = vec![
+            (
+                TriageReason::PackagePlatformPlumbing,
+                "\"package_platform_plumbing\"",
+            ),
+            (
+                TriageReason::PackageInstallerDefault,
+                "\"package_installer_default\"",
+            ),
+            (
+                TriageReason::PackageInstallerPromotedService,
+                "\"package_installer_promoted_service\"",
+            ),
+            (
+                TriageReason::PackageInstallerPromotedConfig,
+                "\"package_installer_promoted_config\"",
+            ),
+            (
+                TriageReason::PackageInstallerAmbiguous,
+                "\"package_installer_ambiguous\"",
+            ),
+            (
+                TriageReason::PackageInstallerEvidenceUnavailable,
+                "\"package_installer_evidence_unavailable\"",
+            ),
+        ];
+        for (reason, expected_json) in cases {
+            let serialized = serde_json::to_string(&reason).unwrap();
+            assert_eq!(
+                serialized, expected_json,
+                "serialization mismatch for {:?}",
+                reason
+            );
+            let deserialized: TriageReason = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(
+                deserialized, reason,
+                "deserialization mismatch for {:?}",
+                reason
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod timeline_entry_tests {
+    use super::*;
+
+    #[test]
+    fn timeline_entry_op_round_trip() {
+        let entry = TimelineEntry::Op(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        });
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: TimelineEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn timeline_entry_view_round_trip() {
+        let entry = TimelineEntry::View(ViewDirective::UngroupGroup {
+            group_name: "Container Management".into(),
+        });
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: TimelineEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
     }
 }

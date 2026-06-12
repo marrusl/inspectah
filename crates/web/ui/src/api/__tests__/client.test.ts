@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   ViewResponse,
   ReferenceSection,
-  AnnotatedOp,
+  AnnotatedTimelineEntry,
   ChangesSummary,
   HealthResponse,
   RefinementOp,
@@ -131,6 +131,7 @@ const mockView: ViewResponse = {
   sysctls: [],
   tuned: [],
   users_groups_decisions: [],
+  package_groups: [],
   session_is_sensitive: false,
 };
 
@@ -150,18 +151,24 @@ const mockSections: ReferenceSection[] = [
   },
 ];
 
-const mockOps: AnnotatedOp[] = [
+// Mock data for /api/ops endpoint (AnnotatedTimelineEntry[])
+const mockOpsResponse: AnnotatedTimelineEntry[] = [
   {
-    op: "ExcludePackage",
+    kind: "Op" as const,
+    op: "ExcludePackage" as const,
     target: { name: "nano", arch: "x86_64" },
     active: true,
   },
   {
-    op: "IncludePackage",
+    kind: "Op" as const,
+    op: "IncludePackage" as const,
     target: { name: "nano", arch: "x86_64" },
     active: false,
   },
 ];
+
+// fetchOps now returns AnnotatedTimelineEntry[] directly (no filtering)
+const mockOps = mockOpsResponse;
 
 const mockChanges: ChangesSummary = {
   packages_included: [],
@@ -273,8 +280,8 @@ describe("GET endpoints", () => {
   });
 
   describe("fetchOps", () => {
-    it("sends GET to /api/ops and returns AnnotatedOp[]", async () => {
-      mockFetchSuccess(mockOps);
+    it("sends GET to /api/ops and returns AnnotatedTimelineEntry[]", async () => {
+      mockFetchSuccess(mockOpsResponse);
       const result = await fetchOps();
       const { url, init } = lastFetchCall();
       expect(url).toBe("/api/ops");
@@ -327,7 +334,8 @@ describe("POST mutation endpoints", () => {
       expect(init.headers).toEqual(
         expect.objectContaining({ "Content-Type": "application/json" }),
       );
-      expect(JSON.parse(init.body as string)).toEqual(op);
+      // applyOp wraps the RefinementOp in a TimelineEntry
+      expect(JSON.parse(init.body as string)).toEqual({ kind: "Op", ...op });
       expect(result).toEqual(mockView);
     });
 
@@ -340,6 +348,7 @@ describe("POST mutation endpoints", () => {
       await applyOp(op);
       const { init } = lastFetchCall();
       const body = JSON.parse(init.body as string);
+      expect(body.kind).toBe("Op");
       expect(body.op).toBe("ExcludeConfig");
       expect(body.target.path).toBe("/etc/httpd/conf/httpd.conf");
     });

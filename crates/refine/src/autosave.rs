@@ -1,4 +1,4 @@
-use crate::types::{ContentHash, RefinementOp};
+use crate::types::{ContentHash, RefinementOp, TimelineEntry};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -10,7 +10,7 @@ pub struct SessionState {
     pub schema_version: u32,
     pub tarball_path: PathBuf,
     pub tarball_hash: ContentHash,
-    pub ops: Vec<RefinementOp>,
+    pub timeline: Vec<TimelineEntry>,
     pub cursor: usize,
     pub saved_at: String,
 }
@@ -65,8 +65,8 @@ pub fn save_session(state: &SessionState, tarball: &Path) -> Result<(), std::io:
 
 /// Load session state from the sidecar file next to the tarball.
 ///
-/// Only the current v2 (SetInclude) format is supported. Users with
-/// older session files should re-scan.
+/// Supports schema v2 (ops-only) and v3 (full timeline with view directives).
+/// v2 files are migrated to v3 on load by wrapping each op in `TimelineEntry::Op`.
 ///
 /// Returns `Ok(None)` if no session file exists. Returns an error if the
 /// file exists but has an unsupported schema version or is malformed.
@@ -87,11 +87,40 @@ pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std:
 
     match version {
         2 => {
+            // v2 stores ops directly; migrate to v3 by wrapping in TimelineEntry::Op.
+            let v2: SessionStateV2 = serde_json::from_str(&contents)?;
+            let timeline = v2.ops.into_iter().map(TimelineEntry::Op).collect();
+            Ok(Some(SessionState {
+                schema_version: 3,
+                tarball_path: v2.tarball_path,
+                tarball_hash: v2.tarball_hash,
+                timeline,
+                cursor: v2.cursor,
+                saved_at: v2.saved_at,
+            }))
+        }
+        3 => {
             let state: SessionState = serde_json::from_str(&contents)?;
             Ok(Some(state))
         }
-        other => Err(format!("unsupported session schema version: {other} (expected 2)").into()),
+        other => Err(format!(
+            "unsupported session schema version: {other} (expected 2 or 3)"
+        )
+        .into()),
     }
+}
+
+/// Legacy v2 session format for migration. Only used during deserialization
+/// of v2 sidecar files.
+#[derive(Deserialize)]
+struct SessionStateV2 {
+    #[allow(dead_code)]
+    schema_version: u32,
+    tarball_path: PathBuf,
+    tarball_hash: ContentHash,
+    ops: Vec<RefinementOp>,
+    cursor: usize,
+    saved_at: String,
 }
 
 /// Compute the SHA-256 hash of a tarball file.
@@ -115,7 +144,7 @@ pub fn compute_tarball_hash(tarball: &Path) -> Result<ContentHash, std::io::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ItemId;
+    use crate::types::{ItemId, ViewDirective};
 
     /// Helper: write a tiny tarball so compute_tarball_hash works.
     fn write_dummy_tarball(path: &Path) {
@@ -162,12 +191,13 @@ mod tests {
         .unwrap();
 
         let loaded = load_session(&tarball).unwrap().unwrap();
-        assert_eq!(loaded.schema_version, 2);
-        assert_eq!(loaded.ops.len(), 1);
+        // v2 files are migrated to v3 on load
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.timeline.len(), 1);
         assert_eq!(loaded.cursor, 1);
 
-        match &loaded.ops[0] {
-            RefinementOp::SetInclude { item_id, include } => {
+        match &loaded.timeline[0] {
+            TimelineEntry::Op(RefinementOp::SetInclude { item_id, include }) => {
                 assert!(!include);
                 match item_id {
                     ItemId::Package { name, arch } => {
@@ -177,35 +207,35 @@ mod tests {
                     other => panic!("expected Package, got {:?}", other),
                 }
             }
-            other => panic!("expected SetInclude, got {:?}", other),
+            other => panic!("expected TimelineEntry::Op(SetInclude), got {:?}", other),
         }
     }
 
     #[test]
-    fn v2_save_roundtrips() {
+    fn v3_save_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
         let tarball = dir.path().join("test.tar.gz");
         write_dummy_tarball(&tarball);
         let hash = compute_tarball_hash(&tarball).unwrap();
 
         let state = SessionState {
-            schema_version: 2,
+            schema_version: 3,
             tarball_path: tarball.clone(),
             tarball_hash: hash,
-            ops: vec![
-                RefinementOp::SetInclude {
+            timeline: vec![
+                TimelineEntry::Op(RefinementOp::SetInclude {
                     item_id: ItemId::Package {
                         name: "httpd".into(),
                         arch: "x86_64".into(),
                     },
                     include: false,
-                },
-                RefinementOp::SetInclude {
+                }),
+                TimelineEntry::Op(RefinementOp::SetInclude {
                     item_id: ItemId::Config {
                         path: "/etc/httpd/httpd.conf".into(),
                     },
                     include: true,
-                },
+                }),
             ],
             cursor: 1,
             saved_at: "300s".into(),
@@ -214,10 +244,10 @@ mod tests {
         save_session(&state, &tarball).unwrap();
         let loaded = load_session(&tarball).unwrap().unwrap();
 
-        assert_eq!(loaded.schema_version, 2);
-        assert_eq!(loaded.ops.len(), 2);
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.timeline.len(), 2);
         assert_eq!(loaded.cursor, 1);
-        assert_eq!(loaded.ops, state.ops);
+        assert_eq!(loaded.timeline, state.timeline);
     }
 
     #[test]
@@ -260,7 +290,7 @@ mod tests {
             "schema_version": 99,
             "tarball_path": tarball.to_string_lossy(),
             "tarball_hash": hash.as_str(),
-            "ops": [],
+            "timeline": [],
             "cursor": 0,
             "saved_at": "0s"
         });
@@ -274,5 +304,129 @@ mod tests {
         let result = load_session(&tarball);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("unsupported"));
+    }
+
+    #[test]
+    fn v3_session_round_trips_with_timeline_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        // Create a session with both Op and View entries
+        let state = SessionState {
+            schema_version: 3,
+            tarball_path: tarball.clone(),
+            tarball_hash: hash,
+            timeline: vec![
+                TimelineEntry::Op(RefinementOp::SetInclude {
+                    item_id: ItemId::Package {
+                        name: "httpd".into(),
+                        arch: "x86_64".into(),
+                    },
+                    include: false,
+                }),
+                TimelineEntry::View(ViewDirective::UngroupGroup {
+                    group_name: "web-server".into(),
+                }),
+                TimelineEntry::Op(RefinementOp::SetInclude {
+                    item_id: ItemId::Config {
+                        path: "/etc/httpd/httpd.conf".into(),
+                    },
+                    include: true,
+                }),
+            ],
+            cursor: 2,
+            saved_at: "400s".into(),
+        };
+
+        save_session(&state, &tarball).unwrap();
+        let loaded = load_session(&tarball).unwrap().unwrap();
+
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.timeline.len(), 3);
+        assert_eq!(loaded.cursor, 2);
+        assert_eq!(loaded.timeline, state.timeline);
+
+        // Verify the View directive survived
+        match &loaded.timeline[1] {
+            TimelineEntry::View(ViewDirective::UngroupGroup { group_name }) => {
+                assert_eq!(group_name, "web-server");
+            }
+            other => panic!("expected TimelineEntry::View(UngroupGroup), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v2_session_migrates_to_v3_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_dummy_tarball(&tarball);
+        let hash = compute_tarball_hash(&tarball).unwrap();
+
+        // Write a v2-format session file manually (with "ops" field)
+        let v2_json = serde_json::json!({
+            "schema_version": 2,
+            "tarball_path": tarball.to_string_lossy(),
+            "tarball_hash": hash.as_str(),
+            "ops": [
+                {
+                    "op": "SetInclude",
+                    "target": {
+                        "item_id": {"kind": "Package", "key": {"name": "httpd", "arch": "x86_64"}},
+                        "include": false
+                    }
+                },
+                {
+                    "op": "SetInclude",
+                    "target": {
+                        "item_id": {"kind": "Config", "key": {"path": "/etc/sshd_config"}},
+                        "include": true
+                    }
+                }
+            ],
+            "cursor": 2,
+            "saved_at": "500s"
+        });
+        let session_path = session_file_path(&tarball);
+        std::fs::write(
+            &session_path,
+            serde_json::to_string_pretty(&v2_json).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_session(&tarball).unwrap().unwrap();
+
+        // Verify migration to v3
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.timeline.len(), 2);
+        assert_eq!(loaded.cursor, 2);
+
+        // Ops should be wrapped in TimelineEntry::Op
+        match &loaded.timeline[0] {
+            TimelineEntry::Op(RefinementOp::SetInclude { item_id, include }) => {
+                assert!(!include);
+                match item_id {
+                    ItemId::Package { name, arch } => {
+                        assert_eq!(name, "httpd");
+                        assert_eq!(arch, "x86_64");
+                    }
+                    other => panic!("expected Package, got {:?}", other),
+                }
+            }
+            other => panic!("expected TimelineEntry::Op(SetInclude), got {:?}", other),
+        }
+        match &loaded.timeline[1] {
+            TimelineEntry::Op(RefinementOp::SetInclude { item_id, include }) => {
+                assert!(include);
+                match item_id {
+                    ItemId::Config { path } => {
+                        assert_eq!(path, "/etc/sshd_config");
+                    }
+                    other => panic!("expected Config, got {:?}", other),
+                }
+            }
+            other => panic!("expected TimelineEntry::Op(SetInclude), got {:?}", other),
+        }
     }
 }

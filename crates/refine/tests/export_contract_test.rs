@@ -3,10 +3,10 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{ItemId, RefinementOp};
+use inspectah_refine::types::{ItemId, RefinementOp, ViewDirective};
 use std::collections::{BTreeSet, HashMap};
 
 fn test_snapshot() -> InspectionSnapshot {
@@ -82,10 +82,7 @@ fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
         let entry = entry.unwrap();
         if entry.header().entry_type() == tar::EntryType::Regular {
             let raw = entry.path().unwrap().to_string_lossy().to_string();
-            let stripped = raw
-                .strip_prefix(&prefix_slash)
-                .unwrap_or(&raw)
-                .to_string();
+            let stripped = raw.strip_prefix(&prefix_slash).unwrap_or(&raw).to_string();
             files.insert(stripped);
         }
     }
@@ -502,5 +499,120 @@ fn export_includes_user_artifacts() {
     assert!(
         actual.iter().any(|f| f.starts_with("users/")),
         "export must contain users/ SSH key directory, got: {actual:?}"
+    );
+}
+
+// ── Task 16a: Preview/export parity with groups and UngroupGroup ──
+
+#[test]
+fn preview_and_export_produce_same_containerfile_with_groups() {
+    // Build a snapshot with groups and packages, then apply an UngroupGroup
+    // directive. Both preview (session.view().containerfile_preview) and
+    // export (tarball Containerfile) must produce identical output.
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "podman".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "buildah".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into(), "buildah".into()],
+            optional_installed: vec![],
+        }]),
+        baseline_package_names: Some(vec![]),
+        ..Default::default()
+    });
+    snap.redaction_state = Some(RedactionState::FullyRedacted {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc123".into(),
+    });
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+
+    let mut session = RefineSession::new(snap);
+
+    // Apply UngroupGroup directive — changes rendering from group install
+    // to individual package installs with ungrouped provenance comment.
+    session
+        .apply_directive(ViewDirective::UngroupGroup {
+            group_name: "Container Management".into(),
+        })
+        .unwrap();
+
+    // Verify render context reflects the UngroupGroup directive.
+    assert!(
+        session.render_context().is_ungrouped("Container Management"),
+        "render_context must show Ungrouped after UngroupGroup directive"
+    );
+
+    // Capture the preview Containerfile — both preview and export must use
+    // the SAME render path. Note: recompute_view() builds the render_context
+    // AFTER computing the preview, so the preview may not include group-aware
+    // provenance comments. This is a known ordering issue tracked separately.
+    // The parity test below verifies that whatever the preview shows, export
+    // produces the exact same output.
+    let preview = session.view().containerfile_preview.clone();
+
+    // Sanity: packages must render (include=true survived normalization)
+    assert!(
+        preview.contains("podman"),
+        "preview must contain podman"
+    );
+    assert!(
+        preview.contains("buildah"),
+        "preview must contain buildah"
+    );
+
+    // Export and extract the Containerfile
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let extract_dir = tempdir.path().join("extract");
+    std::fs::create_dir(&extract_dir).unwrap();
+    let file = std::fs::File::open(&tarball_path).unwrap();
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    archive.unpack(&extract_dir).unwrap();
+
+    let cf_path = walkdir::WalkDir::new(&extract_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name() == "Containerfile")
+        .expect("Containerfile must exist in export");
+
+    let exported = std::fs::read_to_string(cf_path.path()).unwrap();
+
+    assert_eq!(
+        preview, exported,
+        "preview and exported Containerfile must be byte-identical (with groups + UngroupGroup)"
     );
 }

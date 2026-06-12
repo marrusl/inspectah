@@ -80,6 +80,7 @@ const MOCK_VIEW: ViewResponse = {
   sysctls: [],
   tuned: [],
   users_groups_decisions: [],
+  package_groups: [],
   session_is_sensitive: false,
 };
 

@@ -177,6 +177,12 @@ export type TriageReason =
   | "tuned_custom_profile"
   | "tuned_unusual_state"
   | "sensitive_path"
+  | "package_platform_plumbing"
+  | "package_installer_default"
+  | "package_installer_promoted_service"
+  | "package_installer_promoted_config"
+  | "package_installer_ambiguous"
+  | "package_installer_evidence_unavailable"
   | { custom: string };
 
 export interface TriageTag {
@@ -254,6 +260,28 @@ export type RefinementOp =
   | { op: "IncludeConfig"; target: { path: string } }
   | { op: "ExcludeRepo"; target: { section_id: string } }
   | { op: "IncludeRepo"; target: { section_id: string } };
+
+/** Rust: #[serde(tag = "directive")] */
+export type ViewDirective = {
+  directive: "UngroupGroup";
+  group_name: string;
+};
+
+/**
+ * Rust: #[serde(tag = "kind")]
+ * A single timeline entry sent to /api/op — either a refinement op or a view directive.
+ */
+export type TimelineEntry =
+  | ({ kind: "Op" } & RefinementOp)
+  | ({ kind: "View" } & ViewDirective);
+
+/**
+ * Flat shape returned by /api/ops history (Rust uses #[serde(flatten)]).
+ * Each entry carries an `active` flag indicating whether it is ahead of the cursor.
+ */
+export type AnnotatedTimelineEntry =
+  | ({ kind: "Op"; active: boolean } & RefinementOp)
+  | ({ kind: "View"; active: boolean } & ViewDirective);
 
 /** Rust: #[serde(tag = "choice")] */
 export type UserPasswordOp =
@@ -428,6 +456,32 @@ export interface FlatpakDecisionDto {
   lifecycle: string;
 }
 
+// --- Package group types (inspectah-web/src/web_types.rs) ---
+
+/** A single member of an installed DNF group. */
+export interface GroupMemberInfo {
+  name: string;
+  locked: boolean;
+  overlap_groups: string[];
+}
+
+/** Summary of an installed DNF group and its rendering state. */
+export interface GroupInfo {
+  name: string;
+  member_count: number;
+  locked_count: number;
+  optional_spillover_count: number;
+  render_state: "renderable" | "excluded" | "ungrouped" | "degraded";
+  degradation_reason: string | null;
+  members: GroupMemberInfo[];
+}
+
+/** Provenance of a package in the individual zone due to group rendering. */
+export interface PackageProvenance {
+  kind: "optional_spillover" | "ungrouped_member" | "degraded_member";
+  group_name: string;
+}
+
 /** View endpoint response: RefinedView + repo_groups. */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
@@ -439,6 +493,8 @@ export interface ViewResponse extends RefinedView {
   sysctls: SysctlDecisionDto[];
   tuned: TunedDecisionDto[];
   users_groups_decisions: UserDecision[];
+  package_groups: GroupInfo[];
+  package_provenances?: Record<string, PackageProvenance>;
   session_is_sensitive: boolean;
 }
 
@@ -592,6 +648,11 @@ export interface ItemIdNonRpm {
   key: { name: string };
 }
 
+export interface ItemIdGroup {
+  kind: "Group";
+  key: { name: string };
+}
+
 export type ItemId =
   | ItemIdPackage
   | ItemIdConfig
@@ -614,7 +675,8 @@ export type ItemId =
   | ItemIdGeneratedTimer
   | ItemIdSelinuxPort
   | ItemIdFstab
-  | ItemIdNonRpm;
+  | ItemIdNonRpm
+  | ItemIdGroup;
 
 export interface ActionableVariantItem {
   item_id: ItemId;

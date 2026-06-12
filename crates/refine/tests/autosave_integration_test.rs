@@ -163,14 +163,14 @@ fn session_file_updated_after_undo() {
     // Verify cursor is 1 after apply
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(state.cursor, 1);
-    assert_eq!(state.ops.len(), 1);
+    assert_eq!(state.timeline.len(), 1);
 
     session.undo().unwrap();
 
     // After undo, cursor should be 0 but ops still present
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(state.cursor, 0);
-    assert_eq!(state.ops.len(), 1);
+    assert_eq!(state.timeline.len(), 1);
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn session_file_updated_after_redo() {
 
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(state.cursor, 1);
-    assert_eq!(state.ops.len(), 1);
+    assert_eq!(state.timeline.len(), 1);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn replay_from_session_reconstructs_cursor() {
 
     // Persisted state should have 2 ops, cursor at 1
     let state = load_session(&tarball).unwrap().unwrap();
-    assert_eq!(state.ops.len(), 2);
+    assert_eq!(state.timeline.len(), 2);
     assert_eq!(state.cursor, 1);
 }
 
@@ -243,7 +243,7 @@ fn tarball_path_round_trips_through_session_state() {
 
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(state.tarball_path, tarball);
-    assert_eq!(state.schema_version, 2);
+    assert_eq!(state.schema_version, 3);
 }
 
 #[test]
@@ -327,7 +327,7 @@ fn resume_preserves_redo_tail() {
 
     // Verify persisted state
     let state = load_session(&tarball).unwrap().unwrap();
-    assert_eq!(state.ops.len(), 3, "sidecar must have all 3 ops");
+    assert_eq!(state.timeline.len(), 3, "sidecar must have all 3 ops");
     assert_eq!(state.cursor, 2, "sidecar cursor must be 2");
 
     // Drop session and resume
@@ -371,7 +371,7 @@ fn resume_does_not_truncate_redo_on_autosave() {
     // all 3 ops in the sidecar (not truncate to cursor)
     let state = load_session(&tarball).unwrap().unwrap();
     assert_eq!(
-        state.ops.len(),
+        state.timeline.len(),
         3,
         "sidecar after resume must still have all 3 ops (redo tail preserved)"
     );

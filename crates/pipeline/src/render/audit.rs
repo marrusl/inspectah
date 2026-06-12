@@ -9,6 +9,45 @@ use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
 
+/// Finds packages that appear in multiple groups.
+/// Returns a map from package name to the list of group names containing it.
+fn find_package_overlaps(
+    groups: &[inspectah_core::types::rpm::InstalledGroup],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    use std::collections::{BTreeMap, HashMap};
+
+    // Map package name -> list of groups containing it
+    let mut pkg_to_groups: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for group in groups {
+        for member in &group.members {
+            pkg_to_groups
+                .entry(member.as_str())
+                .or_default()
+                .push(group.name.as_str());
+        }
+        for optional in &group.optional_installed {
+            pkg_to_groups
+                .entry(optional.as_str())
+                .or_default()
+                .push(group.name.as_str());
+        }
+    }
+
+    // Filter to only packages that appear in 2+ groups, sorted by package name
+    let mut overlaps = BTreeMap::new();
+    for (pkg, groups_list) in pkg_to_groups {
+        if groups_list.len() >= 2 {
+            let mut sorted_groups: Vec<String> =
+                groups_list.iter().map(|s| s.to_string()).collect();
+            sorted_groups.sort();
+            overlaps.insert(pkg.to_string(), sorted_groups);
+        }
+    }
+
+    overlaps
+}
+
 /// Render the audit report markdown from a snapshot.
 pub fn render_audit(snap: &InspectionSnapshot) -> String {
     let mut lines = Vec::new();
@@ -198,6 +237,25 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 ));
             }
             lines.push(String::new());
+        }
+
+        // Group overlap annotations
+        if let Some(ref groups) = rpm.installed_groups {
+            let overlaps = find_package_overlaps(groups);
+            if !overlaps.is_empty() {
+                for (pkg_name, group_names) in overlaps {
+                    let group_list = group_names
+                        .iter()
+                        .map(|g| format!("'{}'", g))
+                        .collect::<Vec<_>>()
+                        .join(" and ");
+                    lines.push(format!(
+                        "**Note:** `{}` appears in both {} — DNF handles this correctly, no action needed.",
+                        pkg_name, group_list
+                    ));
+                }
+                lines.push(String::new());
+            }
         }
 
         // Version changes
@@ -998,6 +1056,101 @@ mod tests {
         assert!(
             !md.contains("Users & Groups"),
             "must not render Users & Groups when all users are excluded"
+        );
+    }
+
+    #[test]
+    fn test_audit_package_overlap_annotations() {
+        use inspectah_core::types::rpm::InstalledGroup;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
+            installed_groups: Some(vec![
+                InstalledGroup {
+                    name: "Web Server".into(),
+                    members: vec!["httpd".into(), "mod_ssl".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Development Tools".into(),
+                    members: vec!["gcc".into(), "httpd".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Base".into(),
+                    members: vec!["bash".into()],
+                    optional_installed: vec!["httpd".into()],
+                },
+            ]),
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+
+        // httpd appears in all three groups (Web Server members, Development Tools members, Base optional)
+        assert!(
+            md.contains("`httpd` appears in both"),
+            "must annotate httpd overlap"
+        );
+        assert!(
+            md.contains("'Base'") && md.contains("'Development Tools'") && md.contains("'Web Server'"),
+            "must list all groups containing httpd"
+        );
+        assert!(
+            md.contains("DNF handles this correctly, no action needed"),
+            "must include reassurance message"
+        );
+
+        // mod_ssl and gcc only appear in one group each — no overlap
+        assert!(
+            !md.contains("`mod_ssl` appears in both"),
+            "must not annotate mod_ssl (no overlap)"
+        );
+        assert!(
+            !md.contains("`gcc` appears in both"),
+            "must not annotate gcc (no overlap)"
+        );
+    }
+
+    #[test]
+    fn test_audit_no_overlap_annotations_when_no_overlaps() {
+        use inspectah_core::types::rpm::InstalledGroup;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
+            installed_groups: Some(vec![
+                InstalledGroup {
+                    name: "Web Server".into(),
+                    members: vec!["httpd".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Development Tools".into(),
+                    members: vec!["gcc".into()],
+                    optional_installed: vec![],
+                },
+            ]),
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+
+        // No overlaps — no annotations
+        assert!(
+            !md.contains("appears in both"),
+            "must not show overlap annotations when no overlaps exist"
         );
     }
 }

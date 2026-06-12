@@ -134,7 +134,7 @@ fn snapshot_all_sections() -> InspectionSnapshot {
 #[test]
 fn services_in_containerfile() {
     let snap = snapshot_with_services();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("systemctl enable") && output.contains("httpd.service"),
@@ -221,7 +221,7 @@ fn storage_in_kickstart() {
 #[test]
 fn storage_not_in_containerfile() {
     let snap = snapshot_with_storage();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     // Storage devices and mount points must NOT appear in the Containerfile
     assert!(
@@ -252,7 +252,7 @@ fn storage_not_in_containerfile() {
 #[test]
 fn kernelboot_sysctl_in_containerfile() {
     let snap = snapshot_with_kernelboot();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
 
     assert!(
         output.contains("Kernel and Boot Configuration") || output.contains("Kernel Arguments"),

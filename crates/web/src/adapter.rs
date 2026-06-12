@@ -7,8 +7,10 @@
 // Per-section web adapters convert typed domain data from
 // `ReferenceProjection` into `ReferenceSection`/`ContextItem` for the wire.
 
+use std::collections::HashMap;
 use std::path::Path;
 
+use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
@@ -19,9 +21,9 @@ use inspectah_refine::projection::{
 use inspectah_refine::session::RefineSession;
 
 use crate::web_types::{
-    ContextItem, ContextSubsection, DropInDecisionDto, FlatpakDecisionDto, QuadletDecisionDto,
-    ReferenceSection, RepoGroupInfo, ServiceDecisionDto, SysctlDecisionDto, TunedDecisionDto,
-    VersionChangeEntry, ViewResponse,
+    ContextItem, ContextSubsection, DropInDecisionDto, FlatpakDecisionDto, GroupInfo,
+    GroupMemberInfo, PackageProvenance, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
+    ServiceDecisionDto, SysctlDecisionDto, TunedDecisionDto, VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -151,6 +153,133 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .collect();
 
+    // -- Package groups and provenance ----------------------------------------
+
+    let render_ctx = session.render_context();
+    let installed_groups = session
+        .snapshot()
+        .rpm
+        .as_ref()
+        .and_then(|r| r.installed_groups.as_deref())
+        .unwrap_or(&[]);
+
+    let package_groups: Vec<GroupInfo> = installed_groups
+        .iter()
+        .map(|group| {
+            let render_state = render_ctx
+                .group_states
+                .get(&group.name)
+                .cloned()
+                .unwrap_or(GroupRenderState::Renderable);
+
+            let (state_str, degradation_reason) = match &render_state {
+                GroupRenderState::Renderable => ("renderable".to_string(), None),
+                GroupRenderState::Excluded => ("excluded".to_string(), None),
+                GroupRenderState::Ungrouped => ("ungrouped".to_string(), None),
+                GroupRenderState::Degraded { reason } => {
+                    let reason_str = match reason {
+                        DegradationReason::MemberExcluded => "member_excluded",
+                        DegradationReason::MemberOverridden => "member_overridden",
+                        DegradationReason::MultilibConflict => "multilib_conflict",
+                    };
+                    ("degraded".to_string(), Some(reason_str.to_string()))
+                }
+            };
+
+            // Count locked members by cross-referencing against projected packages
+            let projected = session.snapshot_projected();
+            let projected_pkgs = projected
+                .rpm
+                .as_ref()
+                .map(|r| &r.packages_added[..])
+                .unwrap_or(&[]);
+
+            let locked_count = group
+                .members
+                .iter()
+                .filter(|m| projected_pkgs.iter().any(|p| p.name == **m && p.locked))
+                .count();
+
+            // Build member list with overlap detection
+            let members: Vec<GroupMemberInfo> = group
+                .members
+                .iter()
+                .map(|member_name| {
+                    let locked = projected_pkgs
+                        .iter()
+                        .any(|p| p.name == *member_name && p.locked);
+                    let overlap_groups: Vec<String> = installed_groups
+                        .iter()
+                        .filter(|other| other.name != group.name)
+                        .filter(|other| other.members.contains(member_name))
+                        .map(|other| other.name.clone())
+                        .collect();
+                    GroupMemberInfo {
+                        name: member_name.clone(),
+                        locked,
+                        overlap_groups,
+                    }
+                })
+                .collect();
+
+            GroupInfo {
+                name: group.name.clone(),
+                member_count: group.members.len(),
+                locked_count,
+                optional_spillover_count: group.optional_installed.len(),
+                render_state: state_str,
+                degradation_reason,
+                members,
+            }
+        })
+        .collect();
+
+    // Build per-package provenance map. For each package in the view,
+    // check if it belongs to any group in a non-renderable state.
+    let mut package_provenances: HashMap<String, PackageProvenance> = HashMap::new();
+
+    for pkg in &view.packages {
+        let pkg_name = &pkg.entry.name;
+        let pkg_key = format!("{}.{}", pkg.entry.name, pkg.entry.arch);
+
+        // Check optional_installed membership (any group, any render state)
+        if let Some(group) = installed_groups
+            .iter()
+            .find(|g| g.optional_installed.contains(pkg_name))
+        {
+            package_provenances.insert(
+                pkg_key,
+                PackageProvenance {
+                    kind: "optional_spillover".to_string(),
+                    group_name: group.name.clone(),
+                },
+            );
+            continue;
+        }
+
+        // Check ungrouped/degraded membership
+        if let Some(group) = installed_groups.iter().find(|g| {
+            g.members.contains(pkg_name)
+                && matches!(
+                    render_ctx.group_states.get(&g.name),
+                    Some(GroupRenderState::Ungrouped) | Some(GroupRenderState::Degraded { .. })
+                )
+        }) {
+            let kind = if render_ctx.is_ungrouped(&group.name) {
+                "ungrouped_member"
+            } else {
+                "degraded_member"
+            };
+            package_provenances.insert(
+                pkg_key,
+                PackageProvenance {
+                    kind: kind.to_string(),
+                    group_name: group.name.clone(),
+                },
+            );
+        }
+    }
+
     ViewResponse {
         view,
         repo_groups,
@@ -163,6 +292,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         sysctls,
         tuned,
         users_groups_decisions: decisions.users_groups.clone(),
+        package_groups,
+        package_provenances,
         session_is_sensitive: decisions.is_sensitive,
     }
 }
@@ -1003,6 +1134,9 @@ mod tests {
         assert!(json.get("generation").is_some());
         assert!(json.get("service_states").is_some());
         assert!(json.get("repo_groups").is_some());
+        // package_groups present even with no groups
+        let groups = json["package_groups"].as_array().expect("package_groups array");
+        assert!(groups.is_empty(), "empty snapshot has no groups");
     }
 
     #[test]
@@ -1090,5 +1224,65 @@ mod tests {
         ];
         let actual_names: Vec<&str> = sections.iter().map(|s| s.display_name.as_str()).collect();
         assert_eq!(actual_names, expected_names);
+    }
+
+    #[test]
+    fn build_web_view_with_groups() {
+        use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "gcc".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "make".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+            ],
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec!["valgrind".into()],
+            }]),
+            ..Default::default()
+        });
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        let json = serde_json::to_value(&response).expect("serialize");
+
+        // Verify group data is populated correctly
+        let groups = json["package_groups"].as_array().expect("package_groups");
+        assert_eq!(groups.len(), 1, "one group");
+        assert_eq!(groups[0]["name"], "Development Tools");
+        assert_eq!(groups[0]["member_count"], 2);
+        assert_eq!(groups[0]["optional_spillover_count"], 1);
+
+        // Render state reflects session classification (members excluded by
+        // default triage → degraded). The exact state depends on the
+        // classifier; we verify it is a valid string.
+        let state = groups[0]["render_state"].as_str().unwrap();
+        assert!(
+            ["renderable", "excluded", "ungrouped", "degraded"].contains(&state),
+            "render_state must be one of the known states, got: {}",
+            state
+        );
+
+        let members = groups[0]["members"].as_array().expect("members");
+        assert_eq!(members.len(), 2);
+        // Verify member overlap_groups is an array
+        assert!(members[0]["overlap_groups"].is_array());
     }
 }

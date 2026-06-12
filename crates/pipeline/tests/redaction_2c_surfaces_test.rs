@@ -553,7 +553,7 @@ fn test_planted_secret_absent_from_containerfile() {
     let mut snapshot = snapshot_with_all_planted_secrets();
     redact(&mut snapshot, &RedactOptions::default());
 
-    let containerfile = render_containerfile(&snapshot, None);
+    let containerfile = render_containerfile(&snapshot, None, None);
 
     for secret in PLANTED_SECRETS {
         assert!(

@@ -9,7 +9,7 @@ import {
 } from "@patternfly/react-core";
 import type { ViewResponse } from "./api/types";
 import { fetchViewed, fetchOps } from "./api/client";
-import type { AnnotatedOp } from "./api/types";
+import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
@@ -184,9 +184,16 @@ function SingleHostApp({
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
 
-  function getItemTestIdFromOp(op: AnnotatedOp): string | null {
-    if (op.op === "SetInclude") {
-      const t = op.target as {
+  function getItemTestIdFromEntry(entry: AnnotatedTimelineEntry): string | null {
+    if (entry.kind === "View") {
+      if (entry.directive === "UngroupGroup") {
+        return `group-row-${entry.group_name}`;
+      }
+      return null;
+    }
+    // kind === "Op"
+    if (entry.op === "SetInclude") {
+      const t = entry.target as {
         item_id: { kind: string; key: Record<string, string> };
         include: boolean;
       };
@@ -198,23 +205,27 @@ function SingleHostApp({
       }
     }
     // Legacy op format fallback
-    if (op.op === "ExcludePackage" || op.op === "IncludePackage") {
-      const t = op.target as { name: string; arch: string };
+    if (entry.op === "ExcludePackage" || entry.op === "IncludePackage") {
+      const t = entry.target as { name: string; arch: string };
       return `decision-item-packages:${t.name}.${t.arch}`;
     }
-    if (op.op === "ExcludeConfig" || op.op === "IncludeConfig") {
-      const t = op.target as { path: string };
+    if (entry.op === "ExcludeConfig" || entry.op === "IncludeConfig") {
+      const t = entry.target as { path: string };
       return `decision-item-configs:${t.path}`;
     }
     return null;
   }
+
+  const handleSetUndoFocusTarget = useCallback((testId: string | null) => {
+    undoFocusRef.current = testId;
+  }, []);
 
   const handleUndo = useCallback(() => {
     fetchOps()
       .then((ops) => {
         const lastActive = [...ops].reverse().find((o) => o.active);
         undoFocusRef.current = lastActive
-          ? getItemTestIdFromOp(lastActive)
+          ? getItemTestIdFromEntry(lastActive)
           : null;
         mutation.undo();
       })
@@ -229,7 +240,7 @@ function SingleHostApp({
       .then((ops) => {
         const firstInactive = ops.find((o) => !o.active);
         undoFocusRef.current = firstInactive
-          ? getItemTestIdFromOp(firstInactive)
+          ? getItemTestIdFromEntry(firstInactive)
           : null;
         mutation.redo();
       })
@@ -438,6 +449,7 @@ function SingleHostApp({
                 onViewedChange={refreshViewed}
                 filterClearCounter={filterClearCounter}
                 revealItemId={revealItemId}
+                onSetUndoFocusTarget={handleSetUndoFocusTarget}
               />
             </div>
             {isMobile && sidebarOverlayOpen && (

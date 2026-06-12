@@ -221,7 +221,7 @@ fn snapshot_with_nonrpm_no_env() -> InspectionSnapshot {
 #[test]
 fn smoke_containerfile_scheduled() {
     let snap = snapshot_with_scheduled_tasks();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
     // Timer enable lines for included timers
     assert!(
         output.contains("systemctl enable") || output.contains("COPY config/etc/systemd/system/"),
@@ -237,7 +237,7 @@ fn smoke_containerfile_scheduled() {
 #[test]
 fn smoke_containerfile_config() {
     let snap = snapshot_with_config_files();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
     // COPY comments for config files
     assert!(
         output.contains("COPY config/"),
@@ -248,7 +248,7 @@ fn smoke_containerfile_config() {
 #[test]
 fn smoke_containerfile_selinux() {
     let snap = snapshot_with_selinux();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
     // Custom modules trigger FIXME + commented semodule lines
     assert!(
         output.contains("custom policy module"),
@@ -296,7 +296,7 @@ fn smoke_containerfile_nonrpm() {
         ],
         env_files: vec![],
     });
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
     // Non-RPM migration stubs
     assert!(
         output.contains("Non-RPM Software"),
@@ -315,7 +315,7 @@ fn smoke_containerfile_env_fixme() {
     // Verify that .env files do NOT produce uncommented COPY lines (they are
     // handled by the separate env-files/ output path, not the Containerfile).
     let snap = snapshot_with_nonrpm();
-    let output = containerfile::render_containerfile(&snap, None);
+    let output = containerfile::render_containerfile(&snap, None, None);
     assert!(
         !output.contains("COPY env-files/"),
         "containerfile must NOT contain uncommented COPY env-files/ line"

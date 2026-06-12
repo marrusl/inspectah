@@ -100,6 +100,10 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [ ] **Sensitivity-confirmation ordering:** Section 6a and the subscription example disagree on ordering (timing line → sensitivity → report path vs. timing line → report path → sensitivity). Pick one order and make prose, examples, and implementation match.
 - [ ] **Interrupted-path wording:** Spec says "only appears for wave-2 inspectors that never started because SIGINT arrived during wave 1." Actual cancellation boundary is more nuanced — SIGINT can arrive mid-wave, leaving some wave-1 inspectors without a completion result. Soften to "inspectors lacking a completion result by the cancellation boundary."
 
+## Subscription Cert Expiration Visibility
+
+- [ ] **Show RHEL subscription cert expiration date(s):** Surface the expiration date of the key RHEL subscription cert(s) somewhere visible — either as a comment at the top of the Containerfile, or in the refine UI (possibly better since the cert bundle doesn't matter on RHEL itself, only in build contexts). Helps users notice when their entitlement certs are about to expire before a build fails.
+
 ## TUI Input Handling
 
 - [ ] **Evaluate `tui-input` vs custom input:** TUI currently uses custom input handling via crossterm. The `tui-input` crate was a dependency but unused (removed in dead code scan). Evaluate whether adopting `tui-input` would simplify the input layer vs. maintaining the custom approach.

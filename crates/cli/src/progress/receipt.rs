@@ -237,7 +237,11 @@ impl ScanSummary {
             });
         }
         if total_git > 0 {
-            let label = if total_git == 1 { "git repo" } else { "git repos" };
+            let label = if total_git == 1 {
+                "git repo"
+            } else {
+                "git repos"
+            };
             hotspot_segments.push(HotspotSegment {
                 count: total_git,
                 label,

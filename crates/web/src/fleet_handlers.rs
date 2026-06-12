@@ -1289,6 +1289,18 @@ fn triage_reason_to_string(reason: &TriageReason) -> String {
         TriageReason::ConfigUnowned => "config_unowned".to_string(),
         TriageReason::ConfigOrphaned => "config_orphaned".to_string(),
         TriageReason::SensitivePath => "sensitive_path".to_string(),
+        TriageReason::PackagePlatformPlumbing => "package_platform_plumbing".to_string(),
+        TriageReason::PackageInstallerDefault => "package_installer_default".to_string(),
+        TriageReason::PackageInstallerPromotedService => {
+            "package_installer_promoted_service".to_string()
+        }
+        TriageReason::PackageInstallerPromotedConfig => {
+            "package_installer_promoted_config".to_string()
+        }
+        TriageReason::PackageInstallerAmbiguous => "package_installer_ambiguous".to_string(),
+        TriageReason::PackageInstallerEvidenceUnavailable => {
+            "package_installer_evidence_unavailable".to_string()
+        }
         TriageReason::Custom(s) => s.clone(),
         // All remaining reasons get a snake_case string from the variant name
         other => format!("{:?}", other).to_lowercase(),

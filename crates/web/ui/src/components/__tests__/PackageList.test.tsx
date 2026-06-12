@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { PackageList } from "../PackageList";
-import type { RepoGroupInfo } from "../../api/types";
+import type { RepoGroupInfo, GroupInfo } from "../../api/types";
 
 // --- Test data factories ---
 
@@ -649,5 +649,784 @@ describe("PackageList", () => {
     // Focus should land on the package checkbox
     const checkbox = screen.getByRole("checkbox", { name: "httpd" });
     expect(document.activeElement).toBe(checkbox);
+  });
+
+  // --- Package groups zone ---
+
+  const coreGroup: GroupInfo = {
+    name: "core",
+    member_count: 8,
+    locked_count: 2,
+    optional_spillover_count: 0,
+    render_state: "renderable",
+    degradation_reason: null,
+    members: [
+      { name: "bash", locked: true, overlap_groups: [] },
+      { name: "coreutils", locked: true, overlap_groups: [] },
+      { name: "filesystem", locked: false, overlap_groups: [] },
+      { name: "glibc", locked: false, overlap_groups: [] },
+      { name: "grep", locked: false, overlap_groups: [] },
+      { name: "sed", locked: false, overlap_groups: [] },
+      { name: "systemd", locked: false, overlap_groups: [] },
+      { name: "util-linux", locked: false, overlap_groups: [] },
+    ],
+  };
+
+  const editorsGroup: GroupInfo = {
+    name: "editors",
+    member_count: 3,
+    locked_count: 0,
+    optional_spillover_count: 2,
+    render_state: "renderable",
+    degradation_reason: null,
+    members: [
+      { name: "nano", locked: false, overlap_groups: [] },
+      { name: "vim-minimal", locked: false, overlap_groups: [] },
+      { name: "vi", locked: false, overlap_groups: [] },
+    ],
+  };
+
+  const excludedGroup: GroupInfo = {
+    name: "development",
+    member_count: 5,
+    locked_count: 0,
+    optional_spillover_count: 0,
+    render_state: "excluded",
+    degradation_reason: null,
+    members: [],
+  };
+
+  const degradedGroup: GroupInfo = {
+    name: "multimedia",
+    member_count: 2,
+    locked_count: 0,
+    optional_spillover_count: 0,
+    render_state: "degraded",
+    degradation_reason: "insufficient_members",
+    members: [
+      { name: "ffmpeg", locked: false, overlap_groups: [] },
+      { name: "vlc", locked: false, overlap_groups: [] },
+    ],
+  };
+
+  const ungroupedGroup: GroupInfo = {
+    name: "leftovers",
+    member_count: 1,
+    locked_count: 0,
+    optional_spillover_count: 0,
+    render_state: "ungrouped",
+    degradation_reason: null,
+    members: [{ name: "orphan-pkg", locked: false, overlap_groups: [] }],
+  };
+
+  it("renders groups zone above individual packages zone", () => {
+    const pkgs = [makePkg("curl", "baseos"), makePkg("wget", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, editorsGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const list = screen.getByTestId("package-list");
+    const groupsZone = within(list).getByTestId("groups-zone");
+    const individualZone = within(list).getByTestId("individual-packages-zone");
+    const divider = within(list).getByTestId("zone-divider");
+
+    // Groups zone exists and contains group rows
+    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
+    expect(within(groupsZone).getByTestId("group-row-editors")).toBeInTheDocument();
+
+    // Divider is present
+    expect(divider).toHaveTextContent("Individual Packages");
+
+    // Individual packages zone contains package rows
+    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
+    expect(within(individualZone).getByTestId("package-row-wget")).toBeInTheDocument();
+
+    // DOM order: groups-zone before zone-divider before individual-packages-zone
+    const allNodes = Array.from(list.children);
+    const groupsIdx = allNodes.indexOf(groupsZone);
+    const dividerIdx = allNodes.indexOf(divider);
+    const individualIdx = allNodes.indexOf(individualZone);
+    expect(groupsIdx).toBeLessThan(dividerIdx);
+    expect(dividerIdx).toBeLessThan(individualIdx);
+  });
+
+  it("summary bar shows correct counts", () => {
+    const pkgs = [
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+      makePkg("jq", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, editorsGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    // 2 groups, 11 total group packages, 3 individual packages, 2 optional from groups
+    expect(summary).toHaveTextContent("2 groups");
+    expect(summary).toHaveTextContent("11 packages");
+    expect(summary).toHaveTextContent("3 individual packages");
+    expect(summary).toHaveTextContent("2 optional from groups");
+  });
+
+  it("summary bar shows singular forms correctly", () => {
+    const singleGroup: GroupInfo = {
+      ...coreGroup,
+      member_count: 1,
+      members: [{ name: "bash", locked: false, overlap_groups: [] }],
+    };
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[singleGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("1 group");
+    expect(summary).toHaveTextContent("1 package");
+    expect(summary).toHaveTextContent("1 individual package");
+  });
+
+  it("summary bar hides optional count when zero", () => {
+    const noSpillover: GroupInfo = {
+      ...coreGroup,
+      optional_spillover_count: 0,
+    };
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[noSpillover]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).not.toHaveTextContent("optional from groups");
+  });
+
+  it("shows excluded groups in groups zone (not filtered out)", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, excludedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const groupsZone = screen.getByTestId("groups-zone");
+    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
+    expect(within(groupsZone).getByTestId("group-row-development")).toBeInTheDocument();
+  });
+
+  it("shows groups zone when only excluded groups exist", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[excludedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("groups-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("zone-divider")).toBeInTheDocument();
+    expect(screen.getByTestId("package-list-summary")).toBeInTheDocument();
+  });
+
+  it("hides groups zone when packageGroups is undefined", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("groups-zone")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("zone-divider")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("package-list-summary")).not.toBeInTheDocument();
+  });
+
+  it("GroupRow onToggle is wired correctly", () => {
+    const onGroupToggle = vi.fn();
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        onGroupToggle={onGroupToggle}
+      />,
+    );
+    // GroupRow renders a switch for toggling
+    const toggle = screen.getByRole("switch");
+    fireEvent.click(toggle);
+    expect(onGroupToggle).toHaveBeenCalledWith("core", false);
+  });
+
+  it("GroupRow onUngroup is wired correctly", () => {
+    const onGroupUngroup = vi.fn();
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        onGroupUngroup={onGroupUngroup}
+      />,
+    );
+    const ungroupBtn = screen.getByRole("button", { name: /ungroup core/i });
+    fireEvent.click(ungroupBtn);
+    expect(onGroupUngroup).toHaveBeenCalledWith("core");
+  });
+
+  // --- Provenance badges ---
+
+  it("shows provenance badge for optional_spillover packages", () => {
+    const pkgs = [
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+      makePkg("optional-pkg", "baseos"),
+    ];
+    const packageProvenances = {
+      "optional-pkg.x86_64": {
+        kind: "optional_spillover" as const,
+        group_name: "web-tools",
+      },
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageProvenances={packageProvenances}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+
+    // curl and wget should not have badges
+    const curlRow = screen.getByTestId("package-row-curl");
+    expect(within(curlRow).queryByTestId("provenance-badge")).toBeNull();
+
+    const wgetRow = screen.getByTestId("package-row-wget");
+    expect(within(wgetRow).queryByTestId("provenance-badge")).toBeNull();
+
+    // optional-pkg should have the badge
+    const optionalRow = screen.getByTestId("package-row-optional-pkg");
+    const badge = within(optionalRow).getByTestId("provenance-badge");
+    expect(badge).toHaveTextContent('optional from "web-tools"');
+  });
+
+  it("shows provenance badge for ungrouped_member packages", () => {
+    const pkgs = [makePkg("ungrouped-pkg", "baseos")];
+    const packageProvenances = {
+      "ungrouped-pkg.x86_64": {
+        kind: "ungrouped_member" as const,
+        group_name: "dev-libs",
+      },
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageProvenances={packageProvenances}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+
+    const badge = screen.getByTestId("provenance-badge");
+    expect(badge).toHaveTextContent('ungrouped from "dev-libs"');
+  });
+
+  it("shows provenance badge for degraded_member packages", () => {
+    const pkgs = [makePkg("degraded-pkg", "baseos")];
+    const packageProvenances = {
+      "degraded-pkg.x86_64": {
+        kind: "degraded_member" as const,
+        group_name: "core-utils",
+      },
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageProvenances={packageProvenances}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+
+    const badge = screen.getByTestId("provenance-badge");
+    expect(badge).toHaveTextContent(
+      'from "core-utils" (rendered individually)',
+    );
+  });
+
+  // --- Search auto-expand groups ---
+
+  it("searching for member package auto-expands the group", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, editorsGroup]}
+        searchQuery="bash"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // "bash" is a member of coreGroup — group should be auto-expanded
+    const coreRow = screen.getByTestId("group-row-core");
+    // Member should be visible (group expanded)
+    expect(within(coreRow).getByTestId("group-member-bash")).toBeInTheDocument();
+    // The member should have data-search-match
+    expect(
+      within(coreRow).getByTestId("group-member-bash"),
+    ).toHaveAttribute("data-search-match", "true");
+    // editors group has no match for "bash" — it's filtered out entirely
+    expect(screen.queryByTestId("group-row-editors")).not.toBeInTheDocument();
+  });
+
+  it("searching for group name highlights the group row", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, editorsGroup]}
+        searchQuery="core"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const coreRow = screen.getByTestId("group-row-core");
+    expect(coreRow).toHaveAttribute("data-search-match", "true");
+    // editors group has no match for "core" — it's filtered out
+    expect(screen.queryByTestId("group-row-editors")).not.toBeInTheDocument();
+  });
+
+  it("clearing search re-collapses auto-expanded groups", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    const { rerender } = render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        searchQuery="bash"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Group is auto-expanded — member visible
+    expect(screen.getByTestId("group-member-bash")).toBeInTheDocument();
+
+    // Clear search
+    rerender(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        searchQuery=""
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Group should re-collapse — member hidden
+    expect(screen.queryByTestId("group-member-bash")).not.toBeInTheDocument();
+  });
+
+  it("manually expanded groups stay open after search clear", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    const { rerender } = render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        searchQuery=""
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Manually expand the group by clicking the chevron
+    const expandBtn = screen.getByRole("button", { name: /expand/i });
+    fireEvent.click(expandBtn);
+    expect(screen.getByTestId("group-member-bash")).toBeInTheDocument();
+
+    // Now search for something (auto-expand is irrelevant since user already expanded)
+    rerender(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        searchQuery="xyz-no-match"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+
+    // Clear search — user-expanded group should remain open
+    rerender(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        searchQuery=""
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Group stays open because user expanded it manually
+    expect(screen.getByTestId("group-member-bash")).toBeInTheDocument();
+  });
+
+  it("search filters individual packages to only matching ones", () => {
+    const pkgs = [
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+      makePkg("bash-completion", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        searchQuery="curl"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // Only curl should appear in individual zone
+    const individualZone = screen.getByTestId("individual-packages-zone");
+    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
+    expect(within(individualZone).queryByTestId("package-row-wget")).not.toBeInTheDocument();
+    expect(within(individualZone).queryByTestId("package-row-bash-completion")).not.toBeInTheDocument();
+  });
+
+  it("search hides non-matching groups from the groups zone", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, editorsGroup]}
+        searchQuery="nano"
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    // "nano" is a member of editors — editors should be visible
+    const groupsZone = screen.getByTestId("groups-zone");
+    expect(within(groupsZone).getByTestId("group-row-editors")).toBeInTheDocument();
+    // core has no match for "nano" — should be hidden
+    expect(within(groupsZone).queryByTestId("group-row-core")).not.toBeInTheDocument();
+  });
+
+  // --- Renderable member suppression from individual zone ---
+
+  it("renderable group members do not appear in the individual packages zone", () => {
+    // bash and coreutils are members of the renderable coreGroup
+    const pkgs = [
+      makePkg("bash", "baseos"),
+      makePkg("coreutils", "baseos"),
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const individualZone = screen.getByTestId("individual-packages-zone");
+    // bash and coreutils are suppressed — they belong to the renderable group
+    expect(within(individualZone).queryByTestId("package-row-bash")).not.toBeInTheDocument();
+    expect(within(individualZone).queryByTestId("package-row-coreutils")).not.toBeInTheDocument();
+    // curl and wget are not group members — they appear individually
+    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
+    expect(within(individualZone).getByTestId("package-row-wget")).toBeInTheDocument();
+  });
+
+  it("individual package count in summary reflects member suppression", () => {
+    // 4 packages total, 2 are renderable group members → 2 individual
+    const pkgs = [
+      makePkg("bash", "baseos"),
+      makePkg("coreutils", "baseos"),
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("2 individual packages");
+  });
+
+  // --- Canonical name.arch suppression (real MainContent data shape) ---
+
+  it("suppression works with canonical name.arch package identifiers", () => {
+    // Real MainContent produces "name.arch" via toPackageListPackages.
+    // GroupMemberInfo carries bare names.  Suppression must bridge the gap.
+    const pkgs = [
+      makePkg("bash.x86_64", "baseos"),
+      makePkg("coreutils.x86_64", "baseos"),
+      makePkg("curl.x86_64", "baseos"),
+      makePkg("wget.noarch", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const individualZone = screen.getByTestId("individual-packages-zone");
+    // bash and coreutils are group members — suppressed even with .arch suffix
+    expect(
+      within(individualZone).queryByTestId("package-row-bash.x86_64"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-coreutils.x86_64"),
+    ).not.toBeInTheDocument();
+    // curl and wget are not group members — present
+    expect(
+      within(individualZone).getByTestId("package-row-curl.x86_64"),
+    ).toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-wget.noarch"),
+    ).toBeInTheDocument();
+  });
+
+  it("suppression handles all common RPM architectures", () => {
+    const archGroup: GroupInfo = {
+      name: "multi-arch",
+      member_count: 3,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "libfoo", locked: false, overlap_groups: [] },
+        { name: "libbar", locked: false, overlap_groups: [] },
+        { name: "libbaz", locked: false, overlap_groups: [] },
+      ],
+    };
+    const pkgs = [
+      makePkg("libfoo.aarch64", "baseos"),
+      makePkg("libbar.s390x", "baseos"),
+      makePkg("libbaz.ppc64le", "baseos"),
+      makePkg("libqux.x86_64", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[archGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const individualZone = screen.getByTestId("individual-packages-zone");
+    expect(
+      within(individualZone).queryByTestId("package-row-libfoo.aarch64"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-libbar.s390x"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-libbaz.ppc64le"),
+    ).not.toBeInTheDocument();
+    // libqux is not a member — present
+    expect(
+      within(individualZone).getByTestId("package-row-libqux.x86_64"),
+    ).toBeInTheDocument();
+  });
+
+  it("packages with dots in the name that are not arch suffixes are not falsely suppressed", () => {
+    // A package named "python3.11" should NOT be suppressed unless a group
+    // member is literally "python3.11" or the full name is "python3.11.x86_64"
+    // and "python3" is a member.
+    const pyGroup: GroupInfo = {
+      name: "python-core",
+      member_count: 1,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [{ name: "python3", locked: false, overlap_groups: [] }],
+    };
+    const pkgs = [
+      makePkg("python3.11", "baseos"),  // dot-separated version, not an arch
+      makePkg("python3.x86_64", "baseos"),  // actual arch suffix
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[pyGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const individualZone = screen.getByTestId("individual-packages-zone");
+    // "python3.11" has "11" as suffix — not an arch, so not stripped → not suppressed
+    expect(
+      within(individualZone).getByTestId("package-row-python3.11"),
+    ).toBeInTheDocument();
+    // "python3.x86_64" strips to "python3" which IS a member → suppressed
+    expect(
+      within(individualZone).queryByTestId("package-row-python3.x86_64"),
+    ).not.toBeInTheDocument();
+  });
+
+  // --- Excluded groups visible with toggle off ---
+
+  it("excluded groups render with toggle off state", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, excludedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const groupsZone = screen.getByTestId("groups-zone");
+    // Both renderable and excluded groups appear
+    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
+    expect(within(groupsZone).getByTestId("group-row-development")).toBeInTheDocument();
+    // The excluded group's toggle should be off (unchecked)
+    const devRow = within(groupsZone).getByTestId("group-row-development");
+    const toggle = within(devRow).getByRole("switch");
+    expect(toggle).not.toBeChecked();
+  });
+
+  // --- Degraded groups visible but dimmed ---
+
+  it("degraded groups render with degraded styling", () => {
+    const pkgs = [
+      makePkg("curl", "baseos"),
+      makePkg("ffmpeg", "baseos"),
+      makePkg("vlc", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, degradedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const groupsZone = screen.getByTestId("groups-zone");
+    const mmRow = within(groupsZone).getByTestId("group-row-multimedia");
+    expect(mmRow).toBeInTheDocument();
+    // Degraded group has the degraded CSS class
+    expect(mmRow).toHaveClass("inspectah-group-row--degraded");
+    // Degraded group shows "rendered individually" subtitle
+    expect(within(mmRow).getByText("rendered individually")).toBeInTheDocument();
+  });
+
+  // --- Ungrouped groups NOT in groups zone ---
+
+  it("ungrouped groups do not appear in the groups zone", () => {
+    const pkgs = [makePkg("curl", "baseos"), makePkg("orphan-pkg", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, ungroupedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const groupsZone = screen.getByTestId("groups-zone");
+    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
+    expect(within(groupsZone).queryByTestId("group-row-leftovers")).not.toBeInTheDocument();
+  });
+
+  // --- Summary counts with mixed group states ---
+
+  it("summary counts only renderable group packages, includes all visible groups", () => {
+    const pkgs = [makePkg("curl", "baseos")];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[coreGroup, excludedGroup, degradedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    // 3 visible groups (core=renderable, development=excluded, multimedia=degraded)
+    expect(summary).toHaveTextContent("3 groups");
+    // Only renderable group (core) contributes to package count: 8 packages
+    expect(summary).toHaveTextContent("8 packages");
   });
 });

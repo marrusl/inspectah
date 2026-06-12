@@ -1,10 +1,12 @@
 import type {
   ViewResponse,
   ReferenceSection,
-  AnnotatedOp,
+  AnnotatedTimelineEntry,
   ChangesSummary,
   HealthResponse,
   RefinementOp,
+  TimelineEntry,
+  ViewDirective,
   UserPreviewResponse,
 } from "./types";
 import { ApiError } from "./types";
@@ -46,8 +48,10 @@ export function fetchSections(): Promise<ReferenceSection[]> {
   return getJson("/api/snapshot/sections");
 }
 
-export function fetchOps(): Promise<AnnotatedOp[]> {
-  return getJson("/api/ops");
+// Return all timeline entries (Op + View) so undo/redo can see View directives
+// like UngroupGroup in the history cursor.
+export function fetchOps(): Promise<AnnotatedTimelineEntry[]> {
+  return getJson<AnnotatedTimelineEntry[]>("/api/ops");
 }
 
 export function fetchChanges(): Promise<ChangesSummary> {
@@ -60,8 +64,30 @@ export function fetchViewed(): Promise<{ ids: string[] }> {
 
 // --- Mutation endpoints ---
 
+export function applyTimelineEntry(
+  entry: TimelineEntry,
+): Promise<ViewResponse> {
+  return postJson("/api/op", entry);
+}
+
+/** Convenience wrapper: wraps a RefinementOp as a TimelineEntry and sends it. */
 export function applyOp(op: RefinementOp): Promise<ViewResponse> {
-  return postJson("/api/op", op);
+  return applyTimelineEntry({ kind: "Op", ...op });
+}
+
+/** Send a ViewDirective (e.g. UngroupGroup) to the timeline. */
+export function applyDirective(
+  directive: ViewDirective,
+): Promise<ViewResponse> {
+  return applyTimelineEntry({ kind: "View", ...directive });
+}
+
+/** Convenience: ungroup a package group by name. */
+export async function ungroupGroup(groupName: string): Promise<ViewResponse> {
+  return applyDirective({
+    directive: "UngroupGroup",
+    group_name: groupName,
+  });
 }
 
 export function excludeRepo(sectionId: string): Promise<ViewResponse> {

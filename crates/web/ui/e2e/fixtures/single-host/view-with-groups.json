@@ -1,0 +1,306 @@
+{
+  "packages": [
+    {
+      "entry": {
+        "name": "bash",
+        "epoch": "0",
+        "version": "5.2.26",
+        "release": "3.el9",
+        "arch": "x86_64",
+        "state": "base_image_only",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-baseos-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "baseline" },
+        "primary_reason": "package_baseline_match",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "httpd",
+        "epoch": "0",
+        "version": "2.4.57",
+        "release": "11.el9_4.1",
+        "arch": "x86_64",
+        "state": "added",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-appstream-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "package_user_added",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "openssl",
+        "epoch": "1",
+        "version": "3.0.7",
+        "release": "28.el9_4",
+        "arch": "x86_64",
+        "state": "modified",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-baseos-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "package_version_changed",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "vim-enhanced",
+        "epoch": "2",
+        "version": "9.0.2153",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "added",
+        "include": false,
+        "source_repo": "rhel-9-for-x86_64-appstream-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "package_user_added",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "custom-agent",
+        "epoch": "0",
+        "version": "1.0.0",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "local_install",
+        "include": true,
+        "source_repo": "",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "package_local_install",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "mod_ssl",
+        "epoch": "0",
+        "version": "2.4.57",
+        "release": "11.el9_4.1",
+        "arch": "x86_64",
+        "state": "added",
+        "include": true,
+        "source_repo": "rhel-9-for-x86_64-appstream-rpms",
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "package_user_added",
+        "annotations": []
+      }
+    }
+  ],
+  "config_files": [
+    {
+      "entry": {
+        "path": "/etc/sysconfig/network",
+        "kind": "modified",
+        "category": "other",
+        "content": "NETWORKING=yes\nHOSTNAME=test-host-01.example.com\n",
+        "rpm_va_flags": "S.5....T.",
+        "package": "initscripts",
+        "diff_against_rpm": null,
+        "include": true,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "config_modified",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "path": "/etc/chrony.conf",
+        "kind": "modified",
+        "category": "other",
+        "content": "server ntp1.example.com iburst\n",
+        "rpm_va_flags": "S.5....T.",
+        "package": "chrony",
+        "diff_against_rpm": null,
+        "include": true,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "config_modified",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "path": "/etc/sysctl.d/99-custom.conf",
+        "kind": "unowned",
+        "category": "sysctl",
+        "content": "net.core.somaxconn = 4096\n",
+        "rpm_va_flags": null,
+        "package": null,
+        "diff_against_rpm": null,
+        "include": false,
+        "tie": false,
+        "tie_winner": false,
+        "fleet": null
+      },
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "config_unowned",
+        "annotations": []
+      }
+    }
+  ],
+  "containerfile_preview": "FROM registry.redhat.io/rhel9/rhel-bootc:9.4\n\nRUN dnf install -y \\\n    httpd \\\n    openssl \\\n    mod_ssl \\\n    custom-agent \\\n    && dnf clean all\n",
+  "stats": {
+    "sections": [
+      { "kind": "package", "total": 6, "included": 5, "excluded": 1 },
+      { "kind": "config", "total": 3, "included": 2, "excluded": 1 },
+      { "kind": "service", "total": 2, "included": 1, "excluded": 1 },
+      { "kind": "user", "total": 1, "included": 1, "excluded": 0 }
+    ],
+    "needs_review_count": 2,
+    "ops_applied": 0,
+    "can_undo": false,
+    "can_redo": false,
+    "baseline_available": true
+  },
+  "generation": 1,
+  "baseline_summary": {
+    "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.4",
+    "image_digest": "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "strategy": "auto",
+    "baseline_count": 342,
+    "user_added_count": 4,
+    "review_count": 2
+  },
+  "repo_groups": [
+    {
+      "section_id": "rhel-9-for-x86_64-baseos-rpms",
+      "provenance": "verified",
+      "is_distro": true,
+      "tier": "distro",
+      "package_count": 2,
+      "enabled": true
+    },
+    {
+      "section_id": "rhel-9-for-x86_64-appstream-rpms",
+      "provenance": "verified",
+      "is_distro": true,
+      "tier": "distro",
+      "package_count": 3,
+      "enabled": true
+    }
+  ],
+  "version_changes": [
+    {
+      "name": "openssl",
+      "arch": "x86_64",
+      "host_version": "3.0.7",
+      "base_version": "3.0.6",
+      "host_epoch": "1",
+      "base_epoch": "1",
+      "direction": "upgrade"
+    }
+  ],
+  "service_states": [
+    {
+      "unit": "httpd.service",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "service_non_default",
+        "annotations": []
+      },
+      "include": true,
+      "owning_package": "httpd"
+    },
+    {
+      "unit": "custom-agent.service",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "investigate" },
+        "primary_reason": "service_non_default",
+        "annotations": []
+      },
+      "include": false,
+      "owning_package": null
+    }
+  ],
+  "service_dropins": [],
+  "quadlets": [],
+  "flatpaks": [],
+  "sysctls": [
+    {
+      "key": "net.core.somaxconn",
+      "runtime": "4096",
+      "default": "4096",
+      "source": "/etc/sysctl.d/99-custom.conf",
+      "triage": {
+        "triage": { "mode": "single_host", "baseline": "site" },
+        "primary_reason": "sysctl_file_backed_override",
+        "annotations": []
+      },
+      "include": true
+    }
+  ],
+  "tuned": [],
+  "users_groups_decisions": [
+    {
+      "name": "testuser",
+      "uid": 1000,
+      "gid": 1000,
+      "shell": "/bin/bash",
+      "home": "/home/testuser",
+      "include": true,
+      "classification": "interactive",
+      "containerfile_strategy": "useradd",
+      "password_choice": "none",
+      "has_sudo": true,
+      "has_subuid": false,
+      "ssh_key_count": 1,
+      "classification_rationale": "Interactive shell /bin/bash with home directory",
+      "supplementary_groups": ["wheel", "testuser"],
+      "password_status": "password_set"
+    }
+  ],
+  "package_groups": [
+    {
+      "name": "Web Server",
+      "member_count": 2,
+      "locked_count": 0,
+      "optional_spillover_count": 1,
+      "render_state": "renderable",
+      "degradation_reason": null,
+      "members": [
+        { "name": "httpd", "locked": false, "overlap_groups": [] },
+        { "name": "mod_ssl", "locked": false, "overlap_groups": [] }
+      ]
+    }
+  ],
+  "package_provenances": {
+    "custom-agent.x86_64": {
+      "kind": "optional_spillover",
+      "group_name": "Web Server"
+    }
+  },
+  "session_is_sensitive": false
+}

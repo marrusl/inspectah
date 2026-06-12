@@ -17,12 +17,24 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
+use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::rpm::PackageEntry;
 
+use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
+
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
+
+/// Human-readable label for a `DegradationReason`.
+fn degradation_reason_label(reason: &DegradationReason) -> &'static str {
+    match reason {
+        DegradationReason::MemberExcluded => "member excluded",
+        DegradationReason::MemberOverridden => "member overridden",
+        DegradationReason::MultilibConflict => "multilib conflict",
+    }
+}
 
 /// Emit a section header + body only when the body is non-empty.
 ///
@@ -52,22 +64,25 @@ pub(crate) fn section(header: &str, body: Vec<String>) -> Vec<String> {
 pub fn render_containerfile(
     snap: &InspectionSnapshot,
     materialized_roots: Option<&[String]>,
+    render_ctx: Option<&RenderContext>,
 ) -> String {
-    render_containerfile_inner(snap, materialized_roots, None)
+    render_containerfile_inner(snap, materialized_roots, None, render_ctx)
 }
 
 pub fn render_containerfile_with_originals(
     snap: &InspectionSnapshot,
     materialized_roots: Option<&[String]>,
     original_includes: &std::collections::HashMap<String, bool>,
+    render_ctx: Option<&RenderContext>,
 ) -> String {
-    render_containerfile_inner(snap, materialized_roots, Some(original_includes))
+    render_containerfile_inner(snap, materialized_roots, Some(original_includes), render_ctx)
 }
 
 fn render_containerfile_inner(
     snap: &InspectionSnapshot,
     materialized_roots: Option<&[String]>,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
+    render_ctx: Option<&RenderContext>,
 ) -> String {
     let base = base_image_from_snapshot(snap);
     let base_str = base.as_deref().unwrap_or("");
@@ -122,11 +137,12 @@ fn render_containerfile_inner(
         lines.push(String::new());
     }
 
-    // 1. Packages section (FROM + repos + GPG + modules + packages)
+    // 1. Packages section (FROM + repos + GPG + modules + groups + packages)
     lines.extend(packages_section_lines(
         snap,
         base.as_deref(),
         original_includes,
+        render_ctx,
     ));
 
     // bootc label for ostree-desktops base images
@@ -264,6 +280,7 @@ fn packages_section_lines(
     snap: &InspectionSnapshot,
     base: Option<&str>,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
+    render_ctx: Option<&RenderContext>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
 
@@ -431,6 +448,97 @@ fn packages_section_lines(
         lines.extend(section("Module Streams", mod_body));
     }
 
+    // Package Groups — emit `dnf group install` for renderable groups and
+    // collect member names so they can be suppressed from the individual
+    // packages section below.
+    let group_member_suppressed: std::collections::HashSet<String> = {
+        let mut suppressed = std::collections::HashSet::new();
+
+        if let Some(ctx) = render_ctx
+            && let Some(groups) = &rpm.installed_groups
+        {
+            // Collect renderable groups sorted alphabetically by name
+            let mut renderable: Vec<&inspectah_core::types::rpm::InstalledGroup> = groups
+                .iter()
+                .filter(|g| ctx.is_renderable(&g.name))
+                .collect();
+            renderable.sort_by(|a, b| a.name.cmp(&b.name));
+
+            if !renderable.is_empty() {
+                // Build the member suppression set from all renderable groups
+                for g in &renderable {
+                    for member in &g.members {
+                        suppressed.insert(member.clone());
+                    }
+                    // NOTE: optional_installed are NOT suppressed here.
+                    // `dnf group install` does not install optional members,
+                    // so they must appear in the individual packages section.
+                }
+
+                // Emit group install section
+                let mut grp_body: Vec<String> = Vec::new();
+                grp_body.push("RUN dnf group install -y \\".into());
+                for g in &renderable {
+                    grp_body.push(format!("    \"{}\" \\", g.name));
+                }
+                grp_body.push("    && dnf clean all \\".into());
+                grp_body.push("    && rm -rf \\".into());
+                grp_body.push("        /var/cache/dnf \\".into());
+                grp_body.push("        /var/lib/dnf/history* \\".into());
+                grp_body.push("        /var/log/dnf* \\".into());
+                grp_body.push("        /var/log/hawkey.log \\".into());
+                grp_body.push("        /var/log/rhsm".into());
+                lines.extend(section(
+                    &format!("Package Groups ({})", renderable.len()),
+                    grp_body,
+                ));
+            }
+        }
+
+        suppressed
+    };
+
+    // Provenance comments — explain why group members appear individually.
+    // Emitted for ALL groups with non-empty optional_installed (regardless of
+    // render state — optional members are always independent per spec), plus
+    // ungrouped and degraded groups whose members spill into individual packages.
+    if let Some(ctx) = render_ctx
+        && let Some(groups) = &rpm.installed_groups
+    {
+        let mut provenance_lines: Vec<String> = Vec::new();
+
+        // Collect by group, sorted alphabetically
+        let mut sorted_groups: Vec<&inspectah_core::types::rpm::InstalledGroup> =
+            groups.iter().collect();
+        sorted_groups.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for g in &sorted_groups {
+            match ctx.group_states.get(&g.name) {
+                Some(GroupRenderState::Ungrouped) => {
+                    provenance_lines.push(format!("# Ungrouped from \"{}\"", g.name));
+                }
+                Some(GroupRenderState::Degraded { reason }) => {
+                    provenance_lines.push(format!(
+                        "# \"{}\" degraded ({}): members rendered individually",
+                        g.name,
+                        degradation_reason_label(reason),
+                    ));
+                }
+                _ => {}
+            }
+            // Optional spillover — always emitted regardless of group state
+            if !g.optional_installed.is_empty() {
+                provenance_lines
+                    .push(format!("# Optional members from \"{}\"", g.name));
+            }
+        }
+
+        if !provenance_lines.is_empty() {
+            lines.extend(provenance_lines);
+            lines.push(String::new());
+        }
+    }
+
     // Packages
     let mut install_names = Vec::new();
     let mut todo_lines = Vec::new();
@@ -461,6 +569,16 @@ fn packages_section_lines(
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
         })
         .filter(|pkg| {
+            // Locked packages are already decided — skip leaf filter
+            if pkg.locked {
+                return true;
+            }
+            // Anaconda-classified packages with include=true had their
+            // include state set by the anaconda classifier, not by
+            // leaf classification. Bypass the leaf filter.
+            if pkg.source_repo == "anaconda" && pkg.include {
+                return true;
+            }
             let id = canonical_package_id(&pkg.name, &pkg.arch);
             if let Some(orig) = original_includes {
                 let was_included = orig.get(&id).copied().unwrap_or(pkg.include);
@@ -482,6 +600,10 @@ fn packages_section_lines(
         });
 
     for pkg in installable_packages {
+        // Suppress packages whose name is covered by a renderable group
+        if group_member_suppressed.contains(&pkg.name) {
+            continue;
+        }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
         if sanitize_shell_value(&install_name).is_some() {
             install_names.push(install_name);
@@ -494,12 +616,11 @@ fn packages_section_lines(
         // Split repo-enabling packages (e.g. epel-release) from the rest.
         // These must be installed first so their GPG keys and repo configs
         // are present when DNF verifies signatures of packages from those repos.
-        let (repo_pkgs, other_pkgs): (Vec<_>, Vec<_>) =
-            install_names.iter().partition(|n| {
-                // Strip optional .arch suffix (e.g. "epel-release.noarch" -> "epel-release")
-                let base = n.split('.').next().unwrap_or(n);
-                base.ends_with("-release")
-            });
+        let (repo_pkgs, other_pkgs): (Vec<_>, Vec<_>) = install_names.iter().partition(|n| {
+            // Strip optional .arch suffix (e.g. "epel-release.noarch" -> "epel-release")
+            let base = n.split('.').next().unwrap_or(n);
+            base.ends_with("-release")
+        });
 
         if !repo_pkgs.is_empty() && !other_pkgs.is_empty() {
             // Emit repo-enabling packages first
@@ -1362,7 +1483,7 @@ mod tests {
     #[test]
     fn test_containerfile_package_based() {
         let snap = snapshot_with_packages(&["httpd", "vim-enhanced"]);
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         // No target_image or rpm.base_image → FROM omitted
         assert!(
             output.contains("# FROM line omitted"),
@@ -1409,7 +1530,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
 
         // Packages are now one-per-line; check the indented package lines
         assert!(
@@ -1477,7 +1598,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
 
         // Packages are now one-per-line; collect indented package lines
         let pkg_lines: Vec<&str> = output
@@ -1533,7 +1654,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
 
         // Verify section order: packages before services before selinux before epilogue
         let packages_pos = output.find("dnf install -y").unwrap();
@@ -1558,7 +1679,7 @@ mod tests {
     #[test]
     fn test_containerfile_empty_snapshot() {
         let snap = InspectionSnapshot::new();
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("# FROM line omitted"),
             "empty snapshot must omit FROM with comment"
@@ -1581,7 +1702,7 @@ mod tests {
             image_ref: "quay.io/custom/image:latest".into(),
             strategy: ResolutionStrategy::CliOverride,
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(output.contains("FROM quay.io/custom/image:latest"));
     }
 
@@ -1633,7 +1754,7 @@ mod tests {
             disabled_units: vec!["cups.service".into(), "NetworkManager.service".into()],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
             "enable must use multi-line continuation"
@@ -1656,7 +1777,7 @@ mod tests {
     #[test]
     fn test_containerfile_unsafe_package_skipped() {
         let snap = snapshot_with_packages(&["safe-pkg", "bad;pkg"]);
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(output.contains("safe-pkg"));
         // The unsafe package should not appear anywhere in the install block
         assert!(!output.contains("bad;pkg"));
@@ -1666,7 +1787,7 @@ mod tests {
     fn test_containerfile_shell_metachar_package_rejected() {
         // Package name with shell command injection
         let snap = snapshot_with_packages(&["legit-pkg", "pkg$(whoami)", "pkg`id`"]);
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("legit-pkg"),
             "safe package must be included"
@@ -1713,7 +1834,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("RUN dnf module enable -y safe-module:1.0"),
             "safe module must be rendered"
@@ -1754,7 +1875,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("dnf versionlock add httpd"),
             "safe version lock must be rendered"
@@ -1782,7 +1903,7 @@ mod tests {
             degraded_sections: vec![],
             reason: "config inspector timed out".into(),
         };
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains(
                 "WARNING: This Containerfile was generated from an incomplete inspection"
@@ -1806,7 +1927,7 @@ mod tests {
     fn test_containerfile_full_completeness_no_warning() {
         let mut snap = InspectionSnapshot::new();
         snap.completeness = Completeness::Complete;
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains(
                 "WARNING: This Containerfile was generated from an incomplete inspection"
@@ -1829,7 +1950,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("FIXME: Timer unit name contains unsafe characters"),
             "unsafe timer must produce FIXME comment, got:\n{output}"
@@ -1871,7 +1992,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         // Standard-dir key should NOT have rpm --import (auto-imported)
         assert!(
             !output.contains("rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9"),
@@ -1910,7 +2031,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(output.contains("FIXME"), "unsafe path must produce FIXME");
         assert!(
             !output.contains("rpm --import ../../etc/shadow"),
@@ -1940,7 +2061,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("FIXME"),
             "whitespace path must produce FIXME"
@@ -1973,7 +2094,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         let copy_lines: Vec<_> = output
             .lines()
             .filter(|l| l.contains("COPY") && l.contains("rpm-gpg"))
@@ -2012,7 +2133,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         // Standard dir key gets directory COPY
         assert!(
             output.contains("COPY config/etc/pki/rpm-gpg/"),
@@ -2076,7 +2197,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl enable \\"),
             "4+ services should use continuation, got:\n{}",
@@ -2119,7 +2240,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
             "2 services must use multi-line continuation"
@@ -2157,7 +2278,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl mask \\\n    cups.service"),
             "masked service must produce systemctl mask with continuation, got:\n{}",
@@ -2220,7 +2341,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl disable \\"),
             "4+ disabled services should use continuation"
@@ -2240,7 +2361,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("COPY config/good-key /good-key"),
             "root-level key must have direct COPY"
@@ -2261,7 +2382,7 @@ mod tests {
             image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
             strategy: ResolutionStrategy::OsRelease,
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
             "must use target_image.image_ref for FROM, got:\n{output}"
@@ -2277,7 +2398,7 @@ mod tests {
             strategy: ResolutionStrategy::OsRelease,
         });
         snap.no_baseline = true;
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
             "degraded (no_baseline=true) must still use target_image for FROM"
@@ -2289,7 +2410,7 @@ mod tests {
         let snap = InspectionSnapshot::new();
         let result = base_image_from_snapshot(&snap);
         assert!(result.is_none(), "no target_image must return None");
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("# FROM line omitted"),
             "must contain omission comment"
@@ -2347,7 +2468,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("COPY quadlet/"),
             "excluded quadlet must NOT produce COPY quadlet/ line"
@@ -2372,7 +2493,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("COPY quadlet/"),
             "included quadlet must produce COPY quadlet/ line"
@@ -2393,7 +2514,7 @@ mod tests {
             tuned_include: true,
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("tuned"),
             "included tuned must produce tuned output"
@@ -2430,7 +2551,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("flatpak"),
             "excluded flatpak must NOT produce any flatpak output"
@@ -2475,7 +2596,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("httpd"),
             "non-suppressed package should be in containerfile"
@@ -2517,7 +2638,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("httpd.service"),
             "included service must produce systemctl line"
@@ -2579,7 +2700,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("systemctl enable \\\n    httpd.service"),
             "enabled service must produce systemctl enable with continuation"
@@ -2619,7 +2740,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/"),
             "included sysctls must produce COPY for synthesized file, got:\n{output}"
@@ -2645,7 +2766,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("sysctl"),
             "all-excluded sysctls must produce no sysctl output, got:\n{output}"
@@ -2671,7 +2792,7 @@ mod tests {
             tuned_include: false,
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("tuned"),
             "excluded tuned must produce no tuned output, got:\n{output}"
@@ -2691,7 +2812,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("COPY tuned/etc/tuned/ /etc/tuned/"),
             "included tuned with custom profile must COPY profile files, got:\n{output}"
@@ -2721,7 +2842,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
             "included drop-in must produce COPY drop-ins/ line, got:\n{output}"
@@ -2746,7 +2867,7 @@ mod tests {
         snap.rpm.as_mut().unwrap().leaf_authority_hosts = Some(2);
         snap.rpm.as_mut().unwrap().leaf_total_hosts = Some(3);
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("# Leaf classification: 2/3 hosts (partial authority)"),
             "partial authority comment must appear when auth < total, got:\n{output}"
@@ -2767,7 +2888,7 @@ mod tests {
         snap.rpm.as_mut().unwrap().leaf_authority_hosts = Some(2);
         snap.rpm.as_mut().unwrap().leaf_total_hosts = Some(2);
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("partial authority"),
             "full authority must not produce partial authority comment"
@@ -2789,7 +2910,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             !output.contains("COPY drop-ins/"),
             "excluded drop-in must NOT produce COPY drop-ins/ line"
@@ -2830,7 +2951,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
         assert!(
             output.contains("git"),
             "leaf package 'git' must appear in containerfile install line"
@@ -2844,7 +2965,7 @@ mod tests {
     #[test]
     fn test_containerfile_repo_enabling_packages_split() {
         let snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
 
         // epel-release must appear in its own install step before the other packages
         let repo_pos = output
@@ -2878,7 +2999,7 @@ mod tests {
     #[test]
     fn test_containerfile_no_repo_packages_single_block() {
         let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git"]);
-        let output = render_containerfile(&snap, None);
+        let output = render_containerfile(&snap, None, None);
 
         // No repo-enabling section should exist
         assert!(
@@ -2893,5 +3014,797 @@ mod tests {
         assert!(output.contains("httpd"), "must contain httpd");
         assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
         assert!(output.contains("git"), "must contain git");
+    }
+
+    // --- Group install rendering tests ---
+
+    use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    /// Build a snapshot with packages AND installed groups.
+    fn snapshot_with_packages_and_groups(
+        pkg_names: &[&str],
+        groups: Vec<InstalledGroup>,
+    ) -> InspectionSnapshot {
+        let mut snap = snapshot_with_packages(pkg_names);
+        if let Some(ref mut rpm) = snap.rpm {
+            rpm.installed_groups = Some(groups);
+        }
+        snap
+    }
+
+    #[test]
+    fn test_containerfile_renders_group_install_section() {
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make", "vim-enhanced"],
+            vec![
+                InstalledGroup {
+                    name: "Development Tools".into(),
+                    members: vec!["gcc".into(), "make".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec!["podman".into()],
+                    optional_installed: vec![],
+                },
+            ],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+        ctx.group_states
+            .insert("Container Management".into(), GroupRenderState::Renderable);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Group section present with correct count
+        assert!(
+            output.contains("Package Groups (2)"),
+            "must have Package Groups (2) section header"
+        );
+        // dnf group install command
+        assert!(
+            output.contains("RUN dnf group install -y"),
+            "must contain dnf group install command"
+        );
+        // Group names quoted and sorted alphabetically
+        assert!(
+            output.contains("\"Container Management\""),
+            "must contain quoted group name Container Management"
+        );
+        assert!(
+            output.contains("\"Development Tools\""),
+            "must contain quoted group name Development Tools"
+        );
+        // Container Management sorts before Development Tools
+        let cm_pos = output.find("\"Container Management\"").unwrap();
+        let dt_pos = output.find("\"Development Tools\"").unwrap();
+        assert!(
+            cm_pos < dt_pos,
+            "Container Management must sort before Development Tools"
+        );
+
+        // Group members suppressed from individual packages
+        assert!(
+            !output.contains("    gcc "),
+            "gcc must be suppressed from individual packages (member of renderable group)"
+        );
+        assert!(
+            !output.contains("    make "),
+            "make must be suppressed from individual packages (member of renderable group)"
+        );
+
+        // Non-member packages still present
+        assert!(
+            output.contains("httpd"),
+            "httpd must remain in individual packages"
+        );
+        assert!(
+            output.contains("vim-enhanced"),
+            "vim-enhanced must remain in individual packages"
+        );
+
+        // Group section comes before individual packages section
+        let group_pos = output.find("Package Groups").unwrap();
+        let pkg_pos = output.find("Packages (").unwrap();
+        assert!(
+            group_pos < pkg_pos,
+            "group section must come before individual packages section"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_no_group_section_without_render_ctx() {
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make"],
+            vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        // render_ctx is None — all packages render individually
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            !output.contains("Package Groups"),
+            "must not have group section when render_ctx is None"
+        );
+        assert!(
+            !output.contains("dnf group install"),
+            "must not have dnf group install when render_ctx is None"
+        );
+        // All packages present individually
+        assert!(output.contains("gcc"), "gcc must be in individual packages");
+        assert!(
+            output.contains("make"),
+            "make must be in individual packages"
+        );
+        assert!(
+            output.contains("httpd"),
+            "httpd must be in individual packages"
+        );
+        assert!(
+            output.contains("Packages (3)"),
+            "must show all 3 packages individually"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_excluded_groups_not_rendered() {
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make"],
+            vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Excluded);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        assert!(
+            !output.contains("Package Groups"),
+            "excluded group must not produce a group section"
+        );
+        assert!(
+            !output.contains("dnf group install"),
+            "excluded group must not produce dnf group install"
+        );
+        // Members render individually since group is excluded
+        assert!(
+            output.contains("gcc"),
+            "gcc must be in individual packages when group is excluded"
+        );
+        assert!(
+            output.contains("make"),
+            "make must be in individual packages when group is excluded"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_optional_installed_not_suppressed_by_renderable_group() {
+        // optional_installed members MUST appear individually even when the
+        // parent group is renderable — `dnf group install` does not install
+        // optional members, so suppressing them loses them entirely.
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "gdb"],
+            vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec!["gdb".into()],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        assert!(
+            output.contains("Package Groups (1)"),
+            "must have Package Groups (1) section"
+        );
+        // Mandatory member suppressed — reproduced by dnf group install
+        assert!(
+            !output.contains("    gcc "),
+            "gcc must be suppressed (mandatory member reproduced by group install)"
+        );
+        // Optional member NOT suppressed — must appear individually
+        assert!(
+            output.contains("gdb"),
+            "gdb must appear individually (optional_installed, not installed by group install)"
+        );
+        assert!(
+            output.contains("httpd"),
+            "httpd must remain in individual packages"
+        );
+        // Provenance comment for optional members
+        assert!(
+            output.contains("# Optional members from \"Development Tools\""),
+            "must have optional provenance comment"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_mixed_renderable_and_degraded_groups() {
+        use inspectah_core::types::group_render::DegradationReason;
+
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make", "podman", "skopeo"],
+            vec![
+                InstalledGroup {
+                    name: "Development Tools".into(),
+                    members: vec!["gcc".into(), "make".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Container Management".into(),
+                    members: vec!["podman".into(), "skopeo".into()],
+                    optional_installed: vec![],
+                },
+            ],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+        ctx.group_states.insert(
+            "Container Management".into(),
+            GroupRenderState::Degraded {
+                reason: DegradationReason::MemberExcluded,
+            },
+        );
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Only the renderable group appears in group section
+        assert!(
+            output.contains("Package Groups (1)"),
+            "must have Package Groups (1) — only Development Tools is renderable"
+        );
+        assert!(
+            output.contains("\"Development Tools\""),
+            "must contain Development Tools in group install"
+        );
+        // Container Management must not appear in the dnf group install block
+        let group_install_block = output
+            .find("dnf group install")
+            .map(|pos| &output[pos..output[pos..].find("dnf clean all").map_or(output.len(), |end| pos + end)])
+            .unwrap_or("");
+        assert!(
+            !group_install_block.contains("Container Management"),
+            "Container Management is degraded, must not appear in dnf group install block"
+        );
+        // But it SHOULD appear in the degraded provenance comment
+        assert!(
+            output.contains("# \"Container Management\" degraded (member excluded): members rendered individually"),
+            "degraded group must have provenance comment"
+        );
+
+        // Renderable group members suppressed
+        assert!(
+            !output.contains("    gcc "),
+            "gcc suppressed (renderable group member)"
+        );
+        assert!(
+            !output.contains("    make "),
+            "make suppressed (renderable group member)"
+        );
+
+        // Degraded group members render individually
+        assert!(
+            output.contains("podman"),
+            "podman must render individually (degraded group)"
+        );
+        assert!(
+            output.contains("skopeo"),
+            "skopeo must render individually (degraded group)"
+        );
+    }
+
+    // --- Provenance comment annotation tests (Task 15) ---
+
+    #[test]
+    fn test_containerfile_ungrouped_comment() {
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Dev Tools".into(), GroupRenderState::Ungrouped);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Ungrouped comment must appear
+        assert!(
+            output.contains("# Ungrouped from \"Dev Tools\""),
+            "must contain ungrouped provenance comment, got:\n{output}"
+        );
+        // No dnf group install for this group
+        assert!(
+            !output.contains("dnf group install"),
+            "ungrouped group must not produce dnf group install"
+        );
+        // Members render individually
+        assert!(output.contains("gcc"), "gcc must render individually");
+        assert!(output.contains("make"), "make must render individually");
+    }
+
+    #[test]
+    fn test_containerfile_degraded_comment() {
+        use inspectah_core::types::group_render::DegradationReason;
+
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states.insert(
+            "Dev Tools".into(),
+            GroupRenderState::Degraded {
+                reason: DegradationReason::MemberExcluded,
+            },
+        );
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Degraded comment must appear
+        assert!(
+            output.contains("# \"Dev Tools\" degraded (member excluded): members rendered individually"),
+            "must contain degraded provenance comment, got:\n{output}"
+        );
+        // Members render individually
+        assert!(output.contains("gcc"), "gcc must render individually");
+        assert!(output.contains("make"), "make must render individually");
+    }
+
+    #[test]
+    fn test_containerfile_optional_provenance_comment() {
+        // Optional members get a provenance comment AND appear individually
+        // in the packages section — they are never suppressed because
+        // `dnf group install` does not install optional members.
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "gdb", "valgrind"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec!["gdb".into(), "valgrind".into()],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Dev Tools".into(), GroupRenderState::Renderable);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Optional members comment must appear
+        assert!(
+            output.contains("# Optional members from \"Dev Tools\""),
+            "must contain optional provenance comment, got:\n{output}"
+        );
+        // Optional members MUST appear in individual packages
+        assert!(
+            output.contains("gdb"),
+            "gdb must appear individually (optional member not installed by group install)"
+        );
+        assert!(
+            output.contains("valgrind"),
+            "valgrind must appear individually (optional member not installed by group install)"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_optional_provenance_from_excluded_group() {
+        // Optional members are ALWAYS independent — even when the parent
+        // group is excluded, optional members that are installed should
+        // get a provenance comment.
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "gdb"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec!["gdb".into()],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Dev Tools".into(), GroupRenderState::Excluded);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Optional provenance comment must still appear even for excluded groups
+        assert!(
+            output.contains("# Optional members from \"Dev Tools\""),
+            "optional provenance comment must appear even for excluded groups, got:\n{output}"
+        );
+        // gdb renders individually (not suppressed — group is excluded)
+        assert!(
+            output.contains("gdb"),
+            "gdb must render individually when parent group is excluded"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_optional_installed_survive_excluded_parent() {
+        // Optional members are independent of parent group state per spec.
+        // Even when the parent group is excluded, optional members that are
+        // installed must appear individually with provenance.
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "gdb", "strace"],
+            vec![InstalledGroup {
+                name: "Debug Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec!["gdb".into(), "strace".into()],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Debug Tools".into(), GroupRenderState::Excluded);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // No group install section — group is excluded
+        assert!(
+            !output.contains("dnf group install"),
+            "excluded group must not produce a dnf group install block"
+        );
+        // Optional members appear individually
+        assert!(
+            output.contains("gdb"),
+            "gdb must appear individually (optional member, parent excluded)"
+        );
+        assert!(
+            output.contains("strace"),
+            "strace must appear individually (optional member, parent excluded)"
+        );
+        // Provenance comment present
+        assert!(
+            output.contains("# Optional members from \"Debug Tools\""),
+            "must have optional provenance comment for excluded group"
+        );
+        // httpd also appears (non-group package)
+        assert!(
+            output.contains("httpd"),
+            "httpd must remain in individual packages"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_degraded_reason_member_overridden() {
+        use inspectah_core::types::group_render::DegradationReason;
+
+        let snap = snapshot_with_packages_and_groups(
+            &["gcc", "make"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states.insert(
+            "Dev Tools".into(),
+            GroupRenderState::Degraded {
+                reason: DegradationReason::MemberOverridden,
+            },
+        );
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+        assert!(
+            output.contains("# \"Dev Tools\" degraded (member overridden): members rendered individually"),
+            "must show member_overridden reason, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_degraded_reason_multilib() {
+        use inspectah_core::types::group_render::DegradationReason;
+
+        let snap = snapshot_with_packages_and_groups(
+            &["gcc"],
+            vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states.insert(
+            "Dev Tools".into(),
+            GroupRenderState::Degraded {
+                reason: DegradationReason::MultilibConflict,
+            },
+        );
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+        assert!(
+            output.contains("# \"Dev Tools\" degraded (multilib conflict): members rendered individually"),
+            "must show multilib_conflict reason, got:\n{output}"
+        );
+    }
+
+    // ── Task 16: Excluded group with excluded members emits nothing ──
+
+    #[test]
+    fn test_containerfile_excluded_group_emits_nothing() {
+        // Snapshot where group members have include: false (truly excluded)
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "gcc".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: false, // member excluded
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "make".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: false, // member excluded
+                    ..Default::default()
+                },
+            ],
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }]),
+            ..Default::default()
+        });
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Excluded);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // No group section at all
+        assert!(
+            !output.contains("Package Groups"),
+            "excluded group must not produce a group section"
+        );
+        assert!(
+            !output.contains("dnf group install"),
+            "excluded group must not produce dnf group install"
+        );
+        // Group name must not appear anywhere in group install context
+        assert!(
+            !output.contains("\"Development Tools\""),
+            "excluded group name must not appear in dnf group install output"
+        );
+        // Members with include:false must not appear in individual packages
+        assert!(
+            !output.contains("    gcc"),
+            "gcc (include:false) must not appear in individual packages"
+        );
+        assert!(
+            !output.contains("    make"),
+            "make (include:false) must not appear in individual packages"
+        );
+        // Non-member package still renders
+        assert!(
+            output.contains("httpd"),
+            "httpd (non-member, include:true) must still render"
+        );
+    }
+
+    // ── Task 16b: Overlap-precedence proof matrix ──
+
+    #[test]
+    fn test_containerfile_no_duplicate_across_group_and_individual_sections() {
+        // A package covered by a renderable group must NOT appear in the
+        // individual packages section — even when it would otherwise qualify.
+        let snap = snapshot_with_packages_and_groups(
+            &["httpd", "gcc", "make"],
+            vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into(), "make".into()],
+                optional_installed: vec![],
+            }],
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Group section must exist
+        assert!(
+            output.contains("Package Groups (1)"),
+            "must have Package Groups section"
+        );
+        assert!(
+            output.contains("\"Development Tools\""),
+            "must contain group name in dnf group install"
+        );
+        // Members suppressed from individual packages section
+        assert!(
+            !output.contains("    gcc "),
+            "gcc must not appear in individual packages (covered by renderable group)"
+        );
+        assert!(
+            !output.contains("    make "),
+            "make must not appear in individual packages (covered by renderable group)"
+        );
+        // Non-member still present individually
+        assert!(
+            output.contains("httpd"),
+            "httpd must remain in individual packages (not a group member)"
+        );
+
+        // Count: gcc/make must appear exactly once each in the entire output
+        // (only inside the group install command, not in the individual section)
+        let gcc_count = output.matches("gcc").count();
+        assert!(
+            gcc_count <= 1,
+            "gcc must appear at most once (in group install suppression set), found {gcc_count} occurrences"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_precedence_renderable_suppresses_individual() {
+        use inspectah_core::types::group_render::DegradationReason;
+
+        // Package "gcc" belongs to two groups:
+        //   - "Development Tools" (Renderable)
+        //   - "Build Essentials" (Degraded)
+        // The renderable group should suppress gcc from individual packages,
+        // even though the degraded group would normally spill its members.
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "gcc".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "make".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "cmake".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            installed_groups: Some(vec![
+                InstalledGroup {
+                    name: "Development Tools".into(),
+                    members: vec!["gcc".into(), "make".into()],
+                    optional_installed: vec![],
+                },
+                InstalledGroup {
+                    name: "Build Essentials".into(),
+                    members: vec!["gcc".into(), "cmake".into()],
+                    optional_installed: vec![],
+                },
+            ]),
+            ..Default::default()
+        });
+
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+        ctx.group_states.insert(
+            "Build Essentials".into(),
+            GroupRenderState::Degraded {
+                reason: DegradationReason::MemberExcluded,
+            },
+        );
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Only Development Tools in group install section
+        assert!(
+            output.contains("Package Groups (1)"),
+            "must have exactly 1 renderable group"
+        );
+        assert!(
+            output.contains("\"Development Tools\""),
+            "Development Tools must be in group install"
+        );
+        // Scope the check to the dnf group install block — the provenance
+        // comment legitimately contains "Build Essentials" in quotes.
+        let group_install_block = output
+            .find("dnf group install")
+            .map(|pos| {
+                &output[pos..output[pos..]
+                    .find("dnf clean all")
+                    .map_or(output.len(), |end| pos + end)]
+            })
+            .unwrap_or("");
+        assert!(
+            !group_install_block.contains("Build Essentials"),
+            "Build Essentials (degraded) must not be in dnf group install block"
+        );
+
+        // gcc is a member of the renderable group — must be suppressed
+        // from individual packages even though it's also in the degraded group
+        assert!(
+            !output.contains("    gcc "),
+            "gcc must be suppressed: renderable group membership takes precedence"
+        );
+
+        // make is only in the renderable group — also suppressed
+        assert!(
+            !output.contains("    make "),
+            "make must be suppressed (renderable group member)"
+        );
+
+        // cmake is only in the degraded group — it renders individually
+        // (degraded groups spill their members to individual packages)
+        assert!(
+            output.contains("cmake"),
+            "cmake must render individually (only in degraded group, not suppressed)"
+        );
+
+        // httpd is not in any group — renders individually
+        assert!(
+            output.contains("httpd"),
+            "httpd must render individually (not a group member)"
+        );
+
+        // Degraded provenance comment must appear
+        assert!(
+            output.contains("# \"Build Essentials\" degraded"),
+            "degraded provenance comment must appear for Build Essentials"
+        );
     }
 }

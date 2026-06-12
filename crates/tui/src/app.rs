@@ -66,6 +66,7 @@ fn item_id_to_viewed_key(item_id: &ItemId) -> String {
         ItemId::SelinuxPort { protocol_port } => protocol_port.clone(),
         ItemId::Fstab { mount_point } => mount_point.clone(),
         ItemId::NonRpm { name } => name.clone(),
+        ItemId::Group { name } => name.clone(),
     }
 }
 
