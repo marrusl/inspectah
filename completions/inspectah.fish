@@ -1,3 +1,5 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/inspectah completions fish`
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_inspectah_global_optspecs
 	string join \n markdown-help h/help V/version
@@ -40,13 +42,11 @@ complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l preserve -d
 ssh-keys\t''
 subscription\t''
 all\t''"
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l progress -d 'Progress display mode: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)' -r -f -a "rich\t'Block-redraw checklist with spinners (default for TTY)'
-plain\t'Append-only lines with Unicode symbols (durable scrollback)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l progress -d 'Progress display mode: pretty (default TTY), flat (non-TTY/CI)' -r -f -a "pretty\t'Arrival-order receipt with spinners and ANSI color (default for TTY)'
 flat\t'Numbered sequential lines, no ANSI (CI / piped output)'"
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l inspect-only -d 'Write JSON snapshot only, skip tarball/artifact generation'
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l no-baseline -d 'Skip baseline extraction (degraded classification mode)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l no-redaction -d 'Skip the redaction phase — secrets remain unmasked in output'
-complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s v -l verbose -d 'Show sub-step detail for all inspectors, including fast ones'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s q -l quiet -d 'Suppress the scan progress checklist (completion summary still prints)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s h -l help -d 'Print help (see more with \'--help\')'

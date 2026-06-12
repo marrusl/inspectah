@@ -32,6 +32,17 @@ sudo dnf install inspectah
 
 Requires podman >= 4.4 (installed as a dependency if not present).
 
+### Prerequisites
+
+- **Root access** — `inspectah scan` requires root privileges
+- **Podman** — installed and available (`sudo dnf install podman`)
+- **Target base image** — inspectah must be able to pull your target container image.
+  For disconnected or air-gapped environments:
+  - Pull the image on a connected machine: `podman save -o baseline.tar <image-ref>`
+  - Transfer the tarball to the target host
+  - Load it: `podman load -i baseline.tar`
+  - Alternatively, use a local or mirror registry
+
 ### macOS (Homebrew)
 
 ```bash
@@ -61,7 +72,7 @@ inspectah follows a four-step workflow:
 
 inspectah can orchestrate the build via `inspectah build <tarball> <tag>` (runs `podman build` under the hood) or you can extract the tarball and build manually.
 
-The baseline comparison is critical: inspectah extracts the target base image to determine what's already there, so it only includes the delta in your migration artifacts. Without baseline extraction (e.g., `--no-baseline`), all packages and configs are assumed user-added.
+The baseline comparison is critical: inspectah extracts the target base image to determine what's already there, so it only includes the delta in your migration artifacts.
 
 ## Output
 
@@ -108,7 +119,6 @@ For full command-line reference, see the [CLI documentation](https://marrusl.git
 Common flags for `inspectah scan`:
 
 - `--base-image <IMAGE>` — Target base image for cross-distro conversion (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`)
-- `--no-baseline` — Skip baseline extraction (degraded classification mode, faster but less accurate)
 - `--preserve <ITEM>` — Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable
 - `--no-redaction` — Skip the redaction pipeline, retaining raw secrets
 - `--ack-sensitive` — Acknowledge sensitive data in snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`
@@ -118,6 +128,16 @@ Common flags for `inspectah scan`:
 - `-q, --quiet` — Suppress the scan progress checklist
 
 Run `inspectah scan --help` for the full list.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | Success — scan completed, report is trustworthy |
+| 1    | General error (invalid arguments, missing permissions, etc.) |
+| 2    | Incomplete scan — one or more inspectors failed, report has blind spots |
+| 3    | Baseline pull failure — could not pull the target container image |
+| 130  | Interrupted — scan was cancelled by the user (SIGINT / Ctrl-C) |
 
 ### Refine
 

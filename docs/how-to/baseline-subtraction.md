@@ -59,26 +59,31 @@ Baseline, even though the host was not originally running that image. This
 gives you a clear view of what you need to carry forward versus what ships
 with the target.
 
-## Skip baseline extraction
+## Baseline extraction is mandatory
 
-If you do not need package classification against a base image (for example,
-when doing an inventory-only scan), skip the baseline step entirely:
+inspectah requires baseline extraction to classify packages and configurations
+correctly. If the scan cannot pull the target base image, it exits with code 3
+and shows a detailed error with remediation guidance.
 
-```bash
-sudo inspectah scan --no-baseline
-```
+For disconnected or air-gapped environments, you have two options:
 
-This runs in **degraded classification mode**. Without a baseline, inspectah
-cannot distinguish OS packages from site additions, so all packages receive
-a provisional classification. The scan still completes successfully (exit 0)
-but the triage data is less precise.
+1. **Pre-stage the base image:** Pull the image on a connected machine, save it
+   as a tarball with `podman save`, transfer it to the target host, and load it
+   with `podman load`.
 
-### Mutual exclusivity
+   ```bash
+   # On a connected machine:
+   podman pull registry.redhat.io/rhel9/rhel-bootc:9.6
+   podman save -o rhel9-bootc-9.6.tar registry.redhat.io/rhel9/rhel-bootc:9.6
 
-You cannot use `--base-image` and `--no-baseline` together. They are
-contradictory: one says "use this specific image" while the other says
-"skip image comparison entirely." inspectah exits with an error if both
-are specified.
+   # Transfer the tarball to the target host, then:
+   sudo podman load -i rhel9-bootc-9.6.tar
+   sudo inspectah scan
+   ```
+
+2. **Use a local or mirror registry:** Configure a mirror registry in your
+   air-gapped environment and ensure the target base image is replicated there.
+   inspectah will pull from the configured registry.
 
 ## What baseline extraction does
 
@@ -98,8 +103,8 @@ on the packages that actually differ from the base image.
 
 Baseline extraction requires pulling a container image. The host needs
 network access to the registry hosting the target image. For air-gapped
-environments, use `--no-baseline` and classify packages manually in the
-refine UI.
+environments, see the section above on pre-staging the base image via
+`podman save` and `podman load`.
 
 ## Verify the resolved image
 

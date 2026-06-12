@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`--no-baseline` flag** — baseline extraction is now mandatory. Scans that cannot pull the target image exit with a clear error and remediation guidance. Use `--base-image` to override auto-resolution, or use `podman save`/`podman load` for disconnected environments.
+- `--progress rich` and `--progress plain` modes (use `--progress pretty`)
+
 ### Changed
+- **Schema version** bumped to 19. Tarballs from older schema versions are no longer loadable.
+- **Exit codes** — pull failures now exit with code 3 (previously the scan would continue with degraded output).
 - Scan progress output redesigned as append-only streaming receipt
 - Progress modes simplified from three (rich/plain/flat) to two (pretty/flat)
 - Sub-step detail moved behind `--verbose` flag
@@ -15,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--verbose` now works with both pretty and flat modes
 - Flat mode now respects `--verbose` (previously always showed sub-steps)
 
-### Removed
-- `--progress rich` and `--progress plain` modes (use `--progress pretty`)
+### Added
+- **Pull failure classification** — five error categories (registry unreachable, auth required, image not found, TLS/cert error, unknown) with tailored remediation guidance including disconnected-environment workarounds.
 
 ## [0.8.6-beta.1] - 2026-06-09
 

@@ -1,3 +1,20 @@
+   Compiling inspectah-core v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/core)
+   Compiling darling_core v0.23.0
+   Compiling clap v4.6.1
+   Compiling inspectah-web v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/web)
+   Compiling inspectah-cli v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/cli)
+   Compiling clap-markdown v0.1.5
+   Compiling clap_complete v4.6.5
+   Compiling darling_macro v0.23.0
+   Compiling inspectah-collect v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/collect)
+   Compiling darling v0.23.0
+   Compiling inspectah-pipeline v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/pipeline)
+   Compiling instability v0.3.12
+   Compiling ratatui v0.29.0
+   Compiling inspectah-refine v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/refine)
+   Compiling inspectah-tui v0.8.6-beta.3 (/Users/mrussell/Work/bootc-migration/inspectah/crates/tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.05s
+     Running `target/debug/inspectah completions bash`
 _inspectah() {
     local i cur prev opts cmd
     COMPREPLY=()
@@ -419,7 +436,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__scan)
-            opts="-o -v -q -h --inspect-only --output --base-image --no-baseline --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
+            opts="-o -v -q -h --inspect-only --output --base-image --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -442,7 +459,7 @@ _inspectah() {
                     return 0
                     ;;
                 --progress)
-                    COMPREPLY=($(compgen -W "rich plain flat" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "pretty flat" -- "${cur}"))
                     return 0
                     ;;
                 *)

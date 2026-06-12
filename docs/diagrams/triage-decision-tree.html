@@ -109,8 +109,8 @@ const singleHostBranches = [
     sublabel: 'Human review',
     color: 'red',
     tooltip: 'Origin unclear. Requires manual review before migration decision.',
-    criteria: 'No baseline data available, or item does not match known patterns.',
-    example: 'Custom binary /usr/local/bin/myapp — no RPM origin, no baseline.',
+    criteria: 'Item does not match known patterns or provenance is unclear.',
+    example: 'Custom binary /usr/local/bin/myapp — no RPM origin.',
     action: 'Flagged in audit-report.md for operator review.',
   },
 ];

@@ -1,3 +1,5 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running `target/debug/inspectah completions zsh`
 #compdef inspectah
 
 autoload -U is-at-least
@@ -35,14 +37,12 @@ _arguments "${_arguments_options[@]}" : \
 '--output=[Output file path (tarball) or directory (with --inspect-only)]:OUTPUT:_files' \
 '--base-image=[Target base image for cross-distro conversion (e.g., registry.redhat.io/rhel9/rhel-bootc\:9.6)]:BASE_IMAGE:_default' \
 '*--preserve=[Preserve sensitive data in the snapshot]:ITEM:(password-hashes ssh-keys subscription all)' \
-'--progress=[Progress display mode\: rich (default TTY), plain (durable scrollback), flat (non-TTY/CI)]:MODE:((rich\:"Block-redraw checklist with spinners (default for TTY)"
-plain\:"Append-only lines with Unicode symbols (durable scrollback)"
+'--progress=[Progress display mode\: pretty (default TTY), flat (non-TTY/CI)]:MODE:((pretty\:"Arrival-order receipt with spinners and ANSI color (default for TTY)"
 flat\:"Numbered sequential lines, no ANSI (CI / piped output)"))' \
 '--inspect-only[Write JSON snapshot only, skip tarball/artifact generation]' \
-'--no-baseline[Skip baseline extraction (degraded classification mode)]' \
 '--no-redaction[Skip the redaction phase — secrets remain unmasked in output]' \
-'--ack-sensitive[Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)]' \
-'--acknowledge-sensitive[Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)]' \
+'--ack-sensitive[Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)]' \
+'--acknowledge-sensitive[Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)]' \
 '(-q --quiet)-v[Show sub-step detail for all inspectors, including fast ones]' \
 '(-q --quiet)--verbose[Show sub-step detail for all inspectors, including fast ones]' \
 '(-v --verbose)-q[Suppress the scan progress checklist (completion summary still prints)]' \
