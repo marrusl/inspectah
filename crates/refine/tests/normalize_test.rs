@@ -1,6 +1,6 @@
 #[test]
 fn omitted_include_defaults_to_true() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.rpm.as_ref().unwrap().packages_added[0].include,
@@ -10,7 +10,7 @@ fn omitted_include_defaults_to_true() {
 
 #[test]
 fn explicit_false_preserved() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": false}]}}"#;
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": false}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         !snap.rpm.as_ref().unwrap().packages_added[0].include,
@@ -20,14 +20,14 @@ fn explicit_false_preserved() {
 
 #[test]
 fn explicit_true_preserved() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": true}]}}"#;
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": true}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(snap.rpm.as_ref().unwrap().packages_added[0].include);
 }
 
 #[test]
 fn omitted_config_include_defaults_to_true() {
-    let json = r#"{"schema_version": 18, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
+    let json = r#"{"schema_version": 19, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.config.as_ref().unwrap().files[0].include,
@@ -37,7 +37,7 @@ fn omitted_config_include_defaults_to_true() {
 
 #[test]
 fn explicit_config_false_preserved() {
-    let json = r#"{"schema_version": 18, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "include": false}]}}"#;
+    let json = r#"{"schema_version": 19, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "include": false}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         !snap.config.as_ref().unwrap().files[0].include,
@@ -47,14 +47,14 @@ fn explicit_config_false_preserved() {
 
 #[test]
 fn base_image_only_include_false_preserved() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "include": false}]}}"#;
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "include": false}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(!snap.rpm.as_ref().unwrap().base_image_only[0].include);
 }
 
 #[test]
 fn base_image_only_omitted_include_defaults_true() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.rpm.as_ref().unwrap().base_image_only[0].include,
@@ -64,7 +64,7 @@ fn base_image_only_omitted_include_defaults_true() {
 
 #[test]
 fn mixed_present_and_absent_includes() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [
         {"name": "httpd", "arch": "x86_64", "state": "added", "include": false},
         {"name": "vim", "arch": "x86_64", "state": "added", "include": true},
         {"name": "curl", "arch": "x86_64", "state": "added"}
@@ -78,7 +78,7 @@ fn mixed_present_and_absent_includes() {
 
 #[test]
 fn empty_snapshot_loads() {
-    let json = r#"{"schema_version": 18}"#;
+    let json = r#"{"schema_version": 19}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(snap.rpm.is_none());
     assert!(snap.config.is_none());
@@ -100,7 +100,7 @@ fn reject_future_schema() {
 
 #[test]
 fn snapshot_with_all_sections_roundtrip() {
-    let json = r#"{"schema_version": 18, "rpm": {"packages_added": [
+    let json = r#"{"schema_version": 19, "rpm": {"packages_added": [
         {"name": "httpd", "arch": "x86_64", "state": "added", "include": true},
         {"name": "vim", "arch": "x86_64", "state": "added", "include": true}
     ], "base_image_only": [

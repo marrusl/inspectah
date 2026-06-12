@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
