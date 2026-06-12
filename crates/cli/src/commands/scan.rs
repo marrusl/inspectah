@@ -313,11 +313,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     let mut ring_pos: usize = 0;
 
                     let result = {
+                        let mut stderr_out = std::io::stderr().lock();
                         let mut callback = pull_progress::tty_viewport_callback(
                             &mut collected_lines,
                             &mut ring,
                             &mut ring_pos,
                             content_width,
+                            &mut stderr_out,
                         );
                         inspectah_collect::baseline::extract_baseline(
                             &executor,
@@ -332,13 +334,17 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     result.context("baseline extraction failed")?
                 } else {
                     // Narrow terminal — fall back to non-TTY
-                    let mut callback = pull_progress::non_tty_callback(&mut collected_lines);
+                    let mut stderr_out = std::io::stderr().lock();
+                    let mut callback =
+                        pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
                     inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
                         .context("baseline extraction failed")?
                 }
             } else {
                 // Non-TTY: prefixed passthrough
-                let mut callback = pull_progress::non_tty_callback(&mut collected_lines);
+                let mut stderr_out = std::io::stderr().lock();
+                let mut callback =
+                    pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
                 inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
                     .context("baseline extraction failed")?
             };
