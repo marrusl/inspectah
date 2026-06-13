@@ -552,3 +552,112 @@ fn kernelboot_snapshot() {
 
     insta::assert_json_snapshot!(section);
 }
+
+// ── Test 11: tuned_include behavior ──────────────────────────────────
+
+#[test]
+fn tuned_detected_profile_auto_includes() {
+    let exec = MockExecutor::new()
+        .with_file("/proc/cmdline", CMDLINE_FIXTURE)
+        .with_command(
+            "lsmod",
+            ExecResult {
+                stdout: LSMOD_FIXTURE.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "sysctl -a",
+            ExecResult {
+                stdout: SYSCTL_A_FIXTURE.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/sysctl.d", vec![])
+        .with_dir("/usr/lib/sysctl.d", vec![])
+        .with_dir("/etc/modprobe.d", vec![])
+        .with_dir("/etc/modules-load.d", vec![])
+        .with_dir("/etc/dracut.conf.d", vec![])
+        .with_command(
+            "tuned-adm active",
+            ExecResult {
+                stdout: "Current active profile: throughput-performance\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
+    let section = match &output.section {
+        SectionData::KernelBoot(s) => s,
+        other => panic!("expected SectionData::KernelBoot, got {:?}", other),
+    };
+
+    assert_eq!(section.tuned_active, "throughput-performance");
+    assert!(
+        section.tuned_include,
+        "any detected tuned profile should auto-include"
+    );
+}
+
+#[test]
+fn tuned_no_profile_does_not_include() {
+    let exec = MockExecutor::new()
+        .with_file("/proc/cmdline", CMDLINE_FIXTURE)
+        .with_command(
+            "lsmod",
+            ExecResult {
+                stdout: LSMOD_FIXTURE.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "sysctl -a",
+            ExecResult {
+                stdout: SYSCTL_A_FIXTURE.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/sysctl.d", vec![])
+        .with_dir("/usr/lib/sysctl.d", vec![])
+        .with_dir("/etc/modprobe.d", vec![])
+        .with_dir("/etc/modules-load.d", vec![])
+        .with_dir("/etc/dracut.conf.d", vec![]);
+    // tuned-adm not registered → returns exit 127
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = KernelbootInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
+    let section = match &output.section {
+        SectionData::KernelBoot(s) => s,
+        other => panic!("expected SectionData::KernelBoot, got {:?}", other),
+    };
+
+    assert!(section.tuned_active.is_empty());
+    assert!(
+        !section.tuned_include,
+        "no tuned profile detected should not include"
+    );
+}
