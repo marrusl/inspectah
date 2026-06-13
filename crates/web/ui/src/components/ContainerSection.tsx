@@ -44,6 +44,7 @@ export function ContainerSection({
   onMutationError,
 }: ContainerSectionProps) {
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
 
   const handleToggleQuadlet = useCallback(
     (path: string, currentInclude: boolean) => {
@@ -208,7 +209,58 @@ export function ContainerSection({
                   <Label color={attentionLabelColor(level)}>{badge}</Label>
                 </div>
               )}
+              {q.content && (
+                <div role="gridcell" style={{ marginLeft: "auto" }}>
+                  <button
+                    type="button"
+                    aria-label={
+                      expandedPaths.has(q.path)
+                        ? "Hide unit file"
+                        : "Show unit file"
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedPaths((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(q.path)) {
+                          next.delete(q.path);
+                        } else {
+                          next.add(q.path);
+                        }
+                        return next;
+                      });
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "var(--pf-t--global--font--size--xs)",
+                      opacity: 0.7,
+                      padding: "2px 6px",
+                    }}
+                  >
+                    {expandedPaths.has(q.path) ? "▼ Unit" : "▶ Unit"}
+                  </button>
+                </div>
+              )}
             </div>
+            {q.content && expandedPaths.has(q.path) && (
+              <pre
+                data-testid="quadlet-content"
+                style={{
+                  maxHeight: "300px",
+                  overflow: "auto",
+                  whiteSpace: "pre-wrap",
+                  fontSize: "var(--pf-t--global--font--size--xs)",
+                  padding: "var(--pf-t--global--spacer--sm)",
+                  margin: 0,
+                  background: "var(--pf-t--global--background--color--secondary--default)",
+                  borderTop: "1px solid var(--pf-t--global--border--color--default)",
+                }}
+              >
+                {q.content}
+              </pre>
+            )}
           </div>
         );
       })}

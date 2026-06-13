@@ -102,13 +102,21 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
     let quadlets: Vec<QuadletDecisionDto> = decisions
         .quadlets
         .iter()
-        .map(|q| QuadletDecisionDto {
-            path: q.entry.path.clone(),
-            name: q.entry.name.clone(),
-            image: q.entry.image.clone(),
-            triage: q.triage.clone(),
-            include: q.entry.include,
-            locked: q.entry.locked,
+        .map(|q| {
+            let content = if q.entry.content.is_empty() {
+                None
+            } else {
+                Some(q.entry.content.clone())
+            };
+            QuadletDecisionDto {
+                path: q.entry.path.clone(),
+                name: q.entry.name.clone(),
+                image: q.entry.image.clone(),
+                triage: q.triage.clone(),
+                include: q.entry.include,
+                locked: q.entry.locked,
+                content,
+            }
         })
         .collect();
 

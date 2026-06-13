@@ -8,8 +8,8 @@ describe("ConfigDetail", () => {
     return {
       entry: {
         path: "/etc/test.conf",
-        kind: "modified_config",
-        category: "System",
+        kind: "rpm_owned_modified",
+        category: "other",
         content,
         rpm_va_flags: null,
         package: "test-package",
@@ -20,7 +20,7 @@ describe("ConfigDetail", () => {
         fleet: null,
       },
       triage: {
-        triage: "review",
+        triage: { mode: "single_host", baseline: null },
         primary_reason: "config_modified",
         annotations: [],
       },
@@ -54,8 +54,8 @@ describe("ConfigDetail", () => {
     const config: RefinedConfig = {
       entry: {
         path: "/etc/empty.conf",
-        kind: "modified_config",
-        category: "System",
+        kind: "rpm_owned_modified",
+        category: "other",
         content: "",
         rpm_va_flags: null,
         package: "test-package",
@@ -66,7 +66,7 @@ describe("ConfigDetail", () => {
         fleet: null,
       },
       triage: {
-        triage: "review",
+        triage: { mode: "single_host", baseline: null },
         primary_reason: "config_modified",
         annotations: [],
       },

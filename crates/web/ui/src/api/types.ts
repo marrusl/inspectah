@@ -444,6 +444,7 @@ export interface QuadletDecisionDto {
   triage: TriageTag;
   include: boolean;
   locked?: boolean;
+  content?: string | null;
 }
 
 /** A classified flatpak app, projected for the view response. */

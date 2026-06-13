@@ -214,4 +214,74 @@ describe("ContainerSection", () => {
     expect(screen.getByText("Quadlet")).toBeInTheDocument();
     expect(screen.getByText("Flatpak")).toBeInTheDocument();
   });
+
+  it("expands quadlet row to show unit file content", async () => {
+    const unitContent =
+      "[Container]\nImage=quay.io/org/myapp:latest\nPublishPort=8080:80";
+    render(
+      <ContainerSection
+        quadlets={[makeQuadlet({ content: unitContent })]}
+        flatpaks={[]}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    // Content should not be visible initially
+    expect(screen.queryByTestId("quadlet-content")).not.toBeInTheDocument();
+
+    // Click the expand button
+    const expandBtn = screen.getByRole("button", {
+      name: /Show unit file/,
+    });
+    await userEvent.click(expandBtn);
+
+    // Content should now be visible in a <pre> block
+    const contentBlock = screen.getByTestId("quadlet-content");
+    expect(contentBlock).toBeInTheDocument();
+    expect(contentBlock.tagName).toBe("PRE");
+    expect(contentBlock).toHaveTextContent(
+      "[Container] Image=quay.io/org/myapp:latest PublishPort=8080:80",
+    );
+  });
+
+  it("does not show expand button when quadlet has no content", () => {
+    render(
+      <ContainerSection
+        quadlets={[makeQuadlet()]}
+        flatpaks={[]}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Show unit file/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("collapses quadlet content on second click", async () => {
+    const unitContent = "[Container]\nImage=test:latest";
+    render(
+      <ContainerSection
+        quadlets={[makeQuadlet({ content: unitContent })]}
+        flatpaks={[]}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    const expandBtn = screen.getByRole("button", {
+      name: /Show unit file/,
+    });
+    await userEvent.click(expandBtn);
+    expect(screen.getByTestId("quadlet-content")).toBeInTheDocument();
+
+    // Click again to collapse
+    const collapseBtn = screen.getByRole("button", {
+      name: /Hide unit file/,
+    });
+    await userEvent.click(collapseBtn);
+    expect(screen.queryByTestId("quadlet-content")).not.toBeInTheDocument();
+  });
 });

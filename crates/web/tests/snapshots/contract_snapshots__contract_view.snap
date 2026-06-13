@@ -33,6 +33,7 @@ expression: json
   ],
   "quadlets": [
     {
+      "content": "[Container]\nImage=quay.io/myorg/myapp:latest",
       "image": "quay.io/myorg/myapp:latest",
       "include": false,
       "locked": false,
@@ -60,6 +61,7 @@ expression: json
   "service_dropins": [],
   "service_states": [
     {
+      "default_state": "disable",
       "include": false,
       "locked": false,
       "triage": {

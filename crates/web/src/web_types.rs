@@ -103,6 +103,8 @@ pub struct QuadletDecisionDto {
     pub triage: TriageTag,
     pub include: bool,
     pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// A classified flatpak app, projected for the view response.
