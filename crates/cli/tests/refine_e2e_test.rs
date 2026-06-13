@@ -120,6 +120,7 @@ async fn refine_server_lifecycle() {
     let resp = client
         .post(format!("{base}/api/op"))
         .json(&serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Package", "key": {"name": "httpd", "arch": "x86_64"}},
@@ -203,6 +204,7 @@ async fn refine_server_lifecycle() {
     let resp = client
         .post(format!("{base}/api/op"))
         .json(&serde_json::json!({
+            "kind": "Op",
             "op": "SetInclude",
             "target": {
                 "item_id": {"kind": "Package", "key": {"name": "nonexistent", "arch": "x86_64"}},
