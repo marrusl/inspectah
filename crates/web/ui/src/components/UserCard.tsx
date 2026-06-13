@@ -154,7 +154,6 @@ export function UserCard({
               : `${user.ssh_key_count} SSH keys`}
           </Label>
         )}
-        {user.has_subuid && <Label color="teal">subuid</Label>}
         <Label color={isInteractive ? "orange" : "grey"}>
           {classificationLabel}
         </Label>
