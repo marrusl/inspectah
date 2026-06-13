@@ -127,12 +127,18 @@ fn truncate_line(s: &str, max_len: usize) -> String {
 
 /// Create the non-TTY callback: prints each stderr line with `  pull: ` prefix.
 ///
-/// Also collects lines for post-completion blob counting.
-pub fn non_tty_callback(collected: &mut Vec<String>) -> impl FnMut(&str) + '_ {
+/// Displayed output is sanitized to redact credentials. The raw
+/// ANSI-stripped (but unsanitized) line is collected for post-completion
+/// classification by `pull_failure::classify_pull_failure`.
+pub fn non_tty_callback<'a>(
+    collected: &'a mut Vec<String>,
+    output: &'a mut dyn Write,
+) -> impl FnMut(&str) + 'a {
     move |line: &str| {
         let cleaned = strip_ansi(line);
         if !cleaned.trim().is_empty() {
-            eprintln!("  pull: {cleaned}");
+            let sanitized = super::pull_failure::sanitize_stderr(&cleaned);
+            let _ = writeln!(output, "  pull: {sanitized}");
         }
         collected.push(cleaned);
     }
@@ -141,12 +147,15 @@ pub fn non_tty_callback(collected: &mut Vec<String>) -> impl FnMut(&str) + '_ {
 /// Create the TTY viewport callback: renders a dynamic-height box-drawing viewport
 /// with recent stderr lines.
 ///
-/// Also collects lines for post-completion blob counting.
+/// The `output` writer receives the viewport rendering (box-drawing, cursor
+/// control). Content lines are sanitized before display. The raw
+/// ANSI-stripped (but unsanitized) line is collected for classification.
 pub fn tty_viewport_callback<'a>(
     collected: &'a mut Vec<String>,
     ring: &'a mut [String],
     ring_pos: &'a mut usize,
     content_width: usize,
+    output: &'a mut dyn Write,
 ) -> impl FnMut(&str) + 'a {
     move |line: &str| {
         let cleaned = strip_ansi(line);
@@ -157,23 +166,20 @@ pub fn tty_viewport_callback<'a>(
 
         let viewport_lines = ring.len();
 
-        // Push into ring buffer
-        ring[*ring_pos % viewport_lines] = truncate_line(&cleaned, content_width);
+        // Sanitize before putting into ring buffer for display
+        let sanitized = super::pull_failure::sanitize_stderr(&cleaned);
+        ring[*ring_pos % viewport_lines] = truncate_line(&sanitized, content_width);
         *ring_pos += 1;
-
-        // Redraw viewport
-        let stderr = std::io::stderr();
-        let mut w = stderr.lock();
 
         // Move cursor up to clear previous viewport (if not first draw)
         if *ring_pos > 1 {
             // up (viewport_lines + 2) lines (top border + N content + bottom border)
-            let _ = write!(w, "\x1b[{}A", viewport_lines + 2);
+            let _ = write!(output, "\x1b[{}A", viewport_lines + 2);
         }
 
         // Draw top border
         let _ = writeln!(
-            w,
+            output,
             "  \u{250c}{}\u{2510}",
             "\u{2500}".repeat(content_width + 2)
         );
@@ -186,7 +192,7 @@ pub fn tty_viewport_callback<'a>(
             } else {
                 // Empty slot
                 let _ = writeln!(
-                    w,
+                    output,
                     "  \u{2502} {:<width$} \u{2502}",
                     "",
                     width = content_width
@@ -194,7 +200,7 @@ pub fn tty_viewport_callback<'a>(
                 continue;
             };
             let _ = writeln!(
-                w,
+                output,
                 "  \u{2502} {:<width$} \u{2502}",
                 ring[idx],
                 width = content_width
@@ -202,11 +208,11 @@ pub fn tty_viewport_callback<'a>(
         }
         // Draw bottom border
         let _ = writeln!(
-            w,
+            output,
             "  \u{2514}{}\u{2518}",
             "\u{2500}".repeat(content_width + 2)
         );
-        let _ = w.flush();
+        let _ = output.flush();
     }
 }
 
@@ -348,13 +354,53 @@ mod tests {
     #[test]
     fn non_tty_callback_collects() {
         let mut collected = Vec::new();
+        let mut buf = Vec::new();
         {
-            let mut cb = non_tty_callback(&mut collected);
+            let mut cb = non_tty_callback(&mut collected, &mut buf);
             cb("Copying blob sha256:aaa done");
             cb("Copying blob sha256:bbb skipped");
         }
         assert_eq!(collected.len(), 2);
         assert!(collected[0].contains("aaa"));
+        let output = String::from_utf8_lossy(&buf);
+        assert!(output.contains("pull:"));
+    }
+
+    #[test]
+    fn non_tty_callback_sanitizes_displayed_output() {
+        let mut collected = Vec::new();
+        let mut buf = Vec::new();
+        {
+            let mut cb = non_tty_callback(&mut collected, &mut buf);
+            cb("Error: Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig unauthorized");
+        }
+        let output = String::from_utf8_lossy(&buf);
+        // Displayed output should be sanitized
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains("eyJhbGciOiJSUzI1NiJ9"));
+        // Collected line should be raw (unsanitized) for classification
+        assert!(collected[0].contains("eyJhbGciOiJSUzI1NiJ9"));
+    }
+
+    #[test]
+    fn tty_viewport_callback_sanitizes_displayed_output() {
+        let mut collected = Vec::new();
+        let mut ring: Vec<String> = (0..3).map(|_| String::new()).collect();
+        let mut ring_pos: usize = 0;
+        let mut buf = Vec::new();
+        {
+            let mut cb =
+                tty_viewport_callback(&mut collected, &mut ring, &mut ring_pos, 60, &mut buf);
+            cb("failed with Bearer eyJsecrettoken rest of line");
+        }
+        let output = String::from_utf8_lossy(&buf);
+        // Viewport display should be sanitized
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains("eyJsecrettoken"));
+        // Ring buffer should contain sanitized content
+        assert!(ring[0].contains("[REDACTED]"));
+        // Collected should be raw for classification
+        assert!(collected[0].contains("eyJsecrettoken"));
     }
 
     #[test]

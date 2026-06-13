@@ -192,18 +192,6 @@ fn test_merge_selects_baseline_from_matching_host() {
 
     assert!(merged.baseline.is_some());
     assert_eq!(merged.baseline.unwrap().image_digest, "sha256:abc");
-    assert!(!merged.no_baseline);
-}
-
-#[test]
-fn test_merge_no_baseline_sets_flag() {
-    let s1 = make_snap("host-a");
-    let s2 = make_snap("host-b");
-
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
-
-    assert!(merged.baseline.is_none());
-    assert!(merged.no_baseline);
 }
 
 // ---------------------------------------------------------------------------

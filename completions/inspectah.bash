@@ -419,7 +419,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__scan)
-            opts="-o -v -q -h --inspect-only --output --base-image --no-baseline --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
+            opts="-o -v -q -h --inspect-only --output --base-image --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -442,7 +442,7 @@ _inspectah() {
                     return 0
                     ;;
                 --progress)
-                    COMPREPLY=($(compgen -W "rich plain flat" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "pretty flat" -- "${cur}"))
                     return 0
                     ;;
                 *)

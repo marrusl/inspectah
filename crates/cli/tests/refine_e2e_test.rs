@@ -12,7 +12,7 @@ fn pkg_stat(view: &serde_json::Value, field: &str) -> i64 {
 /// Create a minimal test tarball with a FullyRedacted snapshot.
 fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let snap = serde_json::json!({
-        "schema_version": 18,
+        "schema_version": 19,
         "rpm": {
             "packages_added": [
                 {
@@ -37,8 +37,7 @@ fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
             "repo_providing_packages": [],
             "ostree_overrides": [],
             "ostree_removals": [],
-            "file_ownership": [],
-            "no_baseline": true
+            "file_ownership": []
         },
         "config": {
             "files": [
@@ -116,8 +115,8 @@ async fn refine_server_lifecycle() {
     assert_eq!(pkg_stat(&view, "total"), 1);
 
     // 3. Apply an operation (include httpd — normalization sets it to
-    //    exclude by default because there's no baseline, so including
-    //    it is a real state change that bumps generation)
+    //    exclude by default, so including it is a real state change
+    //    that bumps generation)
     let resp = client
         .post(format!("{base}/api/op"))
         .json(&serde_json::json!({

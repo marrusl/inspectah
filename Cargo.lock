@@ -137,6 +137,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_cmd"
+version = "2.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2aa3a22042e45de04255c7bf3626e239f450200fd0493c1e382263544b20aea6"
+dependencies = [
+ "anstyle",
+ "bstr",
+ "libc",
+ "predicates",
+ "predicates-core",
+ "predicates-tree",
+ "wait-timeout",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -243,6 +258,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
 dependencies = [
  "objc2",
+]
+
+[[package]]
+name = "bstr"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
+dependencies = [
+ "memchr",
+ "regex-automata",
+ "serde",
 ]
 
 [[package]]
@@ -579,6 +605,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "difflib"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -709,6 +741,15 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "float-cmp"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b09cf3155332e944990140d967ff5eceb70df778b34f77d8075db46e4704e6d8"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -1159,9 +1200,10 @@ dependencies = [
 
 [[package]]
 name = "inspectah-cli"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "axum",
  "clap",
  "clap-markdown",
@@ -1178,6 +1220,7 @@ dependencies = [
  "libc",
  "open",
  "pathdiff",
+ "predicates",
  "reqwest",
  "serde_json",
  "tar",
@@ -1188,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-collect"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "base64",
  "inspectah-core",
@@ -1206,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-core"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "chrono",
  "serde",
@@ -1220,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-pipeline"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -1243,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-refine"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "flate2",
  "inspectah-core",
@@ -1260,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-tui"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "color-eyre",
  "crossterm",
@@ -1274,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-web"
-version = "0.8.6-beta.2"
+version = "0.8.6-beta.3"
 dependencies = [
  "axum",
  "http-body-util",
@@ -1558,6 +1601,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "normalize-line-endings"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
+
+[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1769,6 +1818,36 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "predicates"
+version = "3.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada8f2932f28a27ee7b70dd6c1c39ea0675c55a36879ab92f3a715eaa1e63cfe"
+dependencies = [
+ "anstyle",
+ "difflib",
+ "float-cmp",
+ "normalize-line-endings",
+ "predicates-core",
+ "regex",
+]
+
+[[package]]
+name = "predicates-core"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cad38746f3166b4031b1a0d39ad9f954dd291e7854fcc0eed52ee41a0b50d144"
+
+[[package]]
+name = "predicates-tree"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0de1b847b39c8131db0467e9df1ff60e6d0562ab8e9a16e568ad0fdb372e2f2"
+dependencies = [
+ "predicates-core",
+ "termtree",
+]
 
 [[package]]
 name = "prettyplease"
@@ -2398,6 +2477,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "termtree"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "thiserror"

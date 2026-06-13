@@ -1031,7 +1031,6 @@ fn test_merge_rpm_sections_version_changes_dedup() {
 #[test]
 fn test_merge_rpm_sections_passthrough_scalars() {
     let s1 = RpmSection {
-        no_baseline: true,
         base_image: Some("registry.example.com/image:latest".into()),
         leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
@@ -1039,7 +1038,6 @@ fn test_merge_rpm_sections_passthrough_scalars() {
     let hostnames: Vec<String> = vec!["h1".into()];
     let (result, _) = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, Some(0)).unwrap();
 
-    assert!(result.no_baseline);
     assert_eq!(
         result.base_image,
         Some("registry.example.com/image:latest".into())
@@ -1840,21 +1838,21 @@ fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
     let s_a = RpmSection {
         base_image: Some("quay.io/rhel:9.3".into()),
         baseline_package_names: Some(vec!["old-pkg".into()]),
-        no_baseline: false,
+
         baseline_suppressed: Some(vec!["not-suppressed-a".into()]),
         ..Default::default()
     };
     let s_b = RpmSection {
         base_image: Some("quay.io/rhel:9.4".into()),
         baseline_package_names: Some(vec!["correct-pkg".into()]),
-        no_baseline: true,
+
         baseline_suppressed: Some(vec!["suppressed-b".into()]),
         ..Default::default()
     };
     let s_c = RpmSection {
         base_image: Some("quay.io/rhel:9.4".into()),
         baseline_package_names: Some(vec!["correct-pkg".into()]),
-        no_baseline: true,
+
         baseline_suppressed: Some(vec!["suppressed-b".into()]),
         ..Default::default()
     };
@@ -1875,7 +1873,6 @@ fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
         result.baseline_package_names,
         Some(vec!["correct-pkg".into()])
     );
-    assert!(result.no_baseline);
     assert_eq!(
         result.baseline_suppressed,
         Some(vec!["suppressed-b".into()])
@@ -1888,7 +1885,7 @@ fn test_merge_rpm_sections_no_baseline_gives_defaults() {
     let s1 = RpmSection {
         base_image: Some("quay.io/rhel:9.4".into()),
         baseline_package_names: Some(vec!["some-pkg".into()]),
-        no_baseline: true,
+
         baseline_suppressed: Some(vec!["suppressed".into()]),
         ..Default::default()
     };
@@ -1899,7 +1896,6 @@ fn test_merge_rpm_sections_no_baseline_gives_defaults() {
 
     assert_eq!(result.base_image, None);
     assert_eq!(result.baseline_package_names, None);
-    assert!(!result.no_baseline);
     assert_eq!(result.baseline_suppressed, None);
 }
 

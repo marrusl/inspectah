@@ -10,7 +10,7 @@ The `InspectionSnapshot` is the core data structure produced by `inspectah scan`
 It captures the full state of an RPM-based Linux system relevant to bootc
 image-mode migration.
 
-**Schema version:** 18
+**Schema version:** 19
 {: .label .label-blue }
 
 **Source:** `crates/core/src/snapshot.rs`
@@ -38,7 +38,7 @@ image-mode migration.
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `schema_version` | `u32` | Schema version number. Current: **18**. Used for forward/backward compatibility checks. |
+| `schema_version` | `u32` | Schema version number. Current: **19**. Used for forward/backward compatibility checks. |
 | `meta` | `Map<String, Value>` | Free-form metadata (hostname, scan timestamp, tool version). |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, ID, variant). |
 | `system_type` | `SystemType` | Detected system kind: `PackageBased` (traditional) or `OstreeBased` (image mode). Default: `PackageBased`. |
@@ -89,7 +89,6 @@ Baseline data connects the host snapshot to a target container image.
 |:------|:-----|:------------|
 | `target_image` | `TargetImageIdentity?` | Canonical reference and resolution strategy for the target base image. |
 | `baseline_data` | `BaselineData?` | Package data resolved from the target image's RPM database. Used for added/removed classification. |
-| `no_baseline` | `bool` | `true` if baseline resolution was attempted but failed or is unavailable. Distinguishes "no baseline" from "baseline not yet attempted." |
 
 ## Sensitivity flags
 

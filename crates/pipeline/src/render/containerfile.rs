@@ -2390,22 +2390,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_target_image_with_no_baseline_degraded() {
-        use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
-        let mut snap = InspectionSnapshot::new();
-        snap.target_image = Some(TargetImageIdentity {
-            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-            strategy: ResolutionStrategy::OsRelease,
-        });
-        snap.no_baseline = true;
-        let output = render_containerfile(&snap, None, None);
-        assert!(
-            output.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
-            "degraded (no_baseline=true) must still use target_image for FROM"
-        );
-    }
-
-    #[test]
     fn test_from_omitted_when_no_target_image() {
         let snap = InspectionSnapshot::new();
         let result = base_image_from_snapshot(&snap);
@@ -2661,7 +2645,6 @@ mod tests {
         snap.rpm = Some(RpmSection {
             baseline_package_names: Some(vec!["httpd".into(), "cups".into(), "avahi".into()]),
             packages_added: vec![],
-            no_baseline: false,
             ..Default::default()
         });
         snap.services = Some(inspectah_core::types::services::ServiceSection {

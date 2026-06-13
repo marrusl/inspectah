@@ -125,7 +125,6 @@ pub struct RefVersionChangeItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmptyReason {
-    NoBaseline,
     ZeroDrift,
     DataUnavailable,
 }

@@ -24,8 +24,12 @@ podman login registry.redhat.io
 
 Fedora and CentOS Stream base images are available from public registries
 and do not require authentication. If you skip registry auth on RHEL,
-inspectah will fail to pull the baseline image. You can work around this
-with `--no-baseline`, but classification quality degrades significantly.
+inspectah will fail to pull the baseline image.
+
+**For disconnected or air-gapped environments:** Pull the base image on a
+connected machine, save it as a tarball (`podman save -o baseline.tar <image-ref>`),
+transfer the tarball to your target host, and load it (`podman load -i baseline.tar`).
+Alternatively, configure a local or mirror registry.
 
 ## Install inspectah
 

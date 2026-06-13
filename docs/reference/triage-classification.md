@@ -88,7 +88,6 @@ When inspectah scans one host, every item receives one of three buckets:
 
 - Package has no known repository source (`PackageNoRepoSource`)
 - Package was locally installed from an RPM file (`PackageLocalInstall`)
-- Package provenance is unavailable -- no baseline to compare against (`PackageProvenanceUnavailable`)
 - Package version was downgraded (`PackageVersionChanged` with downgrade direction)
 - Service has no owning package (`ServiceUnknownOrigin`)
 - Flatpak has incomplete provenance data (`FlatpakIncompleteProvenance`)

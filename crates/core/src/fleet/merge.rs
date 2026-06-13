@@ -809,23 +809,11 @@ where
         .and_then(|s| extractor(s).clone())
 }
 
-/// Pick a bool from a specific host index.
-/// Returns `false` if the host has no section.
-fn baseline_host_bool<S, F>(sections: &[Option<S>], baseline_idx: usize, extractor: F) -> bool
-where
-    F: Fn(&S) -> bool,
-{
-    sections
-        .get(baseline_idx)
-        .and_then(|s| s.as_ref())
-        .map(extractor)
-        .unwrap_or(false)
-}
 
 /// Merge RPM sections from multiple hosts.
 ///
 /// `baseline_host_idx` identifies which sorted host's baseline-bearing fields
-/// to use (e.g. `baseline_package_names`, `base_image`, `no_baseline`).
+/// to use (e.g. `baseline_package_names`, `base_image`).
 /// When `None`, no baseline is selected and baseline fields use defaults.
 ///
 /// Returns `(merged_section, repo_conflicts)` where `repo_conflicts` maps
@@ -1033,19 +1021,17 @@ pub fn merge_rpm_sections(
         baseline_package_names,
         baseline_module_streams,
         base_image,
-        no_baseline,
         baseline_suppressed,
     ) = if let Some(idx) = baseline_host_idx {
         (
             baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
             baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
             baseline_host_option(&sections, idx, |s| &s.base_image),
-            baseline_host_bool(&sections, idx, |s| s.no_baseline),
             baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
         )
     } else {
         // No baseline selected — use defaults
-        (None, None, None, false, None)
+        (None, None, None, None)
     };
     // file_ownership: dedup by package_name
     let file_ownership = {
@@ -1210,7 +1196,6 @@ pub fn merge_rpm_sections(
             ostree_removals,
             base_image,
             baseline_package_names,
-            no_baseline,
             leaf_authority_hosts,
             leaf_total_hosts,
             baseline_suppressed,

@@ -155,11 +155,7 @@ pub fn baseline_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             ));
         }
         None => {
-            if snap.no_baseline {
-                lines.push("| Baseline | skipped (--no-baseline) |".into());
-            } else {
-                lines.push("| Baseline | unavailable |".into());
-            }
+            lines.push("| Baseline | unavailable |".into());
         }
     }
 
@@ -340,19 +336,8 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.target_image = Some(test_target_image());
         snap.baseline = None;
-        snap.no_baseline = false;
         let lines = baseline_section_lines(&snap);
         assert!(lines.iter().any(|l| l.contains("unavailable")));
-    }
-
-    #[test]
-    fn section_lines_skipped_no_baseline() {
-        let mut snap = InspectionSnapshot::new();
-        snap.target_image = Some(test_target_image());
-        snap.baseline = None;
-        snap.no_baseline = true;
-        let lines = baseline_section_lines(&snap);
-        assert!(lines.iter().any(|l| l.contains("skipped (--no-baseline)")));
     }
 
     #[test]

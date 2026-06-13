@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -61,10 +61,6 @@ pub struct InspectionSnapshot {
     /// Baseline package data resolved from the target image's base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<crate::baseline::BaselineData>,
-    /// True if baseline resolution was attempted but failed or is unavailable.
-    /// Distinguishes "no baseline" from "baseline not yet attempted".
-    #[serde(default, skip_serializing_if = "crate::is_false")]
-    pub no_baseline: bool,
     /// True if this snapshot intentionally retains credential material.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub sensitive_snapshot: bool,
@@ -238,7 +234,6 @@ mod tests {
         );
         assert!(parsed.baseline.is_some());
         assert_eq!(parsed.baseline.as_ref().unwrap().packages.len(), 1);
-        assert!(!parsed.no_baseline);
     }
 
     #[test]
@@ -256,39 +251,6 @@ mod tests {
             parsed.target_image.unwrap().image_ref,
             "quay.io/fedora/fedora-bootc:41"
         );
-    }
-
-    #[test]
-    fn test_degraded_snapshot_target_image_present_no_baseline() {
-        let mut snap = InspectionSnapshot::new();
-        snap.target_image = Some(TargetImageIdentity {
-            image_ref: "quay.io/fedora/fedora-bootc:41".to_string(),
-            strategy: ResolutionStrategy::OsRelease,
-        });
-        snap.baseline = None;
-        snap.no_baseline = true;
-
-        let json = serde_json::to_string(&snap).unwrap();
-        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-
-        assert!(parsed.target_image.is_some());
-        assert!(parsed.baseline.is_none());
-        assert!(parsed.no_baseline);
-    }
-
-    #[test]
-    fn test_degraded_snapshot_both_null() {
-        let mut snap = InspectionSnapshot::new();
-        snap.target_image = None;
-        snap.baseline = None;
-        snap.no_baseline = true;
-
-        let json = serde_json::to_string(&snap).unwrap();
-        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-
-        assert!(parsed.target_image.is_none());
-        assert!(parsed.baseline.is_none());
-        assert!(parsed.no_baseline);
     }
 
     #[test]

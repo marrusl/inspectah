@@ -97,14 +97,9 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| Category | Count |".into());
     lines.push("|---|---|".into());
 
-    let no_baseline = snap.rpm.as_ref().map(|r| r.no_baseline).unwrap_or(false);
-    if no_baseline {
-        lines.push(format!("| Packages (all -- no baseline) | {pkg_added} |"));
-    } else {
-        lines.push(format!(
-            "| Packages added (beyond base image) | {pkg_added} |"
-        ));
-    }
+    lines.push(format!(
+        "| Packages added (beyond base image) | {pkg_added} |"
+    ));
 
     lines.push(format!(
         "| Services ({svc_enabled} enabled, {svc_disabled} disabled) | {} |",
@@ -314,20 +309,9 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.target_image = Some(test_target_image());
         snap.baseline = None;
-        snap.no_baseline = false;
         let md = render_readme(&snap);
         assert!(md.contains("## Baseline comparison"));
         assert!(md.contains("unavailable"));
-    }
-
-    #[test]
-    fn readme_baseline_section_skipped() {
-        let mut snap = InspectionSnapshot::new();
-        snap.target_image = Some(test_target_image());
-        snap.baseline = None;
-        snap.no_baseline = true;
-        let md = render_readme(&snap);
-        assert!(md.contains("skipped (--no-baseline)"));
     }
 
     #[test]

@@ -223,8 +223,6 @@ pub struct RpmSection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_suppressed: Option<Vec<String>>,
     pub baseline_package_names: Option<Vec<String>>,
-    #[serde(default)]
-    pub no_baseline: bool,
     /// Number of hosts with authoritative leaf classification data.
     /// Only meaningful for fleet-aggregated snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]

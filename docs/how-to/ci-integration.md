@@ -100,19 +100,22 @@ sudo inspectah scan --inspect-only 2>/dev/null | \
   jq '[.packages[] | select(.baseline_match == false)] | length'
 ```
 
-## Skip baseline in CI
+## Pre-stage baseline image in CI
 
-If your pipeline only needs a host inventory without package classification,
-skip baseline extraction:
+If your CI environment has restricted network access or no registry
+authentication, pre-stage the base image before running inspectah:
 
 ```bash
-sudo inspectah scan --no-baseline --progress flat -o ./scan-output.tar.gz
+# In a setup step or image build:
+sudo podman pull registry.redhat.io/rhel9/rhel-bootc:9.6
+
+# Then run the scan:
+sudo inspectah scan --progress flat -o ./scan-output.tar.gz
 ```
 
-This avoids the network dependency on a container registry, which can
-speed up CI runs and avoid authentication issues in restricted
-environments. The trade-off is degraded classification -- all packages
-get provisional triage data.
+This ensures the baseline image is available locally when inspectah runs,
+avoiding pull failures. The image only needs to be pulled once per CI
+runner or container image build.
 
 ## Specify the base image explicitly
 

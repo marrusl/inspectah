@@ -17,9 +17,8 @@ use super::types::{
 
 /// Project version changes from snapshot into reference format.
 ///
-/// Logic follows the three-state empty reason pattern from handlers:
+/// Logic follows the two-state empty reason pattern:
 /// - `DataUnavailable`: No rpm section exists
-/// - `NoBaseline`: Rpm section exists but no baseline data
 /// - `ZeroDrift`: Baseline exists but no version changes detected
 pub fn project_ref_version_changes(snap: &InspectionSnapshot) -> RefVersionChanges {
     let rpm = match &snap.rpm {
@@ -34,15 +33,10 @@ pub fn project_ref_version_changes(snap: &InspectionSnapshot) -> RefVersionChang
     };
 
     if rpm.version_changes.is_empty() {
-        let reason = if snap.baseline.is_some() {
-            EmptyReason::ZeroDrift
-        } else {
-            EmptyReason::NoBaseline
-        };
         return RefVersionChanges {
             downgrades: Vec::new(),
             upgrades: Vec::new(),
-            empty_reason: Some(reason),
+            empty_reason: Some(EmptyReason::ZeroDrift),
         };
     }
 
@@ -929,24 +923,6 @@ mod tests {
         assert!(result.downgrades.is_empty());
         assert!(result.upgrades.is_empty());
         assert_eq!(result.empty_reason, Some(EmptyReason::DataUnavailable));
-    }
-
-    #[test]
-    fn test_no_baseline_returns_no_baseline() {
-        let snap = InspectionSnapshot {
-            rpm: Some(RpmSection {
-                version_changes: Vec::new(),
-                ..Default::default()
-            }),
-            baseline: None,
-            ..Default::default()
-        };
-
-        let result = project_ref_version_changes(&snap);
-
-        assert!(result.downgrades.is_empty());
-        assert!(result.upgrades.is_empty());
-        assert_eq!(result.empty_reason, Some(EmptyReason::NoBaseline));
     }
 
     #[test]

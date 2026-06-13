@@ -415,14 +415,6 @@ impl Inspector for RpmInspector {
 
         // 9. Build warnings
         let mut warnings = Vec::new();
-        let no_baseline = ctx.baseline_data.is_none();
-        if no_baseline {
-            warnings.push(Warning {
-                inspector: "rpm".into(),
-                message: "no baseline available — all packages classified as added".into(),
-                ..Default::default()
-            });
-        }
         if file_ownership.is_empty() {
             warnings.push(Warning {
                 inspector: "rpm".into(),
@@ -444,7 +436,6 @@ impl Inspector for RpmInspector {
             module_streams: supp.module_streams,
             version_locks: supp.version_locks,
             file_ownership,
-            no_baseline,
             baseline_package_names,
             leaf_packages: leaf_classification.leaf_packages,
             auto_packages: leaf_classification.auto_packages,
@@ -1075,7 +1066,6 @@ mod tests {
             // gpg-pubkey filtered, 4 real packages remain — all Added (no baseline)
             assert_eq!(rpm.packages_added.len(), 4);
             assert!(rpm.base_image_only.is_empty());
-            assert!(rpm.no_baseline);
 
             // Verify specific packages
             let names: Vec<&str> = rpm.packages_added.iter().map(|p| p.name.as_str()).collect();
@@ -1122,13 +1112,6 @@ mod tests {
             panic!("expected SectionData::Rpm");
         }
 
-        // Should have a no-baseline warning
-        assert!(
-            output
-                .warnings
-                .iter()
-                .any(|w| w.message.contains("no baseline"))
-        );
     }
 
     #[test]
@@ -1327,12 +1310,6 @@ mod tests {
                 .expect("baseline_suppressed should be Some");
             assert!(suppressed.contains(&"bash.x86_64".to_string()));
             assert!(suppressed.contains(&"vim-enhanced.x86_64".to_string()));
-
-            // no_baseline should be false (we have baseline data)
-            assert!(
-                !rpm.no_baseline,
-                "no_baseline should be false when baseline is provided"
-            );
         } else {
             panic!("expected SectionData::Rpm");
         }

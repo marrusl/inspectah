@@ -82,9 +82,9 @@ user-deployed container workload. These are the items that define what makes
 this host (or fleet) different from a stock image. They are the migration work.
 
 **Investigate** -- inspectah cannot determine the classification with
-confidence. Maybe no baseline is available for comparison. Maybe a package was
-installed locally from an RPM file with no repository source. Maybe a config
-file is not owned by any installed package and its origin is unclear.
+confidence. Maybe a package was installed locally from an RPM file with no
+repository source. Maybe a config file is not owned by any installed package
+and its origin is unclear.
 
 ### Why three categories, not two
 

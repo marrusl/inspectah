@@ -49,7 +49,6 @@ inspectah scan [OPTIONS]
 | `--inspect-only` | bool | `false` | Write JSON snapshot only, skip tarball/artifact generation |
 | `-o, --output <OUTPUT>` | path | — | Output file path (tarball) or directory (with `--inspect-only`) |
 | `--base-image <BASE_IMAGE>` | string | — | Target base image for version upgrades or cross-distro conversion (e.g., upgrade from RHEL 9.4 to 9.6, or convert from CentOS to RHEL) |
-| `--no-baseline` | bool | `false` | Skip baseline extraction (degraded classification mode) |
 | `--preserve <ITEM>` | string | — | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable |
 | `--no-redaction` | bool | `false` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive) |
 | `--ack-sensitive` | bool | `false` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive` |
