@@ -168,6 +168,32 @@ describe("ServiceSection", () => {
     // No Label badge should be rendered
     expect(within(row).queryByRole("gridcell", { name: /badge/i })).toBeNull();
   });
+
+  it("shows preset label when default_state is present", () => {
+    const services = [
+      makeService({
+        unit: "example.service",
+        default_state: "disable",
+      }),
+    ];
+    render(<ServiceSection {...defaultProps} services={services} />);
+    const presetLabel = screen.getByTestId("default-state-example.service");
+    expect(presetLabel).toBeInTheDocument();
+    expect(presetLabel).toHaveTextContent("preset: disable");
+  });
+
+  it("does not show preset label when default_state is absent", () => {
+    const services = [
+      makeService({
+        unit: "example.service",
+        // no default_state
+      }),
+    ];
+    render(<ServiceSection {...defaultProps} services={services} />);
+    expect(
+      screen.queryByTestId("default-state-example.service"),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("ServiceSection parent-child cascade", () => {
