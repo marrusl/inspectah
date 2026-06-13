@@ -32,52 +32,6 @@ describe("StatsBar", () => {
     expect(screen.getByText(/3 included .* 2 excluded/)).toBeInTheDocument();
   });
 
-  it("renders triage progress based on NeedsReview count", () => {
-    render(
-      <StatsBar
-        stats={MOCK_STATS}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-      />,
-    );
-
-    expect(screen.getByText(/3 items remaining/i)).toBeInTheDocument();
-  });
-
-  it("shows remaining NeedsReview items minus viewed count", () => {
-    render(
-      <StatsBar
-        stats={MOCK_STATS}
-        viewedNeedsReviewCount={1}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-      />,
-    );
-
-    expect(screen.getByText(/2 items remaining/i)).toBeInTheDocument();
-  });
-
-  it("shows completion message when all NeedsReview items triaged", () => {
-    render(
-      <StatsBar
-        stats={MOCK_STATS}
-        viewedNeedsReviewCount={3}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-      />,
-    );
-
-    expect(
-      screen.getByText(/all actionable items reviewed/i),
-    ).toBeInTheDocument();
-  });
-
   it("renders dashes when stats are null", () => {
     render(
       <StatsBar
@@ -167,36 +121,6 @@ describe("StatsBar", () => {
 
     await userEvent.click(screen.getByText("Export"));
     expect(onExport).toHaveBeenCalled();
-  });
-
-  it("shows remaining count when items need review", () => {
-    const stats = { ...MOCK_STATS, needs_review_count: 12 };
-    render(
-      <StatsBar
-        stats={stats}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-      />,
-    );
-    expect(screen.getByText(/12 items remaining/i)).toBeInTheDocument();
-  });
-
-  it("shows completion state when all items reviewed", () => {
-    const stats = { ...MOCK_STATS, needs_review_count: 0 };
-    render(
-      <StatsBar
-        stats={stats}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-      />,
-    );
-    expect(
-      screen.getByText(/all actionable items reviewed/i),
-    ).toBeInTheDocument();
   });
 
   it("renders fleet summary when fleetSummary is provided", () => {

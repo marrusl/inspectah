@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Page,
   PageSection,
@@ -8,7 +8,7 @@ import {
   Button,
 } from "@patternfly/react-core";
 import type { ViewResponse } from "./api/types";
-import { fetchViewed, fetchOps } from "./api/client";
+import { fetchOps } from "./api/client";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -113,44 +113,11 @@ function SingleHostApp({
   const sections = useSections();
   const health = healthFromRouter;
 
-  const [viewedIds, setViewedIds] = useState<Set<string>>(new Set());
-
-  const refreshViewed = useCallback(() => {
-    fetchViewed()
-      .then((resp) => setViewedIds(new Set(resp.ids)))
-      .catch(() => {
-        /* ignore – non-critical */
-      });
-  }, []);
-
-  useEffect(() => {
-    refreshViewed();
-  }, [refreshViewed]);
-
-  const viewedNeedsReviewCount = useMemo(() => {
-    if (!view.data) return 0;
-    let count = 0;
-    for (const pkg of view.data.packages) {
-      if ((pkg.attention ?? []).some((a) => a.level === "needs_review")) {
-        const id = `packages:${pkg.entry.name}.${pkg.entry.arch}`;
-        if (viewedIds.has(id)) count++;
-      }
-    }
-    for (const cfg of view.data.config_files) {
-      if ((cfg.attention ?? []).some((a) => a.level === "needs_review")) {
-        const id = `configs:${cfg.entry.path}`;
-        if (viewedIds.has(id)) count++;
-      }
-    }
-    return count;
-  }, [view.data, viewedIds]);
-
   const undoFocusRef = useRef<string | null>(null);
 
   const onMutationSuccess = useCallback(
     (_result: ViewResponse) => {
       view.invalidate();
-      refreshViewed();
 
       const testId = undoFocusRef.current;
       if (testId) {
@@ -170,7 +137,7 @@ function SingleHostApp({
         });
       }
     },
-    [view.invalidate, refreshViewed],
+    [view.invalidate],
   );
 
   const onMutationError = useCallback(
@@ -383,7 +350,6 @@ function SingleHostApp({
         onRedo={handleRedo}
         onExportComplete={handleExportViewUpdate}
         isPending={mutation.isPending}
-        viewedNeedsReviewCount={viewedNeedsReviewCount}
         activeSection={activeSection}
         onNavigateSection={setActiveSection}
         searchPackageItems={packageItems}
@@ -446,7 +412,6 @@ function SingleHostApp({
                 }
                 sectionSearchOpen={sectionSearchOpen}
                 onSectionSearchClose={onSectionSearchClose}
-                onViewedChange={refreshViewed}
                 filterClearCounter={filterClearCounter}
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}

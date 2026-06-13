@@ -115,8 +115,6 @@ export interface FleetSummary {
 
 export interface StatsBarProps {
   stats: RefineStats | null;
-  /** Number of NeedsReview items the user has viewed/triaged. */
-  viewedNeedsReviewCount?: number;
   onUndo: () => void;
   onRedo: () => void;
   onExport: () => void;
@@ -133,7 +131,6 @@ function stat(value: number | null | undefined, fallback = "-"): string {
 
 export function StatsBar({
   stats,
-  viewedNeedsReviewCount = 0,
   onUndo,
   onRedo,
   onExport,
@@ -141,15 +138,6 @@ export function StatsBar({
   hamburger,
   fleetSummary,
 }: StatsBarProps) {
-  const needsReviewTotal = stats?.needs_review_count ?? null;
-  const remaining =
-    needsReviewTotal != null
-      ? Math.max(0, needsReviewTotal - viewedNeedsReviewCount)
-      : null;
-
-  // Completion signal logic
-  const showCompletionSignal = needsReviewTotal != null && remaining !== null;
-  const isComplete = showCompletionSignal && remaining === 0;
 
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
@@ -203,26 +191,6 @@ export function StatsBar({
                     stats?.sections?.find((s) => s.kind === "config")?.excluded,
                   )}{" "}
                   excluded
-                </Content>
-              </ToolbarItem>
-              <ToolbarItem>
-                <Content component="small">
-                  <strong>Triage:</strong>{" "}
-                  {showCompletionSignal ? (
-                    isComplete ? (
-                      <Label color="green">All actionable items reviewed</Label>
-                    ) : (
-                      <Label color="blue">{remaining} items remaining</Label>
-                    )
-                  ) : (
-                    <>
-                      {remaining != null ? String(remaining) : "-"} of{" "}
-                      {needsReviewTotal != null
-                        ? String(needsReviewTotal)
-                        : "-"}{" "}
-                      to review
-                    </>
-                  )}
                 </Content>
               </ToolbarItem>
             </>

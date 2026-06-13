@@ -279,8 +279,6 @@ export interface DecisionListProps {
   versionChanges?: VersionChangeEntry[];
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
-  /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
-  onViewedChange?: () => void;
 }
 
 const EMPTY_REPO_GROUPS: RepoGroupInfo[] = [];
@@ -295,7 +293,6 @@ export function DecisionList({
   versionChanges,
   onViewUpdate,
   onMutationError,
-  onViewedChange,
 }: DecisionListProps) {
   const toastIdRef = useRef(0);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
@@ -358,7 +355,7 @@ export function DecisionList({
   );
 
   const mutation = useMutation(handleSuccess, handleError);
-  const { viewedIds, markAsViewed } = useViewed(onViewedChange);
+  const { viewedIds, markAsViewed } = useViewed();
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));

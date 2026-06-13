@@ -57,8 +57,6 @@ export interface MainContentProps {
   onMutationError: (err: Error) => void;
   sectionSearchOpen: boolean;
   onSectionSearchClose: () => void;
-  /** Called when a viewed POST succeeds, so App can refresh its viewed count. */
-  onViewedChange?: () => void;
   /** Incremented when global search navigates, to clear section filter even for same-section nav. */
   filterClearCounter?: number;
   /** When set, auto-expands any collapsed summary containing this item ID. */
@@ -97,7 +95,6 @@ export function MainContent({
   onMutationError,
   sectionSearchOpen,
   onSectionSearchClose,
-  onViewedChange,
   filterClearCounter = 0,
   revealItemId,
   onSetUndoFocusTarget,
@@ -397,7 +394,6 @@ export function MainContent({
             revealItemId={revealItemId}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
-            onViewedChange={onViewedChange}
           />
         )}
       </>

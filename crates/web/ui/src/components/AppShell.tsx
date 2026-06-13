@@ -64,8 +64,6 @@ export interface AppShellProps {
   onExportComplete: (view: import("../api/types").ViewResponse) => void;
   /** Whether a mutation is pending (disables undo/redo buttons). */
   isPending?: boolean;
-  /** Number of NeedsReview items viewed (for StatsBar triage progress). */
-  viewedNeedsReviewCount?: number;
   /** Section list for keyboard 1-9 navigation (unused by shell -- delegated to useKeyboard). */
   activeSection: string;
   /** Callback when section changes via keyboard shortcut. */
@@ -113,7 +111,6 @@ export function AppShell({
   onRedo,
   onExportComplete,
   isPending = false,
-  viewedNeedsReviewCount,
   activeSection,
   onNavigateSection,
   searchPackageItems,
@@ -207,7 +204,6 @@ export function AppShell({
     <Page className="inspectah-page" data-testid="app-shell">
       <StatsBar
         stats={stats}
-        viewedNeedsReviewCount={viewedNeedsReviewCount}
         onUndo={onUndo}
         onRedo={onRedo}
         onExport={handleExport}

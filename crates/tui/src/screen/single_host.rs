@@ -171,9 +171,6 @@ impl SingleHostScreen {
         }
 
         // --- Status bar ---
-        let view = session.view();
-        let stats = &view.stats;
-
         // Find current section's entry for included/excluded counts.
         let section_entry = entries.iter().find(|e| e.id == active_section_id);
 
@@ -197,7 +194,7 @@ impl SingleHostScreen {
         };
 
         let status = StatusBarWidget::new(tier)
-            .stats(included, excluded, stats.needs_review_count)
+            .stats(included, excluded)
             .reviewed_progress(reviewed, total_reviewable)
             .decision_section(active_section_id.is_decision())
             .flash(state.flash.as_ref());

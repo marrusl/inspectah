@@ -8,7 +8,6 @@ use crate::types::FlashMessage;
 pub struct StatusBarWidget<'a> {
     included: usize,
     excluded: usize,
-    review_count: usize,
     containerfile_delta: usize,
     reviewed: usize,
     total_reviewable: usize,
@@ -22,7 +21,6 @@ impl<'a> StatusBarWidget<'a> {
         Self {
             included: 0,
             excluded: 0,
-            review_count: 0,
             containerfile_delta: 0,
             reviewed: 0,
             total_reviewable: 0,
@@ -32,10 +30,9 @@ impl<'a> StatusBarWidget<'a> {
         }
     }
 
-    pub fn stats(mut self, included: usize, excluded: usize, review: usize) -> Self {
+    pub fn stats(mut self, included: usize, excluded: usize) -> Self {
         self.included = included;
         self.excluded = excluded;
-        self.review_count = review;
         self
     }
 
@@ -85,9 +82,6 @@ impl Widget for StatusBarWidget<'_> {
         if self.is_decision_section {
             parts.push(format!("{} incl", self.included));
             parts.push(format!("{} excl", self.excluded));
-            if self.review_count > 0 {
-                parts.push(format!("{} review", self.review_count));
-            }
         }
 
         if self.containerfile_delta > 0 {
@@ -123,7 +117,7 @@ mod tests {
     #[test]
     fn renders_stats_line() {
         let widget = StatusBarWidget::new(ColorTier::Mono)
-            .stats(142, 176, 12)
+            .stats(142, 176)
             .containerfile_delta(3);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -131,7 +125,6 @@ mod tests {
         let output = buffer_to_string(&buf);
         assert!(output.contains("142 incl"));
         assert!(output.contains("176 excl"));
-        assert!(output.contains("12 review"));
         assert!(output.contains("Containerfile: 3Δ"));
     }
 
@@ -139,7 +132,7 @@ mod tests {
     fn flash_overrides_stats() {
         let flash = FlashMessage::new("Resumed session (5 ops)", 3);
         let widget = StatusBarWidget::new(ColorTier::Mono)
-            .stats(100, 50, 0)
+            .stats(100, 50)
             .flash(Some(&flash));
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);

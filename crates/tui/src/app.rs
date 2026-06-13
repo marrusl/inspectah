@@ -663,11 +663,10 @@ impl App {
                 let view = self.session.view();
                 let s = &view.stats;
                 let msg = format!(
-                    "ops: {} | undo: {} | redo: {} | review: {}",
+                    "ops: {} | undo: {} | redo: {}",
                     s.ops_applied,
                     if s.can_undo { "yes" } else { "no" },
                     if s.can_redo { "yes" } else { "no" },
-                    s.needs_review_count,
                 );
                 self.state.flash = Some(FlashMessage::new(msg, 5));
             }
