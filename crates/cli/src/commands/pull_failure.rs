@@ -182,6 +182,22 @@ fn registry_from_ref(image_ref: &str) -> Option<&str> {
     None
 }
 
+/// Strip the tag or digest from an image reference, returning the repo-only part.
+///
+/// `quay.io/centos-bootc/centos-bootc:stream10` → `quay.io/centos-bootc/centos-bootc`
+fn repo_from_ref(image_ref: &str) -> &str {
+    let name = image_ref.split('@').next().unwrap_or(image_ref);
+    if let Some(slash_pos) = name.rfind('/') {
+        if let Some(colon_pos) = name[slash_pos..].find(':') {
+            &name[..slash_pos + colon_pos]
+        } else {
+            name
+        }
+    } else {
+        name.split(':').next().unwrap_or(name)
+    }
+}
+
 /// Truncate stderr to a reasonable length for display.
 ///
 /// Keeps the first `max_lines` lines and appends a count of omitted lines.
@@ -235,11 +251,12 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
             );
         }
         PullFailureKind::ImageNotFound => {
+            let repo = repo_from_ref(image_ref);
             msg.push_str("  Cause:  image or tag not found\n\n");
             msg.push_str("  Verify the image reference is correct:\n");
-            msg.push_str(&format!("    podman search {image_ref}\n"));
+            msg.push_str(&format!("    podman search {repo}\n"));
             msg.push_str(&format!(
-                "    skopeo list-tags docker://{image_ref}\n"
+                "    skopeo list-tags docker://{repo}\n"
             ));
             msg.push_str("  If your image is at a different registry or tag, use:\n");
             msg.push_str(
@@ -464,7 +481,10 @@ mod tests {
             "manifest unknown",
         );
         assert!(msg.contains("Cause:  image or tag not found"));
-        assert!(msg.contains("skopeo list-tags"));
+        assert!(msg.contains("skopeo list-tags docker://quay.io/centos-bootc/centos-bootc"));
+        assert!(!msg.contains("skopeo list-tags docker://quay.io/centos-bootc/centos-bootc:nonexistent"),
+            "skopeo list-tags must use repo-only ref, not tagged ref");
+        assert!(msg.contains("podman search quay.io/centos-bootc/centos-bootc"));
     }
 
     #[test]
