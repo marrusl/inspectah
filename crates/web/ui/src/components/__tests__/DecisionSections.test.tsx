@@ -611,11 +611,13 @@ describe("ConfigDetail", () => {
     expect(screen.getByText("ServerRoot /etc/httpd")).toBeInTheDocument();
   });
 
-  it("truncates long content", () => {
+  it("renders full long content without truncation", () => {
     const longContent = "x".repeat(600);
     const cfg = makeConfig({ content: longContent });
-    render(<ConfigDetail config={cfg} />);
-    expect(screen.getByText(/\.\.\.$/)).toBeInTheDocument();
+    const { container } = render(<ConfigDetail config={cfg} />);
+    const preElement = container.querySelector("pre");
+    expect(preElement?.textContent).toBe(longContent);
+    expect(preElement?.textContent).not.toContain("...");
   });
 });
 

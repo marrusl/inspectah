@@ -92,9 +92,7 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
                     whiteSpace: "pre-wrap",
                   }}
                 >
-                  {config.entry.content.length > 500
-                    ? config.entry.content.slice(0, 500) + "..."
-                    : config.entry.content}
+                  {config.entry.content}
                 </pre>
               </Content>
             </DescriptionListDescription>
