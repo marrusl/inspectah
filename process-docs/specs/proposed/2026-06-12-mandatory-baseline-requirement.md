@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-06-12
-**Authors:** Mark Russell, with input from Fern (UX), Ember (product strategy), Tang (code scoping)
+**Authors:** Mark Russell, with internal review input
 
 ## Summary
 
@@ -15,7 +15,7 @@ inspectah's value proposition is the delta — classifying what the user added t
 Removing this path:
 - **Eliminates misleading output.** Users get actionable artifacts or a clear error, never a half-baked result.
 - **Simplifies the codebase.** Every renderer and classifier currently branches on "what if there's no baseline?" — ~70-90 lines of production code and ~11 dedicated test functions. More importantly, the cognitive load of reasoning about two modes disappears.
-- **Sharpens product positioning.** inspectah commits to being a precision migration tool, not a general-purpose system auditor (Ember).
+- **Sharpens product positioning.** inspectah commits to being a precision migration tool, not a general-purpose system auditor.
 
 The air-gapped objection is handled: users can pull to a connected machine (`podman save`) and load on the target (`podman load`), or use a local/mirror registry. The error UX guides them through this.
 
@@ -229,9 +229,9 @@ Error: cannot pull baseline image
 
 ## Implementation Notes
 
-**`InspectionContext.baseline_data: Option` stays as `Option`.** The `InspectionContext` struct is shared across all inspectors, but only the RPM inspector uses baseline data. The other ~10 inspectors pass `None` structurally. Changing to non-optional would force threading a real `BaselineData` through every inspector context, which would be worse — it would pretend all inspectors need baseline when they don't. Tang should evaluate during implementation whether a split-context-type approach (RPM-specific context vs. general context) is cleaner than the current single struct with an `Option`.
+**`InspectionContext.baseline_data: Option` stays as `Option`.** The `InspectionContext` struct is shared across all inspectors, but only the RPM inspector uses baseline data. The other ~10 inspectors pass `None` structurally. Changing to non-optional would force threading a real `BaselineData` through every inspector context, which would be worse — it would pretend all inspectors need baseline when they don't. The implementer should evaluate during implementation whether a split-context-type approach (RPM-specific context vs. general context) is cleaner than the current single struct with an `Option`.
 
-**No pull policy flag.** The current "just pull" behavior is the simplest correct behavior. Podman already handles the "image is local and fresh" case — `podman pull` on a locally-present image checks the remote manifest and succeeds fast. A `--pull=always|never|missing` flag is deferred until CI/fleet use cases create concrete demand (Ember's recommendation).
+**No pull policy flag.** The current "just pull" behavior is the simplest correct behavior. Podman already handles the "image is local and fresh" case — `podman pull` on a locally-present image checks the remote manifest and succeeds fast. A `--pull=always|never|missing` flag is deferred until CI/fleet use cases create concrete demand.
 
 **Preloaded local images (podman load).** The disconnected workaround relies on `podman load` making the image available in the local store, then `podman pull` succeeding against it. Implementation should verify this works end-to-end: `podman save` on a connected machine, `podman load` on the target, then `inspectah scan` succeeds without network access. If `podman pull` still attempts a remote check after `podman load`, the pull will fail despite the image being local. In that case, the error message should suggest the local registry alternative or a future `--pull=never` flag. This is a verification task, not a design change — the behavior depends on podman's pull semantics for locally-loaded images.
 

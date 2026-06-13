@@ -18,7 +18,7 @@
 
 ### Task 1: Add pull failure classifier, formatter, and credential sanitizer (cli crate)
 
-**Owner:** Tang
+**Owner:** Rust
 **Files:**
 - Create: `crates/cli/src/commands/pull_failure.rs`
 - Modify: `crates/cli/src/commands/mod.rs`
@@ -530,7 +530,7 @@ Part of mandatory baseline requirement."
 
 ### Task 2: Remove `no_baseline` from all Rust code (atomic, compiler-clean)
 
-**Owner:** Tang
+**Owner:** Rust
 **Files:**
 - Modify: `crates/core/src/snapshot.rs` — remove `pub no_baseline: bool` field
 - Modify: `crates/core/src/types/rpm.rs` — remove `pub no_baseline: bool` field
@@ -698,7 +698,7 @@ Part of mandatory baseline requirement."
 
 ### Task 3: Remove `--no-baseline` CLI flag and wire hard error with exit code 3 (cli crate)
 
-**Owner:** Tang
+**Owner:** Rust
 **Files:**
 - Modify: `crates/cli/src/commands/scan.rs`
 
@@ -836,7 +836,7 @@ Part of mandatory baseline requirement."
 
 ### Task 4: Bump schema version to 19 (core crate)
 
-**Owner:** Tang
+**Owner:** Rust
 **Files:**
 - Modify: `crates/core/src/snapshot.rs:21`
 
@@ -878,7 +878,7 @@ Part of mandatory baseline requirement."
 
 ### Task 5: Baseline requirement test suite (process + function boundary)
 
-**Owner:** Tang
+**Owner:** Rust
 **Files:**
 - Create: `crates/cli/tests/baseline_requirement_test.rs`
 - Modify: `crates/cli/Cargo.toml` (add `assert_cmd` and `predicates` dev-dependencies)
@@ -969,7 +969,7 @@ Part of mandatory baseline requirement."
 
 ### Task 6: Frontend cleanup (web UI)
 
-**Owner:** Kit
+**Owner:** Frontend
 **Files:**
 - Modify: `crates/web/ui/src/components/MainContent.tsx`
 - Modify: `crates/web/ui/src/components/__tests__/EmptyStates.test.tsx`
@@ -1023,7 +1023,7 @@ Part of mandatory baseline requirement."
 
 ### Task 7: Documentation, completions, and changelog
 
-**Owner:** Mango
+**Owner:** Docs
 **Files:**
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
@@ -1130,7 +1130,7 @@ Part of mandatory baseline requirement."
 
 ### Task 8: Final verification
 
-**Owner:** Tang
+**Owner:** Rust
 
 - [ ] **Step 1: Verify zero Rust references to `no_baseline`**
 
