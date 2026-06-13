@@ -692,20 +692,38 @@ fn classify_deps_rpm(
     // Parse sentinel output: @@name header followed by requires lines.
     let per_pkg_caps = parse_sentinel_requires(&result.stdout);
 
-    // Resolve providers for each package's capabilities.
+    // Collect ALL unique capabilities across all packages, resolve them
+    // in batched --whatprovides calls, then distribute per-package.
+    let all_caps: Vec<String> = {
+        let mut set: HashSet<String> = HashSet::new();
+        for (_, caps) in &per_pkg_caps {
+            set.extend(caps.iter().cloned());
+        }
+        let mut v: Vec<String> = set.into_iter().collect();
+        v.sort();
+        v
+    };
+
+    // Build cap→provider_ids map from batched resolution.
+    let cap_providers =
+        resolve_all_providers(exec, &all_caps, &added_names, added_ids, &name_re, batch_size);
+
+    // Distribute resolved providers to each package by its own cap list.
     for (pkg_name, caps) in &per_pkg_caps {
         if let Some(ids) = name_to_ids.get(pkg_name.as_str()) {
             for package_id in ids {
-                resolve_providers(
-                    exec,
-                    package_id,
-                    caps,
-                    &added_names,
-                    added_ids,
-                    &name_re,
-                    batch_size,
-                    &mut depends_on,
-                );
+                let pid_name = name_from_id(package_id);
+                if let Some(dep_set) = depends_on.get_mut(package_id.as_str()) {
+                    for cap in caps {
+                        if let Some(providers) = cap_providers.get(cap.as_str()) {
+                            for prov_id in providers {
+                                if name_from_id(prov_id) != pid_name {
+                                    dep_set.insert(prov_id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -782,26 +800,29 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
     caps
 }
 
-/// Resolve a set of capabilities to provider packages and record edges
-/// in the dependency graph.
-#[allow(clippy::too_many_arguments)]
-fn resolve_providers(
+/// Resolve all unique capabilities to provider packages in batched
+/// `--whatprovides` calls. Returns a map from capability name to the
+/// canonical `name.arch` IDs that provide it (filtered to `added_ids`).
+///
+/// Since `rpm -q --whatprovides cap1 cap2 ...` returns a flat list of
+/// NEVRAs without per-cap attribution, providers from a single chunk
+/// are attributed to every cap in that chunk. This is the same
+/// granularity as the previous per-package batching (chunks of 50).
+fn resolve_all_providers(
     exec: &dyn Executor,
-    package_id: &str,
-    caps: &[String],
+    all_caps: &[String],
     added_names: &HashSet<&str>,
     added_ids: &HashSet<String>,
     name_re: &Regex,
     batch_size: usize,
-    depends_on: &mut HashMap<String, HashSet<String>>,
-) {
-    if caps.is_empty() {
-        return;
+) -> HashMap<String, HashSet<String>> {
+    let mut cap_providers: HashMap<String, HashSet<String>> = HashMap::new();
+
+    if all_caps.is_empty() {
+        return cap_providers;
     }
 
-    let pkg_name = name_from_id(package_id);
-
-    for chunk in caps.chunks(batch_size) {
+    for chunk in all_caps.chunks(batch_size) {
         let mut args: Vec<&str> = vec!["-q", "--whatprovides"];
         args.extend(chunk.iter().map(|s| s.as_str()));
 
@@ -810,36 +831,41 @@ fn resolve_providers(
             continue;
         }
 
+        // Collect providers for this chunk.
+        let mut chunk_providers: HashSet<String> = HashSet::new();
         for pline in result.stdout.lines() {
             let pline = pline.trim();
             if pline.is_empty() || pline.contains("no package provides") {
                 continue;
             }
 
-            // Parse NEVRA to extract provider name.
-            let provider = if let Some(m) = name_re.captures(pline) {
+            let provider_name = if let Some(m) = name_re.captures(pline) {
                 m.get(1).map(|g| g.as_str())
             } else {
-                // Fallback: split on first '-'.
                 pline.split_once('-').map(|(n, _)| n)
             };
 
-            if let Some(provider_name) = provider {
-                // Only track deps where the provider is also in added packages.
-                if provider_name != pkg_name && added_names.contains(provider_name) {
-                    // Find the matching canonical ID(s) in added_ids.
-                    // The provider NEVRA includes arch as the last dot-segment.
-                    let provider_arch = pline.rsplit_once('.').map(|(_, a)| a).unwrap_or("");
-                    let candidate_id = format!("{}.{}", provider_name, provider_arch);
-                    if added_ids.contains(&candidate_id)
-                        && let Some(deps) = depends_on.get_mut(package_id)
-                    {
-                        deps.insert(candidate_id);
-                    }
+            if let Some(pname) = provider_name
+                && added_names.contains(pname)
+            {
+                let provider_arch = pline.rsplit_once('.').map(|(_, a)| a).unwrap_or("");
+                let candidate_id = format!("{}.{}", pname, provider_arch);
+                if added_ids.contains(&candidate_id) {
+                    chunk_providers.insert(candidate_id);
                 }
             }
         }
+
+        // Attribute all chunk providers to every cap in this chunk.
+        for cap in chunk {
+            cap_providers
+                .entry(cap.clone())
+                .or_default()
+                .extend(chunk_providers.iter().cloned());
+        }
     }
+
+    cap_providers
 }
 
 /// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency)
@@ -2643,19 +2669,13 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
                     stderr: String::new(),
                 },
             )
+            // Global batched --whatprovides: all unique caps sorted.
             .with_command(
-                "rpm -q --whatprovides basesystem",
+                "rpm -q --whatprovides basesystem libc.so.6()(64bit) libncurses.so.6()(64bit)",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "basesystem-11-13.el9.noarch\n".into(),
-                    stderr: String::new(),
-                },
-            )
-            .with_command(
-                "rpm -q --whatprovides libc.so.6()(64bit) libncurses.so.6()(64bit)",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "glibc-2.34-60.el9.x86_64\n\
+                    stdout: "basesystem-11-13.el9.noarch\n\
+                             glibc-2.34-60.el9.x86_64\n\
                              ncurses-libs-6.2-8.el9.x86_64\n"
                         .into(),
                     stderr: String::new(),
@@ -2781,14 +2801,7 @@ libc.so.6()(64bit)
                     stderr: String::new(),
                 },
             )
-            .with_command(
-                "rpm -q --whatprovides libc.so.6()(64bit)",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "glibc-2.34-60.el9.x86_64\n".into(),
-                    stderr: String::new(),
-                },
-            )
+            // Global batched --whatprovides: all unique caps sorted.
             .with_command(
                 "rpm -q --whatprovides libapr-1.so.0()(64bit) libc.so.6()(64bit)",
                 ExecResult {
