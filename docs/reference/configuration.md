@@ -70,7 +70,7 @@ for the full command reference.
 | Flag | Description |
 |:-----|:------------|
 | `--manifest <PATH>` | Path to a fleet manifest (TOML). Cannot be combined with positional inputs. |
-| `--baseline <IMAGE>` | Override the baseline image reference from the manifest. |
+| `--target-image <IMAGE>` | Override the target image reference from the manifest. |
 | `--output-dir <DIR>` | Output directory for the fleet tarball. |
 | `--output-file <FILE>` | Output file path for the fleet tarball. |
 | `--json-only` | Write JSON snapshot to stdout (or file) instead of tarball. |

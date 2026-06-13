@@ -41,7 +41,7 @@ The `baseline` value depends on your distro. Common base images:
 | Field | Type | Required | Description |
 |:------|:-----|:---------|:------------|
 | `label` | string | No | Human-readable name for the fleet (e.g., `"web-servers"`, `"db-tier"`). Used in output filenames and fleet metadata. |
-| `baseline` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--baseline` CLI flag. |
+| `baseline` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--target-image` CLI flag. |
 | `sources` | array of strings | **Yes** | Paths to host snapshot tarballs. Relative paths are resolved relative to the manifest file's parent directory. |
 
 ## Path resolution
@@ -98,7 +98,7 @@ is the sole source of truth for which tarballs to include.
 
 | Flag | Behavior |
 |:-----|:---------|
-| `--baseline <IMAGE>` | Overrides the `baseline` field from the manifest. |
+| `--target-image <IMAGE>` | Overrides the `baseline` field from the manifest. |
 | `--output-dir <DIR>` | Output directory for the fleet tarball. |
 | `--output-file <FILE>` | Output file path for the fleet tarball. |
 | `--json-only` | Write JSON snapshot instead of tarball. |

@@ -251,7 +251,7 @@ inspectah fleet aggregate [OPTIONS] [INPUTS]...
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--manifest <MANIFEST>` | path | — | Path to a fleet manifest (TOML) specifying sources |
-| `--baseline <BASELINE>` | string | — | Override the baseline image reference |
+| `--target-image <IMAGE>` | string | — | Override the target image reference for baseline comparison |
 | `--output-dir <OUTPUT_DIR>` | path | — | Output directory for the fleet tarball |
 | `--output-file <OUTPUT_FILE>` | path | — | Output file path for the fleet tarball |
 | `--json-only` | bool | `false` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`) |
@@ -279,10 +279,10 @@ Aggregate from a fleet manifest:
 inspectah fleet aggregate --manifest fleet.toml
 ```
 
-Override the baseline image during aggregation:
+Override the target image during aggregation:
 
 ```bash
-inspectah fleet aggregate --baseline quay.io/centos-bootc/centos-bootc:stream9 /srv/snapshots/
+inspectah fleet aggregate --target-image quay.io/centos-bootc/centos-bootc:stream9 /srv/snapshots/
 ```
 
 Write fleet JSON to stdout:

@@ -122,6 +122,6 @@ override.
 ## Fleet baseline
 
 When aggregating fleet scans, you can override the baseline for the entire
-fleet using the `baseline` field in `fleet.toml` or the `--baseline` flag
+fleet using the `baseline` field in `fleet.toml` or the `--target-image` flag
 on `inspectah fleet aggregate`. See the
 [Fleet Aggregation](fleet-aggregation.md) guide for details.

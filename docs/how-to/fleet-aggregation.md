@@ -166,11 +166,11 @@ If you want to compare against a different base image than what the hosts
 were scanned with:
 
 ```bash
-# Example with CentOS Stream baseline
-inspectah fleet aggregate --manifest fleet.toml --baseline quay.io/centos-bootc/centos-bootc:stream9
+# Example with CentOS Stream target image
+inspectah fleet aggregate --manifest fleet.toml --target-image quay.io/centos-bootc/centos-bootc:stream9
 
-# Example with RHEL baseline
-inspectah fleet aggregate --manifest fleet.toml --baseline registry.redhat.io/rhel9/rhel-bootc:9.6
+# Example with RHEL target image
+inspectah fleet aggregate --manifest fleet.toml --target-image registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 
 ### Sensitive data acknowledgment

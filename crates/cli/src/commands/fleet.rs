@@ -40,9 +40,9 @@ pub struct FleetAggregateArgs {
     #[arg(long)]
     pub manifest: Option<PathBuf>,
 
-    /// Override the baseline image reference
+    /// Override the target image reference for baseline comparison
     #[arg(long)]
-    pub baseline: Option<String>,
+    pub target_image: Option<String>,
 
     /// Output directory for the fleet tarball
     #[arg(long)]
@@ -555,9 +555,9 @@ fn resolve_inputs(
             )
         })?;
 
-        // CLI --baseline overrides manifest baseline
-        if let Some(baseline) = &args.baseline {
-            manifest.baseline = Some(baseline.clone());
+        // CLI --target-image overrides manifest baseline
+        if let Some(target_image) = &args.target_image {
+            manifest.baseline = Some(target_image.clone());
         }
 
         let label = manifest.label.clone().unwrap_or_else(|| "fleet".into());
@@ -602,7 +602,7 @@ fn build_manifest_from_args(
 ) -> FleetManifest {
     FleetManifest {
         label: Some(label.to_string()),
-        baseline: args.baseline.clone(),
+        baseline: args.target_image.clone(),
         sources: paths.to_vec(),
     }
 }
@@ -976,7 +976,7 @@ mod tests {
         FleetAggregateArgs {
             inputs: vec![],
             manifest: None,
-            baseline: None,
+            target_image: None,
             output_dir,
             output_file,
             json_only,
@@ -1032,7 +1032,7 @@ mod tests {
         let args = FleetAggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
-            baseline: None,
+            target_image: None,
             output_dir: Some(out_dir.clone()),
             output_file: None,
             json_only: true,
@@ -1065,7 +1065,7 @@ mod tests {
         let args = FleetAggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
-            baseline: None,
+            target_image: None,
             output_dir: None,
             output_file: Some(out_file.clone()),
             json_only: true,
@@ -1121,7 +1121,7 @@ mod tests {
         let args = FleetAggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
-            baseline: None,
+            target_image: None,
             output_dir: None,
             output_file: None,
             json_only: false,
@@ -1180,7 +1180,7 @@ mod tests {
         let args = FleetAggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
-            baseline: None,
+            target_image: None,
             output_dir: Some(out_dir.clone()),
             output_file: None,
             json_only: false,
