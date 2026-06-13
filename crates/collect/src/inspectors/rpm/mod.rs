@@ -503,19 +503,20 @@ fn collect_installed_groups(exec: &dyn Executor) -> Option<Vec<InstalledGroup>> 
         }
     }
 
-    let mut groups = Vec::new();
-    for group_name in &group_names {
-        let info_result = exec.run("env", &["LC_ALL=C", "dnf", "group", "info", group_name]);
-        if info_result.exit_code != 0 {
-            continue;
-        }
-        let packages = parse_group_info_packages(&info_result.stdout);
-        groups.push(InstalledGroup {
-            name: group_name.clone(),
-            members: packages,
-            ..Default::default()
-        });
+    if group_names.is_empty() {
+        return Some(Vec::new());
     }
+
+    // Batch all group names into one `dnf group info` call.
+    let mut args: Vec<&str> = vec!["LC_ALL=C", "dnf", "group", "info"];
+    args.extend(group_names.iter().map(|s| s.as_str()));
+    let info_result = exec.run("env", &args);
+    if info_result.exit_code != 0 {
+        return Some(Vec::new());
+    }
+
+    // Parse the combined output by splitting on `Group:` headers.
+    let groups = parse_batched_group_info(&info_result.stdout);
 
     Some(groups)
 }
@@ -546,6 +547,51 @@ fn parse_group_info_packages(stdout: &str) -> Vec<String> {
     packages.sort();
     packages.dedup();
     packages
+}
+
+/// Parse batched `dnf group info group1 group2 ...` output into
+/// per-group `InstalledGroup` structs by splitting on `Group:` headers.
+///
+/// DNF outputs each group block starting with `Group: <name>`, followed
+/// by Description, package lists, etc. We split on these headers and
+/// feed each block to `parse_group_info_packages`.
+fn parse_batched_group_info(stdout: &str) -> Vec<InstalledGroup> {
+    let mut groups = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_block = String::new();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("Group:") {
+            // Flush previous group.
+            if let Some(prev_name) = current_name.take() {
+                let packages = parse_group_info_packages(&current_block);
+                groups.push(InstalledGroup {
+                    name: prev_name,
+                    members: packages,
+                    ..Default::default()
+                });
+            }
+            current_name = Some(name.trim().to_string());
+            current_block.clear();
+            continue;
+        }
+        if current_name.is_some() {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+    // Flush last group.
+    if let Some(name) = current_name {
+        let packages = parse_group_info_packages(&current_block);
+        groups.push(InstalledGroup {
+            name,
+            members: packages,
+            ..Default::default()
+        });
+    }
+
+    groups
 }
 
 /// Build a dependency graph from `dnf repoquery --requires --resolve --recursive --installed`.
