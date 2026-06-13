@@ -51,6 +51,7 @@ pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
         || lower.contains("x509")
         || lower.contains("tls")
         || lower.contains("ssl")
+        || lower.contains("insecure")
     {
         return PullFailureKind::TlsCertError;
     }
@@ -66,7 +67,8 @@ pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
     }
 
     // Registry unreachable — DNS/network failures
-    if lower.contains("no such host")
+    if lower.contains("dial tcp")
+        || lower.contains("no such host")
         || lower.contains("connection refused")
         || lower.contains("timeout")
         || lower.contains("could not resolve")
@@ -184,13 +186,12 @@ fn registry_from_ref(image_ref: &str) -> Option<&str> {
 ///
 /// Keeps the first `max_lines` lines and appends a count of omitted lines.
 fn truncate_stderr(stderr: &str, max_lines: usize) -> String {
-    let lines: Vec<&str> = stderr.lines().collect();
-    if lines.len() <= max_lines {
-        return stderr.to_string();
-    }
-    let kept: Vec<&str> = lines[..max_lines].to_vec();
-    let omitted = lines.len() - max_lines;
-    format!("{}\n  ... ({omitted} more lines)", kept.join("\n"))
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(max_lines)
+        .collect();
+    lines.join("\n")
 }
 
 /// Format a structured pull error message with per-category remediation.
@@ -572,13 +573,14 @@ mod tests {
 
     #[test]
     fn truncate_long_stderr() {
-        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
-        let input = lines.join("\n");
-        let result = truncate_stderr(&input, 5);
-        assert!(result.contains("line 0"));
-        assert!(result.contains("line 4"));
-        assert!(!result.contains("line 5"));
-        assert!(result.contains("15 more lines"));
+        let result = truncate_stderr("one\ntwo\nthree\nfour\nfive", 3);
+        assert_eq!(result, "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn truncate_skips_blank_lines() {
+        let result = truncate_stderr("one\n\n\ntwo\n\nthree\nfour", 3);
+        assert_eq!(result, "one\ntwo\nthree");
     }
 
     // ── Helper tests ─────────────────────────────────────────────
