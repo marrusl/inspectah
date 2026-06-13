@@ -16,10 +16,10 @@ into a fleet view. It is consumed by `inspectah fleet aggregate`.
 
 ```toml
 # inspectah fleet manifest
-# Edit label and baseline as needed. Sources are relative to this file.
+# Edit label and target_image as needed. Sources are relative to this file.
 
 label = "web-servers"
-baseline = "quay.io/centos-bootc/centos-bootc:stream9"
+target_image = "quay.io/centos-bootc/centos-bootc:stream9"
 
 sources = [
   "scans/host-a.tar.gz",
@@ -28,7 +28,7 @@ sources = [
 ]
 ```
 
-The `baseline` value depends on your distro. Common base images:
+The `target_image` value depends on your distro. Common base images:
 
 | Distro | Base image |
 |:-------|:-----------|
@@ -41,7 +41,7 @@ The `baseline` value depends on your distro. Common base images:
 | Field | Type | Required | Description |
 |:------|:-----|:---------|:------------|
 | `label` | string | No | Human-readable name for the fleet (e.g., `"web-servers"`, `"db-tier"`). Used in output filenames and fleet metadata. |
-| `baseline` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--target-image` CLI flag. |
+| `target_image` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--target-image` CLI flag. |
 | `sources` | array of strings | **Yes** | Paths to host snapshot tarballs. Relative paths are resolved relative to the manifest file's parent directory. |
 
 ## Path resolution
@@ -73,7 +73,7 @@ inspectah fleet init /path/to/scans/
 This scans the directory for `.tar.gz` files and writes a `fleet.toml` with:
 
 - `label` derived from the directory name
-- `baseline` commented out (placeholder)
+- `target_image` commented out (placeholder)
 - `sources` populated with relative paths to each tarball
 
 ### Options
@@ -98,7 +98,7 @@ is the sole source of truth for which tarballs to include.
 
 | Flag | Behavior |
 |:-----|:---------|
-| `--target-image <IMAGE>` | Overrides the `baseline` field from the manifest. |
+| `--target-image <IMAGE>` | Overrides the `target_image` field from the manifest. |
 | `--output-dir <DIR>` | Output directory for the fleet tarball. |
 | `--output-file <FILE>` | Output file path for the fleet tarball. |
 | `--json-only` | Write JSON snapshot instead of tarball. |
@@ -113,7 +113,7 @@ Only `sources` is required. A minimal manifest:
 sources = ["a.tar.gz", "b.tar.gz"]
 ```
 
-This produces a fleet snapshot with no label and no baseline comparison.
+This produces a fleet snapshot with no label and no target image comparison.
 
 ## Validation
 

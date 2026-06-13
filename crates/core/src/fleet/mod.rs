@@ -283,7 +283,7 @@ fn compute_section_host_counts(snapshots: &[InspectionSnapshot]) -> BTreeMap<Str
 
 /// Select the target image for the merged snapshot.
 ///
-/// If the manifest provides a baseline override, use it with `CliOverride` strategy.
+/// If the manifest provides a target_image override, use it with `CliOverride` strategy.
 /// Otherwise, find the most-common `target_image` across inputs.
 /// Ties broken by lexicographic `image_ref`.
 ///
@@ -296,7 +296,7 @@ fn select_target_image(
 ) -> (Option<TargetImageIdentity>, bool) {
     // Manifest override takes precedence
     if let Some(m) = manifest
-        && let Some(ref override_ref) = m.baseline
+        && let Some(ref override_ref) = m.target_image
     {
         return (
             Some(TargetImageIdentity {
@@ -497,7 +497,7 @@ mod tests {
         let snaps = vec![InspectionSnapshot::new()];
         let manifest = FleetManifest {
             label: None,
-            baseline: Some("registry.example.com/rhel:9.4".into()),
+            target_image: Some("registry.example.com/rhel:9.4".into()),
             sources: vec![],
         };
         let (ti, provisional) = select_target_image(&snaps, Some(&manifest));

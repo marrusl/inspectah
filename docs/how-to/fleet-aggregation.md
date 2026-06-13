@@ -89,7 +89,7 @@ The generated manifest looks like this:
 
 ```toml
 label = "web-servers"
-baseline = "quay.io/centos-bootc/centos-bootc:stream9"
+target_image = "quay.io/centos-bootc/centos-bootc:stream9"
 sources = [
   "scans/host-a.tar.gz",
   "scans/host-b.tar.gz",
@@ -97,14 +97,14 @@ sources = [
 ]
 ```
 
-The `baseline` is auto-detected from the scan metadata and will reflect
+The `target_image` is auto-detected from the scan metadata and will reflect
 whatever distro your hosts are running (Fedora, CentOS Stream, or RHEL).
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `sources` | Yes | List of tarball paths (relative to the manifest file or absolute) |
 | `label` | No | A human-readable name for this fleet group |
-| `baseline` | No | Target base image reference; auto-detected from scan data when omitted |
+| `target_image` | No | Target base image reference; auto-detected from scan data when omitted |
 
 When hosts target different images, `fleet init` selects the most common
 image. You can edit the manifest to change this or any other field.

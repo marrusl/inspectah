@@ -76,7 +76,7 @@ fn test_merge_with_manifest_label() {
     let s2 = make_snap("host-b");
     let manifest = FleetManifest {
         label: Some("web-tier".into()),
-        baseline: None,
+        target_image: None,
         sources: vec![],
     };
 
@@ -147,12 +147,12 @@ fn test_merge_selects_most_common_target_image() {
 }
 
 #[test]
-fn test_merge_manifest_baseline_override() {
+fn test_merge_manifest_target_image_override() {
     let s1 = make_snap_with_target("host-a", "quay.io/rhel:9.3");
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
     let manifest = FleetManifest {
         label: None,
-        baseline: Some("registry.redhat.io/rhel9/rhel-bootc:9.6".into()),
+        target_image: Some("registry.redhat.io/rhel9/rhel-bootc:9.6".into()),
         sources: vec![],
     };
 

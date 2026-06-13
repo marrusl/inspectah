@@ -375,7 +375,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         );
     }
 
-    // --- Step 6: Detect baseline conflicts ---
+    // --- Step 6: Detect target image conflicts ---
     let mut image_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     for meta in &metadata_list {
@@ -384,7 +384,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         }
     }
 
-    let baseline = if image_counts.is_empty() {
+    let target_image = if image_counts.is_empty() {
         None
     } else {
         // Pick the most common image. For deterministic tie-breaking when
@@ -403,7 +403,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
                 .map(|(img, count)| format!("{img} ({count})"))
                 .collect();
             eprintln!(
-                "warning: baseline conflict: selected {} from [{}]",
+                "warning: target image conflict: selected {} from [{}]",
                 most_common,
                 dist.join(", ")
             );
@@ -440,7 +440,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         .and_then(|n| n.to_str())
         .unwrap_or("fleet");
 
-    let toml = generate_manifest_toml(label, baseline.as_deref(), &sources);
+    let toml = generate_manifest_toml(label, target_image.as_deref(), &sources);
 
     // --- Step 9: Write manifest file ---
     if let Some(parent) = output_path.parent()
@@ -457,9 +457,9 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         "Wrote {} ({} sources{})",
         output_path.display(),
         sources.len(),
-        baseline
+        target_image
             .as_ref()
-            .map_or(String::new(), |b| format!(", baseline: {b}"))
+            .map_or(String::new(), |b| format!(", target_image: {b}"))
     );
 
     Ok(())
@@ -508,18 +508,18 @@ fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
 }
 
 /// Generate a TOML manifest string with comments.
-fn generate_manifest_toml(label: &str, baseline: Option<&str>, sources: &[PathBuf]) -> String {
+fn generate_manifest_toml(label: &str, target_image: Option<&str>, sources: &[PathBuf]) -> String {
     let mut toml = String::new();
 
     toml.push_str("# inspectah fleet manifest\n");
-    toml.push_str("# Edit label and baseline as needed. Sources are relative to this file.\n\n");
+    toml.push_str("# Edit label and target_image as needed. Sources are relative to this file.\n\n");
 
     toml.push_str(&format!("label = \"{label}\"\n"));
 
-    if let Some(b) = baseline {
-        toml.push_str(&format!("baseline = \"{b}\"\n"));
+    if let Some(b) = target_image {
+        toml.push_str(&format!("target_image = \"{b}\"\n"));
     } else {
-        toml.push_str("# baseline = \"registry.redhat.io/rhel9/rhel-bootc:9.6\"\n");
+        toml.push_str("# target_image = \"registry.redhat.io/rhel9/rhel-bootc:9.6\"\n");
     }
 
     toml.push_str("\nsources = [\n");
@@ -555,9 +555,9 @@ fn resolve_inputs(
             )
         })?;
 
-        // CLI --target-image overrides manifest baseline
+        // CLI --target-image overrides manifest target_image
         if let Some(target_image) = &args.target_image {
-            manifest.baseline = Some(target_image.clone());
+            manifest.target_image = Some(target_image.clone());
         }
 
         let label = manifest.label.clone().unwrap_or_else(|| "fleet".into());
@@ -602,7 +602,7 @@ fn build_manifest_from_args(
 ) -> FleetManifest {
     FleetManifest {
         label: Some(label.to_string()),
-        baseline: args.target_image.clone(),
+        target_image: args.target_image.clone(),
         sources: paths.to_vec(),
     }
 }
@@ -860,19 +860,19 @@ mod tests {
     }
 
     #[test]
-    fn test_baseline_conflict_selects_most_common() {
+    fn test_target_image_conflict_selects_most_common() {
         let dir = tempfile::tempdir().unwrap();
 
         let common_image = "registry.redhat.io/rhel9/rhel-bootc:9.6";
         let outlier_image = "registry.redhat.io/rhel9/rhel-bootc:9.4";
 
-        // Two tarballs with the same baseline
+        // Two tarballs with the same target image
         let json_common = serde_json::json!({
             "schema_version": 19,
             "meta": {"hostname": "host-1"},
             "target_image": {"image_ref": common_image, "strategy": "BootcStatus"}
         });
-        // One tarball with a different baseline
+        // One tarball with a different target image
         let json_outlier = serde_json::json!({
             "schema_version": 19,
             "meta": {"hostname": "host-3"},
@@ -901,7 +901,7 @@ mod tests {
         assert_eq!(
             image_counts.len(),
             2,
-            "should detect two distinct baselines"
+            "should detect two distinct target images"
         );
         assert_eq!(image_counts[common_image], 2);
         assert_eq!(image_counts[outlier_image], 1);
@@ -910,15 +910,15 @@ mod tests {
         let (winner, _) = image_counts.iter().max_by_key(|(_, c)| *c).unwrap();
         assert_eq!(
             winner, common_image,
-            "conflict resolution should pick the most common baseline"
+            "conflict resolution should pick the most common target image"
         );
     }
 
     #[test]
-    fn test_fleet_init_baseline_tie_break_is_deterministic() {
+    fn test_fleet_init_target_image_tie_break_is_deterministic() {
         // Command-boundary regression test: when two images have equal
         // prevalence (1 host each), the generated fleet.toml must contain
-        // the lexicographically earlier image ref as the baseline.
+        // the lexicographically earlier image ref as the target_image.
         let dir = tempfile::tempdir().unwrap();
         let tarballs_dir = dir.path().join("tarballs");
         std::fs::create_dir_all(&tarballs_dir).unwrap();
@@ -957,7 +957,7 @@ mod tests {
             std::fs::read_to_string(&output_path).expect("fleet.toml should exist after init");
 
         assert!(
-            toml_content.contains(&format!("baseline = \"{alpha_image}\"")),
+            toml_content.contains(&format!("target_image = \"{alpha_image}\"")),
             "tie-break should select lexicographically earlier image ref (alpha < beta), got:\n{}",
             toml_content
         );

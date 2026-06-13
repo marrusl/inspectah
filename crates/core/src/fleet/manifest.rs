@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Deserialize)]
 pub struct FleetManifest {
     pub label: Option<String>,
-    pub baseline: Option<String>,
+    pub target_image: Option<String>,
     pub sources: Vec<PathBuf>,
 }
 
@@ -48,19 +48,19 @@ mod tests {
         let m = FleetManifest::parse(toml).unwrap();
         assert_eq!(m.sources.len(), 2);
         assert!(m.label.is_none());
-        assert!(m.baseline.is_none());
+        assert!(m.target_image.is_none());
     }
 
     #[test]
     fn test_parse_full() {
         let toml = r#"
 label = "web-servers"
-baseline = "host-a"
+target_image = "host-a"
 sources = ["scans/a.tar.gz", "scans/b.tar.gz"]
 "#;
         let m = FleetManifest::parse(toml).unwrap();
         assert_eq!(m.label.as_deref(), Some("web-servers"));
-        assert_eq!(m.baseline.as_deref(), Some("host-a"));
+        assert_eq!(m.target_image.as_deref(), Some("host-a"));
     }
 
     #[test]
