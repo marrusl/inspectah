@@ -195,73 +195,92 @@ fn truncate_stderr(stderr: &str, max_lines: usize) -> String {
 
 /// Format a structured pull error message with per-category remediation.
 ///
-/// The output includes:
-/// - A headline identifying the failure kind and image
-/// - Sanitized stderr excerpt
-/// - Remediation steps specific to the error category
-/// - A disconnected-system hint (inspectah may run on air-gapped hosts)
+/// Follows the approved spec contract:
+/// - Stable header: "Error: cannot pull baseline image"
+/// - Image ref echoed back
+/// - One-line cause
+/// - Per-category remediation (2-4 lines)
+/// - Disconnected hint with actual image ref on every category
+/// - Raw stderr excerpt only for Unknown category (3 lines max, sanitized)
 pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &str) -> String {
-    let sanitized = sanitize_stderr(raw_stderr);
-    let truncated = truncate_stderr(&sanitized, 10);
     let registry = registry_from_ref(image_ref).unwrap_or("the registry");
+    let mut msg = String::new();
 
-    let mut msg = format!(
-        "Failed to pull baseline image: {kind}\n\
-         Image: {image_ref}\n\n\
-         {truncated}\n"
-    );
+    msg.push_str("Error: cannot pull baseline image\n\n");
+    msg.push_str(&format!("  Image:  {image_ref}\n"));
 
     match kind {
-        PullFailureKind::TlsCertError => {
+        PullFailureKind::RegistryUnreachable => {
+            msg.push_str(&format!("  Cause:  cannot reach registry ({registry})\n\n"));
+            msg.push_str("  Check network connectivity to the registry:\n");
             msg.push_str(&format!(
-                "\nRemediation:\n\
-                 - Verify the image reference is correct (a wrong registry can look like a TLS error):\n\
-                   inspectah scan --base-image <correct-registry>/<image>:<tag>\n\
-                 - Verify the TLS certificate for {registry}\n\
-                 - If using a private registry, ensure its CA is trusted on this host\n\
-                 - For testing only: podman pull --tls-verify=false (not recommended)\n"
+                "    curl -s https://{registry}/v2/ || echo \"unreachable\"\n"
             ));
+            msg.push_str("  If behind a proxy, configure podman:\n");
+            msg.push_str(
+                "    Edit /etc/containers/registries.conf or set HTTP_PROXY/HTTPS_PROXY\n",
+            );
         }
         PullFailureKind::AuthRequired => {
-            msg.push_str(&format!(
-                "\nRemediation:\n\
-                 - Verify the image reference is correct (a wrong registry can look like an auth error):\n\
-                   inspectah scan --base-image <correct-registry>/<image>:<tag>\n\
-                 - Run: podman login {registry}\n\
-                 - Check that credentials are current and have pull access\n\
-                 - For Red Hat registries: verify subscription or token at access.redhat.com\n"
-            ));
-        }
-        PullFailureKind::RegistryUnreachable => {
-            msg.push_str(&format!(
-                "\nRemediation:\n\
-                 - Check network connectivity to {registry}\n\
-                 - Verify DNS resolution: host {registry}\n\
-                 - Check firewall rules and proxy configuration\n"
-            ));
+            msg.push_str("  Cause:  authentication required\n\n");
+            msg.push_str("  Verify the image reference is correct (a wrong registry can look like an auth error):\n");
+            msg.push_str(
+                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
+            );
+            msg.push_str("  If the reference is correct, log in to the registry:\n");
+            msg.push_str(&format!("    podman login {registry}\n"));
+            msg.push_str(
+                "  For Red Hat registries, use your Red Hat account or a service account token.\n",
+            );
         }
         PullFailureKind::ImageNotFound => {
+            msg.push_str("  Cause:  image or tag not found\n\n");
+            msg.push_str("  Verify the image reference is correct:\n");
+            msg.push_str(&format!("    podman search {image_ref}\n"));
             msg.push_str(&format!(
-                "\nRemediation:\n\
-                 - Verify the image reference: {image_ref}\n\
-                 - Check that the tag or digest exists in the registry\n\
-                 - Use: podman search {registry}/<name> to find available tags\n"
+                "    skopeo list-tags docker://{image_ref}\n"
             ));
+            msg.push_str("  If your image is at a different registry or tag, use:\n");
+            msg.push_str(
+                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
+            );
+        }
+        PullFailureKind::TlsCertError => {
+            msg.push_str("  Cause:  TLS certificate error\n\n");
+            msg.push_str("  Verify the image reference is correct (a wrong registry can cause TLS errors):\n");
+            msg.push_str(
+                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
+            );
+            msg.push_str("  If using a private registry with self-signed certificates:\n");
+            msg.push_str(
+                "    sudo cp ca.crt /etc/pki/ca-trust/source/anchors/ && sudo update-ca-trust\n",
+            );
+            msg.push_str("  Or configure podman to trust the registry:\n");
+            msg.push_str(
+                "    Edit /etc/containers/registries.conf.d/ to add [[registry]] with insecure=true\n",
+            );
         }
         PullFailureKind::Unknown => {
-            msg.push_str(
-                "\nRemediation:\n\
-                 - Review the error output above for details\n\
-                 - Try: podman pull <image> manually for more diagnostics\n",
-            );
+            msg.push_str("  Cause:  pull failed\n\n");
+            let sanitized = sanitize_stderr(raw_stderr);
+            let excerpt = truncate_stderr(&sanitized, 3);
+            if !excerpt.is_empty() {
+                msg.push_str("  podman reported:\n");
+                for line in excerpt.lines() {
+                    msg.push_str(&format!("    {line}\n"));
+                }
+                msg.push('\n');
+            }
+            msg.push_str("  Try pulling the image manually to diagnose:\n");
+            msg.push_str(&format!("    podman pull {image_ref}\n"));
         }
     }
 
-    msg.push_str(
-        "\n  Disconnected? You can load images from a tarball:\n    \
-         podman save -o baseline.tar <image-ref>\n    \
-         podman load -i baseline.tar",
-    );
+    msg.push_str(&format!(
+        "\n  Disconnected? You can load images from a tarball:\n\
+         \x20\x20\x20\x20podman save -o baseline.tar {image_ref}\n\
+         \x20\x20\x20\x20podman load -i baseline.tar"
+    ));
 
     msg
 }
@@ -380,99 +399,154 @@ mod tests {
         assert_eq!(result, input);
     }
 
-    // ── Formatter tests ──────────────────────────────────────────
+    // ── Formatter tests (spec contract) ───────────────────────────
 
     #[test]
-    fn format_tls_error_has_remediation() {
-        let msg = format_pull_error(
-            &PullFailureKind::TlsCertError,
-            "registry.example.com/image:latest",
-            "x509: certificate error",
-        );
-        assert!(msg.contains("TLS certificate error"));
-        assert!(msg.contains("registry.example.com"));
-        assert!(msg.contains("Remediation"));
-        assert!(msg.contains("CA is trusted"));
-    }
-
-    #[test]
-    fn format_auth_error_has_login_hint() {
-        let msg = format_pull_error(
-            &PullFailureKind::AuthRequired,
-            "registry.redhat.io/rhel10/rhel-bootc:10.2",
-            "unauthorized: authentication required",
-        );
-        assert!(msg.contains("podman login"));
-        assert!(msg.contains("registry.redhat.io"));
-    }
-
-    #[test]
-    fn format_registry_error_has_connectivity_hint() {
-        let msg = format_pull_error(
-            &PullFailureKind::RegistryUnreachable,
-            "quay.io/centos-bootc/centos-bootc:stream10",
-            "no such host",
-        );
-        assert!(msg.contains("network connectivity"));
-        assert!(msg.contains("quay.io"));
-    }
-
-    #[test]
-    fn format_not_found_has_search_hint() {
-        let msg = format_pull_error(
-            &PullFailureKind::ImageNotFound,
-            "quay.io/centos-bootc/centos-bootc:nonexistent",
-            "manifest unknown",
-        );
-        assert!(msg.contains("podman search"));
-        assert!(msg.contains("tag or digest"));
-    }
-
-    #[test]
-    fn format_unknown_has_manual_hint() {
-        let msg = format_pull_error(
-            &PullFailureKind::Unknown,
-            "example.com/image:v1",
-            "something weird",
-        );
-        assert!(msg.contains("podman pull"));
-        assert!(msg.contains("manually"));
-    }
-
-    #[test]
-    fn format_always_has_disconnect_hint() {
-        let msg = format_pull_error(&PullFailureKind::Unknown, "example.com/image:v1", "error");
-        assert!(msg.contains("podman save"));
-        assert!(msg.contains("podman load"));
-        assert!(msg.contains("Disconnected"));
-    }
-
-    #[test]
-    fn format_sanitizes_credentials() {
-        let msg = format_pull_error(
-            &PullFailureKind::AuthRequired,
-            "registry.example.com/image:latest",
-            "failed with Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig",
-        );
-        assert!(!msg.contains("eyJhbGciOiJSUzI1NiJ9"));
-        assert!(msg.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn format_error_ordering() {
-        // Verify the message structure: headline, stderr, remediation, disconnect
+    fn format_stable_header() {
         let msg = format_pull_error(
             &PullFailureKind::AuthRequired,
             "quay.io/test:latest",
             "unauthorized",
         );
-        let headline_pos = msg.find("Failed to pull").expect("headline");
-        let stderr_pos = msg.find("unauthorized").expect("stderr");
-        let remediation_pos = msg.find("Remediation").expect("remediation");
-        let disconnect_pos = msg.find("Disconnected").expect("disconnect");
-        assert!(headline_pos < stderr_pos);
-        assert!(stderr_pos < remediation_pos);
-        assert!(remediation_pos < disconnect_pos);
+        assert!(msg.starts_with("Error: cannot pull baseline image"));
+    }
+
+    #[test]
+    fn format_echoes_image_ref() {
+        let msg = format_pull_error(
+            &PullFailureKind::AuthRequired,
+            "quay.io/centos-bootc/centos-bootc:stream10",
+            "unauthorized",
+        );
+        assert!(msg.contains("Image:  quay.io/centos-bootc/centos-bootc:stream10"));
+    }
+
+    #[test]
+    fn format_tls_error() {
+        let msg = format_pull_error(
+            &PullFailureKind::TlsCertError,
+            "registry.example.com/image:latest",
+            "x509: certificate error",
+        );
+        assert!(msg.contains("Cause:  TLS certificate error"));
+        assert!(msg.contains("--base-image"));
+        assert!(msg.contains("ca-trust"));
+    }
+
+    #[test]
+    fn format_auth_error() {
+        let msg = format_pull_error(
+            &PullFailureKind::AuthRequired,
+            "registry.redhat.io/rhel10/rhel-bootc:10.2",
+            "unauthorized",
+        );
+        assert!(msg.contains("Cause:  authentication required"));
+        assert!(msg.contains("podman login registry.redhat.io"));
+    }
+
+    #[test]
+    fn format_registry_unreachable() {
+        let msg = format_pull_error(
+            &PullFailureKind::RegistryUnreachable,
+            "quay.io/centos-bootc/centos-bootc:stream10",
+            "no such host",
+        );
+        assert!(msg.contains("Cause:  cannot reach registry (quay.io)"));
+        assert!(msg.contains("curl -s https://quay.io/v2/"));
+    }
+
+    #[test]
+    fn format_not_found() {
+        let msg = format_pull_error(
+            &PullFailureKind::ImageNotFound,
+            "quay.io/centos-bootc/centos-bootc:nonexistent",
+            "manifest unknown",
+        );
+        assert!(msg.contains("Cause:  image or tag not found"));
+        assert!(msg.contains("skopeo list-tags"));
+    }
+
+    #[test]
+    fn format_unknown_shows_stderr_excerpt() {
+        let stderr = "line one\nline two\nline three\nline four\nline five";
+        let msg = format_pull_error(
+            &PullFailureKind::Unknown,
+            "example.com/image:v1",
+            stderr,
+        );
+        assert!(msg.contains("Cause:  pull failed"));
+        assert!(msg.contains("line one"));
+        assert!(msg.contains("line three"));
+        assert!(!msg.contains("line four"), "must truncate at 3 lines");
+        assert!(msg.contains("podman pull example.com/image:v1"));
+    }
+
+    #[test]
+    fn format_non_unknown_omits_stderr() {
+        let msg = format_pull_error(
+            &PullFailureKind::AuthRequired,
+            "quay.io/test:latest",
+            "unauthorized: some verbose podman output here",
+        );
+        assert!(!msg.contains("podman reported:"), "only Unknown shows stderr excerpt");
+    }
+
+    #[test]
+    fn format_disconnect_hint_uses_actual_ref() {
+        let msg = format_pull_error(
+            &PullFailureKind::RegistryUnreachable,
+            "quay.io/centos-bootc/centos-bootc:stream10",
+            "no such host",
+        );
+        assert!(msg.contains("podman save -o baseline.tar quay.io/centos-bootc/centos-bootc:stream10"));
+        assert!(msg.contains("podman load"));
+    }
+
+    #[test]
+    fn format_disconnect_hint_on_every_category() {
+        for kind in &[
+            PullFailureKind::TlsCertError,
+            PullFailureKind::AuthRequired,
+            PullFailureKind::RegistryUnreachable,
+            PullFailureKind::ImageNotFound,
+            PullFailureKind::Unknown,
+        ] {
+            let msg = format_pull_error(kind, "example.com/img:v1", "err");
+            assert!(msg.contains("Disconnected?"), "missing hint for {kind:?}");
+            assert!(msg.contains("podman save"), "missing save for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn format_unknown_sanitizes_credentials() {
+        let stderr = "Bearer eyJsecret in line one\nline two\nline three";
+        let msg = format_pull_error(&PullFailureKind::Unknown, "quay.io/test:v1", stderr);
+        assert!(msg.contains("[REDACTED]"));
+        assert!(!msg.contains("eyJsecret"));
+    }
+
+    #[test]
+    fn format_auth_leads_with_base_image() {
+        let msg = format_pull_error(
+            &PullFailureKind::AuthRequired,
+            "registry.example.com/img:v1",
+            "",
+        );
+        let base_image_pos = msg.find("--base-image").unwrap();
+        let login_pos = msg.find("podman login").unwrap();
+        assert!(base_image_pos < login_pos);
+    }
+
+    #[test]
+    fn format_tls_leads_with_base_image() {
+        let msg = format_pull_error(
+            &PullFailureKind::TlsCertError,
+            "registry.example.com/img:v1",
+            "",
+        );
+        let base_image_pos = msg.find("--base-image").unwrap();
+        let ca_pos = msg.find("ca-trust").unwrap();
+        assert!(base_image_pos < ca_pos);
     }
 
     // ── Resolution error test ────────────────────────────────────
@@ -546,39 +620,4 @@ mod tests {
         );
     }
 
-    // ── Ordering tests for --base-image verification ────────────
-
-    #[test]
-    fn format_auth_leads_with_base_image() {
-        let msg = format_pull_error(
-            &PullFailureKind::AuthRequired,
-            "registry.example.com/image:latest",
-            "unauthorized",
-        );
-        // Find positions of key remediation steps
-        let base_image_pos = msg.find("--base-image").expect("--base-image not found");
-        let podman_login_pos = msg.find("podman login").expect("podman login not found");
-        // --base-image verification must come before podman login
-        assert!(
-            base_image_pos < podman_login_pos,
-            "Auth remediation must lead with --base-image verification before podman login"
-        );
-    }
-
-    #[test]
-    fn format_tls_leads_with_base_image() {
-        let msg = format_pull_error(
-            &PullFailureKind::TlsCertError,
-            "registry.example.com/image:latest",
-            "x509: certificate error",
-        );
-        // Find positions of key remediation steps
-        let base_image_pos = msg.find("--base-image").expect("--base-image not found");
-        let ca_trust_pos = msg.find("CA is trusted").expect("CA trust not found");
-        // --base-image verification must come before CA trust check
-        assert!(
-            base_image_pos < ca_trust_pos,
-            "TLS remediation must lead with --base-image verification before CA trust check"
-        );
-    }
 }
