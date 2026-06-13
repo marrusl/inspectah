@@ -622,15 +622,31 @@ struct DepGraphResult {
     transitive: bool,
 }
 
-/// Build a dependency graph using `rpm -qR` + `rpm -q --whatprovides`.
+/// RPM query format for batched requires — sentinel format.
 ///
-/// For each package in `added_ids`, runs `rpm -qR <name>` to get direct
-/// dependency capabilities, filters out `rpmlib(...)` and path deps,
-/// then resolves capabilities to provider packages via batched
-/// `rpm -q --whatprovides` calls.
+/// Uses the same `@@name` sentinel pattern as `RPM_FILE_OWNERSHIP_FORMAT`.
+/// `%{REQUIRENAME}` is an array tag, so it goes inside `[...]`. `%{NAME}`
+/// is scalar and goes outside as the header:
+///
+/// ```text
+/// @@bash
+/// /bin/sh
+/// libc.so.6()(64bit)
+/// rpmlib(CompressedFileNames)
+/// @@httpd
+/// apr-util(x86-64)
+/// libc.so.6()(64bit)
+/// ```
+const RPM_REQUIRES_FORMAT: &str = "@@%{NAME}\\n[%{REQUIRENAME}\\n]";
+
+/// Build a dependency graph using batched `rpm -q` + `rpm -q --whatprovides`.
+///
+/// Queries all packages' requires in a single batched `rpm -q --queryformat`
+/// call using sentinel headers, then resolves capabilities to provider
+/// packages via batched `rpm -q --whatprovides` calls.
 ///
 /// Returns direct-only deps (caller must walk the graph for transitive closure).
-/// Returns `None` if `rpm -qR` fails on the first probe package.
+/// Returns `None` if `rpm -q --queryformat` fails on the probe.
 fn classify_deps_rpm(
     exec: &dyn Executor,
     added_ids: &HashSet<String>,
@@ -654,47 +670,88 @@ fn classify_deps_rpm(
         depends_on.insert(package_id.clone(), HashSet::new());
     }
 
-    // Probe with first package to check if rpm -qR is available.
-    let first_name = name_from_id(package_ids[0]);
-    let probe = exec.run("rpm", &["-qR", first_name]);
-    if !probe.success() {
+    // Build name→canonical-id map for sentinel header → package_id lookup.
+    let name_to_ids: HashMap<&str, Vec<&String>> = {
+        let mut map: HashMap<&str, Vec<&String>> = HashMap::new();
+        for pid in &package_ids {
+            map.entry(name_from_id(pid)).or_default().push(pid);
+        }
+        map
+    };
+
+    // Batch all package names into one rpm query using sentinel format.
+    let pkg_names: Vec<&str> = package_ids.iter().map(|id| name_from_id(id)).collect();
+    let mut args: Vec<&str> = vec!["-q", "--queryformat", RPM_REQUIRES_FORMAT];
+    args.extend(&pkg_names);
+
+    let result = exec.run("rpm", &args);
+    if !result.success() {
         return None;
     }
 
-    // Process first package's capabilities inline.
-    let first_caps = filter_capabilities(&probe.stdout);
-    resolve_providers(
-        exec,
-        package_ids[0],
-        &first_caps,
-        &added_names,
-        added_ids,
-        &name_re,
-        batch_size,
-        &mut depends_on,
-    );
+    // Parse sentinel output: @@name header followed by requires lines.
+    let per_pkg_caps = parse_sentinel_requires(&result.stdout);
 
-    // Query remaining packages.
-    for package_id in &package_ids[1..] {
-        let pkg_name = name_from_id(package_id);
-        let result = exec.run("rpm", &["-qR", pkg_name]);
-        if !result.success() {
-            continue;
+    // Resolve providers for each package's capabilities.
+    for (pkg_name, caps) in &per_pkg_caps {
+        if let Some(ids) = name_to_ids.get(pkg_name.as_str()) {
+            for package_id in ids {
+                resolve_providers(
+                    exec,
+                    package_id,
+                    caps,
+                    &added_names,
+                    added_ids,
+                    &name_re,
+                    batch_size,
+                    &mut depends_on,
+                );
+            }
         }
-        let caps = filter_capabilities(&result.stdout);
-        resolve_providers(
-            exec,
-            package_id,
-            &caps,
-            &added_names,
-            added_ids,
-            &name_re,
-            batch_size,
-            &mut depends_on,
-        );
     }
 
     Some(depends_on)
+}
+
+/// Parse batched `rpm -q --queryformat '@@%{NAME}\n[%{REQUIRENAME}\n]'` output
+/// into per-package capability lists, applying the same filtering as
+/// `filter_capabilities`.
+fn parse_sentinel_requires(stdout: &str) -> Vec<(String, Vec<String>)> {
+    let mut results: Vec<(String, Vec<String>)> = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_caps: Vec<String> = Vec::new();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("@@") {
+            // Flush previous package.
+            if let Some(prev_name) = current_name.take() {
+                current_caps.sort();
+                current_caps.dedup();
+                results.push((prev_name, std::mem::take(&mut current_caps)));
+            }
+            current_name = Some(name.to_string());
+            continue;
+        }
+        if current_name.is_some() && !trimmed.is_empty() {
+            // Apply same filters as filter_capabilities.
+            if trimmed.starts_with("rpmlib(") || trimmed.starts_with('/') {
+                continue;
+            }
+            let cap = trimmed.split_whitespace().next().unwrap_or(trimmed);
+            if !cap.is_empty() {
+                current_caps.push(cap.to_string());
+            }
+        }
+    }
+    // Flush last package.
+    if let Some(name) = current_name {
+        current_caps.sort();
+        current_caps.dedup();
+        results.push((name, current_caps));
+    }
+
+    results
 }
 
 /// Extract the package name from a canonical `name.arch` identity.
@@ -706,6 +763,7 @@ fn name_from_id(id: &str) -> &str {
 ///
 /// Skips lines starting with `rpmlib(` or `/`, and takes only the first
 /// whitespace-separated field (capability name without version constraints).
+#[cfg(test)]
 fn filter_capabilities(stdout: &str) -> Vec<String> {
     let mut caps = Vec::new();
     for line in stdout.lines() {
@@ -2559,15 +2617,29 @@ mod tests {
     fn classify_deps_rpm_builds_arch_aware_graph() {
         // vim depends on glibc (via libc.so.6 capability).
         // glibc has no deps in added set.
+        //
+        // Batched query: `rpm -q --queryformat <sentinel> glibc vim`
+        // (sorted alphabetically by name).
+        let sentinel_output = "\
+@@glibc
+rpmlib(CompressedFileNames) <= 3.0.4-1
+/sbin/ldconfig
+basesystem
+@@vim
+libc.so.6()(64bit)
+libncurses.so.6()(64bit)
+rpmlib(PayloadIsZstd) <= 5.4.18-1
+/usr/bin/sh
+";
         let exec = MockExecutor::new()
             .with_command(
-                "rpm -qR glibc",
+                &format!(
+                    "rpm -q --queryformat {} glibc vim",
+                    RPM_REQUIRES_FORMAT
+                ),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "rpmlib(CompressedFileNames) <= 3.0.4-1\n\
-                             /sbin/ldconfig\n\
-                             basesystem\n"
-                        .into(),
+                    stdout: sentinel_output.into(),
                     stderr: String::new(),
                 },
             )
@@ -2576,18 +2648,6 @@ mod tests {
                 ExecResult {
                     exit_code: 0,
                     stdout: "basesystem-11-13.el9.noarch\n".into(),
-                    stderr: String::new(),
-                },
-            )
-            .with_command(
-                "rpm -qR vim",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "libc.so.6()(64bit)\n\
-                             libncurses.so.6()(64bit)\n\
-                             rpmlib(PayloadIsZstd) <= 5.4.18-1\n\
-                             /usr/bin/sh\n"
-                        .into(),
                     stderr: String::new(),
                 },
             )
@@ -2624,7 +2684,10 @@ mod tests {
     #[test]
     fn classify_deps_rpm_returns_none_when_rpm_unavailable() {
         let exec = MockExecutor::new().with_command(
-            "rpm -qR glibc",
+            &format!(
+                "rpm -q --queryformat {} glibc",
+                RPM_REQUIRES_FORMAT
+            ),
             ExecResult {
                 exit_code: 1,
                 stdout: String::new(),
@@ -2697,12 +2760,24 @@ mod tests {
                     stderr: "dnf not found".into(),
                 },
             )
-            // rpm -qR for each package (sorted alphabetically: apr, glibc, httpd)
+            // Batched rpm query for all packages (sorted: apr, glibc, httpd)
             .with_command(
-                "rpm -qR apr",
+                &format!(
+                    "rpm -q --queryformat {} apr glibc httpd",
+                    RPM_REQUIRES_FORMAT
+                ),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "libc.so.6()(64bit)\n".into(),
+                    stdout: "\
+@@apr
+libc.so.6()(64bit)
+@@glibc
+rpmlib(CompressedFileNames) <= 3.0.4-1
+@@httpd
+libapr-1.so.0()(64bit)
+libc.so.6()(64bit)
+"
+                    .into(),
                     stderr: String::new(),
                 },
             )
@@ -2711,22 +2786,6 @@ mod tests {
                 ExecResult {
                     exit_code: 0,
                     stdout: "glibc-2.34-60.el9.x86_64\n".into(),
-                    stderr: String::new(),
-                },
-            )
-            .with_command(
-                "rpm -qR glibc",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "rpmlib(CompressedFileNames) <= 3.0.4-1\n".into(),
-                    stderr: String::new(),
-                },
-            )
-            .with_command(
-                "rpm -qR httpd",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "libapr-1.so.0()(64bit)\nlibc.so.6()(64bit)\n".into(),
                     stderr: String::new(),
                 },
             )
