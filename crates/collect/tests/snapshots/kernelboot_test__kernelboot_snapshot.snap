@@ -1,5 +1,5 @@
 ---
-source: inspectah-collect/tests/kernelboot_test.rs
+source: crates/collect/tests/kernelboot_test.rs
 expression: section
 ---
 {
@@ -91,7 +91,7 @@ expression: section
   ],
   "non_default_modules": [],
   "tuned_active": "virtual-guest",
-  "tuned_include": false,
+  "tuned_include": true,
   "tuned_custom_profiles": [],
   "locale": "en_US.UTF-8",
   "timezone": "America/New_York",

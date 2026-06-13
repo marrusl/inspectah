@@ -5,7 +5,7 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::kernelboot::{
-    ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride, is_stock_tuned_profile,
+    ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
 };
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use std::collections::HashMap;
@@ -137,7 +137,7 @@ impl Inspector for KernelbootInspector {
                 .map_or_else(|_| Vec::new(), |v| v.clone()),
             loaded_modules,
             non_default_modules: Vec::new(),
-            tuned_include: !tuned_active.is_empty() && !is_stock_tuned_profile(&tuned_active),
+            tuned_include: !tuned_active.is_empty(),
             tuned_active,
             tuned_custom_profiles: Vec::new(),
             locale,
