@@ -81,6 +81,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             locked: s.entry.locked,
             attention_reason: s.entry.attention_reason.clone(),
             owning_package: s.entry.owning_package.clone(),
+            default_state: s.entry.default_state.map(|d| d.to_string()),
         })
         .collect();
 
