@@ -60,7 +60,7 @@ it("uses top-level items count when items are present", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd crates/web/ui && npx vitest run -- Sidebar`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/Sidebar.test.tsx`
 
 Expected: FAIL — subsection-only section returns "0".
 
@@ -89,7 +89,7 @@ function sectionCount(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd crates/web/ui && npx vitest run -- Sidebar`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/Sidebar.test.tsx`
 
 Expected: PASS
 
@@ -133,11 +133,28 @@ it("renders subsection labels as h4 inside a section with aria-labelledby", () =
   expect(sectionEl).toHaveAttribute("aria-labelledby", "subsection-connections");
   expect(heading).toHaveAttribute("id", "subsection-connections");
 });
+
+it("subsection region contains its list items", () => {
+  const section: ReferenceSection = {
+    id: "network",
+    display_name: "Network",
+    items: [],
+    subsections: [
+      { id: "connections", display_name: "Connections", items: [
+        { id: "eth0", title: "eth0", subtitle: null, detail: null, searchable_text: "eth0" },
+      ]},
+    ],
+  };
+  render(<ContextList section={section} />);
+  const region = screen.getByRole("list", { name: "Connections context items" });
+  expect(region).toBeInTheDocument();
+  expect(within(region).getByTestId("context-item-eth0")).toBeInTheDocument();
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd crates/web/ui && npx vitest run -- ContextList`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/ContextList.test.tsx`
 
 Expected: FAIL — no `<h4>` or `<section>` elements.
 
@@ -169,7 +186,7 @@ In `ContextList.tsx`, replace the subsection rendering block:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd crates/web/ui && npx vitest run -- ContextList`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/ContextList.test.tsx`
 
 Expected: PASS
 
@@ -230,12 +247,26 @@ fn web_network_section_groups_into_subsections() {
     assert_eq!(section.subsections.len(), 5);
     assert_eq!(section.subsections[0].id, "connections");
     assert_eq!(section.subsections[0].items.len(), 1);
+    // Verify representative field values (not just counts)
+    assert_eq!(section.subsections[0].items[0].title, "eth0");
+    assert!(section.subsections[0].items[0].subtitle.as_deref()
+        .unwrap().contains("ethernet"));
+
     assert_eq!(section.subsections[1].id, "firewall");
     assert_eq!(section.subsections[1].items.len(), 2); // zone + direct rule
+    // Zone detail must contain zone content
+    assert!(section.subsections[1].items[0].detail.is_some());
+
     assert_eq!(section.subsections[2].id, "routes_rules");
     assert_eq!(section.subsections[2].items.len(), 3); // static + ip_route + ip_rule
+    // IP route subtitle must say "ip route"
+    let ip_route_item = section.subsections[2].items.iter()
+        .find(|i| i.subtitle.as_deref() == Some("ip route")).unwrap();
+    assert!(!ip_route_item.searchable_text.is_empty());
+
     assert_eq!(section.subsections[3].id, "dns_hosts");
     assert_eq!(section.subsections[3].items.len(), 2); // resolv + hosts
+
     assert_eq!(section.subsections[4].id, "proxy");
     assert_eq!(section.subsections[4].items.len(), 1);
 }
@@ -349,7 +380,8 @@ Expected: PASS. Also run `cargo clippy -p inspectah-web -- -W clippy::all`.
 
 - [ ] **Step 5: Commit**
 
-```
+```bash
+git add crates/web/src/adapter.rs
 git commit -m "refactor(refine): group network section into subsections by type"
 ```
 
@@ -372,16 +404,44 @@ git commit -m "refactor(refine): group network section into subsections by type"
 ```rust
 #[test]
 fn web_kernel_boot_section_splits_customizations_and_defaults() {
-    // Construct RefKernelBoot with items in both categories.
-    // Assert: 2 subsections, "customizations" first, "defaults_context" second.
-    // Assert: tuned profile → customizations, cmdline → defaults.
-    // Assert: top-level items is empty.
+    // Construct RefKernelBoot with:
+    //   tuned_active = Some("throughput-performance")
+    //   sysctl_overrides = [one override with key="vm.swappiness"]
+    //   cmdline = Some("BOOT_IMAGE=...")
+    //   locale = Some("en_US.UTF-8")
+    let data = RefKernelBoot { /* populate fields */ };
+    let section = web_kernel_boot_section(&data);
+
+    assert!(section.items.is_empty(), "top-level items must be empty");
+    assert_eq!(section.subsections.len(), 2);
+    assert_eq!(section.subsections[0].id, "customizations");
+    assert_eq!(section.subsections[0].display_name, "Customizations");
+    // Verify tuned and sysctl landed in customizations
+    assert!(section.subsections[0].items.iter()
+        .any(|i| i.title == "Active tuned profile"));
+    assert!(section.subsections[0].items.iter()
+        .any(|i| i.title == "vm.swappiness"));
+
+    assert_eq!(section.subsections[1].id, "defaults_context");
+    assert_eq!(section.subsections[1].display_name, "Defaults / Context");
+    // Verify cmdline and locale landed in defaults
+    assert!(section.subsections[1].items.iter()
+        .any(|i| i.title == "Kernel cmdline"));
+    assert!(section.subsections[1].items.iter()
+        .any(|i| i.title == "Locale"));
 }
 
 #[test]
 fn web_kernel_boot_section_omits_empty_customizations() {
     // Construct RefKernelBoot with only cmdline and locale (no customizations).
-    // Assert: 1 subsection ("defaults_context" only).
+    let data = RefKernelBoot {
+        cmdline: Some("BOOT_IMAGE=...".to_string()),
+        locale: Some("en_US.UTF-8".to_string()),
+        ..Default::default()
+    };
+    let section = web_kernel_boot_section(&data);
+    assert_eq!(section.subsections.len(), 1, "only non-empty subsections");
+    assert_eq!(section.subsections[0].id, "defaults_context");
 }
 ```
 
@@ -405,7 +465,8 @@ Run: `cargo test -p inspectah-web && cargo clippy -p inspectah-web -- -W clippy:
 
 - [ ] **Step 5: Commit**
 
-```
+```bash
+git add crates/web/src/adapter.rs
 git commit -m "refactor(refine): split kernel & boot into customizations vs defaults"
 ```
 
@@ -456,7 +517,7 @@ describe("formatEvrPair", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd crates/web/ui && npx vitest run -- evrFormat`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/evrFormat.test.ts`
 
 Expected: FAIL — module does not exist.
 
@@ -491,13 +552,15 @@ export function formatEvrPair(
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd crates/web/ui && npx vitest run -- evrFormat`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/evrFormat.test.ts`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
-```
+```bash
+git add crates/web/ui/src/components/evrFormat.ts \
+       crates/web/ui/src/components/__tests__/evrFormat.test.ts
 git commit -m "feat(refine): add pairwise EVR formatting utility"
 ```
 
@@ -513,7 +576,14 @@ git commit -m "feat(refine): add pairwise EVR formatting utility"
 
 **Context:** New component that renders version changes as a grouped table. Reads `VersionChangeEntry[]` from `viewData.version_changes`. Receives `empty_reason` from the reference section for empty state rendering.
 
-**Dependencies:** Task 5 (EVR utility). `@patternfly/react-table` must be installed — check `package.json` first; if absent, run `npm install @patternfly/react-table` in `crates/web/ui/`.
+**Dependencies:** Task 5 (EVR utility). `@patternfly/react-table` (PatternFly 6 compatible — the project already uses `@patternfly/react-core` v6) must be installed — check `package.json` first; if absent, run `npm install @patternfly/react-table` in `crates/web/ui/`.
+
+**Files (exhaustive):**
+- Create: `crates/web/ui/src/components/VersionChangesTable.tsx`
+- Test: `crates/web/ui/src/components/__tests__/VersionChangesTable.test.tsx`
+- Modify: `crates/web/ui/package.json` (if adding dependency)
+- Modify: `crates/web/ui/package-lock.json` (if adding dependency)
+- Modify: `crates/web/ui/src/App.css` (or relevant CSS file — add table styles)
 
 - [ ] **Step 1: Check and install PatternFly table dependency**
 
@@ -600,7 +670,7 @@ describe("VersionChangesTable", () => {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd crates/web/ui && npx vitest run -- VersionChangesTable`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/VersionChangesTable.test.tsx`
 
 Expected: FAIL — module does not exist.
 
@@ -730,13 +800,18 @@ Add CSS for the group headers and version cells. Create or append to the appropr
 
 - [ ] **Step 5: Run tests**
 
-Run: `cd crates/web/ui && npx vitest run -- VersionChangesTable`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/VersionChangesTable.test.tsx`
 
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
-```
+```bash
+git add crates/web/ui/src/components/VersionChangesTable.tsx \
+       crates/web/ui/src/components/__tests__/VersionChangesTable.test.tsx \
+       crates/web/ui/src/App.css \
+       crates/web/ui/package.json \
+       crates/web/ui/package-lock.json
 git commit -m "feat(refine): add VersionChangesTable grouped table component"
 ```
 
@@ -753,11 +828,39 @@ git commit -m "feat(refine): add VersionChangesTable grouped table component"
 
 **Context:** Wire `VersionChangesTable` into `MainContent.tsx` replacing `ContextList` for the `version_changes` section. Update `App.tsx` section-entry focus to target `[data-testid^="context-item-"]` instead of `[role="row"]` for the version_changes section.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
-Add a test that renders MainContent with version_changes active and asserts the table renders (not ContextList). Also test that App.tsx focus query prefers `context-item-` testids.
+Add tests for MainContent integration and App-level focus contract:
 
-- [ ] **Step 2: Run test to verify it fails**
+```typescript
+// MainContent integration test (add to existing MainContent tests)
+it("renders VersionChangesTable instead of ContextList for version_changes", () => {
+  // Render MainContent with activeSection="version_changes"
+  // and viewData containing version_changes entries.
+  // Assert: VersionChangesTable renders (e.g., table with group header)
+  // Assert: ContextList does NOT render for this section
+});
+
+// App-level focus contract tests (add to App.test.tsx or new file)
+it("plain section entry focuses first data row, not group header", () => {
+  // Render App with version_changes active, no revealItemId.
+  // Assert: document.activeElement has data-testid
+  //   matching "context-item-{first-downgrade-name}.{arch}"
+  // Assert: document.activeElement does NOT have class
+  //   "inspectah-vc-group-header"
+});
+
+it("reveal navigation focuses the targeted data row", () => {
+  // Render App with version_changes active and
+  //   revealItemId="podman.x86_64"
+  // Assert: element with data-testid="context-item-podman.x86_64"
+  //   has focus or is scrolled into view
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/MainContent.test.tsx`
 
 - [ ] **Step 3: Update MainContent.tsx**
 
@@ -766,7 +869,10 @@ In the `version_changes` section case, replace the `ContextList` rendering:
 ```tsx
 if (activeSection === "version_changes") {
   const section = sections?.find((s) => s.id === "version_changes");
-  const emptyReason = section?.empty_reason ?? undefined;
+  if (!section) {
+    return <p>Section data not available.</p>;
+  }
+  const emptyReason = section.empty_reason ?? undefined;
 
   return (
     <>
@@ -795,16 +901,22 @@ if (firstRow) { firstRow.focus(); return; }
 const firstContextItem = container.querySelector('[data-testid^="context-item-"]') ...
 ```
 
-Change to try `context-item-` first, then fall back to `role="row"`:
+For the `version_changes` section only, try `[data-testid^="context-item-"]` before `[role="row"]`. Other sections keep existing behavior:
 
 ```typescript
-const firstContextItem = container.querySelector(
-  '[data-testid^="context-item-"]',
-) as HTMLElement | null;
-if (firstContextItem) {
-  firstContextItem.focus();
-  return;
+// Scoped to version_changes per the approved spec
+const preferContextItem = activeSection === "version_changes";
+
+if (preferContextItem) {
+  const firstContextItem = container.querySelector(
+    '[data-testid^="context-item-"]',
+  ) as HTMLElement | null;
+  if (firstContextItem) {
+    firstContextItem.focus();
+    return;
+  }
 }
+
 const firstRow = container.querySelector(
   '[role="row"]',
 ) as HTMLElement | null;
@@ -812,9 +924,19 @@ if (firstRow) {
   firstRow.focus();
   return;
 }
+
+if (!preferContextItem) {
+  const firstContextItem = container.querySelector(
+    '[data-testid^="context-item-"]',
+  ) as HTMLElement | null;
+  if (firstContextItem) {
+    firstContextItem.focus();
+    return;
+  }
+}
 ```
 
-This ensures version changes (and all other sections) prefer data rows over header/group rows. The change is backward-compatible — decision sections with `[data-testid^="context-item-"]` elements will still focus correctly, and those without will fall through to `[role="row"]`.
+This is scoped to `version_changes` only, matching the spec. Other sections are unaffected. The `activeSection` variable is already in scope in the `useEffect`.
 
 - [ ] **Step 5: Run full test suite**
 
@@ -824,7 +946,10 @@ Expected: All tests pass.
 
 - [ ] **Step 6: Commit**
 
-```
+```bash
+git add crates/web/ui/src/components/MainContent.tsx \
+       crates/web/ui/src/App.tsx \
+       crates/web/ui/src/components/__tests__/
 git commit -m "feat(refine): wire VersionChangesTable into MainContent, fix section-entry focus"
 ```
 
@@ -838,7 +963,16 @@ git commit -m "feat(refine): wire VersionChangesTable into MainContent, fix sect
 - Update: `crates/web/tests/snapshots/` — any contract snapshots affected by subsection structure changes
 - Verify: full workspace test suite
 
-- [ ] **Step 1: Run full Rust test suite**
+- [ ] **Step 1: Update `api_test.rs` assertions for subsection structure**
+
+`crates/web/tests/api_test.rs` contains flat-list assertions for `network` and `kernel_boot` sections that check `items` counts and field values. These will fail because items have moved to subsections. Update the assertions to:
+- Check `items` is empty for `network` and `kernel_boot` sections
+- Check `subsections` array has the expected structure
+- Verify representative items exist in the correct subsections
+
+Read the failing tests first to understand the exact assertions, then update them to match the new subsection structure.
+
+- [ ] **Step 2: Run full Rust test suite**
 
 Run: `cargo test --workspace`
 
@@ -868,8 +1002,13 @@ Expected: zero errors.
 git commit -m "test(refine): update contract snapshots for subsection structure"
 ```
 
-- [ ] **Step 6: Verify the complete commit log**
+- [ ] **Step 6: Final behavior verification**
 
-Run: `git log --oneline -8`
+Run both test suites one more time as a gate:
 
-Expected: 8 clean commits covering sidebar, a11y, networking adapter, kernel/boot adapter, EVR utility, table component, integration, and snapshots.
+```bash
+cargo test --workspace 2>&1 | tail -5
+cd crates/web/ui && npx vitest run 2>&1 | tail -5
+```
+
+Expected: zero failures in both. If any fail, diagnose and fix before marking complete.
