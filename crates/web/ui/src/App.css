@@ -919,6 +919,30 @@ html, body, #root {
   border: 0;
 }
 
+/* ── VersionChangesTable ── */
+.inspectah-vc-group-header--danger .inspectah-vc-group-header__cell {
+  font-weight: 600;
+  font-size: var(--pf-t--global--font--size--xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--pf-t--global--color--status--danger--default);
+  border-bottom: 2px solid var(--pf-t--global--color--status--danger--default);
+}
+.inspectah-vc-group-header--success .inspectah-vc-group-header__cell {
+  font-weight: 600;
+  font-size: var(--pf-t--global--font--size--xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--pf-t--global--color--status--success--default);
+  border-bottom: 2px solid var(--pf-t--global--color--status--success--default);
+}
+.inspectah-vc-version {
+  font-family: var(--pf-t--global--font--family--mono);
+}
+.inspectah-vc-row--revealed {
+  background: var(--pf-t--global--background--color--primary--default);
+}
+
 /* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
   .inspectah-cf-line--added {
