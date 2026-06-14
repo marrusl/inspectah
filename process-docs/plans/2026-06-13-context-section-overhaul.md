@@ -1000,11 +1000,15 @@ Expected: zero errors.
 
 - [ ] **Step 5: Commit snapshot and test updates**
 
+Stage only the exact files changed — do NOT glob the snapshots directory:
+
 ```bash
 git add crates/web/tests/api_test.rs \
-       crates/web/tests/snapshots/
+       crates/web/tests/snapshots/contract_snapshots__contract_view.snap
 git commit -m "test(refine): update contract snapshots for subsection structure"
 ```
+
+If additional `.snap` files changed, add them by name. Do not stage the directory.
 
 - [ ] **Step 6: Final behavior verification**
 
