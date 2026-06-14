@@ -243,14 +243,14 @@ describe("Sidebar", () => {
             id: "network_interfaces",
             display_name: "Network Interfaces",
             items: [
-              { kind: "firewall", label: "eth0", description: null },
-              { kind: "firewall", label: "eth1", description: null },
+              { id: "eth0", title: "eth0", subtitle: null, detail: null, searchable_text: "eth0" },
+              { id: "eth1", title: "eth1", subtitle: null, detail: null, searchable_text: "eth1" },
             ],
           },
           {
             id: "firewall",
             display_name: "Firewall",
-            items: [{ kind: "firewall", label: "rule1", description: null }],
+            items: [{ id: "rule1", title: "rule1", subtitle: null, detail: null, searchable_text: "rule1" }],
           },
         ],
       },
@@ -276,7 +276,7 @@ describe("Sidebar", () => {
       {
         id: "network",
         display_name: "Network",
-        items: [{ kind: "network", label: "eth0", description: null }],
+        items: [{ id: "eth0", title: "eth0", subtitle: null, detail: null, searchable_text: "eth0" }],
         subsections: [], // Empty subsections
       },
       { id: "containers", display_name: "Containers", items: [] },

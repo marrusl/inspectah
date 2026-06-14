@@ -1,5 +1,5 @@
 ---
-source: inspectah-web/tests/contract_snapshots.rs
+source: crates/web/tests/contract_snapshots.rs
 expression: json
 ---
 [
@@ -52,27 +52,40 @@ expression: json
   {
     "display_name": "Network",
     "id": "network",
-    "items": [
+    "items": [],
+    "subsections": [
       {
-        "detail": null,
-        "id": "eth0",
-        "searchable_text": "eth0 802-3-ethernet auto /etc/NetworkManager/system-connections/eth0.nmconnection",
-        "subtitle": "802-3-ethernet (auto)",
-        "title": "eth0"
+        "display_name": "Connections",
+        "id": "connections",
+        "items": [
+          {
+            "detail": null,
+            "id": "eth0",
+            "searchable_text": "eth0 802-3-ethernet auto /etc/NetworkManager/system-connections/eth0.nmconnection",
+            "subtitle": "802-3-ethernet (auto)",
+            "title": "eth0"
+          }
+        ]
       },
       {
-        "detail": null,
-        "id": "resolv_provenance",
-        "searchable_text": "NetworkManager",
-        "subtitle": "NetworkManager",
-        "title": "DNS resolver"
-      },
-      {
-        "detail": null,
-        "id": "10.0.0.50 app-server",
-        "searchable_text": "10.0.0.50 app-server",
-        "subtitle": "hosts",
-        "title": "10.0.0.50 app-server"
+        "display_name": "DNS & Hosts",
+        "id": "dns_hosts",
+        "items": [
+          {
+            "detail": null,
+            "id": "resolv_provenance",
+            "searchable_text": "NetworkManager",
+            "subtitle": "NetworkManager",
+            "title": "DNS resolver"
+          },
+          {
+            "detail": null,
+            "id": "10.0.0.50 app-server",
+            "searchable_text": "10.0.0.50 app-server",
+            "subtitle": "hosts",
+            "title": "10.0.0.50 app-server"
+          }
+        ]
       }
     ]
   },

@@ -1001,33 +1001,41 @@ fn normalize_network_maps_connections_and_firewall() {
     let sections = build_web_sections(session.reference());
     let net = sections.iter().find(|s| s.id == "network").unwrap();
 
-    // NMConnection
-    let eth0 = net.items.iter().find(|i| i.id == "eth0").unwrap();
+    // Top-level items should be empty (using subsections)
+    assert!(net.items.is_empty());
+
+    // Helper to find item across all subsections
+    let find_item = |id: &str| {
+        net.subsections
+            .iter()
+            .flat_map(|s| &s.items)
+            .find(|i| i.id == id)
+    };
+
+    // NMConnection (in connections subsection)
+    let eth0 = find_item("eth0").unwrap();
     assert!(eth0.subtitle.as_ref().unwrap().contains("ethernet"));
 
-    // FirewallZone
-    let public = net.items.iter().find(|i| i.id == "public").unwrap();
+    // FirewallZone (in firewall subsection)
+    let public = find_item("public").unwrap();
     assert!(
         public.subtitle.as_ref().unwrap().contains("ssh"),
         "zone subtitle should summarize services"
     );
 
-    // FirewallDirectRule
-    let direct = net.items.iter().find(|i| i.id == "ipv4:INPUT:0").unwrap();
+    // FirewallDirectRule (in firewall subsection)
+    let direct = find_item("ipv4:INPUT:0").unwrap();
     assert_eq!(direct.title, "INPUT");
 
-    // hosts_additions
-    let hosts = net
-        .items
-        .iter()
-        .find(|i| i.id == "192.168.1.100 myhost")
-        .unwrap();
+    // hosts_additions (in dns_hosts subsection)
+    let hosts = find_item("192.168.1.100 myhost").unwrap();
     assert_eq!(hosts.subtitle.as_deref(), Some("hosts"));
 
-    // ProxyEntry
+    // ProxyEntry (in proxy subsection)
     let proxy = net
-        .items
+        .subsections
         .iter()
+        .flat_map(|s| &s.items)
         .find(|i| i.id.contains("/etc/environment"))
         .unwrap();
     assert!(proxy.subtitle.as_ref().unwrap().contains("HTTP_PROXY"));

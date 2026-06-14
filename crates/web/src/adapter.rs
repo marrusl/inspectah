@@ -862,11 +862,12 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
 // -- Network ---------------------------------------------------------------
 
 pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
-    let mut items = Vec::new();
+    let mut subsections = Vec::new();
 
-    // NMConnection
+    // 1. Connections subsection
+    let mut connections_items = Vec::new();
     for conn in &data.connections {
-        items.push(ContextItem {
+        connections_items.push(ContextItem {
             id: conn.name.clone(),
             title: conn.name.clone(),
             subtitle: Some(format!("{} ({})", conn.conn_type, conn.method)),
@@ -877,8 +878,16 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             ),
         });
     }
+    if !connections_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "connections".to_string(),
+            display_name: "Connections".to_string(),
+            items: connections_items,
+        });
+    }
 
-    // FirewallZone
+    // 2. Firewall subsection (zones + direct rules)
+    let mut firewall_items = Vec::new();
     for zone in &data.firewall_zones {
         let mut summary_parts = Vec::new();
         if !zone.services.is_empty() {
@@ -892,7 +901,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
         } else {
             Some(summary_parts.join("; "))
         };
-        items.push(ContextItem {
+        firewall_items.push(ContextItem {
             id: zone.name.clone(),
             title: zone.name.clone(),
             subtitle,
@@ -906,11 +915,9 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             ),
         });
     }
-
-    // FirewallDirectRule
     for rule in &data.firewall_direct_rules {
         let id = format!("{}:{}:{}", rule.ipv, rule.chain, rule.priority);
-        items.push(ContextItem {
+        firewall_items.push(ContextItem {
             id,
             title: rule.chain.clone(),
             subtitle: Some(format!("{} {}", rule.ipv, rule.table)),
@@ -921,10 +928,18 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             ),
         });
     }
+    if !firewall_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "firewall".to_string(),
+            display_name: "Firewall".to_string(),
+            items: firewall_items,
+        });
+    }
 
-    // StaticRouteFile
+    // 3. Routes & Rules subsection (static routes + ip routes + ip rules)
+    let mut routes_rules_items = Vec::new();
     for sr in &data.static_routes {
-        items.push(ContextItem {
+        routes_rules_items.push(ContextItem {
             id: sr.path.clone(),
             title: sr.name.clone(),
             subtitle: Some(sr.path.clone()),
@@ -932,10 +947,8 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: format!("{} {}", sr.path, sr.name),
         });
     }
-
-    // ip_routes
     for route in &data.ip_routes {
-        items.push(ContextItem {
+        routes_rules_items.push(ContextItem {
             id: route.clone(),
             title: route.clone(),
             subtitle: Some("ip route".to_string()),
@@ -943,10 +956,8 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: route.clone(),
         });
     }
-
-    // ip_rules
     for rule in &data.ip_rules {
-        items.push(ContextItem {
+        routes_rules_items.push(ContextItem {
             id: rule.clone(),
             title: rule.clone(),
             subtitle: Some("ip rule".to_string()),
@@ -954,10 +965,18 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: rule.clone(),
         });
     }
+    if !routes_rules_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "routes_rules".to_string(),
+            display_name: "Routes & Rules".to_string(),
+            items: routes_rules_items,
+        });
+    }
 
-    // resolv_provenance
+    // 4. DNS & Hosts subsection (resolv_provenance + hosts_additions)
+    let mut dns_hosts_items = Vec::new();
     if !data.resolv_provenance.is_empty() {
-        items.push(ContextItem {
+        dns_hosts_items.push(ContextItem {
             id: "resolv_provenance".to_string(),
             title: "DNS resolver".to_string(),
             subtitle: Some(data.resolv_provenance.clone()),
@@ -965,10 +984,8 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: data.resolv_provenance.clone(),
         });
     }
-
-    // hosts_additions
     for line in &data.hosts_additions {
-        items.push(ContextItem {
+        dns_hosts_items.push(ContextItem {
             id: line.clone(),
             title: line.clone(),
             subtitle: Some("hosts".to_string()),
@@ -976,11 +993,19 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: line.clone(),
         });
     }
+    if !dns_hosts_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "dns_hosts".to_string(),
+            display_name: "DNS & Hosts".to_string(),
+            items: dns_hosts_items,
+        });
+    }
 
-    // ProxyEntry
+    // 5. Proxy subsection
+    let mut proxy_items = Vec::new();
     for proxy in &data.proxy_env {
         let id = format!("{}:{}", proxy.source, proxy.line);
-        items.push(ContextItem {
+        proxy_items.push(ContextItem {
             id,
             title: proxy.source.clone(),
             subtitle: Some(proxy.line.clone()),
@@ -988,8 +1013,21 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             searchable_text: format!("{} {}", proxy.source, proxy.line),
         });
     }
+    if !proxy_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "proxy".to_string(),
+            display_name: "Proxy".to_string(),
+            items: proxy_items,
+        });
+    }
 
-    crate::web_types::reference_section("network", "Network", items)
+    ReferenceSection {
+        id: "network".to_string(),
+        display_name: "Network".to_string(),
+        items: Vec::new(),
+        subsections,
+        empty_reason: None,
+    }
 }
 
 // -- Storage ---------------------------------------------------------------
@@ -1292,5 +1330,80 @@ mod tests {
         assert_eq!(members.len(), 2);
         // Verify member overlap_groups is an array
         assert!(members[0]["overlap_groups"].is_array());
+    }
+
+    #[test]
+    fn web_network_section_groups_into_subsections() {
+        use inspectah_refine::projection::{RefNetwork, RefNMConnection, RefFirewallZone, RefFirewallDirectRule, RefStaticRoute, RefProxyEnv};
+
+        let data = RefNetwork {
+            connections: vec![RefNMConnection {
+                name: "eth0".into(), conn_type: "ethernet".into(),
+                method: "auto".into(), path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+            }],
+            firewall_zones: vec![RefFirewallZone {
+                name: "public".into(), path: "/etc/firewalld/zones/public.xml".into(),
+                content: "<zone>...</zone>".into(),
+                services: vec!["ssh".into()], ports: vec!["8080/tcp".into()],
+                rich_rules: vec![],
+            }],
+            firewall_direct_rules: vec![RefFirewallDirectRule {
+                ipv: "ipv4".into(), table: "filter".into(), chain: "INPUT".into(),
+                priority: "0".into(), args: "-p tcp --dport 443 -j ACCEPT".into(),
+            }],
+            static_routes: vec![RefStaticRoute { path: "/etc/sysconfig/network-scripts/route-eth0".into(), name: "route-eth0".into() }],
+            ip_routes: vec!["10.0.0.0/8 via 10.0.0.1".into()],
+            ip_rules: vec!["from 10.0.0.0/8 lookup 100".into()],
+            resolv_provenance: "NetworkManager".into(),
+            hosts_additions: vec!["10.0.0.5 db.local".into()],
+            proxy_env: vec![RefProxyEnv { source: "/etc/environment".into(), line: "http_proxy=http://proxy:3128".into() }],
+        };
+        let section = web_network_section(&data);
+        assert!(section.items.is_empty(), "top-level items must be empty");
+        assert_eq!(section.subsections.len(), 5);
+
+        assert_eq!(section.subsections[0].id, "connections");
+        assert_eq!(section.subsections[0].display_name, "Connections");
+        assert_eq!(section.subsections[0].items.len(), 1);
+        assert_eq!(section.subsections[0].items[0].title, "eth0");
+        assert!(section.subsections[0].items[0].subtitle.as_deref().unwrap().contains("ethernet"));
+
+        assert_eq!(section.subsections[1].id, "firewall");
+        assert_eq!(section.subsections[1].items.len(), 2);
+        assert!(section.subsections[1].items[0].detail.is_some());
+
+        assert_eq!(section.subsections[2].id, "routes_rules");
+        assert_eq!(section.subsections[2].display_name, "Routes & Rules");
+        assert_eq!(section.subsections[2].items.len(), 3);
+        assert!(section.subsections[2].items.iter().any(|i| i.subtitle.as_deref() == Some("ip route")));
+
+        assert_eq!(section.subsections[3].id, "dns_hosts");
+        assert_eq!(section.subsections[3].items.len(), 2);
+
+        assert_eq!(section.subsections[4].id, "proxy");
+        assert_eq!(section.subsections[4].items.len(), 1);
+    }
+
+    #[test]
+    fn web_network_section_omits_empty_subsections() {
+        use inspectah_refine::projection::{RefNetwork, RefNMConnection};
+
+        let data = RefNetwork {
+            connections: vec![RefNMConnection {
+                name: "eth0".into(), conn_type: "ethernet".into(),
+                method: "auto".into(), path: "/path".into(),
+            }],
+            firewall_zones: vec![],
+            firewall_direct_rules: vec![],
+            static_routes: vec![],
+            ip_routes: vec![],
+            ip_rules: vec![],
+            resolv_provenance: String::new(),
+            hosts_additions: vec![],
+            proxy_env: vec![],
+        };
+        let section = web_network_section(&data);
+        assert_eq!(section.subsections.len(), 1);
+        assert_eq!(section.subsections[0].id, "connections");
     }
 }
