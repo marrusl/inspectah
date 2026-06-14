@@ -69,13 +69,15 @@ be preserved:
   app uses for programmatic focus. The row element must be focusable
   (`tabIndex={-1}` or a natively focusable element). When
   `revealItemId` targets a version change item, focus must land on the
-  **matching data row**, not a group header or table header. On plain
-  section entry (no `revealItemId`), focus must land on the **first
-  data row**, not a group header — group headers must not use
-  `role="row"` or must be excluded from the `[role="row"]` query
-  that `App.tsx` uses for initial focus. This matches the existing
-  `ContextItem.tsx` contract where `data-testid="context-item-${item.id}"`
-  is the focus target.
+  **matching data row**, not a group header or table header.
+- **Plain section entry:** When the user navigates to Version Changes
+  via the sidebar (no `revealItemId`), `App.tsx` currently focuses
+  the first `[role="row"]` in the section content. Group headers use
+  `role="row"` for table semantics, so the focus query in `App.tsx`
+  must be updated to skip non-data rows. The fix: `App.tsx` targets
+  `[data-testid^="context-item-"]` instead of `[role="row"]` for the
+  `version_changes` section, ensuring focus lands on the first data
+  row. This is a small, scoped change to `App.tsx`.
 - **Section search is out of scope.** `MainContent.tsx` does not
   currently expose section-level search for context sections (only
   decision sections have it). This spec does not add it. GlobalSearch
@@ -102,6 +104,9 @@ be preserved:
   empty_reason and search compatibility.
 - `crates/web/ui/src/components/__tests__/VersionChangesTable.test.tsx` —
   NEW.
+- `crates/web/ui/src/App.tsx` — update section-entry focus query for
+  `version_changes` to target `[data-testid^="context-item-"]` instead
+  of `[role="row"]`.
 - `crates/web/ui/package.json` — add `@patternfly/react-table` if not
   already a dependency.
 
@@ -296,6 +301,8 @@ doesn't use `<h3>` for subsection-level content.
   - Search highlight: row with matching name gets highlight class
   - Focus anchor: `data-testid="context-item-{name}.{arch}"` on each
     data row, element is focusable, focus lands on row not header
+  - Section entry focus: navigating to Version Changes via sidebar
+    focuses the first data row, not a group header
 - **Sidebar:** Verify `sectionCount()` sums subsection items when
   top-level items is empty. Verify existing sections unaffected.
 - **ContextList accessibility:** Verify subsection labels render as
