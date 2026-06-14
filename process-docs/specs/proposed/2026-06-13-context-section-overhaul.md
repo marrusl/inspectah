@@ -69,9 +69,13 @@ be preserved:
   app uses for programmatic focus. The row element must be focusable
   (`tabIndex={-1}` or a natively focusable element). When
   `revealItemId` targets a version change item, focus must land on the
-  **matching data row**, not a group header or table header. This
-  matches the existing `ContextItem.tsx` contract where
-  `data-testid="context-item-${item.id}"` is the focus target.
+  **matching data row**, not a group header or table header. On plain
+  section entry (no `revealItemId`), focus must land on the **first
+  data row**, not a group header — group headers must not use
+  `role="row"` or must be excluded from the `[role="row"]` query
+  that `App.tsx` uses for initial focus. This matches the existing
+  `ContextItem.tsx` contract where `data-testid="context-item-${item.id}"`
+  is the focus target.
 - **Section search is out of scope.** `MainContent.tsx` does not
   currently expose section-level search for context sections (only
   decision sections have it). This spec does not add it. GlobalSearch
