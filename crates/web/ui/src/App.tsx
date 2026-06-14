@@ -71,6 +71,20 @@ function SingleHostApp({
       const container = mainContentRef.current;
       if (!container) return;
 
+      // For version_changes, prefer context-item data rows over group header
+      // rows (which also have role="row") per the approved spec.
+      const preferContextItem = activeSection === "version_changes";
+
+      if (preferContextItem) {
+        const firstContextItem = container.querySelector(
+          '[data-testid^="context-item-"]',
+        ) as HTMLElement | null;
+        if (firstContextItem) {
+          firstContextItem.focus();
+          return;
+        }
+      }
+
       const firstRow = container.querySelector(
         '[role="row"]',
       ) as HTMLElement | null;
@@ -79,12 +93,14 @@ function SingleHostApp({
         return;
       }
 
-      const firstContextItem = container.querySelector(
-        '[data-testid^="context-item-"]',
-      ) as HTMLElement | null;
-      if (firstContextItem) {
-        firstContextItem.focus();
-        return;
+      if (!preferContextItem) {
+        const firstContextItem = container.querySelector(
+          '[data-testid^="context-item-"]',
+        ) as HTMLElement | null;
+        if (firstContextItem) {
+          firstContextItem.focus();
+          return;
+        }
       }
 
       const heading = container.querySelector("h2, h3") as HTMLElement | null;

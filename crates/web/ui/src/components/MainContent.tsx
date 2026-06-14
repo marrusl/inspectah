@@ -20,6 +20,7 @@ import { applyOp, ungroupGroup } from "../api/client";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
+import { VersionChangesTable } from "./VersionChangesTable";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
@@ -485,23 +486,18 @@ export function MainContent({
     if (!section) {
       return <p>Section data not available.</p>;
     }
-
-    if (section.items.length === 0 && section.empty_reason) {
-      const copyMap: Record<string, string> = {
-        zero_drift: "All packages match the target baseline versions.",
-        data_unavailable:
-          "Version change data is not available for this snapshot.",
-      };
-      const copy = copyMap[section.empty_reason] ?? copyMap.data_unavailable;
-      return <EmptyState titleText={copy} icon={CubesIcon} headingLevel="h3" />;
-    }
+    const emptyReason = section.empty_reason ?? undefined;
 
     return (
       <>
         <Content>
           <h2>{SECTION_LABELS.version_changes}</h2>
         </Content>
-        <ContextList key="version_changes" section={section} />
+        <VersionChangesTable
+          entries={viewData?.version_changes ?? []}
+          emptyReason={emptyReason}
+          revealItemId={revealItemId}
+        />
       </>
     );
   }
