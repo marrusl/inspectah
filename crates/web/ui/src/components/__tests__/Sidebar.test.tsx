@@ -231,4 +231,68 @@ describe("Sidebar", () => {
     await userEvent.click(screen.getByText("Services"));
     expect(onSelect).toHaveBeenCalledWith("services");
   });
+
+  it("counts subsection items when top-level items is empty", () => {
+    const sectionsWithSubsections: ReferenceSection[] = [
+      {
+        id: "network",
+        display_name: "Network",
+        items: [], // Empty top-level items
+        subsections: [
+          {
+            id: "network_interfaces",
+            display_name: "Network Interfaces",
+            items: [
+              { kind: "firewall", label: "eth0", description: null },
+              { kind: "firewall", label: "eth1", description: null },
+            ],
+          },
+          {
+            id: "firewall",
+            display_name: "Firewall",
+            items: [{ kind: "firewall", label: "rule1", description: null }],
+          },
+        ],
+      },
+      { id: "containers", display_name: "Containers", items: [] },
+    ];
+
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={sectionsWithSubsections}
+        health={MOCK_HEALTH}
+      />,
+    );
+
+    // Network section should show "3" (2 + 1 subsection items)
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("uses top-level items count when items are present", () => {
+    const sectionsWithTopLevelItems: ReferenceSection[] = [
+      {
+        id: "network",
+        display_name: "Network",
+        items: [{ kind: "network", label: "eth0", description: null }],
+        subsections: [], // Empty subsections
+      },
+      { id: "containers", display_name: "Containers", items: [] },
+    ];
+
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={sectionsWithTopLevelItems}
+        health={MOCK_HEALTH}
+      />,
+    );
+
+    // Network section should show "1" from top-level items
+    expect(screen.getByText("1")).toBeInTheDocument();
+  });
 });

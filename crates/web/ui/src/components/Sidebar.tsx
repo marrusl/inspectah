@@ -60,7 +60,14 @@ function sectionCount(
   // "compose" sidebar entry maps to the "containers" context section from the backend
   const lookupId = id === "compose" ? "containers" : id;
   const sec = sections.find((s) => s.id === lookupId);
-  return sec ? String(sec.items.length) : "0";
+  if (!sec) return "0";
+  const topLevel = sec.items.length;
+  if (topLevel > 0) return String(topLevel);
+  const subTotal = (sec.subsections ?? []).reduce(
+    (sum, sub) => sum + sub.items.length,
+    0,
+  );
+  return String(subTotal);
 }
 
 function decisionCount(
