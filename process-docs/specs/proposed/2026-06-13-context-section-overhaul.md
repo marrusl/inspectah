@@ -8,8 +8,7 @@ replaces them with purpose-built layouts that match how sysadmins actually
 scan migration data.
 
 **Scope:** Adapter restructuring (Rust) + one new frontend component
-(Version Changes table). Networking and Kernel & Boot use the existing
-`ContextList` subsection rendering — adapter-only changes.
+(Version Changes table) + sidebar count fix for subsection-only sections.
 
 ## Sections
 
@@ -32,75 +31,126 @@ distinction between risk levels.
 - **Upgrade group:** Green accent. Header: `"▲ Upgrades (N)"`.
 - **Row styling:** Compact — 6px vertical padding. Monospace for version
   strings. Package name in medium weight.
-- **Empty states:** If only upgrades exist, omit the Downgrades header
+- **Empty groups:** If only upgrades exist, omit the Downgrades header
   entirely (don't show "Downgrades (0)"). Same for the reverse.
-- **Existing empty reasons preserved:** The adapter already handles
-  `data_unavailable` and `zero_drift` empty states — the new component
-  must pass these through to `ContextList`'s EmptyState or render its own.
+
+**EVR formatting:** The component must replicate the adapter's current
+epoch-aware formatting logic (in `format_evr_pair()`). When `epoch` is
+non-empty and not `"0"`, display as `epoch:version`. Otherwise display
+`version` alone. Do not rely on raw `host_version`/`base_version` strings
+— those are the unformatted RPM version fields.
+
+**Empty states:** The `version_changes` reference section currently has
+two reason-specific empty states handled in `MainContent.tsx`:
+- `data_unavailable` → "Baseline data is required..."
+- `zero_drift` → "All packages match the target baseline versions."
+- Default (no items, no reason) → standard EmptyState
+
+The new component must preserve all three. Read `empty_reason` from the
+reference section (still emitted by the adapter) and render the
+appropriate message. Do not drop this contract.
+
+**Search/navigation contract:** The current search and focus system must
+be preserved:
+
+- `GlobalSearch.tsx` indexes reference section items via
+  `searchable_text`. The version changes reference section must continue
+  to emit ContextItems so GlobalSearch can index them. The adapter
+  continues emitting the `version_changes` reference section as before
+  (flat ContextItems) — the frontend simply renders a different component
+  for this section instead of `ContextList`. GlobalSearch reads the
+  section data; the visual component reads `viewData.version_changes`.
+- Focus restore (`revealItemId` in `MainContent.tsx`) must work: when
+  search navigates to a version change item, the table must scroll the
+  matching row into view and apply a highlight. Each table row needs a
+  stable `data-testid` anchor matching the ContextItem `id` format
+  (`"{name}.{arch}"`).
+- Section search filtering in `MainContent.tsx` must still match version
+  change items when the user types in the section search bar.
 
 **Accessibility:**
 - Group headers: `role="row"` with `aria-label="N downgrades"`.
-- Table uses PatternFly `Table` with `Thead`/`Tbody` grouping.
+- Use PatternFly composable `Table` / `Thead` / `Tbody`. Add
+  `@patternfly/react-table` to `package.json` dependencies if not
+  already present.
 - Column headers in `Thead` for screen reader column identification.
 
 **Files changed:**
-- `crates/web/src/adapter.rs` — `web_version_changes_section()` emits
-  two `ContextSubsection`s (downgrades, upgrades) instead of flat items.
-  OR: the adapter emits structured data and the frontend renders a
-  dedicated component. Preferred: **dedicated component** since the table
-  layout doesn't fit the ContextItem model.
+- `crates/web/src/adapter.rs` — `web_version_changes_section()` continues
+  to emit ContextItems into the reference section (preserves search
+  indexing). No structural change to the adapter.
 - `crates/web/ui/src/components/VersionChangesTable.tsx` — NEW. Receives
-  `VersionChangeEntry[]` from `ViewResponse` (already available — the
-  adapter maps these in `build_web_view()`). Renders the grouped table.
+  `VersionChangeEntry[]` from `viewData.version_changes` plus
+  `empty_reason` from the reference section. Renders the grouped table
+  with EVR formatting, empty states, search highlight, and focus anchors.
 - `crates/web/ui/src/components/MainContent.tsx` — The `version_changes`
   section case currently renders `<ContextList>`. Replace with
-  `<VersionChangesTable>` using `viewData.version_changes`.
-- `crates/web/ui/src/components/__tests__/VersionChangesTable.test.tsx` — NEW.
-
-**Data flow:** No Rust adapter change needed for version changes. The
-`ViewResponse` already includes `version_changes: Vec<VersionChangeEntry>`
-with `name`, `arch`, `host_version`, `base_version`, `host_epoch`,
-`base_epoch`, `direction` fields. The frontend currently ignores this and
-reads from the reference section's ContextItems instead. The new component
-reads directly from `version_changes`.
+  `<VersionChangesTable>` while still passing the reference section for
+  empty_reason and search compatibility.
+- `crates/web/ui/src/components/__tests__/VersionChangesTable.test.tsx` —
+  NEW.
+- `crates/web/ui/package.json` — add `@patternfly/react-table` if not
+  already a dependency.
 
 ### 2. Networking → Subsections by Type
 
-**Problem:** NM connections, firewall zones, DNS config, and hostname are
-mixed into one flat ContextItem list with no categorization.
+**Problem:** NM connections, firewall zones, firewall direct rules, static
+routes, IP routes, IP rules, DNS resolution, hosts additions, proxy
+environment, and hostname are mixed into one flat ContextItem list with no
+categorization.
 
 **Design:** Group items into labeled subsections using the existing
-`ContextSubsection` mechanism. No new frontend component needed —
-`ContextList` already renders subsections with labels.
+`ContextSubsection` mechanism.
 
-**Subsection groups:**
-- **Connections** — NM connection profiles (name, type, method)
-- **Firewall Zones** — firewalld zones (name, services, ports). These
-  already have expandable `detail` (zone content) — preserved as-is.
-- **DNS & Resolution** — resolv.conf entries
-- **Identity** — hostname
+**Exhaustive field mapping against `RefNetwork`:**
 
-**Empty subsections:** Omit any subsection with zero items. If the host
-has no firewall zones, the "Firewall Zones" header doesn't appear.
+| RefNetwork field | Subsection | Current adapter behavior |
+|---|---|---|
+| `connections: Vec<RefNMConnection>` | Connections | ContextItem per connection |
+| `firewall_zones: Vec<RefFirewallZone>` | Firewall | ContextItem per zone (detail = zone content) |
+| `firewall_direct_rules: Vec<RefFirewallDirectRule>` | Firewall | ContextItem per rule (detail = args) |
+| `static_routes: Vec<RefStaticRoute>` | Routes & Rules | ContextItem per route file |
+| `ip_routes: Vec<String>` | Routes & Rules | ContextItem per route |
+| `ip_rules: Vec<String>` | Routes & Rules | ContextItem per rule |
+| `resolv_provenance: String` | DNS & Hosts | ContextItem (single) |
+| `hosts_additions: Vec<String>` | DNS & Hosts | ContextItem per line |
+| `proxy_env: Vec<RefProxyEnv>` | Proxy | ContextItem per entry |
+
+**Subsection groups (5):**
+- **Connections** — NM connection profiles (`connections`)
+- **Firewall** — firewalld zones + direct rules (`firewall_zones`,
+  `firewall_direct_rules`). Zones already have expandable `detail`
+  (zone content) — preserved as-is.
+- **Routes & Rules** — static route files, ip routes, ip rules
+  (`static_routes`, `ip_routes`, `ip_rules`)
+- **DNS & Hosts** — resolver provenance + hosts additions
+  (`resolv_provenance`, `hosts_additions`)
+- **Proxy** — proxy environment entries (`proxy_env`)
+
+**Note:** `hostname` is NOT in `RefNetwork` — it does not appear in the
+current adapter output for this section. Do not add it. If hostname
+surfaces later, it belongs in a future scope.
+
+**Empty subsections:** Omit any subsection with zero items.
 
 **Files changed:**
 - `crates/web/src/adapter.rs` — `web_network_section()` restructured to
   emit items into subsections instead of a flat `items` vec. Uses
-  `ContextSubsection` for each group. Top-level `items` remains empty.
-- No frontend changes. `ContextList` already handles this.
+  `ContextSubsection` for each group. Top-level `items` remains empty
+  (see sidebar fix below).
 
 ### 3. Kernel & Boot → Customizations vs Defaults/Context
 
 **Problem:** cmdline, GRUB defaults, tuned profile, locale, timezone,
 sysctl overrides, kernel modules, modprobe.d/modules-load.d/dracut
-snippets, and alternatives are all dumped into one flat list.
+snippets, alternatives, and custom tuned profiles are all dumped into one
+flat list.
 
 **Design:** Split into two subsections based on migration relevance,
 not domain taxonomy.
 
 **Subsection groups:**
-- **Customizations** — items the user deliberately changed. These are
-  the things that matter for migration carry-forward:
+- **Customizations** — items the user deliberately changed:
   - Active tuned profile
   - Sysctl overrides (non-default values)
   - Non-default kernel modules
@@ -108,8 +158,7 @@ not domain taxonomy.
   - modprobe.d snippets
   - dracut.conf.d snippets
   - Custom tuned profiles
-- **Defaults / Context** — reference information for awareness, not
-  typically requiring action:
+- **Defaults / Context** — reference information for awareness:
   - Kernel cmdline
   - GRUB defaults
   - Locale
@@ -122,8 +171,61 @@ with no customizations shows only "Defaults / Context".
 **Files changed:**
 - `crates/web/src/adapter.rs` — `web_kernel_boot_section()` restructured
   to emit items into two `ContextSubsection`s instead of a flat vec.
-  Top-level `items` remains empty.
-- No frontend changes. `ContextList` already handles this.
+  Top-level `items` remains empty (see sidebar fix below).
+
+## Cross-Cutting: Sidebar Count Fix
+
+**Problem:** `Sidebar.tsx` counts reference section items via
+`sec.items.length`. When networking and kernel/boot move all items into
+subsections (top-level `items` empty), the sidebar will show `0` for
+these sections.
+
+**Fix:** Update the `contextCount()` function in `Sidebar.tsx` to sum
+items across subsections when top-level items is empty:
+
+```typescript
+function contextCount(sections, id) {
+  const sec = sections.find(s => s.id === lookupId);
+  if (!sec) return "0";
+  const topLevel = sec.items.length;
+  if (topLevel > 0) return String(topLevel);
+  // Fall through to subsection sum
+  const subTotal = (sec.subsections ?? [])
+    .reduce((sum, sub) => sum + sub.items.length, 0);
+  return String(subTotal);
+}
+```
+
+This is backward-compatible — sections that still use top-level items
+(Storage, Scheduled Tasks, etc.) are unaffected.
+
+**Files changed:**
+- `crates/web/ui/src/components/Sidebar.tsx` — update `contextCount()`.
+
+## Cross-Cutting: Subsection Accessibility
+
+**Problem:** `ContextList.tsx` currently renders subsection labels as a
+plain `<div>` with class `inspectah-context-subsection__label`. This
+works for visual hierarchy but provides no semantic structure for screen
+readers.
+
+**Fix:** Upgrade subsection labels to use heading + region semantics:
+
+```html
+<section aria-labelledby="subsection-{id}">
+  <h4 id="subsection-{id}" class="inspectah-context-subsection__label">
+    {sub.display_name}
+  </h4>
+  <div role="list">...</div>
+</section>
+```
+
+Use `<h4>` since the section heading is `<h2>` and the main content area
+doesn't use `<h3>` for subsection-level content.
+
+**Files changed:**
+- `crates/web/ui/src/components/ContextList.tsx` — update subsection
+  rendering.
 
 ## Out of Scope
 
@@ -132,41 +234,60 @@ with no customizations shows only "Defaults / Context".
 - **Package group dependency visibility** — separate spec (RPM dependency
   data not currently in the snapshot).
 - **Package group summary wording** ("2 groups (4 packages) · 75
-  individual packages") — include in the group deps spec since it's the
-  same underlying clarity problem.
+  individual packages") — include in the group deps spec.
 - **Sortable table columns** for version changes — nice-to-have for a
-  follow-up, not launch-critical. The grouping (downgrades first) does
-  the heavy lifting.
+  follow-up, not launch-critical.
 
 ## Implementation Notes
 
-- **Networking and Kernel & Boot are adapter-only changes.** The Rust
-  `web_network_section()` and `web_kernel_boot_section()` functions
-  restructure their output to use `ContextSubsection` instead of flat
-  `items`. The frontend `ContextList` component already renders
-  subsections with labels. No new React components needed.
-- **Version Changes requires a new React component** since the table
-  layout doesn't fit the ContextItem/ContextList pattern. The data is
-  already available in `ViewResponse.version_changes` — the component
-  reads it directly instead of going through the reference section.
+- **Networking and Kernel & Boot are adapter changes + sidebar fix.** The
+  Rust adapters restructure output to use `ContextSubsection`. The
+  frontend `ContextList` handles subsection rendering. The sidebar count
+  fix is a small change to `contextCount()` in `Sidebar.tsx`.
+- **Version Changes requires a new React component.** The data is already
+  in `ViewResponse.version_changes`. The adapter continues to emit the
+  flat reference section for search indexing — the frontend renders the
+  table component instead of `ContextList` for this section.
 - **The generic ContextItem component is not being removed.** Other
-  sections (Storage, Scheduled Tasks, Non-RPM Software, SELinux) still
-  use it. This spec replaces its use in three specific sections.
-- **Existing search behavior:** The reference sections support
-  `searchable_text` for global search. Networking and Kernel & Boot
-  preserve this since they still use ContextItem within subsections.
-  Version Changes needs search integration in the new table component
-  (highlight matching rows).
+  sections still use it.
 - **TDD required** for all changes.
 
 ## Testing Strategy
 
-- **Rust adapter tests:** Verify subsection structure for networking and
-  kernel/boot. Verify subsection counts, item placement, and empty
-  subsection omission.
-- **Frontend tests (vitest):** VersionChangesTable component tests —
-  renders downgrades before upgrades, shows counts, applies color
-  styling, handles empty groups, handles fully empty (zero_drift /
-  data_unavailable).
-- **Contract snapshot tests:** Update existing contract snapshots to
-  reflect subsection structure changes.
+### Rust adapter tests
+
+- **Networking:** Verify every `RefNetwork` field maps to exactly one
+  subsection. Test with all fields populated: assert 5 subsections with
+  correct item counts. Test with only connections populated: assert 1
+  subsection. Test with empty `RefNetwork`: assert empty section.
+- **Kernel & Boot:** Verify customization items (tuned, sysctls, modules,
+  snippets) land in "Customizations" subsection. Verify context items
+  (cmdline, GRUB, locale, timezone, alternatives) land in
+  "Defaults / Context". Test with no customizations: assert only
+  "Defaults / Context" subsection emitted.
+- **Contract snapshot tests:** Update existing snapshots to reflect
+  subsection structure.
+
+### Frontend tests (vitest)
+
+- **VersionChangesTable:**
+  - Renders downgrades before upgrades with correct group headers
+  - Shows counts in group headers
+  - Applies danger/success styling to group headers
+  - Handles epoch-aware EVR formatting (epoch:version vs version-only)
+  - Handles empty groups (upgrades only, downgrades only)
+  - Handles fully empty with `data_unavailable` reason
+  - Handles fully empty with `zero_drift` reason
+  - Handles fully empty with no reason (default EmptyState)
+  - Search highlight: row with matching name gets highlight class
+  - Focus anchor: `data-testid` matches `{name}.{arch}` format
+- **Sidebar:** Verify `contextCount()` sums subsection items when
+  top-level items is empty. Verify existing sections unaffected.
+- **ContextList accessibility:** Verify subsection labels render as
+  `<h4>` inside `<section>` with `aria-labelledby`.
+
+### End-to-end contract
+
+- Verify `GlobalSearch` still indexes version change items (reads
+  reference section ContextItems, not the table component).
+- Verify focus restore navigates to a version change row in the table.
