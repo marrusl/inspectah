@@ -35,10 +35,14 @@ distinction between risk levels.
   entirely (don't show "Downgrades (0)"). Same for the reverse.
 
 **EVR formatting:** The component must replicate the adapter's current
-epoch-aware formatting logic (in `format_evr_pair()`). When `epoch` is
-non-empty and not `"0"`, display as `epoch:version`. Otherwise display
-`version` alone. Do not rely on raw `host_version`/`base_version` strings
-— those are the unformatted RPM version fields.
+pairwise epoch-display logic from `format_evr_pair()` in
+`crates/web/src/adapter.rs`. The rule is pairwise, not per-side: show
+the `epoch:` prefix on BOTH sides when EITHER side has a non-empty,
+non-`"0"` epoch. This preserves the visual delta for epoch-change rows
+(e.g., `1:2.4.57 → 0:2.4.51`). When neither side has a meaningful
+epoch, display version alone on both sides. Do not apply per-side
+epoch rendering — that would drop the base-side `0:` on epoch-delta
+rows, misrepresenting the version relationship.
 
 **Empty states:** The `version_changes` reference section currently has
 two reason-specific empty states handled in `MainContent.tsx`:
@@ -60,13 +64,18 @@ be preserved:
   (flat ContextItems) — the frontend simply renders a different component
   for this section instead of `ContextList`. GlobalSearch reads the
   section data; the visual component reads `viewData.version_changes`.
-- Focus restore (`revealItemId` in `MainContent.tsx`) must work: when
-  search navigates to a version change item, the table must scroll the
-  matching row into view and apply a highlight. Each table row needs a
-  stable `data-testid` anchor matching the ContextItem `id` format
-  (`"{name}.{arch}"`).
-- Section search filtering in `MainContent.tsx` must still match version
-  change items when the user types in the section search bar.
+- **DOM/focus contract:** Each data row in the table must carry
+  `data-testid="context-item-{name}.{arch}"` — the exact selector the
+  app uses for programmatic focus. The row element must be focusable
+  (`tabIndex={-1}` or a natively focusable element). When
+  `revealItemId` targets a version change item, focus must land on the
+  **matching data row**, not a group header or table header. This
+  matches the existing `ContextItem.tsx` contract where
+  `data-testid="context-item-${item.id}"` is the focus target.
+- **Section search is out of scope.** `MainContent.tsx` does not
+  currently expose section-level search for context sections (only
+  decision sections have it). This spec does not add it. GlobalSearch
+  covers version change item discovery.
 
 **Accessibility:**
 - Group headers: `role="row"` with `aria-label="N downgrades"`.
@@ -180,7 +189,7 @@ with no customizations shows only "Defaults / Context".
 subsections (top-level `items` empty), the sidebar will show `0` for
 these sections.
 
-**Fix:** Update the `contextCount()` function in `Sidebar.tsx` to sum
+**Fix:** Update the `sectionCount()` function in `Sidebar.tsx` to sum
 items across subsections when top-level items is empty:
 
 ```typescript
@@ -200,7 +209,7 @@ This is backward-compatible — sections that still use top-level items
 (Storage, Scheduled Tasks, etc.) are unaffected.
 
 **Files changed:**
-- `crates/web/ui/src/components/Sidebar.tsx` — update `contextCount()`.
+- `crates/web/ui/src/components/Sidebar.tsx` — update `sectionCount()`.
 
 ## Cross-Cutting: Subsection Accessibility
 
@@ -243,7 +252,7 @@ doesn't use `<h3>` for subsection-level content.
 - **Networking and Kernel & Boot are adapter changes + sidebar fix.** The
   Rust adapters restructure output to use `ContextSubsection`. The
   frontend `ContextList` handles subsection rendering. The sidebar count
-  fix is a small change to `contextCount()` in `Sidebar.tsx`.
+  fix is a small change to `sectionCount()` in `Sidebar.tsx`.
 - **Version Changes requires a new React component.** The data is already
   in `ViewResponse.version_changes`. The adapter continues to emit the
   flat reference section for search indexing — the frontend renders the
@@ -274,14 +283,16 @@ doesn't use `<h3>` for subsection-level content.
   - Renders downgrades before upgrades with correct group headers
   - Shows counts in group headers
   - Applies danger/success styling to group headers
-  - Handles epoch-aware EVR formatting (epoch:version vs version-only)
+  - Handles pairwise EVR formatting: both sides show epoch when either
+    has a non-zero epoch; both sides omit epoch when neither does
   - Handles empty groups (upgrades only, downgrades only)
   - Handles fully empty with `data_unavailable` reason
   - Handles fully empty with `zero_drift` reason
   - Handles fully empty with no reason (default EmptyState)
   - Search highlight: row with matching name gets highlight class
-  - Focus anchor: `data-testid` matches `{name}.{arch}` format
-- **Sidebar:** Verify `contextCount()` sums subsection items when
+  - Focus anchor: `data-testid="context-item-{name}.{arch}"` on each
+    data row, element is focusable, focus lands on row not header
+- **Sidebar:** Verify `sectionCount()` sums subsection items when
   top-level items is empty. Verify existing sections unaffected.
 - **ContextList accessibility:** Verify subsection labels render as
   `<h4>` inside `<section>` with `aria-labelledby`.
