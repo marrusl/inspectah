@@ -860,7 +860,9 @@ it("reveal navigation focuses the targeted data row", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd crates/web/ui && npx vitest run src/components/__tests__/MainContent.test.tsx`
+Run: `cd crates/web/ui && npx vitest run src/components/__tests__/VersionChangesIntegration.test.tsx`
+
+Note: This is a new test file created in Step 1. The existing MainContent tests are `MainContent.ungroup.test.tsx`, `MainContent.ungroup.focus.test.tsx`, and `MainContent.ungroup.deferred-focus.test.tsx` — all scoped to ungroup behavior. Version changes integration and focus contract tests go in their own file.
 
 - [ ] **Step 3: Update MainContent.tsx**
 
@@ -949,7 +951,7 @@ Expected: All tests pass.
 ```bash
 git add crates/web/ui/src/components/MainContent.tsx \
        crates/web/ui/src/App.tsx \
-       crates/web/ui/src/components/__tests__/
+       crates/web/ui/src/components/__tests__/VersionChangesIntegration.test.tsx
 git commit -m "feat(refine): wire VersionChangesTable into MainContent, fix section-entry focus"
 ```
 
@@ -996,19 +998,26 @@ Run: `cd crates/web/ui && npx tsc --noEmit`
 
 Expected: zero errors.
 
-- [ ] **Step 5: Commit any snapshot updates**
+- [ ] **Step 5: Commit snapshot and test updates**
 
-```
+```bash
+git add crates/web/tests/api_test.rs \
+       crates/web/tests/snapshots/
 git commit -m "test(refine): update contract snapshots for subsection structure"
 ```
 
 - [ ] **Step 6: Final behavior verification**
 
-Run both test suites one more time as a gate:
+Run both test suites as a pass/fail gate. Do NOT pipe through `tail` — run the raw commands and check exit status:
 
 ```bash
-cargo test --workspace 2>&1 | tail -5
-cd crates/web/ui && npx vitest run 2>&1 | tail -5
+cargo test --workspace
 ```
 
-Expected: zero failures in both. If any fail, diagnose and fix before marking complete.
+Expected: exit 0, all tests pass.
+
+```bash
+cd crates/web/ui && npx vitest run
+```
+
+Expected: exit 0, all tests pass. If either fails, diagnose and fix before marking complete.
