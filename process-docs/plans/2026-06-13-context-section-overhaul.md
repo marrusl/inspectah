@@ -1004,7 +1004,7 @@ Stage only the exact files changed — do NOT glob the snapshots directory:
 
 ```bash
 git add crates/web/tests/api_test.rs \
-       crates/web/tests/snapshots/contract_snapshots__contract_view.snap
+       crates/web/tests/snapshots/contract_snapshots__contract_sections.snap
 git commit -m "test(refine): update contract snapshots for subsection structure"
 ```
 
