@@ -61,6 +61,7 @@ expression: json
   "service_dropins": [],
   "service_states": [
     {
+      "current_state": "enabled",
       "default_state": "disable",
       "include": false,
       "locked": false,

@@ -42,6 +42,7 @@ function makeService(
     unit: "httpd.service",
     triage: makeTriage("site"),
     include: true,
+    current_state: "enabled",
     ...overrides,
   };
 }
@@ -169,30 +170,32 @@ describe("ServiceSection", () => {
     expect(within(row).queryByRole("gridcell", { name: /badge/i })).toBeNull();
   });
 
-  it("shows preset label when default_state is present", () => {
+  it("shows current state and preset when default_state is present", () => {
     const services = [
       makeService({
         unit: "example.service",
-        default_state: "disable",
+        current_state: "disabled",
+        default_state: "enable",
       }),
     ];
     render(<ServiceSection {...defaultProps} services={services} />);
-    const presetLabel = screen.getByTestId("default-state-example.service");
-    expect(presetLabel).toBeInTheDocument();
-    expect(presetLabel).toHaveTextContent("preset: disable");
+    const stateLabel = screen.getByTestId("service-state-example.service");
+    expect(stateLabel).toBeInTheDocument();
+    expect(stateLabel).toHaveTextContent("disabled (preset: enable)");
   });
 
-  it("does not show preset label when default_state is absent", () => {
+  it("shows current state without preset when default_state is absent", () => {
     const services = [
       makeService({
         unit: "example.service",
+        current_state: "enabled",
         // no default_state
       }),
     ];
     render(<ServiceSection {...defaultProps} services={services} />);
-    expect(
-      screen.queryByTestId("default-state-example.service"),
-    ).not.toBeInTheDocument();
+    const stateLabel = screen.getByTestId("service-state-example.service");
+    expect(stateLabel).toHaveTextContent("enabled");
+    expect(stateLabel).not.toHaveTextContent("preset");
   });
 });
 

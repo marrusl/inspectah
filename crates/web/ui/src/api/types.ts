@@ -400,6 +400,7 @@ export interface ServiceDecisionDto {
   attention_reason?: string | null;
   owning_package?: string | null;
   default_state?: string | null;
+  current_state: string;
 }
 
 /** A classified service drop-in override, projected for the view response. */

@@ -201,19 +201,18 @@ export function ServiceSection({
                       ({svc.owning_package})
                     </span>
                   )}
-                  {svc.default_state && (
-                    <span
-                      data-testid={`default-state-${svc.unit}`}
-                      style={{
-                        fontSize: "var(--pf-t--global--font--size--xs)",
-                        opacity: 0.55,
-                        marginLeft: "var(--pf-t--global--spacer--sm)",
-                        fontStyle: "italic",
-                      }}
-                    >
-                      preset: {svc.default_state}
-                    </span>
-                  )}
+                  <span
+                    data-testid={`service-state-${svc.unit}`}
+                    style={{
+                      fontSize: "var(--pf-t--global--font--size--xs)",
+                      opacity: 0.55,
+                      marginLeft: "var(--pf-t--global--spacer--sm)",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    {svc.current_state}
+                    {svc.default_state && ` (preset: ${svc.default_state})`}
+                  </span>
                 </div>
                 {badge && !svcLocked && (
                   <div

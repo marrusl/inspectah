@@ -80,6 +80,7 @@ pub struct ServiceDecisionDto {
     pub owning_package: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_state: Option<String>,
+    pub current_state: String,
 }
 
 /// A classified service drop-in override, projected for the view response.

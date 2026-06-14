@@ -50,6 +50,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
         annotations: [],
       },
       include: true,
+      current_state: "enabled",
     },
   ],
   service_dropins: [],
