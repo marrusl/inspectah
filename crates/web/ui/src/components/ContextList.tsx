@@ -38,16 +38,23 @@ export function ContextList({ section }: ContextListProps) {
       )}
 
       {subsections.map((sub) => (
-        <div key={sub.id} className="inspectah-context-subsection">
-          <div className="inspectah-context-subsection__label">
+        <section
+          key={sub.id}
+          className="inspectah-context-subsection"
+          aria-labelledby={`subsection-${sub.id}`}
+        >
+          <h4
+            id={`subsection-${sub.id}`}
+            className="inspectah-context-subsection__label"
+          >
             {sub.display_name}
-          </div>
+          </h4>
           <div role="list" aria-label={`${sub.display_name} context items`}>
             {sub.items.map((item) => (
               <ContextItem key={item.id} item={item} />
             ))}
           </div>
-        </div>
+        </section>
       ))}
     </>
   );

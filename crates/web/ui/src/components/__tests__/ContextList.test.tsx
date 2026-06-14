@@ -152,4 +152,64 @@ describe("ContextList", () => {
     expect(screen.getByText("Service Warnings")).toBeInTheDocument();
     expect(screen.getByText("linked.service")).toBeInTheDocument();
   });
+
+  it("renders subsection labels as h4 inside a section with aria-labelledby", () => {
+    const section: ReferenceSection = {
+      id: "network",
+      display_name: "Network",
+      items: [],
+      subsections: [
+        {
+          id: "connections",
+          display_name: "Connections",
+          items: [
+            {
+              id: "eth0",
+              title: "eth0",
+              subtitle: null,
+              detail: null,
+              searchable_text: "eth0",
+            },
+          ],
+        },
+      ],
+    };
+    render(<ContextList section={section} />);
+    const heading = screen.getByRole("heading", {
+      level: 4,
+      name: "Connections",
+    });
+    expect(heading).toBeInTheDocument();
+    const sectionEl = heading.closest("section");
+    expect(sectionEl).toHaveAttribute("aria-labelledby", "subsection-connections");
+    expect(heading).toHaveAttribute("id", "subsection-connections");
+  });
+
+  it("subsection region contains its list items", () => {
+    const section: ReferenceSection = {
+      id: "network",
+      display_name: "Network",
+      items: [],
+      subsections: [
+        {
+          id: "connections",
+          display_name: "Connections",
+          items: [
+            {
+              id: "eth0",
+              title: "eth0",
+              subtitle: null,
+              detail: null,
+              searchable_text: "eth0",
+            },
+          ],
+        },
+      ],
+    };
+    render(<ContextList section={section} />);
+    const region = screen.getByRole("list", {
+      name: "Connections context items",
+    });
+    expect(region).toBeInTheDocument();
+  });
 });
