@@ -216,4 +216,70 @@ mod tests {
             VersionChangeDirection::Upgrade
         );
     }
+
+    #[test]
+    fn repo_group_count_excludes_platform_plumbing() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry};
+
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    // Platform plumbing — filtered from view
+                    PackageEntry {
+                        name: "grub2-tools".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        source_repo: "anaconda".into(),
+                        ..Default::default()
+                    },
+                    // Normal anaconda package — visible
+                    PackageEntry {
+                        name: "cronie".into(),
+                        arch: "x86_64".into(),
+                        include: true,
+                        source_repo: "anaconda".into(),
+                        ..Default::default()
+                    },
+                ],
+                file_ownership: vec![FileOwnershipEntry {
+                    package_name: "dummy".into(),
+                    paths: vec!["/etc/dummy".into()],
+                }],
+                ..Default::default()
+            }),
+            services: Some(ServiceSection {
+                state_changes: vec![ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    locked: false,
+                    owning_package: Some("openssh-server".into()),
+                    fleet: None,
+                    attention_reason: None,
+                }],
+                ..Default::default()
+            }),
+            config: Some(ConfigSection { files: vec![] }),
+            ..Default::default()
+        };
+        snap.schema_version = inspectah_core::snapshot::SCHEMA_VERSION;
+
+        let session = RefineSession::new(snap);
+        let proj = project_decisions(&session);
+
+        // Find the anaconda repo group
+        let anaconda_group = proj
+            .repo_groups
+            .iter()
+            .find(|rg| rg.section_id == "anaconda");
+        assert!(anaconda_group.is_some(), "anaconda repo group should exist");
+        assert_eq!(
+            anaconda_group.unwrap().package_count,
+            1,
+            "anaconda group count should be 1 (grub2-tools filtered)"
+        );
+    }
 }

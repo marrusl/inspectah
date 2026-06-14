@@ -18,8 +18,8 @@ use crate::repo_index::RepoIndex;
 use crate::types::{
     AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, FleetContext, ItemId,
     RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
-    SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, UserPasswordOp,
-    ViewDirective,
+    SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
+    UserPasswordOp, ViewDirective,
 };
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::rpm::PackageEntry;
@@ -619,10 +619,7 @@ impl RefineSession {
     /// View directives do not mutate the projected snapshot — they control
     /// how data is displayed. They share the timeline with refinement ops
     /// so undo/redo works uniformly.
-    pub fn apply_directive(
-        &mut self,
-        directive: ViewDirective,
-    ) -> Result<(), RefineError> {
+    pub fn apply_directive(&mut self, directive: ViewDirective) -> Result<(), RefineError> {
         // Validate: group must exist in installed_groups
         match &directive {
             ViewDirective::UngroupGroup { group_name } => {
@@ -1080,7 +1077,12 @@ impl RefineSession {
                     .collect()
             })
             .unwrap_or_default();
-        render_refine_export(&projected, path, Some(&orig_inc), self.cached_render_context.as_ref())
+        render_refine_export(
+            &projected,
+            path,
+            Some(&orig_inc),
+            self.cached_render_context.as_ref(),
+        )
     }
 
     // --- Private helpers ---
@@ -1242,10 +1244,7 @@ impl RefineSession {
                     | ItemId::VersionLock { .. }
                     | ItemId::Group { .. } => {
                         if let ItemId::Group { name } = item_id {
-                            let found = self
-                                .installed_groups()
-                                .iter()
-                                .any(|g| g.name == *name);
+                            let found = self.installed_groups().iter().any(|g| g.name == *name);
                             if !found {
                                 return Err(RefineError::UnknownTarget(name.clone()));
                             }
@@ -2064,6 +2063,13 @@ impl RefineSession {
         let packages: Vec<_> = all_packages
             .into_iter()
             .filter(|p| {
+                // Platform plumbing packages (grub2-*, shim-*, etc.) are
+                // unconditionally excluded, locked, and provide no user
+                // signal. Hide them from the refine view entirely.
+                if p.triage.primary_reason == TriageReason::PackagePlatformPlumbing {
+                    return false;
+                }
+
                 // Only filter out packages that were normalized to include=false
                 // at construction AND are still false after ops AND are not
                 // NeedsReview. These are non-leaf Tier 2 dependencies the
@@ -4343,11 +4349,7 @@ mod tests {
                 ],
                 installed_groups: Some(vec![InstalledGroup {
                     name: "Container Management".into(),
-                    members: vec![
-                        "podman".into(),
-                        "buildah".into(),
-                        "skopeo".into(),
-                    ],
+                    members: vec!["podman".into(), "buildah".into(), "skopeo".into()],
                     ..Default::default()
                 }]),
                 ..Default::default()
@@ -4471,11 +4473,7 @@ mod tests {
                 ],
                 installed_groups: Some(vec![InstalledGroup {
                     name: "Container Management".into(),
-                    members: vec![
-                        "podman".into(),
-                        "buildah".into(),
-                        "skopeo".into(),
-                    ],
+                    members: vec!["podman".into(), "buildah".into(), "skopeo".into()],
                     ..Default::default()
                 }]),
                 ..Default::default()
@@ -4584,10 +4582,7 @@ mod tests {
         for pkg in &view.packages {
             match pkg.entry.name.as_str() {
                 // buildah is locked — should stay excluded
-                "buildah" => assert!(
-                    !pkg.entry.include,
-                    "locked buildah should stay excluded"
-                ),
+                "buildah" => assert!(!pkg.entry.include, "locked buildah should stay excluded"),
                 // podman and skopeo are not locked — should be re-included
                 "podman" | "skopeo" => assert!(
                     pkg.entry.include,
@@ -4675,11 +4670,7 @@ mod tests {
                 include: true,
             })
             .unwrap();
-        assert_eq!(
-            session.timeline_len(),
-            0,
-            "noop should not add to timeline"
-        );
+        assert_eq!(session.timeline_len(), 0, "noop should not add to timeline");
     }
 
     #[test]
@@ -4757,11 +4748,7 @@ mod tests {
                 ],
                 installed_groups: Some(vec![InstalledGroup {
                     name: "Container Management".into(),
-                    members: vec![
-                        "podman".into(),
-                        "buildah".into(),
-                        "skopeo".into(),
-                    ],
+                    members: vec!["podman".into(), "buildah".into(), "skopeo".into()],
                     optional_installed: vec!["python3-podman".into()],
                 }]),
                 ..Default::default()
@@ -4883,7 +4870,9 @@ mod tests {
         );
         session.undo().unwrap();
         assert!(
-            session.render_context().is_renderable("Container Management"),
+            session
+                .render_context()
+                .is_renderable("Container Management"),
             "after undo => back to Renderable"
         );
     }
@@ -5075,7 +5064,10 @@ mod tests {
 
         // mod_ssl should be the only visible package.
         assert_eq!(
-            view.packages.iter().filter(|p| p.entry.name == "mod_ssl").count(),
+            view.packages
+                .iter()
+                .filter(|p| p.entry.name == "mod_ssl")
+                .count(),
             1,
             "mod_ssl must be visible in view"
         );
@@ -5155,7 +5147,10 @@ mod tests {
 
         // vim should be the only visible package.
         assert_eq!(
-            view.packages.iter().filter(|p| p.entry.name == "vim").count(),
+            view.packages
+                .iter()
+                .filter(|p| p.entry.name == "vim")
+                .count(),
             1,
             "vim must be visible in view"
         );
@@ -5226,6 +5221,169 @@ mod tests {
         assert!(
             ctx2.is_degraded("Core Libs"),
             "excluding the only visible member must degrade the group"
+        );
+    }
+
+    #[test]
+    fn view_hides_platform_plumbing_packages() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::FileOwnershipEntry;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            // Platform plumbing — should be hidden
+            PackageEntry {
+                name: "grub2-tools".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "anaconda".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "shim-x64".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "anaconda".into(),
+                ..Default::default()
+            },
+            // Normal anaconda package — should be visible
+            PackageEntry {
+                name: "harfbuzz".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "anaconda".into(),
+                ..Default::default()
+            },
+            // Non-anaconda package — should be visible
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.file_ownership = vec![FileOwnershipEntry {
+            package_name: "dummy".into(),
+            paths: vec!["/etc/dummy".into()],
+        }];
+
+        // Provide services + config evidence so anaconda classifier runs
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Enable),
+                include: true,
+                locked: false,
+                owning_package: Some("openssh-server".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection { files: vec![] });
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        let view_names: Vec<&str> = view
+            .packages
+            .iter()
+            .map(|p| p.entry.name.as_str())
+            .collect();
+
+        // Platform plumbing packages must not appear in the view
+        assert!(
+            !view_names.contains(&"grub2-tools"),
+            "grub2-tools (platform plumbing) should be hidden from view"
+        );
+        assert!(
+            !view_names.contains(&"shim-x64"),
+            "shim-x64 (platform plumbing) should be hidden from view"
+        );
+
+        // Non-plumbing packages must remain visible
+        assert!(
+            view_names.contains(&"harfbuzz"),
+            "harfbuzz should be visible in view"
+        );
+        assert!(
+            view_names.contains(&"httpd"),
+            "httpd should be visible in view"
+        );
+    }
+
+    #[test]
+    fn view_plumbing_filter_updates_package_count() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::FileOwnershipEntry;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "grub2-tools".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "anaconda".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "cronie".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "anaconda".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.file_ownership = vec![FileOwnershipEntry {
+            package_name: "dummy".into(),
+            paths: vec!["/etc/dummy".into()],
+        }];
+
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Enable),
+                include: true,
+                locked: false,
+                owning_package: Some("openssh-server".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection { files: vec![] });
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Only 2 packages should be visible (grub2-tools hidden)
+        assert_eq!(
+            view.packages.len(),
+            2,
+            "view should contain 2 packages (grub2-tools filtered)"
+        );
+        assert_eq!(
+            view.stats.total_packages(),
+            2,
+            "stats.total_packages should reflect filtered count"
         );
     }
 }
