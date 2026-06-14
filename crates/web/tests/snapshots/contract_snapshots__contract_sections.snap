@@ -138,27 +138,40 @@ expression: json
   {
     "display_name": "Kernel & Boot",
     "id": "kernel_boot",
-    "items": [
+    "items": [],
+    "subsections": [
       {
-        "detail": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
-        "id": "cmdline",
-        "searchable_text": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
-        "subtitle": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
-        "title": "Kernel cmdline"
+        "display_name": "Customizations",
+        "id": "customizations",
+        "items": [
+          {
+            "detail": "/etc/sysctl.d/k8s.conf",
+            "id": "net.ipv4.ip_forward",
+            "searchable_text": "net.ipv4.ip_forward 1 0 /etc/sysctl.d/k8s.conf",
+            "subtitle": "\"1\" (default: \"0\")",
+            "title": "net.ipv4.ip_forward"
+          },
+          {
+            "detail": "br_netfilter",
+            "id": "/etc/modules-load.d/br_netfilter.conf",
+            "searchable_text": "/etc/modules-load.d/br_netfilter.conf br_netfilter",
+            "subtitle": "modules-load.d",
+            "title": "br_netfilter.conf"
+          }
+        ]
       },
       {
-        "detail": "/etc/sysctl.d/k8s.conf",
-        "id": "net.ipv4.ip_forward",
-        "searchable_text": "net.ipv4.ip_forward 1 0 /etc/sysctl.d/k8s.conf",
-        "subtitle": "\"1\" (default: \"0\")",
-        "title": "net.ipv4.ip_forward"
-      },
-      {
-        "detail": "br_netfilter",
-        "id": "/etc/modules-load.d/br_netfilter.conf",
-        "searchable_text": "/etc/modules-load.d/br_netfilter.conf br_netfilter",
-        "subtitle": "modules-load.d",
-        "title": "br_netfilter.conf"
+        "display_name": "Defaults / Context",
+        "id": "defaults_context",
+        "items": [
+          {
+            "detail": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+            "id": "cmdline",
+            "searchable_text": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+            "subtitle": "quiet crashkernel=auto rd.lvm.lv=rhel/root",
+            "title": "Kernel cmdline"
+          }
+        ]
       }
     ]
   },

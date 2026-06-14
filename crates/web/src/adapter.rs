@@ -730,38 +730,14 @@ pub fn web_containers_section(data: &RefContainers) -> ReferenceSection {
 // -- Kernel & Boot ---------------------------------------------------------
 
 pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
-    let mut items = Vec::new();
+    let mut subsections = Vec::new();
 
-    // cmdline — single item
-    if let Some(cmdline) = &data.cmdline {
-        let subtitle = if cmdline.len() > 80 {
-            Some(format!("{}...", &cmdline[..77]))
-        } else {
-            Some(cmdline.clone())
-        };
-        items.push(ContextItem {
-            id: "cmdline".to_string(),
-            title: "Kernel cmdline".to_string(),
-            subtitle,
-            detail: Some(cmdline.clone()),
-            searchable_text: cmdline.clone(),
-        });
-    }
+    // Customizations subsection
+    let mut custom_items = Vec::new();
 
-    // grub_defaults — single item
-    if let Some(grub) = &data.grub_defaults {
-        items.push(ContextItem {
-            id: "grub_defaults".to_string(),
-            title: "GRUB defaults".to_string(),
-            subtitle: None,
-            detail: Some(grub.clone()),
-            searchable_text: grub.clone(),
-        });
-    }
-
-    // tuned_active — single item
+    // tuned_active → customizations
     if let Some(tuned) = &data.tuned_active {
-        items.push(ContextItem {
+        custom_items.push(ContextItem {
             id: "tuned_active".to_string(),
             title: "Active tuned profile".to_string(),
             subtitle: Some(tuned.clone()),
@@ -770,31 +746,9 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
         });
     }
 
-    // locale — single item (optional)
-    if let Some(locale) = &data.locale {
-        items.push(ContextItem {
-            id: "locale".to_string(),
-            title: "Locale".to_string(),
-            subtitle: Some(locale.clone()),
-            detail: None,
-            searchable_text: locale.clone(),
-        });
-    }
-
-    // timezone — single item (optional)
-    if let Some(tz) = &data.timezone {
-        items.push(ContextItem {
-            id: "timezone".to_string(),
-            title: "Timezone".to_string(),
-            subtitle: Some(tz.clone()),
-            detail: None,
-            searchable_text: tz.clone(),
-        });
-    }
-
-    // SysctlOverride
+    // sysctl_overrides → customizations
     for so in &data.sysctl_overrides {
-        items.push(ContextItem {
+        custom_items.push(ContextItem {
             id: so.key.clone(),
             title: so.key.clone(),
             subtitle: Some(format!("\"{}\" (default: \"{}\")", so.runtime, so.default)),
@@ -803,9 +757,9 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
         });
     }
 
-    // KernelModule (non_default_modules only)
+    // non_default_modules → customizations
     for km in &data.non_default_modules {
-        items.push(ContextItem {
+        custom_items.push(ContextItem {
             id: km.name.clone(),
             title: km.name.clone(),
             subtitle: Some(format!("size: {}", km.size)),
@@ -840,14 +794,77 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             .collect()
     };
 
-    items.extend(snippet_items(&data.modules_load_d, "modules-load.d"));
-    items.extend(snippet_items(&data.modprobe_d, "modprobe.d"));
-    items.extend(snippet_items(&data.dracut_conf, "dracut.conf.d"));
-    items.extend(snippet_items(&data.custom_tuned_profiles, "tuned profile"));
+    custom_items.extend(snippet_items(&data.modules_load_d, "modules-load.d"));
+    custom_items.extend(snippet_items(&data.modprobe_d, "modprobe.d"));
+    custom_items.extend(snippet_items(&data.dracut_conf, "dracut.conf.d"));
+    custom_items.extend(snippet_items(
+        &data.custom_tuned_profiles,
+        "tuned profile",
+    ));
 
-    // AlternativeEntry
+    if !custom_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "customizations".to_string(),
+            display_name: "Customizations".to_string(),
+            items: custom_items,
+        });
+    }
+
+    // Defaults / Context subsection
+    let mut default_items = Vec::new();
+
+    // cmdline → defaults_context
+    if let Some(cmdline) = &data.cmdline {
+        let subtitle = if cmdline.len() > 80 {
+            Some(format!("{}...", &cmdline[..77]))
+        } else {
+            Some(cmdline.clone())
+        };
+        default_items.push(ContextItem {
+            id: "cmdline".to_string(),
+            title: "Kernel cmdline".to_string(),
+            subtitle,
+            detail: Some(cmdline.clone()),
+            searchable_text: cmdline.clone(),
+        });
+    }
+
+    // grub_defaults → defaults_context
+    if let Some(grub) = &data.grub_defaults {
+        default_items.push(ContextItem {
+            id: "grub_defaults".to_string(),
+            title: "GRUB defaults".to_string(),
+            subtitle: None,
+            detail: Some(grub.clone()),
+            searchable_text: grub.clone(),
+        });
+    }
+
+    // locale → defaults_context
+    if let Some(locale) = &data.locale {
+        default_items.push(ContextItem {
+            id: "locale".to_string(),
+            title: "Locale".to_string(),
+            subtitle: Some(locale.clone()),
+            detail: None,
+            searchable_text: locale.clone(),
+        });
+    }
+
+    // timezone → defaults_context
+    if let Some(tz) = &data.timezone {
+        default_items.push(ContextItem {
+            id: "timezone".to_string(),
+            title: "Timezone".to_string(),
+            subtitle: Some(tz.clone()),
+            detail: None,
+            searchable_text: tz.clone(),
+        });
+    }
+
+    // alternatives → defaults_context
     for ae in &data.alternatives {
-        items.push(ContextItem {
+        default_items.push(ContextItem {
             id: ae.name.clone(),
             title: ae.name.clone(),
             subtitle: Some(format!("{} ({})", ae.path, ae.status)),
@@ -856,7 +873,21 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
         });
     }
 
-    crate::web_types::reference_section("kernel_boot", "Kernel & Boot", items)
+    if !default_items.is_empty() {
+        subsections.push(ContextSubsection {
+            id: "defaults_context".to_string(),
+            display_name: "Defaults / Context".to_string(),
+            items: default_items,
+        });
+    }
+
+    ReferenceSection {
+        id: "kernel_boot".to_string(),
+        display_name: "Kernel & Boot".to_string(),
+        items: Vec::new(),
+        subsections,
+        empty_reason: None,
+    }
 }
 
 // -- Network ---------------------------------------------------------------
@@ -1405,5 +1436,69 @@ mod tests {
         let section = web_network_section(&data);
         assert_eq!(section.subsections.len(), 1);
         assert_eq!(section.subsections[0].id, "connections");
+    }
+
+    #[test]
+    fn web_kernel_boot_section_splits_customizations_and_defaults() {
+        use inspectah_refine::projection::{RefKernelBoot, RefSysctlOverride};
+
+        let data = RefKernelBoot {
+            tuned_active: Some("throughput-performance".into()),
+            sysctl_overrides: vec![RefSysctlOverride {
+                key: "vm.swappiness".into(),
+                runtime: "10".into(),
+                default: "60".into(),
+                source: "/etc/sysctl.d/99-custom.conf".into(),
+            }],
+            cmdline: Some("BOOT_IMAGE=/vmlinuz-5.14.0 root=/dev/mapper/rhel-root".into()),
+            locale: Some("en_US.UTF-8".into()),
+            ..Default::default()
+        };
+        let section = web_kernel_boot_section(&data);
+
+        assert!(
+            section.items.is_empty(),
+            "top-level items must be empty"
+        );
+        assert_eq!(section.subsections.len(), 2);
+        assert_eq!(section.subsections[0].id, "customizations");
+        assert_eq!(section.subsections[0].display_name, "Customizations");
+        assert!(section.subsections[0]
+            .items
+            .iter()
+            .any(|i| i.title == "Active tuned profile"));
+        assert!(section.subsections[0]
+            .items
+            .iter()
+            .any(|i| i.title == "vm.swappiness"));
+
+        assert_eq!(section.subsections[1].id, "defaults_context");
+        assert_eq!(section.subsections[1].display_name, "Defaults / Context");
+        assert!(section.subsections[1]
+            .items
+            .iter()
+            .any(|i| i.title == "Kernel cmdline"));
+        assert!(section.subsections[1]
+            .items
+            .iter()
+            .any(|i| i.title == "Locale"));
+    }
+
+    #[test]
+    fn web_kernel_boot_section_omits_empty_customizations() {
+        use inspectah_refine::projection::RefKernelBoot;
+
+        let data = RefKernelBoot {
+            cmdline: Some("BOOT_IMAGE=...".into()),
+            locale: Some("en_US.UTF-8".into()),
+            ..Default::default()
+        };
+        let section = web_kernel_boot_section(&data);
+        assert_eq!(
+            section.subsections.len(),
+            1,
+            "only non-empty subsections"
+        );
+        assert_eq!(section.subsections[0].id, "defaults_context");
     }
 }

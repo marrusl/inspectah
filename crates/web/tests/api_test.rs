@@ -1109,14 +1109,30 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     let sections = build_web_sections(session.reference());
     let kb = sections.iter().find(|s| s.id == "kernel_boot").unwrap();
 
-    let cmdline = kb.items.iter().find(|i| i.id == "cmdline").unwrap();
+    // Items are now in subsections
+    let defaults = kb
+        .subsections
+        .iter()
+        .find(|s| s.id == "defaults_context")
+        .unwrap();
+    let customizations = kb
+        .subsections
+        .iter()
+        .find(|s| s.id == "customizations")
+        .unwrap();
+
+    let cmdline = defaults.items.iter().find(|i| i.id == "cmdline").unwrap();
     assert_eq!(cmdline.title, "Kernel cmdline");
     assert!(cmdline.detail.as_ref().unwrap().contains("quiet"));
 
-    let sysctl = kb.items.iter().find(|i| i.id == "kernel.sysrq").unwrap();
+    let sysctl = customizations
+        .items
+        .iter()
+        .find(|i| i.id == "kernel.sysrq")
+        .unwrap();
     assert!(sysctl.subtitle.as_ref().unwrap().contains("16"));
 
-    let modload = kb
+    let modload = customizations
         .items
         .iter()
         .find(|i| i.id.contains("custom.conf"))
