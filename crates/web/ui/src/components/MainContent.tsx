@@ -29,7 +29,6 @@ import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
-import { CubesIcon } from "@patternfly/react-icons";
 import { Content } from "@patternfly/react-core";
 
 /** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */

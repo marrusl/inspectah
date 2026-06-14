@@ -62,13 +62,15 @@ function makeSections(
   return [
     {
       id: "version_changes",
+      display_name: "Version Changes",
       items: Array.from({ length: itemCount }, (_, i) => ({
-        key: `item-${i}`,
-        label: `item ${i}`,
-        value: `val ${i}`,
-        subsection: null,
+        id: `item-${i}`,
+        title: `item ${i}`,
+        subtitle: null,
+        detail: `val ${i}`,
+        searchable_text: `item ${i} val ${i}`,
       })),
-      empty_reason: emptyReason ?? null,
+      empty_reason: emptyReason,
     },
   ];
 }
