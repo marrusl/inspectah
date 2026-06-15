@@ -1939,6 +1939,23 @@ impl RefineSession {
         let mut all_packages = classify_packages(&projected);
         let mut config_files = classify_configs(&projected);
 
+        // The classifier re-derives include/locked from package metadata,
+        // which overwrites user ops (e.g., anaconda Tier 4 always sets
+        // include=true). Restore the projected snapshot's include/locked
+        // values so user SetInclude ops are respected.
+        if let Some(ref rpm) = projected.rpm {
+            for pkg in &mut all_packages {
+                if let Some(entry) = rpm
+                    .packages_added
+                    .iter()
+                    .find(|e| e.name == pkg.entry.name && e.arch == pkg.entry.arch)
+                {
+                    pkg.entry.include = entry.include;
+                    pkg.entry.locked = entry.locked;
+                }
+            }
+        }
+
         // Fleet triage scoring (when in fleet mode).
         if let RefineMode::Fleet(ref ctx) = self.refine_mode {
             for pkg in &mut all_packages {
@@ -5386,4 +5403,75 @@ mod tests {
             "stats.total_packages should reflect filtered count"
         );
     }
+
+    #[test]
+    fn user_can_exclude_anaconda_tier4_package() {
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::rpm::FileOwnershipEntry;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        };
+
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "harfbuzz".into(),
+                    arch: "aarch64".into(),
+                    include: true,
+                    source_repo: "anaconda".into(),
+                    ..Default::default()
+                }],
+                file_ownership: vec![FileOwnershipEntry {
+                    package_name: "dummy".into(),
+                    paths: vec!["/etc/dummy".into()],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Enable),
+                include: true,
+                locked: false,
+                owning_package: Some("openssh-server".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection { files: vec![] });
+
+        let mut session = RefineSession::new(snap);
+
+        // harfbuzz starts as Tier 4 ambiguous: include=true, locked=false
+        let view = session.view();
+        let pkg = view.packages.iter().find(|p| p.entry.name == "harfbuzz").unwrap();
+        assert!(pkg.entry.include, "harfbuzz should start included");
+        assert!(!pkg.entry.locked, "harfbuzz should not be locked");
+
+        // User toggles harfbuzz to exclude
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: "harfbuzz".into(),
+                    arch: "aarch64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // After toggle, harfbuzz must be excluded — classifier must not
+        // override the user's op
+        let view = session.view();
+        let pkg = view.packages.iter().find(|p| p.entry.name == "harfbuzz").unwrap();
+        assert!(
+            !pkg.entry.include,
+            "harfbuzz must be excluded after user toggle"
+        );
+    }
+
 }
