@@ -243,16 +243,24 @@ For each member in the expanded list, check `member.in_base_image`:
 </span>
 ```
 
-Add CSS:
+Add CSS. Per spec, raw `opacity: 0.5` may fail WCAG 2.2 AA contrast
+(4.5:1 for normal text). Use a named muted color token instead of
+raw opacity to guarantee contrast in both light and dark themes:
+
 ```css
 .inspectah-group-row__member--from-base {
-  opacity: 0.5;
+  color: var(--pf-t--global--text--color--subtle);
   font-style: italic;
 }
 .inspectah-group-row__from-base-label {
   font-size: var(--pf-t--global--font--size--xs);
 }
 ```
+
+`--pf-t--global--text--color--subtle` is PatternFly 6's muted text
+token, designed to meet AA contrast in all themes. If the project
+uses a different token for muted text, match that instead. Do NOT
+use raw `opacity` — it's not contrast-safe across themes.
 
 **C. Truncation fix** — replace hard cap with progressive disclosure:
 
@@ -425,7 +433,23 @@ const groupSummaryLabel = useMemo(() => {
 }, [newCount, baseCount]);
 ```
 
-When no groups exist, the entire summary `<div>` is already hidden by `{hasGroups && ...}`. The "other" label only shows when groups exist.
+When no groups exist, the summary still renders but without the group
+prefix or the "other" qualifier — just `"N packages"`. Change the
+`{hasGroups && ...}` gate to always render the summary `<div>`, and
+conditionally include the group prefix only when `hasGroups` is true:
+
+```tsx
+<div data-testid="package-list-summary" className="inspectah-package-list__summary">
+  {hasGroups && (
+    <>
+      {visibleGroups.length} {visibleGroups.length === 1 ? "group" : "groups"} ({groupSummaryLabel}) &middot;{" "}
+    </>
+  )}
+  {displayPackages.length}{" "}
+  {hasGroups ? "other " : ""}
+  {displayPackages.length === 1 ? "package" : "packages"}
+</div>
+```
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -444,6 +468,12 @@ it("shows 'N new, M from base' in group parenthetical", () => {
 it("deduplicates overlapping group members", () => {
   // Two groups sharing a member
   // Assert: count is unique, not double-counted
+});
+
+it("shows 'N packages' with no qualifier when no groups exist", () => {
+  // Render PackageList with no groups
+  // Assert: summary shows "75 packages"
+  // Assert: text does NOT contain "other" or "individual"
 });
 ```
 
@@ -496,13 +526,19 @@ const message = addedCount === 0
   : `Group ungrouped into ${addedCount} package${addedCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
 ```
 
-**Change 2 — Focus targets first new member:**
+**Change 2 — Focus targets first new member, with fallback:**
 ```tsx
 const firstNewMember = group?.members?.find(m => !m.in_base_image);
 const firstMemberName = firstNewMember?.name ?? null;
 ```
 
-With the adapter's sort order (new members first), `members[0]` would work IF the adapter sort is reliable. But explicitly filtering is safer and doesn't depend on sort order.
+When `added_count === 0` (all-from-base group), `firstNewMember` is
+`undefined` and `firstMemberName` is `null`. In this case, ungroup
+dissolves nothing visible — no package rows appear. The existing
+`pendingFocusTarget` deferred-focus `useEffect` already handles
+`null` by skipping the focus attempt, so focus stays on the current
+position (typically the next group row or the first package row
+in the list). No crash, no focus on a nonexistent row.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -523,6 +559,14 @@ it("post-ungroup focus targets first new member", () => {
   // Group with members: [{ name: "apr", in_base_image: true }, { name: "httpd", in_base_image: false }]
   // Trigger ungroup
   // Assert: pendingFocusTarget is "httpd" not "apr"
+});
+
+it("all-from-base ungroup does not crash or focus nonexistent row", () => {
+  // Group with added_count: 0, all members in_base_image: true
+  // Trigger ungroup
+  // Assert: toast says "all packages from base"
+  // Assert: pendingFocusTarget is null (no focus attempt)
+  // Assert: no error thrown
 });
 ```
 
