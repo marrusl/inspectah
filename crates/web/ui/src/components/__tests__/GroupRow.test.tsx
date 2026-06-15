@@ -6,7 +6,7 @@ import type { GroupInfo } from "../../api/types";
 const mockGroup: GroupInfo = {
   name: "core",
   member_count: 8,
-  added_count: 0, locked_count: 2,
+  added_count: 8, locked_count: 2,
   optional_spillover_count: 0,
   render_state: "renderable",
   degradation_reason: null,
@@ -80,6 +80,7 @@ describe("GroupRow", () => {
       ...smallGroup,
       name: "single",
       member_count: 1,
+      added_count: 1,
       members: [{ name: "solo", locked: false, overlap_groups: [] , in_base_image: false}],
     };
     render(
@@ -138,7 +139,7 @@ describe("GroupRow", () => {
     expect(screen.queryByText("bash")).not.toBeInTheDocument();
   });
 
-  it("truncates member list to first 5 with 'N more' indicator", () => {
+  it("truncates member list to first 5 with 'Show all' button", () => {
     render(
       <GroupRow
         group={mockGroup}
@@ -156,9 +157,9 @@ describe("GroupRow", () => {
     expect(screen.getByText("glibc")).toBeInTheDocument();
     expect(screen.getByText("grep")).toBeInTheDocument();
 
-    // Remaining 3 truncated
+    // Remaining 3 truncated, "Show all" button shown
     expect(screen.queryByText("sed")).not.toBeInTheDocument();
-    expect(screen.getByText("3 more")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show all 8 members/i })).toBeInTheDocument();
   });
 
   it("shows all members when 5 or fewer", () => {
@@ -441,5 +442,166 @@ describe("GroupRow", () => {
 
     const ungroupBtn = screen.getByRole("button", { name: /ungroup core/i });
     expect(ungroupBtn).not.toBeDisabled();
+  });
+
+  // --- Task 2: Header labels, base-image members, progressive disclosure ---
+
+  it("shows 'all from base' when added_count is 0", () => {
+    const allBaseGroup: GroupInfo = {
+      ...smallGroup,
+      added_count: 0,
+      member_count: 3,
+    };
+    render(
+      <GroupRow
+        group={allBaseGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("3 packages (all from base)")).toBeInTheDocument();
+  });
+
+  it("shows 'N new, M from base' for mixed groups", () => {
+    const mixedGroup: GroupInfo = {
+      ...smallGroup,
+      name: "mixed",
+      member_count: 5,
+      added_count: 3,
+      members: [
+        { name: "alpha", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "beta", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "gamma", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "delta", locked: false, overlap_groups: [], in_base_image: true },
+        { name: "epsilon", locked: false, overlap_groups: [], in_base_image: true },
+      ],
+    };
+    render(
+      <GroupRow
+        group={mixedGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("3 new, 2 from base")).toBeInTheDocument();
+  });
+
+  it("shows 'N packages' when all are new", () => {
+    const allNewGroup: GroupInfo = {
+      ...smallGroup,
+      name: "allnew",
+      member_count: 3,
+      added_count: 3,
+    };
+    render(
+      <GroupRow
+        group={allNewGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("3 packages")).toBeInTheDocument();
+  });
+
+  it("renders base-image members with (from base) label", () => {
+    const baseGroup: GroupInfo = {
+      ...smallGroup,
+      name: "basetest",
+      member_count: 2,
+      added_count: 1,
+      members: [
+        { name: "new-pkg", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "base-pkg", locked: false, overlap_groups: [], in_base_image: true },
+      ],
+    };
+    render(
+      <GroupRow
+        group={baseGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+        defaultExpanded={true}
+      />,
+    );
+    const baseMember = screen.getByTestId("group-member-base-pkg");
+    expect(baseMember).toHaveTextContent("(from base)");
+    // New member should not have the label
+    const newMember = screen.getByTestId("group-member-new-pkg");
+    expect(newMember).not.toHaveTextContent("(from base)");
+  });
+
+  it("base-image members have aria-label", () => {
+    const baseGroup: GroupInfo = {
+      ...smallGroup,
+      name: "ariatest",
+      member_count: 2,
+      added_count: 1,
+      members: [
+        { name: "new-pkg", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "base-pkg", locked: false, overlap_groups: [], in_base_image: true },
+      ],
+    };
+    render(
+      <GroupRow
+        group={baseGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+        defaultExpanded={true}
+      />,
+    );
+    const baseMemberName = screen.getByTestId("group-member-base-pkg")
+      .querySelector(".inspectah-group-row__member-name");
+    expect(baseMemberName).toHaveAttribute(
+      "aria-label",
+      "base-pkg (from base image, no action needed)",
+    );
+    // New member should not have aria-label
+    const newMemberName = screen.getByTestId("group-member-new-pkg")
+      .querySelector(".inspectah-group-row__member-name");
+    expect(newMemberName).not.toHaveAttribute("aria-label");
+  });
+
+  it("shows 'Show all N members' when list exceeds 5", () => {
+    render(
+      <GroupRow
+        group={mockGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+        defaultExpanded={true}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /show all 8 members/i })).toBeInTheDocument();
+    // 6th member should not be visible yet
+    expect(screen.queryByText("sed")).not.toBeInTheDocument();
+  });
+
+  it("clicking 'Show all' expands to full list", () => {
+    render(
+      <GroupRow
+        group={mockGroup}
+        onToggle={vi.fn()}
+        onUngroup={vi.fn()}
+        defaultExpanded={true}
+      />,
+    );
+    // Initially truncated
+    expect(screen.queryByText("sed")).not.toBeInTheDocument();
+
+    // Click "Show all"
+    const showAllBtn = screen.getByRole("button", { name: /show all 8 members/i });
+    fireEvent.click(showAllBtn);
+
+    // All members visible
+    expect(screen.getByText("sed")).toBeInTheDocument();
+    expect(screen.getByText("systemd")).toBeInTheDocument();
+    expect(screen.getByText("util-linux")).toBeInTheDocument();
+
+    // Button now says "Show less"
+    expect(screen.getByRole("button", { name: /show less/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument();
+
+    // Click "Show less" to collapse back
+    fireEvent.click(screen.getByRole("button", { name: /show less/i }));
+    expect(screen.queryByText("sed")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show all 8 members/i })).toBeInTheDocument();
   });
 });

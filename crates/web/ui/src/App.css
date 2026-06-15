@@ -875,6 +875,28 @@ html, body, #root {
   font-style: italic;
 }
 
+.inspectah-group-row__member--from-base {
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+.inspectah-group-row__from-base-label {
+  font-size: var(--pf-t--global--font--size--xs);
+}
+
+.inspectah-group-row__show-all {
+  background: none;
+  border: none;
+  color: var(--pf-t--global--text--color--link--default);
+  cursor: pointer;
+  font-size: var(--pf-t--global--font--size--sm);
+  padding: var(--pf-t--global--spacer--xs) 0;
+}
+
+.inspectah-group-row__show-all:hover {
+  text-decoration: underline;
+}
+
 .inspectah-group-row--degraded {
   opacity: 0.55;
 }
