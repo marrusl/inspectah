@@ -7,22 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-- **`--no-baseline` flag** — baseline extraction is now mandatory. Scans that cannot pull the target image exit with a clear error and remediation guidance. Use `--base-image` to override auto-resolution, or use `podman save`/`podman load` for disconnected environments.
-- `--progress rich` and `--progress plain` modes (use `--progress pretty`)
-
-### Changed
-- **Schema version** bumped to 19. Tarballs from older schema versions are no longer loadable.
-- **Exit codes** — pull failures now exit with code 3 (previously the scan would continue with degraded output).
-- Scan progress output redesigned as append-only streaming receipt
-- Progress modes simplified from three (rich/plain/flat) to two (pretty/flat)
-- Sub-step detail moved behind `--verbose` flag
-- Findings summary block added after inspector receipt
-- `--verbose` now works with both pretty and flat modes
-- Flat mode now respects `--verbose` (previously always showed sub-steps)
+## [0.8.6-beta.3] - 2026-06-15
 
 ### Added
+- **Anaconda gap classifier** — packages installed by the RHEL installer (Anaconda) are now classified as platform plumbing and auto-excluded from migration scope. Dramatically reduces migration noise by hiding installer-default packages.
+- **Package group dependency visibility** — group members now show whether they're already in the base image. Summary labels distinguish "new" members from base-image members. Progressive disclosure replaces fixed truncation for long group member lists.
+- **Version changes table** — context section now renders version changes as a grouped table (upgrades/downgrades with EVR formatting) instead of simple list.
+- **Networking subsections** — context section networking split into clear subsections: Connections, Firewall, Routes & Rules, DNS & Hosts, Proxy.
+- **Kernel & boot subsections** — context section kernel & boot split into Customizations vs Defaults/Context for clearer organization.
+- **Service state display** — refine UI now shows both current (host) state and preset default alongside each service.
+- **Container section quadlet content** — quadlet unit file content now viewable inline via expand/collapse in container section.
+- **Sidebar subsection counts** — sidebar section counts correctly sum subsection items for subsection-only sections.
+- **Accessibility improvements** — ContextList subsections use semantic headings and ARIA region landmarks.
 - **Pull failure classification** — five error categories (registry unreachable, auth required, image not found, TLS/cert error, unknown) with tailored remediation guidance including disconnected-environment workarounds.
+
+### Changed
+- **Mandatory baseline** — `--no-baseline` flag removed; baseline extraction is now required. Scans that cannot pull the target image exit with code 3 with remediation guidance. Use `--base-image` to override auto-resolution.
+- **CLI flag rename** — `--baseline` flag renamed to `--target-image` (old flag still accepted as alias for compatibility).
+- **Exit codes** — pull failures now exit with code 3 (previously the scan would continue with degraded output).
+- **Scan progress output** redesigned as append-only streaming receipt.
+- **Progress modes** simplified from three (rich/plain/flat) to two (pretty/flat).
+- **Sub-step detail** moved behind `--verbose` flag.
+- **Verbose mode** now works with both pretty and flat modes; flat mode respects `--verbose` (previously always showed sub-steps).
+- **Tuned profiles** auto-enabled by default (previously required manual inclusion).
+- **Schema version** bumped to 19. Tarballs from older schema versions are no longer loadable.
+
+### Fixed
+- **RPM performance** — massive speedup through batching: `dnf group info`, `rpm -qR`, and `--whatprovides` calls now batched into single invocations. Dramatically reduces scan time on hosts with many packages/groups.
+- **Platform plumbing packages** hidden from refine view (installer-default packages no longer clutter migration scope).
+- **User refinement operations** preserved after anaconda reclassification.
+- **Config content truncation** removed (previously capped at 500 characters).
+- **InstalledGroup members** filtered to installed-only packages (previously included uninstalled metadata).
+- **Triage count badge** removed from UI (was noisy, not useful).
+- **Subuid badge** removed from user cards.
+
+### Removed
+- **`--no-baseline` flag** — baseline is now mandatory.
+- **`--progress rich` and `--progress plain` modes** (use `--progress pretty`).
 
 ## [0.8.6-beta.1] - 2026-06-09
 
@@ -251,7 +272,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.1...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.3...HEAD
+[0.8.6-beta.3]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.2...v0.8.6-beta.3
 [0.8.6-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.2...v0.8.6-beta.1
 [0.8.5-beta.2]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.1...v0.8.5-beta.2
 [0.8.5-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-alpha.1...v0.8.5-beta.1
