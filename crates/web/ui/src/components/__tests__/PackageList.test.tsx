@@ -773,10 +773,10 @@ describe("PackageList", () => {
       />,
     );
     const summary = screen.getByTestId("package-list-summary");
-    // 2 groups, 11 total group packages, 3 individual packages, 2 optional from groups
+    // 2 groups, 11 total group packages, 3 other packages, 2 optional from groups
     expect(summary).toHaveTextContent("2 groups");
     expect(summary).toHaveTextContent("11 packages");
-    expect(summary).toHaveTextContent("3 individual packages");
+    expect(summary).toHaveTextContent("3 other packages");
     expect(summary).toHaveTextContent("2 optional from groups");
   });
 
@@ -800,7 +800,7 @@ describe("PackageList", () => {
     const summary = screen.getByTestId("package-list-summary");
     expect(summary).toHaveTextContent("1 group");
     expect(summary).toHaveTextContent("1 package");
-    expect(summary).toHaveTextContent("1 individual package");
+    expect(summary).toHaveTextContent("1 other package");
   });
 
   it("summary bar hides optional count when zero", () => {
@@ -870,7 +870,9 @@ describe("PackageList", () => {
     );
     expect(screen.queryByTestId("groups-zone")).not.toBeInTheDocument();
     expect(screen.queryByTestId("zone-divider")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("package-list-summary")).not.toBeInTheDocument();
+    // Summary is now always shown (even without groups)
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("1 package");
   });
 
   it("GroupRow onToggle is wired correctly", () => {
@@ -1196,7 +1198,7 @@ describe("PackageList", () => {
   });
 
   it("individual package count in summary reflects member suppression", () => {
-    // 4 packages total, 2 are renderable group members → 2 individual
+    // 4 packages total, 2 are renderable group members → 2 other
     const pkgs = [
       makePkg("bash", "baseos"),
       makePkg("coreutils", "baseos"),
@@ -1214,7 +1216,7 @@ describe("PackageList", () => {
       />,
     );
     const summary = screen.getByTestId("package-list-summary");
-    expect(summary).toHaveTextContent("2 individual packages");
+    expect(summary).toHaveTextContent("2 other packages");
   });
 
   // --- Canonical name.arch suppression (real MainContent data shape) ---
@@ -1426,7 +1428,197 @@ describe("PackageList", () => {
     const summary = screen.getByTestId("package-list-summary");
     // 3 visible groups (core=renderable, development=excluded, multimedia=degraded)
     expect(summary).toHaveTextContent("3 groups");
-    // Only renderable group (core) contributes to package count: 8 packages
-    expect(summary).toHaveTextContent("8 packages");
+    // Only renderable group (core=8) + degraded (2) = 10 in parenthetical, plus 1 other package
+    expect(summary).toHaveTextContent("10 packages");
+    expect(summary).toHaveTextContent("1 other package");
+  });
+
+  // --- Task 3: Summary label changes for group dependency visibility ---
+
+  it("shows 'other packages' instead of 'individual packages' when groups exist", () => {
+    const groupWithMembers: GroupInfo = {
+      name: "core",
+      member_count: 3,
+      added_count: 3,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "bash", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+      ],
+    };
+    const pkgs = [
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        packageGroups={[groupWithMembers]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("other packages");
+    expect(summary).not.toHaveTextContent("individual packages");
+  });
+
+  it("shows 'N packages' with no qualifier when no groups exist", () => {
+    const pkgs = [
+      makePkg("bash", "baseos"),
+      makePkg("curl", "baseos"),
+      makePkg("wget", "baseos"),
+    ];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={allRepos}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("3 packages");
+    expect(summary).not.toHaveTextContent("other");
+    expect(summary).not.toHaveTextContent("individual");
+  });
+
+  it("shows 'N new, M from base' in group parenthetical", () => {
+    const mixedGroup: GroupInfo = {
+      name: "core",
+      member_count: 5,
+      added_count: 3,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "bash", locked: false, overlap_groups: [], in_base_image: true },
+        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "systemd", locked: false, overlap_groups: [], in_base_image: true },
+        { name: "util-linux", locked: false, overlap_groups: [], in_base_image: false },
+      ],
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={[]}
+        repoGroups={allRepos}
+        packageGroups={[mixedGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("1 group (3 new, 2 from base)");
+  });
+
+  it("deduplicates overlapping group members in summary counts", () => {
+    const group1: GroupInfo = {
+      name: "core",
+      member_count: 3,
+      added_count: 3,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "bash", locked: false, overlap_groups: ["editors"], in_base_image: false },
+        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+      ],
+    };
+    const group2: GroupInfo = {
+      name: "editors",
+      member_count: 2,
+      added_count: 2,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "bash", locked: false, overlap_groups: ["core"], in_base_image: false },
+        { name: "vim", locked: false, overlap_groups: [], in_base_image: false },
+      ],
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={[]}
+        repoGroups={allRepos}
+        packageGroups={[group1, group2]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    // 4 unique packages total (bash, grep, sed, vim), not 5
+    expect(summary).toHaveTextContent("2 groups (4 packages)");
+  });
+
+  it("shows 'all from base' when all group members are from base image", () => {
+    const baseOnlyGroup: GroupInfo = {
+      name: "base-tools",
+      member_count: 3,
+      added_count: 0,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "bash", locked: false, overlap_groups: [], in_base_image: true },
+        { name: "systemd", locked: false, overlap_groups: [], in_base_image: true },
+        { name: "util-linux", locked: false, overlap_groups: [], in_base_image: true },
+      ],
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={[]}
+        repoGroups={allRepos}
+        packageGroups={[baseOnlyGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("1 group (all from base)");
+  });
+
+  it("shows package count with no 'from base' suffix when no base packages", () => {
+    const newOnlyGroup: GroupInfo = {
+      name: "new-tools",
+      member_count: 2,
+      added_count: 2,
+      locked_count: 0,
+      optional_spillover_count: 0,
+      render_state: "renderable",
+      degradation_reason: null,
+      members: [
+        { name: "kubectl", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "helm", locked: false, overlap_groups: [], in_base_image: false },
+      ],
+    };
+    render(
+      <PackageList
+        mode="single"
+        packages={[]}
+        repoGroups={allRepos}
+        packageGroups={[newOnlyGroup]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const summary = screen.getByTestId("package-list-summary");
+    expect(summary).toHaveTextContent("1 group (2 packages)");
+    expect(summary).not.toHaveTextContent("from base");
   });
 });

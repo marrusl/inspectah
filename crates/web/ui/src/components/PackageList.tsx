@@ -320,15 +320,28 @@ export function PackageList({
     () => visibleGroups.filter((g) => g.render_state === "renderable"),
     [visibleGroups],
   );
-  const groupPackageCount = useMemo(() => {
-    const uniquePackages = new Set<string>();
-    for (const group of renderableOnly) {
+  const { newCount, baseCount } = useMemo(() => {
+    const newSet = new Set<string>();
+    const baseSet = new Set<string>();
+    for (const group of visibleGroups) {
       for (const member of group.members) {
-        uniquePackages.add(member.name);
+        if (member.in_base_image) {
+          baseSet.add(member.name);
+        } else {
+          newSet.add(member.name);
+        }
       }
     }
-    return uniquePackages.size;
-  }, [renderableOnly]);
+    // Remove any package from baseSet that also appears in newSet (new takes precedence)
+    for (const name of newSet) baseSet.delete(name);
+    return { newCount: newSet.size, baseCount: baseSet.size };
+  }, [visibleGroups]);
+
+  const groupSummaryLabel = useMemo(() => {
+    if (newCount === 0) return "all from base";
+    if (baseCount === 0) return `${newCount} ${newCount === 1 ? "package" : "packages"}`;
+    return `${newCount} new, ${baseCount} from base`;
+  }, [newCount, baseCount]);
   const optionalSpilloverCount = useMemo(
     () =>
       renderableOnly.reduce(
@@ -426,38 +439,44 @@ export function PackageList({
 
   return (
     <div data-testid="package-list">
-      {hasGroups && (
-        <div
-          data-testid="package-list-summary"
-          className="inspectah-package-list__summary"
-        >
-          {searchLower ? (
-            // Filtered view during search
-            <>
-              {displayGroups.length}{" "}
-              {displayGroups.length === 1 ? "group" : "groups"} &middot;{" "}
-              {displayPackages.length} individual{" "}
-              {displayPackages.length === 1 ? "package" : "packages"}
-            </>
-          ) : (
-            // Full view when not searching
-            <>
-              {visibleGroups.length}{" "}
-              {visibleGroups.length === 1 ? "group" : "groups"} (
-              {groupPackageCount}{" "}
-              {groupPackageCount === 1 ? "package" : "packages"}) &middot;{" "}
-              {individualPackages.length} individual{" "}
-              {individualPackages.length === 1 ? "package" : "packages"}
-              {optionalSpilloverCount > 0 && (
-                <>
-                  {" "}
-                  &middot; {optionalSpilloverCount} optional from groups
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      <div
+        data-testid="package-list-summary"
+        className="inspectah-package-list__summary"
+      >
+        {searchLower ? (
+          // Filtered view during search
+          <>
+            {hasGroups && (
+              <>
+                {displayGroups.length}{" "}
+                {displayGroups.length === 1 ? "group" : "groups"} ({groupSummaryLabel}) &middot;{" "}
+              </>
+            )}
+            {displayPackages.length}{" "}
+            {hasGroups ? "other " : ""}
+            {displayPackages.length === 1 ? "package" : "packages"}
+          </>
+        ) : (
+          // Full view when not searching
+          <>
+            {hasGroups && (
+              <>
+                {visibleGroups.length}{" "}
+                {visibleGroups.length === 1 ? "group" : "groups"} ({groupSummaryLabel}) &middot;{" "}
+              </>
+            )}
+            {displayPackages.length}{" "}
+            {hasGroups ? "other " : ""}
+            {displayPackages.length === 1 ? "package" : "packages"}
+            {hasGroups && optionalSpilloverCount > 0 && (
+              <>
+                {" "}
+                &middot; {optionalSpilloverCount} optional from groups
+              </>
+            )}
+          </>
+        )}
+      </div>
 
       {showGroupsZone && (
         <div data-testid="groups-zone" role="list">

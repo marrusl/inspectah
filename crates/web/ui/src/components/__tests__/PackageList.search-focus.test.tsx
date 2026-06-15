@@ -163,7 +163,7 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
     const summary = screen.getByTestId("package-list-summary");
     // 2 groups, but only 4 unique packages (shared-pkg counted once)
     expect(summary).toHaveTextContent("2 groups (4 packages)");
-    expect(summary).toHaveTextContent("1 individual package");
+    expect(summary).toHaveTextContent("1 other package");
   });
 
   it("excluded and degraded groups visible in zone, ungrouped filtered out", () => {
@@ -219,8 +219,8 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
 
     const summary = screen.getByTestId("package-list-summary");
     // During search: 1 group (editors contains nano),
-    // 1 individual (nano-utils matches; nano is suppressed as a group member)
+    // 1 other (nano-utils matches; nano is suppressed as a group member)
     expect(summary).toHaveTextContent("1 group");
-    expect(summary).toHaveTextContent("1 individual package");
+    expect(summary).toHaveTextContent("1 other package");
   });
 });
