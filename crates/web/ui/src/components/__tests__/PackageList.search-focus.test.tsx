@@ -17,53 +17,53 @@ const distroRepo: RepoGroupInfo = {
 const coreGroup: GroupInfo = {
   name: "core",
   member_count: 3,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 0,
   render_state: "renderable",
   degradation_reason: null,
   members: [
-    { name: "bash", locked: false, overlap_groups: [] },
-    { name: "coreutils", locked: false, overlap_groups: [] },
-    { name: "systemd", locked: false, overlap_groups: [] },
+    { name: "bash", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "coreutils", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "systemd", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const editorsGroup: GroupInfo = {
   name: "editors",
   member_count: 2,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 0,
   render_state: "renderable",
   degradation_reason: null,
   members: [
-    { name: "nano", locked: false, overlap_groups: [] },
-    { name: "vim", locked: false, overlap_groups: [] },
+    { name: "nano", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "vim", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const degradedGroup: GroupInfo = {
   name: "Degraded Group",
   member_count: 2,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 0,
   render_state: "degraded",
   degradation_reason: "overlap with another group",
   members: [
-    { name: "podman", locked: false, overlap_groups: [] },
-    { name: "buildah", locked: false, overlap_groups: [] },
+    { name: "podman", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "buildah", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const excludedGroup: GroupInfo = {
   name: "Excluded Group",
   member_count: 3,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 2,
   render_state: "excluded",
   degradation_reason: null,
   members: [
-    { name: "ffmpeg", locked: false, overlap_groups: [] },
-    { name: "vlc", locked: false, overlap_groups: [] },
+    { name: "ffmpeg", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "vlc", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
@@ -123,27 +123,27 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
     const overlappingGroup1: GroupInfo = {
       name: "group1",
       member_count: 3,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "shared-pkg", locked: false, overlap_groups: ["group2"] },
-        { name: "pkg-a", locked: false, overlap_groups: [] },
-        { name: "pkg-b", locked: false, overlap_groups: [] },
+        { name: "shared-pkg", locked: false, overlap_groups: ["group2"] , in_base_image: false},
+        { name: "pkg-a", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "pkg-b", locked: false, overlap_groups: [] , in_base_image: false},
       ],
     };
 
     const overlappingGroup2: GroupInfo = {
       name: "group2",
       member_count: 2,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "shared-pkg", locked: false, overlap_groups: ["group1"] },
-        { name: "pkg-c", locked: false, overlap_groups: [] },
+        { name: "shared-pkg", locked: false, overlap_groups: ["group1"] , in_base_image: false},
+        { name: "pkg-c", locked: false, overlap_groups: [] , in_base_image: false},
       ],
     };
 
@@ -170,11 +170,11 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
     const ungroupedGroup: GroupInfo = {
       name: "Ungrouped Group",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "ungrouped",
       degradation_reason: null,
-      members: [{ name: "orphan", locked: false, overlap_groups: [] }],
+      members: [{ name: "orphan", locked: false, overlap_groups: [] , in_base_image: false}],
     };
 
     render(

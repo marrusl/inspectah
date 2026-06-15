@@ -62,14 +62,14 @@ describe("Deferred post-ungroup focus", () => {
   it("post-ungroup focus lands on the real package row after re-render", async () => {
     // Start with a group containing "httpd"
     const members: GroupMemberInfo[] = [
-      { name: "httpd", locked: false, overlap_groups: [] },
-      { name: "mod_ssl", locked: false, overlap_groups: [] },
+      { name: "httpd", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "mod_ssl", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "web-server",
       member_count: 2,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -142,13 +142,13 @@ describe("Deferred post-ungroup focus", () => {
     // The dot boundary in the selector must prevent "httpd" from matching
     // "httpd-tools.x86_64" via startsWith.
     const members: GroupMemberInfo[] = [
-      { name: "httpd", locked: false, overlap_groups: [] },
+      { name: "httpd", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "web-only",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -226,13 +226,13 @@ describe("Deferred post-ungroup focus", () => {
     // Group contains "python3" — but the view also has "python3.11.x86_64".
     // Exact-match selector must prevent "python3" from matching "python3.11.x86_64".
     const members: GroupMemberInfo[] = [
-      { name: "python3", locked: false, overlap_groups: [] },
+      { name: "python3", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "python-base",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,

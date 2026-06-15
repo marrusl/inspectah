@@ -6,59 +6,59 @@ import type { GroupInfo } from "../../api/types";
 const mockGroup: GroupInfo = {
   name: "core",
   member_count: 8,
-  locked_count: 2,
+  added_count: 0, locked_count: 2,
   optional_spillover_count: 0,
   render_state: "renderable",
   degradation_reason: null,
   members: [
-    { name: "bash", locked: true, overlap_groups: [] },
-    { name: "coreutils", locked: true, overlap_groups: [] },
-    { name: "filesystem", locked: false, overlap_groups: [] },
-    { name: "glibc", locked: false, overlap_groups: [] },
-    { name: "grep", locked: false, overlap_groups: [] },
-    { name: "sed", locked: false, overlap_groups: [] },
-    { name: "systemd", locked: false, overlap_groups: [] },
-    { name: "util-linux", locked: false, overlap_groups: [] },
+    { name: "bash", locked: true, overlap_groups: [] , in_base_image: false},
+    { name: "coreutils", locked: true, overlap_groups: [] , in_base_image: false},
+    { name: "filesystem", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "glibc", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "grep", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "sed", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "systemd", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "util-linux", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const smallGroup: GroupInfo = {
   name: "editors",
   member_count: 3,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 0,
   render_state: "renderable",
   degradation_reason: null,
   members: [
-    { name: "nano", locked: false, overlap_groups: [] },
-    { name: "vim-minimal", locked: false, overlap_groups: [] },
-    { name: "vi", locked: false, overlap_groups: [] },
+    { name: "nano", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "vim-minimal", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "vi", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const degradedGroup: GroupInfo = {
   name: "Container Management",
   member_count: 12,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 0,
   render_state: "degraded",
   degradation_reason: "overlap with another group",
   members: [
-    { name: "podman", locked: false, overlap_groups: [] },
-    { name: "buildah", locked: false, overlap_groups: [] },
+    { name: "podman", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "buildah", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
 const excludedWithSpillover: GroupInfo = {
   name: "multimedia",
   member_count: 5,
-  locked_count: 0,
+  added_count: 0, locked_count: 0,
   optional_spillover_count: 3,
   render_state: "excluded",
   degradation_reason: null,
   members: [
-    { name: "ffmpeg", locked: false, overlap_groups: [] },
-    { name: "vlc", locked: false, overlap_groups: [] },
+    { name: "ffmpeg", locked: false, overlap_groups: [] , in_base_image: false},
+    { name: "vlc", locked: false, overlap_groups: [] , in_base_image: false},
   ],
 };
 
@@ -80,7 +80,7 @@ describe("GroupRow", () => {
       ...smallGroup,
       name: "single",
       member_count: 1,
-      members: [{ name: "solo", locked: false, overlap_groups: [] }],
+      members: [{ name: "solo", locked: false, overlap_groups: [] , in_base_image: false}],
     };
     render(
       <GroupRow

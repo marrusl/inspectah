@@ -149,6 +149,7 @@ pub struct TunedDecisionDto {
 pub struct GroupInfo {
     pub name: String,
     pub member_count: usize,
+    pub added_count: usize,
     pub locked_count: usize,
     pub optional_spillover_count: usize,
     pub render_state: String,
@@ -163,6 +164,7 @@ pub struct GroupMemberInfo {
     pub name: String,
     pub locked: bool,
     pub overlap_groups: Vec<String>,
+    pub in_base_image: bool,
 }
 
 /// Provenance of a package that appears in the individual zone due to

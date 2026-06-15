@@ -65,14 +65,14 @@ describe("MainContent ungroup focus restoration", () => {
 
   it("calls onSetUndoFocusTarget with group-row ID when ungroup button is clicked", async () => {
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] },
-      { name: "pkg2", locked: false, overlap_groups: [] },
+      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "pkg2", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "test-group",
       member_count: 2,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -125,14 +125,14 @@ describe("MainContent ungroup focus restoration", () => {
     // contains packages with "name.arch" ("httpd.x86_64").  The focus
     // selector must use prefix matching to find the real DOM row.
     const members: GroupMemberInfo[] = [
-      { name: "httpd", locked: false, overlap_groups: [] },
-      { name: "mod_ssl", locked: false, overlap_groups: [] },
+      { name: "httpd", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "mod_ssl", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "web-server",
       member_count: 2,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -179,13 +179,13 @@ describe("MainContent ungroup focus restoration", () => {
 
   it("calls onViewUpdate with server response after successful ungroup", async () => {
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] },
+      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "my-group",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -233,16 +233,16 @@ describe("MainContent ungroup toast", () => {
     const mockGroup: GroupInfo = {
       name: "test-group",
       member_count: 5,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "a", locked: false, overlap_groups: [] },
-        { name: "b", locked: false, overlap_groups: [] },
-        { name: "c", locked: false, overlap_groups: [] },
-        { name: "d", locked: false, overlap_groups: [] },
-        { name: "e", locked: false, overlap_groups: [] },
+        { name: "a", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "b", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "c", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "d", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "e", locked: false, overlap_groups: [] , in_base_image: false},
       ],
     };
 
@@ -287,11 +287,11 @@ describe("MainContent ungroup toast", () => {
     const mockGroup: GroupInfo = {
       name: "single-pkg",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
-      members: [{ name: "lonely", locked: false, overlap_groups: [] }],
+      members: [{ name: "lonely", locked: false, overlap_groups: [] , in_base_image: false}],
     };
 
     const mockViewData = makeViewData([mockGroup]);
@@ -333,14 +333,14 @@ describe("MainContent ungroup toast", () => {
     const mockGroup: GroupInfo = {
       name: "auto-dismiss",
       member_count: 3,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "x", locked: false, overlap_groups: [] },
-        { name: "y", locked: false, overlap_groups: [] },
-        { name: "z", locked: false, overlap_groups: [] },
+        { name: "x", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "y", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "z", locked: false, overlap_groups: [] , in_base_image: false},
       ],
     };
 

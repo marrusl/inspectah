@@ -466,12 +466,14 @@ export interface GroupMemberInfo {
   name: string;
   locked: boolean;
   overlap_groups: string[];
+  in_base_image: boolean;
 }
 
 /** Summary of an installed DNF group and its rendering state. */
 export interface GroupInfo {
   name: string;
   member_count: number;
+  added_count: number;
   locked_count: number;
   optional_spillover_count: number;
   render_state: "renderable" | "excluded" | "ungrouped" | "degraded";

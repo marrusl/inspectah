@@ -211,13 +211,16 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .count();
 
             // Build member list with overlap detection
-            let members: Vec<GroupMemberInfo> = group
+            let mut members: Vec<GroupMemberInfo> = group
                 .members
                 .iter()
                 .map(|member_name| {
                     let locked = projected_pkgs
                         .iter()
                         .any(|p| p.name == *member_name && p.locked);
+                    let in_base_image = !projected_pkgs
+                        .iter()
+                        .any(|p| p.name == *member_name);
                     let overlap_groups: Vec<String> = installed_groups
                         .iter()
                         .filter(|other| other.name != group.name)
@@ -228,13 +231,21 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                         name: member_name.clone(),
                         locked,
                         overlap_groups,
+                        in_base_image,
                     }
                 })
                 .collect();
 
+            // Sort members: new (in_base_image=false) first, then base-image, alphabetical within each
+            members.sort_by(|a, b| a.in_base_image.cmp(&b.in_base_image).then(a.name.cmp(&b.name)));
+
+            // Compute added_count
+            let added_count = members.iter().filter(|m| !m.in_base_image).count();
+
             GroupInfo {
                 name: group.name.clone(),
-                member_count: group.members.len(),
+                member_count: members.len(),
+                added_count,
                 locked_count,
                 optional_spillover_count: group.optional_installed.len(),
                 render_state: state_str,
@@ -1362,6 +1373,73 @@ mod tests {
         assert_eq!(members.len(), 2);
         // Verify member overlap_groups is an array
         assert!(members[0]["overlap_groups"].is_array());
+    }
+
+    #[test]
+    fn group_info_includes_in_base_image_and_added_count() {
+        use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+
+        // Build snapshot with packages_added: ["httpd", "mod_ssl"]
+        // Build InstalledGroup with members: ["httpd", "mod_ssl", "apr", "apr-util"]
+        // (apr and apr-util are installed but from base — not in packages_added)
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "mod_ssl".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+            ],
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Web Server".into(),
+                members: vec!["httpd".into(), "mod_ssl".into(), "apr".into(), "apr-util".into()],
+                optional_installed: vec![],
+            }]),
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        let json = serde_json::to_value(&response).expect("serialize");
+
+        let groups = json["package_groups"].as_array().expect("package_groups");
+        assert_eq!(groups.len(), 1);
+
+        // Assert: GroupInfo.added_count == 2
+        assert_eq!(groups[0]["added_count"], 2, "added_count should be 2");
+
+        // Assert: GroupInfo.member_count == 4
+        assert_eq!(groups[0]["member_count"], 4, "member_count should be 4");
+
+        let members = groups[0]["members"].as_array().expect("members");
+        assert_eq!(members.len(), 4);
+
+        // Assert: members sorted new first (httpd, mod_ssl), then base (apr, apr-util)
+        assert_eq!(members[0]["name"], "httpd");
+        assert_eq!(members[0]["in_base_image"], false, "httpd should not be in_base_image");
+
+        assert_eq!(members[1]["name"], "mod_ssl");
+        assert_eq!(members[1]["in_base_image"], false, "mod_ssl should not be in_base_image");
+
+        assert_eq!(members[2]["name"], "apr");
+        assert_eq!(members[2]["in_base_image"], true, "apr should be in_base_image");
+
+        assert_eq!(members[3]["name"], "apr-util");
+        assert_eq!(members[3]["in_base_image"], true, "apr-util should be in_base_image");
     }
 
     #[test]

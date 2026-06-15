@@ -656,40 +656,40 @@ describe("PackageList", () => {
   const coreGroup: GroupInfo = {
     name: "core",
     member_count: 8,
-    locked_count: 2,
+    added_count: 0, locked_count: 2,
     optional_spillover_count: 0,
     render_state: "renderable",
     degradation_reason: null,
     members: [
-      { name: "bash", locked: true, overlap_groups: [] },
-      { name: "coreutils", locked: true, overlap_groups: [] },
-      { name: "filesystem", locked: false, overlap_groups: [] },
-      { name: "glibc", locked: false, overlap_groups: [] },
-      { name: "grep", locked: false, overlap_groups: [] },
-      { name: "sed", locked: false, overlap_groups: [] },
-      { name: "systemd", locked: false, overlap_groups: [] },
-      { name: "util-linux", locked: false, overlap_groups: [] },
+      { name: "bash", locked: true, overlap_groups: [] , in_base_image: false},
+      { name: "coreutils", locked: true, overlap_groups: [] , in_base_image: false},
+      { name: "filesystem", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "glibc", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "grep", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "sed", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "systemd", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "util-linux", locked: false, overlap_groups: [] , in_base_image: false},
     ],
   };
 
   const editorsGroup: GroupInfo = {
     name: "editors",
     member_count: 3,
-    locked_count: 0,
+    added_count: 0, locked_count: 0,
     optional_spillover_count: 2,
     render_state: "renderable",
     degradation_reason: null,
     members: [
-      { name: "nano", locked: false, overlap_groups: [] },
-      { name: "vim-minimal", locked: false, overlap_groups: [] },
-      { name: "vi", locked: false, overlap_groups: [] },
+      { name: "nano", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "vim-minimal", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "vi", locked: false, overlap_groups: [] , in_base_image: false},
     ],
   };
 
   const excludedGroup: GroupInfo = {
     name: "development",
     member_count: 5,
-    locked_count: 0,
+    added_count: 0, locked_count: 0,
     optional_spillover_count: 0,
     render_state: "excluded",
     degradation_reason: null,
@@ -699,24 +699,24 @@ describe("PackageList", () => {
   const degradedGroup: GroupInfo = {
     name: "multimedia",
     member_count: 2,
-    locked_count: 0,
+    added_count: 0, locked_count: 0,
     optional_spillover_count: 0,
     render_state: "degraded",
     degradation_reason: "insufficient_members",
     members: [
-      { name: "ffmpeg", locked: false, overlap_groups: [] },
-      { name: "vlc", locked: false, overlap_groups: [] },
+      { name: "ffmpeg", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "vlc", locked: false, overlap_groups: [] , in_base_image: false},
     ],
   };
 
   const ungroupedGroup: GroupInfo = {
     name: "leftovers",
     member_count: 1,
-    locked_count: 0,
+    added_count: 0, locked_count: 0,
     optional_spillover_count: 0,
     render_state: "ungrouped",
     degradation_reason: null,
-    members: [{ name: "orphan-pkg", locked: false, overlap_groups: [] }],
+    members: [{ name: "orphan-pkg", locked: false, overlap_groups: [] , in_base_image: false}],
   };
 
   it("renders groups zone above individual packages zone", () => {
@@ -784,7 +784,7 @@ describe("PackageList", () => {
     const singleGroup: GroupInfo = {
       ...coreGroup,
       member_count: 1,
-      members: [{ name: "bash", locked: false, overlap_groups: [] }],
+      members: [{ name: "bash", locked: false, overlap_groups: [] , in_base_image: false}],
     };
     const pkgs = [makePkg("curl", "baseos")];
     render(
@@ -1259,14 +1259,14 @@ describe("PackageList", () => {
     const archGroup: GroupInfo = {
       name: "multi-arch",
       member_count: 3,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "libfoo", locked: false, overlap_groups: [] },
-        { name: "libbar", locked: false, overlap_groups: [] },
-        { name: "libbaz", locked: false, overlap_groups: [] },
+        { name: "libfoo", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "libbar", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "libbaz", locked: false, overlap_groups: [] , in_base_image: false},
       ],
     };
     const pkgs = [
@@ -1308,11 +1308,11 @@ describe("PackageList", () => {
     const pyGroup: GroupInfo = {
       name: "python-core",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
-      members: [{ name: "python3", locked: false, overlap_groups: [] }],
+      members: [{ name: "python3", locked: false, overlap_groups: [] , in_base_image: false}],
     };
     const pkgs = [
       makePkg("python3.11", "baseos"),  // dot-separated version, not an arch

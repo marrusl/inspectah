@@ -39,14 +39,14 @@ describe("MainContent undo focus restoration", () => {
 
   it("after ungroup, onSetUndoFocusTarget is called with the group-row ID", async () => {
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] },
-      { name: "pkg2", locked: false, overlap_groups: [] },
+      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "pkg2", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "test-group",
       member_count: 2,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -93,13 +93,13 @@ describe("MainContent undo focus restoration", () => {
     // handleGroupUngroup sets the undo focus target to "group-row-<name>"
     // so that App.tsx can restore focus to the group row after undo.
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] },
+      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
     ];
 
     const mockGroup: GroupInfo = {
       name: "my-group",
       member_count: 1,
-      locked_count: 0,
+      added_count: 0, locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
