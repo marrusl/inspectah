@@ -17,7 +17,7 @@ use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, Sysctl
 use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection, VersionChange};
+use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection, VersionChange};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
 use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
 use inspectah_core::types::services::{
@@ -236,4 +236,120 @@ async fn get_sections_contract() {
     let (status, json) = get_json(&app, "/api/snapshot/sections").await;
     assert_eq!(status, StatusCode::OK);
     insta::assert_json_snapshot!("contract_sections", json);
+}
+
+/// Grouped view contract: exercises package groups with mixed base/added dependencies.
+/// httpd and mod_ssl are user-added, apr and apr-util are from base image.
+/// Expected: added_count=2, member_count=4, members sorted new-first, in_base_image flag set correctly.
+#[tokio::test]
+async fn grouped_view_contract() {
+    let mut snap = InspectionSnapshot::new();
+
+    snap.meta.insert(
+        "hostname".to_string(),
+        serde_json::json!("grouped-host.example.com"),
+    );
+
+    snap.os_release = Some(OsRelease {
+        name: "Red Hat Enterprise Linux".into(),
+        version: "9.4 (Plow)".into(),
+        version_id: "9.4".into(),
+        id: "rhel".into(),
+        pretty_name: "Red Hat Enterprise Linux 9.4 (Plow)".into(),
+        ..Default::default()
+    });
+
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "2.4.57".into(),
+                release: "11.el9".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "mod_ssl".into(),
+                arch: "x86_64".into(),
+                version: "2.4.57".into(),
+                release: "11.el9".into(),
+                state: PackageState::Added,
+                include: true,
+                locked: false,
+                ..Default::default()
+            },
+        ],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Web Server".into(),
+            members: vec![
+                "httpd".into(),
+                "mod_ssl".into(),
+                "apr".into(),
+                "apr-util".into(),
+            ],
+            optional_installed: vec![],
+        }]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(session)),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Verify contract expectations before snapshotting
+    let groups = json["package_groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "expected exactly one package group");
+
+    let group = &groups[0];
+    assert_eq!(
+        group["added_count"].as_u64().unwrap(),
+        2,
+        "expected added_count=2 (httpd, mod_ssl)"
+    );
+    assert_eq!(
+        group["member_count"].as_u64().unwrap(),
+        4,
+        "expected member_count=4"
+    );
+
+    let members = group["members"].as_array().unwrap();
+    assert_eq!(members.len(), 4);
+
+    // First two should be new (httpd, mod_ssl), sorted alphabetically
+    assert_eq!(members[0]["name"].as_str().unwrap(), "httpd");
+    assert_eq!(
+        members[0]["in_base_image"].as_bool().unwrap(),
+        false,
+        "httpd should NOT be in_base_image"
+    );
+    assert_eq!(members[1]["name"].as_str().unwrap(), "mod_ssl");
+    assert_eq!(
+        members[1]["in_base_image"].as_bool().unwrap(),
+        false,
+        "mod_ssl should NOT be in_base_image"
+    );
+
+    // Last two should be from base (apr, apr-util), sorted alphabetically
+    assert_eq!(members[2]["name"].as_str().unwrap(), "apr");
+    assert_eq!(
+        members[2]["in_base_image"].as_bool().unwrap(),
+        true,
+        "apr should be in_base_image"
+    );
+    assert_eq!(members[3]["name"].as_str().unwrap(), "apr-util");
+    assert_eq!(
+        members[3]["in_base_image"].as_bool().unwrap(),
+        true,
+        "apr-util should be in_base_image"
+    );
+
+    insta::assert_json_snapshot!("grouped_view", json);
 }
