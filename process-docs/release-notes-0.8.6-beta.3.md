@@ -45,10 +45,6 @@ Scan progress output redesigned as an append-only streaming receipt. Progress mo
 - Accessibility: ContextList subsections use semantic headings and ARIA region landmarks
 - Schema version bumped to 19
 
-### Known issues
-
-- **RHEL-subscribed builds on non-RHEL hosts:** The `--preserve-subscription` flag captures host-specific RHSM entitlement material. This material is not transferable and will not work when inspectah runs on a non-RHEL host (e.g., Fedora, CentOS Stream). Run inspectah on the RHEL host whose subscription you want to preserve.
-
 ### Binaries
 
 Pre-built binaries for 3 platforms:
