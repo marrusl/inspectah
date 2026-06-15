@@ -411,7 +411,17 @@ impl Inspector for RpmInspector {
         });
 
         // 8. Collect installed dnf groups
-        let installed_groups = collect_installed_groups(exec);
+        let mut installed_groups = collect_installed_groups(exec);
+
+        // 8a. Filter group members to only installed packages
+        if let Some(ref mut groups) = installed_groups {
+            let installed_names: HashSet<&str> = host_packages.iter()
+                .map(|p| p.name.as_str())
+                .collect();
+            for group in groups.iter_mut() {
+                group.members.retain(|name| installed_names.contains(name.as_str()));
+            }
+        }
 
         // 9. Build warnings
         let mut warnings = Vec::new();
@@ -2932,5 +2942,104 @@ Group: Container Management
     fn test_parse_group_info_empty() {
         let packages = parse_group_info_packages("");
         assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn test_installed_groups_filter_to_installed_only() {
+        // Mock rpm -qa output with only some packages installed
+        let rpm_qa_output = "\
+0:bash-5.2.26-3.el9.x86_64
+0:vim-enhanced-9.0.1592-1.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+";
+        // Mock file ownership (required by inspector)
+        let file_ownership_output = "\
+@@bash
+/usr/bin/bash
+@@vim-enhanced
+/usr/bin/vim
+@@httpd
+/usr/sbin/httpd
+";
+        // Mock dnf group list output
+        let group_list_output = "\
+Installed Groups:
+   Development Tools
+";
+        // Mock dnf group info output listing MORE packages than are installed
+        let group_info_output = "\
+Group: Development Tools
+ Description: A basic development environment
+ Mandatory Packages:
+   gcc
+   make
+ Default Packages:
+   bash
+   vim-enhanced
+ Optional Packages:
+   httpd
+   gdb
+   strace
+";
+        let exec = MockExecutor::new()
+            .with_command(
+                &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
+                ExecResult {
+                    stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+                ExecResult {
+                    stdout: file_ownership_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "env LC_ALL=C dnf group list --installed",
+                ExecResult {
+                    stdout: group_list_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "env LC_ALL=C dnf group info Development Tools",
+                ExecResult {
+                    stdout: group_info_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+        if let SectionData::Rpm(rpm) = &output.section {
+            let groups = rpm.installed_groups.as_ref().unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].name, "Development Tools");
+
+            // Group metadata lists: gcc, make, bash, vim-enhanced, httpd, gdb, strace
+            // But only bash, vim-enhanced, httpd are actually installed
+            // Expected members after filtering: bash, httpd, vim-enhanced (sorted)
+            assert_eq!(
+                groups[0].members,
+                vec!["bash", "httpd", "vim-enhanced"]
+            );
+        } else {
+            panic!("expected SectionData::Rpm");
+        }
     }
 }
