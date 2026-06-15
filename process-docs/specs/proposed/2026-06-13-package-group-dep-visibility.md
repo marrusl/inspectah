@@ -27,10 +27,42 @@ and fix the member list truncation.
 
 ## Design
 
+### 0. Prerequisite: tighten `InstalledGroup.members` collector contract
+
+**Problem:** `InstalledGroup.members` is currently populated by
+`parse_group_info_packages()` in `crates/collect/src/inspectors/rpm/mod.rs`,
+which parses `dnf group info` output and collects Mandatory, Default,
+and Optional packages into the same `members` list. This includes
+packages from the group metadata that may not be installed on the host.
+The `in_base_image` derivation below requires that `members` contains
+only actually-installed packages.
+
+**Fix:** In the collector, after parsing `dnf group info`, filter
+`InstalledGroup.members` against the host's installed RPM list (already
+available at collection time from `rpm -qa`). Remove any member name
+that does not appear in the installed RPM set.
+
+`optional_installed` is a separate field and is already scoped to
+installed optional packages — no change needed there.
+
+**Files changed:**
+- `crates/collect/src/inspectors/rpm/mod.rs` — filter `members` against
+  installed RPM names in `collect_installed_groups()` or the call site
+- Update existing collector tests that assert uninstalled optional
+  packages in `members`
+
+**Schema impact:** None. The `InstalledGroup` serialization format is
+unchanged — `members` is still `Vec<String>`. The semantic tightening
+is backward-compatible (fewer entries, not different shape). Existing
+tarballs with unfiltered members will show those packages as "from base"
+which is slightly inaccurate but harmless — future scans will be
+correct.
+
 ### 1. Show all group members, annotate base-image ones
 
-When a group is expanded, show ALL members from `InstalledGroup.members`,
-not just those that appear in `packages_added`.
+With the collector contract tightened (prerequisite above), every entry
+in `InstalledGroup.members` is an installed package. Show ALL members
+when a group is expanded, not just those in `packages_added`.
 
 - **New members** (in `packages_added`): render as today — normal
   weight, interactive.
@@ -38,13 +70,12 @@ not just those that appear in `packages_added`.
   `packages_added`): render de-emphasized with a trailing label
   "(from base)". These are read-only context, not toggleable.
 
-**`in_base_image` derivation:** A group member that is installed on the
-host and absent from `packages_added` is definitionally in the base
-image — `packages_added` is computed as `host_packages - base_packages`.
-This is a closed-world determination, not a guess. Group members that
-were never installed do not appear in `InstalledGroup` (the struct
-represents installed groups with their installed members), so the
-"not installed" edge case does not arise in the current data model.
+**`in_base_image` derivation:** With the tightened collector, every
+member in `InstalledGroup.members` is confirmed installed on the host.
+A member absent from `packages_added` is therefore definitionally in
+the base image — `packages_added` is computed as
+`host_packages - base_packages`. This is a closed-world determination
+contingent on the prerequisite collector fix.
 
 **De-emphasis treatment:**
 - Reduced opacity (0.5) with italic text
@@ -199,6 +230,30 @@ export interface GroupInfo {
 Unchanged. Base-image members don't appear in `packages_added` so they
 were never in the individual/other packages list to begin with.
 
+**`MainContent.tsx` ungroup follow-ons:**
+
+`MainContent.tsx` uses `group.member_count` and `group.members[0]` for
+ungroup behavior. With `member_count` now including base-image members
+and `members` containing non-renderable base-image entries, two edits
+are required:
+
+- **Ungroup success toast:** Currently shows
+  `"Group ungrouped into {member_count} packages"`. Change to use
+  `added_count` instead: `"Group ungrouped into {added_count} packages"`.
+  Base-image members don't become individually rendered rows after
+  ungroup, so the toast should not count them.
+- **Post-ungroup focus target:** Currently targets `members[0]` as the
+  first focus candidate. Change to target the first member where
+  `in_base_image === false`. With the spec's sort order (new members
+  first), this is still `members[0]` IF the sort is applied to the
+  `GroupInfo.members` array at the adapter level. The spec requires
+  the adapter to sort members with new members first — this ensures
+  `members[0]` is always a valid focus target when `added_count > 0`.
+  When `added_count === 0` (all-from-base group), ungroup dissolves
+  nothing visible — the toast should say
+  `"Group ungrouped (all packages from base)"` and focus stays on the
+  next group row or falls through to the first package row.
+
 ### 6. Count deduplication
 
 Groups can share members. When computing the aggregate parenthetical
@@ -224,17 +279,38 @@ Degraded and excluded groups still contribute to the aggregate counts
 
 ## Testing Strategy
 
+### Rust collector tests
+
+- Verify `InstalledGroup.members` only contains packages present in the
+  installed RPM set (tightened contract).
+- Test: group metadata lists 10 members, only 7 are installed → members
+  has 7 entries.
+- Update existing tests that assert uninstalled optional packages in
+  `members`.
+
 ### Rust adapter tests
 
 - Verify `in_base_image` is set correctly: member in `packages_added`
   → `false`, member not in `packages_added` → `true`.
 - Verify `member_count` is total (new + base-image).
 - Verify `added_count` matches the count of members in `packages_added`.
+- Verify members are sorted: new members first, then base-image.
 - Test: group with all members in base image (Minimal-like) —
   `added_count` is 0, all members have `in_base_image: true`.
 - Test: group with no base-image members — `added_count` equals
   `member_count`, no members have `in_base_image: true`.
 - Test: group with mixed members.
+
+### Grouped `/api/view` contract fixture
+
+Add a grouped contract fixture in `crates/web/tests/contract_snapshots.rs`
+that exercises:
+- A snapshot with at least one `InstalledGroup` containing both
+  `packages_added` members and base-image-only members.
+- Assert `GroupInfo` in the serialized response includes `added_count`,
+  `member_count`, and `members` with correct `in_base_image` values.
+- This fixture protects the wire format for consumers of the `/api/view`
+  endpoint.
 
 ### Frontend tests (vitest)
 
@@ -252,5 +328,10 @@ Degraded and excluded groups still contribute to the aggregate counts
   Renders "packages" (no qualifier) when no groups. Renders correct
   group parenthetical with new/base counts. Deduplicates across
   overlapping groups.
+- **MainContent ungroup toast:** Uses `added_count` not `member_count`.
+  All-from-base group shows "(all packages from base)" toast.
+- **MainContent ungroup focus:** Post-ungroup focus targets the first
+  new (non-base-image) member. All-from-base group does not crash or
+  focus a nonexistent row.
 - **Contract snapshots:** Update to include `in_base_image` and
   `added_count` fields.
