@@ -236,15 +236,15 @@ export function MainContent({
   // Group ungroup: UngroupGroup directive
   const handleGroupUngroup = useCallback(
     (groupName: string) => {
-      // Find the group to get member count and first member for focus restoration
+      // Find the group to get added count and first new member for focus restoration
       const group = viewData?.package_groups?.find((g) => g.name === groupName);
-      const memberCount = group?.member_count ?? 0;
-      // Get first member for focus target after ungroup.
+      const addedCount = group?.added_count ?? 0;
+      // Get first non-base-image member for focus target after ungroup.
       // GroupMemberInfo carries bare names (e.g. "httpd") but rendered package
       // rows use canonical "name.arch" (e.g. "package-row-httpd.x86_64").
       // Use a prefix-match selector to bridge the gap.
-      const firstMember = group?.members?.[0];
-      const firstMemberName = firstMember?.name ?? null;
+      const firstNewMember = group?.members?.find((m) => !m.in_base_image);
+      const firstMemberName = firstNewMember?.name ?? null;
 
       // Set focus target for undo: the group row
       onSetUndoFocusTarget?.(`group-row-${groupName}`);
@@ -254,7 +254,10 @@ export function MainContent({
           onViewUpdate(updatedView);
           // Show success toast
           const id = ++toastIdRef.current;
-          const message = `Group ungrouped into ${memberCount} package${memberCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
+          const message =
+            addedCount === 0
+              ? "Group ungrouped (all packages from base). Ctrl+Z to undo."
+              : `Group ungrouped into ${addedCount} package${addedCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
           setToasts((prev) => [
             ...prev,
             { id, message, variant: AlertVariant.success },
