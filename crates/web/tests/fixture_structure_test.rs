@@ -67,21 +67,21 @@ fn fixture_single_host_user_preview_redacted() {
     );
 }
 
-// --- Body fixtures: fleet (GET presets) ---
+// --- Body fixtures: aggregate (GET presets) ---
 
 #[test]
-fn fixture_fleet_view() {
-    snapshot_fixture("fleet_view", "fleet/fleet-view.json");
+fn fixture_aggregate_view() {
+    snapshot_fixture("aggregate_view", "aggregate/aggregate-view.json");
 }
 
 #[test]
 fn fixture_aggregate_health() {
-    snapshot_fixture("aggregate_health", "fleet/health.json");
+    snapshot_fixture("aggregate_health", "aggregate/health.json");
 }
 
 #[test]
-fn fixture_fleet_sections() {
-    snapshot_fixture("fleet_sections", "fleet/sections.json");
+fn fixture_aggregate_sections() {
+    snapshot_fixture("aggregate_sections", "aggregate/sections.json");
 }
 
 // --- Sequence fixtures ---
@@ -163,10 +163,10 @@ fn fixture_post_redo_success() {
 }
 
 #[test]
-fn fixture_post_fleet_diff_success() {
+fn fixture_post_aggregate_diff_success() {
     snapshot_post_fixture(
-        "post_fleet_diff_success",
-        "post-responses/fleet-diff/success.json",
+        "post_aggregate_diff_success",
+        "post-responses/aggregate-diff/success.json",
     );
 }
 

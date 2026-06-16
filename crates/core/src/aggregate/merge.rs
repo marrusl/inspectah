@@ -438,7 +438,7 @@ impl AggregateMergeable for FstabEntry {
 // ---------------------------------------------------------------------------
 
 /// Merge items from multiple host snapshots into a deduplicated list with
-/// fleet prevalence metadata.
+/// aggregate prevalence metadata.
 ///
 /// Each input tuple is `(host_index, item)` where `host_index` refers to
 /// the position in `hostnames`. Items are grouped by identity key, and each
@@ -620,9 +620,9 @@ fn merge_with_variants<T: AggregateMergeable>(
 }
 
 /// Post-merge narrowing: set `include = false` for items that are not
-/// universal across all hosts in the fleet (count < total).
+/// universal across all hosts in the aggregate (count < total).
 ///
-/// This is the single place where fleet narrowing happens — called after
+/// This is the single place where aggregate narrowing happens — called after
 /// both `merge_items` and `merge_with_variants` produce their results.
 fn narrow_non_universal<T: AggregateMergeable>(items: &mut [T]) {
     for item in items.iter_mut() {
@@ -818,7 +818,7 @@ where
 ///
 /// Returns `(merged_section, repo_conflicts)` where `repo_conflicts` maps
 /// `name.arch` identity keys to the distinct repos with host counts, only
-/// for packages installed from 2+ different repos across the fleet.
+/// for packages installed from 2+ different repos across the aggregate.
 pub fn merge_rpm_sections(
     sections: Vec<Option<RpmSection>>,
     total_hosts: usize,
@@ -980,7 +980,7 @@ pub fn merge_rpm_sections(
             let mut sorted_leaf: Vec<String> = intersection.into_iter().collect();
             sorted_leaf.sort();
 
-            // Fleet auto_packages: None (not independently meaningful).
+            // Aggregate auto_packages: None (not independently meaningful).
             let auto = None;
 
             // Dep tree from first authoritative host (sorted by hostname),
@@ -1056,7 +1056,7 @@ pub fn merge_rpm_sections(
     //   - Universal packages (count >= total, i.e. present on all hosts):
     //     keep only if in the leaf intersection (leaf on ALL authoritative
     //     hosts). A universal package that is auto on some hosts is not a
-    //     user-intent package fleet-wide.
+    //     user-intent package aggregate-wide.
     //   - Partial packages (count < total, i.e. not on every host): keep
     //     if in the leaf union (leaf on ANY authoritative host). These
     //     can't appear in the intersection because hosts that don't have
@@ -1107,7 +1107,7 @@ pub fn merge_rpm_sections(
     }
 
     // Detect repo-source conflicts: packages installed from different repos
-    // across the fleet. Only tracks conflicts when repos span different tiers
+    // across the aggregate. Only tracks conflicts when repos span different tiers
     // (e.g., epel vs baseos). Same-tier differences (e.g., anaconda vs baseos)
     // are not meaningful conflicts.
     let repo_conflicts = {
@@ -1650,7 +1650,7 @@ pub fn merge_kernelboot_sections(
     //    engine and including them would override that.
     // 2. Universality: non-stock profiles are included only if the winner
     //    profile is universal across all hosts. A custom profile on 2/3 hosts
-    //    is not fleet consensus, so it should not be included.
+    //    is not aggregate consensus, so it should not be included.
     let tuned_include = !tuned_active.is_empty()
         && !is_stock_tuned_profile(&tuned_active)
         && is_scalar_universal(&sections, |s| &s.tuned_active, &tuned_active);

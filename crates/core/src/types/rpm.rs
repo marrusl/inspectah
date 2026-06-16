@@ -224,11 +224,11 @@ pub struct RpmSection {
     pub baseline_suppressed: Option<Vec<String>>,
     pub baseline_package_names: Option<Vec<String>>,
     /// Number of hosts with authoritative leaf classification data.
-    /// Only meaningful for fleet-aggregated snapshots.
+    /// Only meaningful for aggregated snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_authority_hosts: Option<u32>,
-    /// Total number of hosts in the fleet.
-    /// Only meaningful for fleet-aggregated snapshots.
+    /// Total number of hosts in the aggregate.
+    /// Only meaningful for aggregated snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_total_hosts: Option<u32>,
     /// File ownership data from `rpm -qa --queryformat '%{NAME}\t[%{FILENAMES}\n]'`.

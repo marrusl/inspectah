@@ -1,30 +1,30 @@
 ---
-source: inspectah-web/tests/fixture_structure_test.rs
+source: crates/web/tests/fixture_structure_test.rs
 expression: value
 ---
 {
   "fixtures": {
+    "aggregate/aggregate-view.json": {
+      "category": "body",
+      "schema": "AggregateViewResponse"
+    },
+    "aggregate/health.json": {
+      "category": "body",
+      "schema": "HealthResponse"
+    },
+    "aggregate/sections.json": {
+      "category": "body",
+      "schema": "ContextSections"
+    },
     "errors/malformed.txt": {
       "category": "excluded"
     },
     "errors/server-500.json": {
       "category": "error-envelope"
     },
-    "fleet/fleet-view.json": {
-      "category": "body",
-      "schema": "FleetViewResponse"
-    },
-    "fleet/health.json": {
-      "category": "body",
-      "schema": "HealthResponse"
-    },
-    "fleet/sections.json": {
-      "category": "body",
-      "schema": "ContextSections"
-    },
-    "post-responses/fleet-diff/success.json": {
+    "post-responses/aggregate-diff/success.json": {
       "category": "wrapper",
-      "schema": "FleetDiffResponse"
+      "schema": "AggregateDiffResponse"
     },
     "post-responses/op/success.json": {
       "category": "wrapper",

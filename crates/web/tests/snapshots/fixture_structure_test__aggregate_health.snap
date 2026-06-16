@@ -3,8 +3,7 @@ source: crates/web/tests/fixture_structure_test.rs
 expression: value
 ---
 {
-  "completeness": "full",
-  "fleet": {
+  "aggregate": {
     "host_count": 3,
     "hostnames": [
       "host-01.example.com",
@@ -16,8 +15,9 @@ expression: value
     "variant_count": 2,
     "zones_active": true
   },
+  "completeness": "full",
   "host": {
-    "hostname": "fleet-merged",
+    "hostname": "aggregate-merged",
     "os_id": "rhel",
     "os_name": "Red Hat Enterprise Linux",
     "os_version": "9.4",

@@ -1,10 +1,10 @@
 ---
-source: inspectah-web/tests/fixture_structure_test.rs
+source: crates/web/tests/fixture_structure_test.rs
 expression: value
 ---
 {
+  "aggregate": null,
   "completeness": "full",
-  "fleet": null,
   "host": {
     "hostname": "test-host-01.example.com",
     "os_id": "rhel",

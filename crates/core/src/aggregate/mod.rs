@@ -190,7 +190,7 @@ pub fn merge_snapshots(
         }
     }
     merged_meta.insert(
-        "fleet_source".into(),
+        "aggregate_source".into(),
         serde_json::Value::String("aggregate".into()),
     );
     merged.meta = merged_meta;
@@ -714,7 +714,7 @@ mod tests {
         let (merged, _warnings) =
             merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
         assert_eq!(
-            merged.meta.get("fleet_source"),
+            merged.meta.get("aggregate_source"),
             Some(&serde_json::json!("aggregate")),
         );
     }

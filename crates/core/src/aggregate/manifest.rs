@@ -67,7 +67,7 @@ sources = ["scans/a.tar.gz", "scans/b.tar.gz"]
     fn test_load_resolves_paths() {
         // Create a temp dir with a manifest file
         let dir = tempfile::tempdir().unwrap();
-        let manifest_path = dir.path().join("fleet.toml");
+        let manifest_path = dir.path().join("aggregate.toml");
         std::fs::write(&manifest_path, r#"sources = ["scans/a.tar.gz"]"#).unwrap();
         let m = AggregateManifest::load(&manifest_path).unwrap();
         assert_eq!(m.sources[0], dir.path().join("scans/a.tar.gz"));

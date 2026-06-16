@@ -1,5 +1,5 @@
 ---
-source: inspectah-web/tests/fixture_structure_test.rs
+source: crates/web/tests/fixture_structure_test.rs
 expression: value
 ---
 {
@@ -14,10 +14,10 @@ expression: value
   "config_files": [
     {
       "entry": {
+        "aggregate": null,
         "category": "other",
         "content": "NETWORKING=yes\nHOSTNAME=test-host-01.example.com\n",
         "diff_against_rpm": "--- /etc/sysconfig/network.rpmorig\n+++ /etc/sysconfig/network\n@@ -1 +1,2 @@\n NETWORKING=yes\n+HOSTNAME=test-host-01.example.com\n",
-        "fleet": null,
         "include": true,
         "kind": "modified",
         "package": "initscripts",
@@ -37,10 +37,10 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "category": "other",
         "content": "# Use internal NTP servers\nserver ntp1.example.com iburst\nserver ntp2.example.com iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n",
         "diff_against_rpm": null,
-        "fleet": null,
         "include": true,
         "kind": "modified",
         "package": "chrony",
@@ -60,10 +60,10 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "category": "sysctl",
         "content": "# Custom sysctl overrides\nnet.core.somaxconn = 4096\nvm.swappiness = 10\n",
         "diff_against_rpm": null,
-        "fleet": null,
         "include": false,
         "kind": "unowned",
         "package": null,
@@ -94,9 +94,9 @@ expression: value
   "packages": [
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "0",
-        "fleet": null,
         "include": true,
         "name": "bash",
         "release": "3.el9",
@@ -115,9 +115,9 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "0",
-        "fleet": null,
         "include": false,
         "name": "httpd",
         "release": "11.el9_4.1",
@@ -136,9 +136,9 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "1",
-        "fleet": null,
         "include": true,
         "name": "openssl",
         "release": "28.el9_4",
@@ -157,9 +157,9 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "2",
-        "fleet": null,
         "include": false,
         "name": "vim-enhanced",
         "release": "1.el9",
@@ -178,9 +178,9 @@ expression: value
     },
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "0",
-        "fleet": null,
         "include": true,
         "name": "custom-agent",
         "release": "1.el9",

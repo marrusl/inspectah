@@ -76,7 +76,7 @@ pub struct InspectionSnapshot {
     /// True if subscription data was preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_subscription: bool,
-    /// True if redaction was skipped during scan (fleet-only, derived from Raw state during merge).
+    /// True if redaction was skipped during scan (aggregate-only, derived from Raw state during merge).
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub redaction_skipped: bool,
     /// Aggregate snapshot metadata. None for single-host snapshots.
