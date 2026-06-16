@@ -17,16 +17,16 @@ import { useMutation } from "./hooks/useMutation";
 import { Sidebar } from "./components/Sidebar";
 import { MainContent } from "./components/MainContent";
 import { AppShell } from "./components/AppShell";
-import { FleetApp } from "./components/FleetApp";
+import { AggregateApp } from "./components/AggregateApp";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
 /**
- * Top-level router. Uses only useHealth to decide between fleet and
- * single-host mode. Fleet sessions fork here and never instantiate
+ * Top-level router. Uses only useHealth to decide between aggregate and
+ * single-host mode. Aggregate sessions fork here and never instantiate
  * the single-host hooks (useView, useSections).
  *
- * Gate: returns null until health resolves at least once, so fleet
+ * Gate: returns null until health resolves at least once, so aggregate
  * sessions never transiently mount SingleHostApp during the loading
  * window. Tests mock fetch synchronously, so null is never visible.
  */
@@ -34,14 +34,14 @@ function App() {
   const health = useHealth();
 
   // Wait for health to resolve before choosing a path. Without this,
-  // fleet sessions would transiently mount SingleHostApp (and its
+  // aggregate sessions would transiently mount SingleHostApp (and its
   // useView/useSections hooks) on first paint while health.data is null.
   if (!health.data && !health.error) {
     return null;
   }
 
-  if (health.data?.fleet) {
-    return <FleetApp fleet={health.data.fleet} health={health.data} />;
+  if (health.data?.aggregate) {
+    return <AggregateApp aggregate={health.data.aggregate} health={health.data} />;
   }
 
   return <SingleHostApp healthFromRouter={health} />;
@@ -49,7 +49,7 @@ function App() {
 
 /**
  * Single-host refine UI. All single-host hooks (useView, useSections,
- * useMutation) live here and are never instantiated in fleet mode.
+ * useMutation) live here and are never instantiated in aggregate mode.
  */
 function SingleHostApp({
   healthFromRouter,

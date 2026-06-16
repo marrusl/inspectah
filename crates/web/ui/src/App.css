@@ -43,13 +43,13 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-/* Fleet hostname popover */
-.fleet-host-trigger {
+/* Aggregate hostname popover */
+.aggregate-host-trigger {
   font-size: inherit;
   padding: 0;
 }
 
-.fleet-hostname-list {
+.aggregate-hostname-list {
   max-height: 300px;
   overflow-y: auto;
   font-family: var(--pf-t--global--font--family--mono);
@@ -57,11 +57,11 @@ html, body, #root {
   line-height: 1.6;
 }
 
-.fleet-hostname-entry {
+.aggregate-hostname-entry {
   white-space: nowrap;
 }
 
-.fleet-hostname-copy {
+.aggregate-hostname-copy {
   margin-top: var(--pf-t--global--spacer--sm);
 }
 
@@ -621,15 +621,15 @@ html, body, #root {
   cursor: not-allowed;
 }
 
-.fleet-item-row--locked {
+.aggregate-item-row--locked {
   opacity: 0.55;
 }
 
-.fleet-item-row--locked .fleet-item-row__toggle .pf-v6-c-switch {
+.aggregate-item-row--locked .aggregate-item-row__toggle .pf-v6-c-switch {
   cursor: not-allowed;
 }
 
-.fleet-item-row__locked-badge {
+.aggregate-item-row__locked-badge {
   margin-left: var(--pf-t--global--spacer--xs);
 }
 

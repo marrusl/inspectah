@@ -37,7 +37,7 @@ function makePkg(name: string): DecisionItemKind {
         state: "added",
         include: true,
         source_repo: "baseos",
-        fleet: null,
+        aggregate: null,
       },
       attention: [ROUTINE_TAG],
       triage: {

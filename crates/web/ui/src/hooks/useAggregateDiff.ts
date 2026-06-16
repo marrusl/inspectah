@@ -1,12 +1,12 @@
 import { useState, useCallback, useRef } from "react";
-import type { FleetDiffResponse, ItemId } from "../api/types";
-import { fetchFleetDiff } from "../api/fleet-client";
+import type { AggregateDiffResponse, ItemId } from "../api/types";
+import { fetchAggregateDiff } from "../api/aggregate-client";
 
-export interface UseFleetDiffResult {
+export interface UseAggregateDiffResult {
   /** Fetch diff (returns cached if available). */
   fetchDiff: (itemId: ItemId, base: string, target: string) => Promise<void>;
   /** Current diff result (null before first fetch). */
-  diff: FleetDiffResponse | null;
+  diff: AggregateDiffResponse | null;
   /** Loading state. */
   isLoading: boolean;
   /** Error message (null if no error). */
@@ -15,11 +15,11 @@ export interface UseFleetDiffResult {
   clearDiff: () => void;
 }
 
-export function useFleetDiff(): UseFleetDiffResult {
-  const [diff, setDiff] = useState<FleetDiffResponse | null>(null);
+export function useAggregateDiff(): UseAggregateDiffResult {
+  const [diff, setDiff] = useState<AggregateDiffResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cacheRef = useRef<Map<string, FleetDiffResponse>>(new Map());
+  const cacheRef = useRef<Map<string, AggregateDiffResponse>>(new Map());
 
   const fetchDiff = useCallback(
     async (itemId: ItemId, base: string, target: string): Promise<void> => {
@@ -33,7 +33,7 @@ export function useFleetDiff(): UseFleetDiffResult {
 
       setIsLoading(true);
       try {
-        const result = await fetchFleetDiff({ item_id: itemId, base, target });
+        const result = await fetchAggregateDiff({ item_id: itemId, base, target });
         cacheRef.current.set(cacheKey, result);
         setDiff(result);
         setError(null);

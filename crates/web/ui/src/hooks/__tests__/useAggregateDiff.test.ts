@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useFleetDiff } from "../useFleetDiff";
-import type { FleetDiffResponse, ItemId } from "../../api/types";
+import { useAggregateDiff } from "../useAggregateDiff";
+import type { AggregateDiffResponse, ItemId } from "../../api/types";
 
-const MOCK_DIFF: FleetDiffResponse = {
+const MOCK_DIFF: AggregateDiffResponse = {
   base_hash: "aaa111",
   target_hash: "bbb222",
   base_hosts: ["host-a"],
@@ -35,14 +35,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("useFleetDiff", () => {
+describe("useAggregateDiff", () => {
   it("fetches diff from API on cache miss", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(MOCK_DIFF),
     } as Response);
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     await act(async () => {
       await result.current.fetchDiff(CONFIG_ITEM, "aaa111", "bbb222");
@@ -50,7 +50,7 @@ describe("useFleetDiff", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/fleet/diff",
+      "/api/aggregate/diff",
       expect.objectContaining({
         method: "POST",
       }),
@@ -66,7 +66,7 @@ describe("useFleetDiff", () => {
       json: () => Promise.resolve(MOCK_DIFF),
     } as Response);
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     // First call — cache miss
     await act(async () => {
@@ -91,7 +91,7 @@ describe("useFleetDiff", () => {
         }),
     );
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     let fetchPromise: Promise<void>;
     act(() => {
@@ -119,7 +119,7 @@ describe("useFleetDiff", () => {
       json: () => Promise.resolve({ error: "internal error" }),
     } as unknown as Response);
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     await act(async () => {
       await result.current.fetchDiff(CONFIG_ITEM, "aaa111", "bbb222");
@@ -136,7 +136,7 @@ describe("useFleetDiff", () => {
       json: () => Promise.resolve(MOCK_DIFF),
     } as Response);
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     // Fetch and populate diff
     await act(async () => {
@@ -159,7 +159,7 @@ describe("useFleetDiff", () => {
   });
 
   it("different item/hash combos get separate cache entries", async () => {
-    const secondDiff: FleetDiffResponse = {
+    const secondDiff: AggregateDiffResponse = {
       ...MOCK_DIFF,
       base_hash: "ccc333",
       target_hash: "ddd444",
@@ -175,7 +175,7 @@ describe("useFleetDiff", () => {
       } as Response);
     });
 
-    const { result } = renderHook(() => useFleetDiff());
+    const { result } = renderHook(() => useAggregateDiff());
 
     // First item
     await act(async () => {

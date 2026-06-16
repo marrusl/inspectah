@@ -1,15 +1,15 @@
 import { useState, useRef } from "react";
 import { Button } from "@patternfly/react-core";
-import type { FleetItem, ItemId } from "../../api/types";
+import type { AggregateItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
-import type { UseFleetDiffResult } from "../../hooks/useFleetDiff";
+import type { UseAggregateDiffResult } from "../../hooks/useAggregateDiff";
 import { DiffDrawer } from "./DiffDrawer";
 
 export interface VariantViewProps {
-  item: FleetItem;
+  item: AggregateItem;
   ack: UseVariantAckResult;
   onSelectVariant: (itemId: ItemId, hash: string) => void;
-  diffHook: UseFleetDiffResult;
+  diffHook: UseAggregateDiffResult;
 }
 
 export function VariantView({

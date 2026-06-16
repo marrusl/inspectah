@@ -22,7 +22,7 @@ function makePkg(
   return { name, source_repo, include, ...extras };
 }
 
-function makeFleetPkg(
+function makeAggregatePkg(
   name: string,
   source_repo: string,
   count: number,
@@ -106,14 +106,14 @@ describe("PackageList", () => {
     expect(within(rightCol).getByText("baseos")).toBeInTheDocument();
   });
 
-  // --- Fleet layout ---
+  // --- Aggregate layout ---
 
-  it("fleet: renders repo inline with name, prevalence in right column", () => {
-    const pkgs = [makeFleetPkg("httpd", "appstream", 3, 5)];
+  it("aggregate: renders repo inline with name, prevalence in right column", () => {
+    const pkgs = [makeAggregatePkg("httpd", "appstream", 3, 5)];
     const repos = [{ ...distroRepo, section_id: "appstream" }];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={repos}
         onToggle={vi.fn()}
@@ -179,17 +179,17 @@ describe("PackageList", () => {
     expect(rows[2]).toHaveAttribute("data-testid", "package-row-nginx");
   });
 
-  // --- Sort: prevalence ascending (fleet default) ---
+  // --- Sort: prevalence ascending (aggregate default) ---
 
-  it("sorts by prevalence ascending — rarest first (fleet default)", () => {
+  it("sorts by prevalence ascending — rarest first (aggregate default)", () => {
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 5, 5),
-      makeFleetPkg("nginx", "epel", 1, 5),
-      makeFleetPkg("curl", "baseos", 3, 5),
+      makeAggregatePkg("httpd", "baseos", 5, 5),
+      makeAggregatePkg("nginx", "epel", 1, 5),
+      makeAggregatePkg("curl", "baseos", 3, 5),
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -323,10 +323,10 @@ describe("PackageList", () => {
     ).toBeInTheDocument();
   });
 
-  it("fleet: SortHeader shows Packages / Prevalence", () => {
+  it("aggregate: SortHeader shows Packages / Prevalence", () => {
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={[]}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -346,7 +346,7 @@ describe("PackageList", () => {
   it("reports dismissed count to parent via onDismissedCountChange", () => {
     const onDismissedCountChange = vi.fn();
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
@@ -355,7 +355,7 @@ describe("PackageList", () => {
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -370,7 +370,7 @@ describe("PackageList", () => {
   it("onRestoreDismissed clears all dismissed and resets count", () => {
     const onDismissedCountChange = vi.fn();
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
@@ -379,7 +379,7 @@ describe("PackageList", () => {
     ];
     const { rerender } = render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -391,7 +391,7 @@ describe("PackageList", () => {
     // Trigger restore by passing true
     rerender(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -404,12 +404,12 @@ describe("PackageList", () => {
     expect(onDismissedCountChange).toHaveBeenLastCalledWith(0);
   });
 
-  // --- Fleet conflict-first sorting ---
+  // --- Aggregate conflict-first sorting ---
 
-  it("fleet: packages with undismissed repo_conflict sort before others in same prevalence group", () => {
+  it("aggregate: packages with undismissed repo_conflict sort before others in same prevalence group", () => {
     const pkgs = [
-      makeFleetPkg("aaa-clean", "baseos", 3, 5),
-      makeFleetPkg("bbb-conflict", "baseos", 3, 5, true, {
+      makeAggregatePkg("aaa-clean", "baseos", 3, 5),
+      makeAggregatePkg("bbb-conflict", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "epel", host_count: 1 },
@@ -418,7 +418,7 @@ describe("PackageList", () => {
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -501,21 +501,21 @@ describe("PackageList", () => {
     expect(screen.getByText("No excluded packages")).toBeInTheDocument();
   });
 
-  // --- Fleet conflict popover in rows ---
+  // --- Aggregate conflict popover in rows ---
 
-  it("fleet: renders RepoConflictPopover trigger for packages with repo_conflict", () => {
+  it("aggregate: renders RepoConflictPopover trigger for packages with repo_conflict", () => {
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
         ],
       }),
-      makeFleetPkg("curl", "baseos", 5, 5),
+      makeAggregatePkg("curl", "baseos", 5, 5),
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -534,10 +534,10 @@ describe("PackageList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("fleet: dismissing a conflict hides popover trigger and reports count", () => {
+  it("aggregate: dismissing a conflict hides popover trigger and reports count", () => {
     const onDismissedCountChange = vi.fn();
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
@@ -546,7 +546,7 @@ describe("PackageList", () => {
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -568,10 +568,10 @@ describe("PackageList", () => {
     expect(onDismissedCountChange).toHaveBeenCalledWith(1);
   });
 
-  it("fleet: onRestoreDismissed clears dismissals and re-shows popover trigger", () => {
+  it("aggregate: onRestoreDismissed clears dismissals and re-shows popover trigger", () => {
     const onDismissedCountChange = vi.fn();
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
@@ -580,7 +580,7 @@ describe("PackageList", () => {
     ];
     const { rerender } = render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -599,7 +599,7 @@ describe("PackageList", () => {
     // Restore dismissed via prop toggle
     rerender(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}
@@ -618,9 +618,9 @@ describe("PackageList", () => {
 
   // --- Focus handoff after dismiss ---
 
-  it("fleet: focus moves to package checkbox after conflict dismiss", async () => {
+  it("aggregate: focus moves to package checkbox after conflict dismiss", async () => {
     const pkgs = [
-      makeFleetPkg("httpd", "baseos", 3, 5, true, {
+      makeAggregatePkg("httpd", "baseos", 3, 5, true, {
         repo_conflict: [
           { repo: "baseos", host_count: 2 },
           { repo: "appstream", host_count: 1 },
@@ -629,7 +629,7 @@ describe("PackageList", () => {
     ];
     render(
       <PackageList
-        mode="fleet"
+        mode="aggregate"
         packages={pkgs}
         repoGroups={allRepos}
         onToggle={vi.fn()}

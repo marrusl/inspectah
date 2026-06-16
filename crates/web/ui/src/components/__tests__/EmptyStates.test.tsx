@@ -109,7 +109,7 @@ function makePkg(
       state: "added",
       include: true,
       source_repo: "baseos",
-      fleet: null,
+      aggregate: null,
       ...overrides,
     },
     attention,

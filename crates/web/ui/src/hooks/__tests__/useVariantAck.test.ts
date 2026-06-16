@@ -31,9 +31,9 @@ if (typeof globalThis.localStorage === "undefined") {
   });
 }
 
-const FLEET_LABEL = "test-fleet";
+const AGGREGATE_LABEL = "test-aggregate";
 const MERGED_AT = "2026-05-21T12:00:00Z";
-const STORAGE_KEY = `fleet-ack:${FLEET_LABEL}:${MERGED_AT}`;
+const STORAGE_KEY = `aggregate-ack:${AGGREGATE_LABEL}:${MERGED_AT}`;
 
 const ITEM_A: ItemId = { kind: "Config", key: { path: "/etc/foo.conf" } };
 const ITEM_B: ItemId = { kind: "Config", key: { path: "/etc/bar.conf" } };
@@ -49,7 +49,7 @@ beforeEach(() => {
 describe("useVariantAck", () => {
   it("starts with all items unreviewed", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
     );
 
     expect(result.current.getStatus(ITEM_A)).toBe("unreviewed");
@@ -62,7 +62,7 @@ describe("useVariantAck", () => {
 
   it("confirm() marks item as confirmed", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
     );
 
     act(() => {
@@ -75,7 +75,7 @@ describe("useVariantAck", () => {
 
   it("markChanged() marks item as changed", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A]),
     );
 
     act(() => {
@@ -87,7 +87,7 @@ describe("useVariantAck", () => {
 
   it("isAcked returns true for confirmed and changed items", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B, ITEM_C]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B, ITEM_C]),
     );
 
     act(() => {
@@ -102,7 +102,7 @@ describe("useVariantAck", () => {
 
   it("unackedCount decrements when item is acked", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B, ITEM_C]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B, ITEM_C]),
     );
 
     expect(result.current.unackedCount).toBe(3);
@@ -120,7 +120,7 @@ describe("useVariantAck", () => {
 
   it("persists state to localStorage", () => {
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
     );
 
     act(() => {
@@ -141,7 +141,7 @@ describe("useVariantAck", () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
 
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
     );
 
     expect(result.current.getStatus(ITEM_A)).toBe("confirmed");
@@ -149,12 +149,12 @@ describe("useVariantAck", () => {
     expect(result.current.unackedCount).toBe(0);
   });
 
-  it("scopes storage key to fleet label and mergedAt", () => {
+  it("scopes storage key to aggregate label and mergedAt", () => {
     const { result: r1 } = renderHook(() =>
-      useVariantAck("fleet-a", "2026-01-01", [ITEM_A]),
+      useVariantAck("aggregate-a", "2026-01-01", [ITEM_A]),
     );
     const { result: r2 } = renderHook(() =>
-      useVariantAck("fleet-b", "2026-01-01", [ITEM_A]),
+      useVariantAck("aggregate-b", "2026-01-01", [ITEM_A]),
     );
 
     act(() => {
@@ -164,8 +164,8 @@ describe("useVariantAck", () => {
     expect(r1.current.isAcked(ITEM_A)).toBe(true);
     expect(r2.current.isAcked(ITEM_A)).toBe(false);
 
-    expect(localStorage.getItem("fleet-ack:fleet-a:2026-01-01")).toBeTruthy();
-    expect(localStorage.getItem("fleet-ack:fleet-b:2026-01-01")).toBeNull();
+    expect(localStorage.getItem("aggregate-ack:aggregate-a:2026-01-01")).toBeTruthy();
+    expect(localStorage.getItem("aggregate-ack:aggregate-b:2026-01-01")).toBeNull();
   });
 
   it("ignores localStorage items not in actionableIds", () => {
@@ -178,7 +178,7 @@ describe("useVariantAck", () => {
 
     // Only ITEM_A and ITEM_B are actionable; ITEM_C should be ignored
     const { result } = renderHook(() =>
-      useVariantAck(FLEET_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
+      useVariantAck(AGGREGATE_LABEL, MERGED_AT, [ITEM_A, ITEM_B]),
     );
 
     expect(result.current.getStatus(ITEM_A)).toBe("confirmed");

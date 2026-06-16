@@ -63,20 +63,20 @@ function HostnamePopover({
 
   return (
     <Popover
-      aria-label="Fleet hosts"
+      aria-label="Aggregate hosts"
       headerContent={
         <span>
-          Fleet Hosts <Badge isRead>{hostCount}</Badge>
+          Aggregate Hosts <Badge isRead>{hostCount}</Badge>
         </span>
       }
       bodyContent={
         <div>
           <div
-            className="fleet-hostname-list"
-            data-testid="fleet-hostname-list"
+            className="aggregate-hostname-list"
+            data-testid="aggregate-hostname-list"
           >
             {sorted.map((h) => (
-              <div key={h} className="fleet-hostname-entry">
+              <div key={h} className="aggregate-hostname-entry">
                 {h}
               </div>
             ))}
@@ -85,8 +85,8 @@ function HostnamePopover({
             variant="link"
             icon={<CopyIcon />}
             onClick={handleCopy}
-            className="fleet-hostname-copy"
-            data-testid="fleet-hostname-copy"
+            className="aggregate-hostname-copy"
+            data-testid="aggregate-hostname-copy"
             size="sm"
           >
             {copied ? "Copied!" : "Copy all"}
@@ -97,8 +97,8 @@ function HostnamePopover({
       <Button
         variant="link"
         isInline
-        className="fleet-host-trigger"
-        data-testid="fleet-host-trigger"
+        className="aggregate-host-trigger"
+        data-testid="aggregate-host-trigger"
       >
         <strong>{hostCount}</strong> hosts
       </Button>
@@ -106,7 +106,7 @@ function HostnamePopover({
   );
 }
 
-export interface FleetSummary {
+export interface AggregateSummary {
   hostCount: number;
   hostnames: string[];
   totalItems: number;
@@ -121,8 +121,8 @@ export interface StatsBarProps {
   isPending: boolean;
   /** Hamburger menu button rendered at < 1024px. */
   hamburger?: React.ReactNode;
-  /** When set, render a fleet-oriented one-line summary instead of single-host counters. */
-  fleetSummary?: FleetSummary;
+  /** When set, render a aggregate-oriented one-line summary instead of single-host counters. */
+  aggregateSummary?: AggregateSummary;
 }
 
 function stat(value: number | null | undefined, fallback = "-"): string {
@@ -136,7 +136,7 @@ export function StatsBar({
   onExport,
   isPending,
   hamburger,
-  fleetSummary,
+  aggregateSummary,
 }: StatsBarProps) {
 
   return (
@@ -144,19 +144,19 @@ export function StatsBar({
       <ToolbarContent>
         {hamburger && <ToolbarItem>{hamburger}</ToolbarItem>}
         <ToolbarGroup align={{ default: "alignStart" }}>
-          {fleetSummary ? (
+          {aggregateSummary ? (
             <ToolbarItem>
-              <Content component="small" data-testid="fleet-stats-summary">
+              <Content component="small" data-testid="aggregate-stats-summary">
                 <HostnamePopover
-                  hostCount={fleetSummary.hostCount}
-                  hostnames={fleetSummary.hostnames}
+                  hostCount={aggregateSummary.hostCount}
+                  hostnames={aggregateSummary.hostnames}
                 />
                 {" · "}
-                <strong>{fleetSummary.totalItems.toLocaleString()}</strong>{" "}
+                <strong>{aggregateSummary.totalItems.toLocaleString()}</strong>{" "}
                 items{" · "}
-                {fleetSummary.needsReviewCount > 0 ? (
+                {aggregateSummary.needsReviewCount > 0 ? (
                   <Label color="blue">
-                    {fleetSummary.needsReviewCount} need review
+                    {aggregateSummary.needsReviewCount} need review
                   </Label>
                 ) : (
                   <Label color="green">All reviewed</Label>

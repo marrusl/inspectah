@@ -1,16 +1,16 @@
 import { Nav, NavGroup, NavItem, Badge } from "@patternfly/react-core";
-import type { FleetSection } from "../../api/types";
+import type { AggregateSection } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
 export interface AggregateSidebarProps {
-  sections: FleetSection[];
+  sections: AggregateSection[];
   activeSection: string;
   onSelect: (sectionId: string) => void;
   ackState: UseVariantAckResult;
   searchSlot?: React.ReactNode;
 }
 
-function sectionItemCount(section: FleetSection): number {
+function sectionItemCount(section: AggregateSection): number {
   if (section.zones) {
     return (
       section.zones.consensus.count +
@@ -22,7 +22,7 @@ function sectionItemCount(section: FleetSection): number {
 }
 
 function ackLabel(
-  section: FleetSection,
+  section: AggregateSection,
   ack: UseVariantAckResult,
 ): string | null {
   if (!section.is_decision_section) return null;
@@ -41,7 +41,7 @@ export function AggregateSidebar({
   const reviewSections = sections.filter((s) => s.is_decision_section);
   const referenceSections = sections.filter((s) => !s.is_decision_section);
 
-  const renderItem = (section: FleetSection) => {
+  const renderItem = (section: AggregateSection) => {
     const ack = ackLabel(section, ackState);
     return (
       <NavItem

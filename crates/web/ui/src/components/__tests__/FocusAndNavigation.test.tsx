@@ -19,7 +19,7 @@ const MOCK_VIEW = {
         state: "added",
         include: true,
         source_repo: "appstream",
-        fleet: null,
+        aggregate: null,
       },
       attention: [
         {
@@ -39,7 +39,7 @@ const MOCK_VIEW = {
         state: "added",
         include: true,
         source_repo: "baseos",
-        fleet: null,
+        aggregate: null,
       },
       attention: [
         {
@@ -472,7 +472,7 @@ describe("RepoBar renders in packages section", () => {
             state: "added",
             include: true,
             source_repo: "epel",
-            fleet: null,
+            aggregate: null,
           },
           attention: [
             {
@@ -555,7 +555,7 @@ describe("App-level packages rendering with unified components", () => {
             state: "added",
             include: true,
             source_repo: "appstream",
-            fleet: null,
+            aggregate: null,
           },
           attention: [
             {
@@ -575,7 +575,7 @@ describe("App-level packages rendering with unified components", () => {
             state: "unchanged",
             include: true,
             source_repo: "baseos",
-            fleet: null,
+            aggregate: null,
           },
           attention: [
             {

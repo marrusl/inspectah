@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
 import { GroupRow } from "./GroupRow";
-import { RepoConflictPopover } from "./fleet/RepoConflictPopover";
+import { RepoConflictPopover } from "./aggregate/RepoConflictPopover";
 import type {
   GroupInfo,
   PackageProvenance,
@@ -21,7 +21,7 @@ export interface PackageListPackage {
 }
 
 export interface PackageListProps {
-  mode: "single" | "fleet";
+  mode: "single" | "aggregate";
   packages: PackageListPackage[];
   repoGroups: RepoGroupInfo[];
   /** Groups from the view response (package_groups). */
@@ -87,7 +87,7 @@ export function PackageList({
 }: PackageListProps) {
   // Sort state: defaults differ by mode
   const [activeColumn, setActiveColumn] = useState<"left" | "right">(
-    mode === "fleet" ? "right" : "left",
+    mode === "aggregate" ? "right" : "left",
   );
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
 
@@ -180,9 +180,9 @@ export function PackageList({
         });
       }
     } else {
-      // Fleet mode
+      // Aggregate mode
       if (activeColumn === "right" || activeColumn === "left") {
-        // Prevalence ascending (rarest first) is the default for fleet
+        // Prevalence ascending (rarest first) is the default for aggregate
         sorted.sort((a, b) => {
           const prevA = a.prevalence?.count ?? 0;
           const prevB = b.prevalence?.count ?? 0;
@@ -540,7 +540,7 @@ export function PackageList({
 
 interface PackageRowProps {
   pkg: PackageListPackage;
-  mode: "single" | "fleet";
+  mode: "single" | "aggregate";
   tier: RepoTier;
   dismissed: boolean;
   packageProvenances?: Record<string, PackageProvenance>;
@@ -621,7 +621,7 @@ function PackageRow({
             </span>
           )}
         </div>
-        {mode === "fleet" && (
+        {mode === "aggregate" && (
           <>
             <span
               data-testid="repo-text"

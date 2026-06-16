@@ -1,16 +1,16 @@
-/* inspectah refine — fleet mode styles */
+/* inspectah refine — aggregate mode styles */
 
-/* ─── Fleet content area ─────────────────────────────────────────────── */
+/* ─── Aggregate content area ─────────────────────────────────────────────── */
 
 /* Padding now inherited from .inspectah-layout__main in App.css */
 
-/* ─── Fleet section search ───────────────────────────────────────────── */
+/* ─── Aggregate section search ───────────────────────────────────────────── */
 
-.fleet-section-search {
+.aggregate-section-search {
   margin-bottom: var(--pf-t--global--spacer--sm);
 }
 
-.fleet-section-search input {
+.aggregate-section-search input {
   width: 100%;
   padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
   border: 1px solid var(--pf-t--global--border--color--default);
@@ -20,15 +20,15 @@
   color: var(--pf-t--global--text--color--regular);
 }
 
-.fleet-section-search input:focus {
+.aggregate-section-search input:focus {
   outline: 2px solid var(--pf-t--global--color--brand--default);
   outline-offset: -1px;
   border-color: var(--pf-t--global--color--brand--default);
 }
 
-/* ─── Fleet item row ─────────────────────────────────────────────────── */
+/* ─── Aggregate item row ─────────────────────────────────────────────────── */
 
-.fleet-item-row {
+.aggregate-item-row {
   display: flex;
   align-items: center;
   gap: var(--pf-t--global--spacer--sm);
@@ -38,26 +38,26 @@
   transition: background-color 150ms ease;
 }
 
-.fleet-item-row:hover {
+.aggregate-item-row:hover {
   background-color: var(--pf-t--global--background--color--secondary--default);
 }
 
-.fleet-item-row:focus-visible {
+.aggregate-item-row:focus-visible {
   outline: 2px solid var(--pf-t--global--color--brand--default);
   outline-offset: -2px;
   border-radius: var(--pf-t--global--border--radius--small);
 }
 
-.fleet-item-row__toggle {
+.aggregate-item-row__toggle {
   flex-shrink: 0;
 }
 
-.fleet-item-row__toggle .pf-v6-c-switch {
+.aggregate-item-row__toggle .pf-v6-c-switch {
   /* Prevent toggle from expanding beyond its natural size */
   --pf-v6-c-switch--Width: auto;
 }
 
-.fleet-item-row__name {
+.aggregate-item-row__name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -67,7 +67,7 @@
   font-size: var(--pf-t--global--font--size--body--default);
 }
 
-.fleet-item-row__prevalence {
+.aggregate-item-row__prevalence {
   flex-shrink: 0;
   display: inline-block;
   padding: 1px 6px;
@@ -76,22 +76,22 @@
   font-weight: var(--pf-t--global--font--weight--body--bold);
 }
 
-.fleet-item-row__prevalence--full {
+.aggregate-item-row__prevalence--full {
   background-color: #e6f2e6;
   color: #1e4620;
 }
 
-.fleet-item-row__prevalence--partial {
+.aggregate-item-row__prevalence--partial {
   background-color: #fef3cd;
   color: #664d03;
 }
 
-.fleet-item-row__prevalence--low {
+.aggregate-item-row__prevalence--low {
   background-color: #fce8e6;
   color: #842029;
 }
 
-.fleet-item-row__variants {
+.aggregate-item-row__variants {
   flex-shrink: 0;
   background: none;
   border: none;
@@ -102,32 +102,32 @@
   text-decoration: underline;
 }
 
-.fleet-item-row__variants:hover {
+.aggregate-item-row__variants:hover {
   color: var(--pf-t--global--color--brand--hover);
 }
 
-.fleet-item-row__variants-chevron {
+.aggregate-item-row__variants-chevron {
   display: inline-block;
   font-size: 0.7em;
   margin-left: 2px;
   transition: transform 150ms ease;
 }
 
-.fleet-item-row__variants-chevron--expanded {
+.aggregate-item-row__variants-chevron--expanded {
   transform: rotate(90deg);
 }
 
-.fleet-item-row__variants--readonly {
+.aggregate-item-row__variants--readonly {
   cursor: default;
   color: var(--pf-t--global--text--color--subtle);
   text-decoration: none;
 }
 
-.fleet-item-row__variants--readonly:hover {
+.aggregate-item-row__variants--readonly:hover {
   color: var(--pf-t--global--text--color--subtle);
 }
 
-.fleet-item-row__attention {
+.aggregate-item-row__attention {
   flex-shrink: 0;
   display: inline-block;
   padding: 2px var(--pf-t--global--spacer--xs);
@@ -136,49 +136,49 @@
   font-weight: var(--pf-t--global--font--weight--body--bold);
 }
 
-.fleet-item-row__attention--needs_review {
+.aggregate-item-row__attention--needs_review {
   background-color: var(--pf-t--global--color--status--warning--100, #fef6e7);
   color: #795600;
   border: 1px solid #c58c00;
 }
 
-.fleet-item-row__attention--informational {
+.aggregate-item-row__attention--informational {
   background-color: var(--pf-t--global--color--status--info--100, #e7f1fa);
   color: #002952;
   border: 1px solid #06c;
 }
 
-.fleet-item-row__attention--routine {
+.aggregate-item-row__attention--routine {
   background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
   color: #1e4620;
   border: 1px solid #2d6a30;
 }
 
-/* ─── Fleet zone group ───────────────────────────────────────────────── */
+/* ─── Aggregate zone group ───────────────────────────────────────────────── */
 
-.fleet-zone-group {
+.aggregate-zone-group {
   margin-bottom: var(--pf-t--global--spacer--sm);
 }
 
-.fleet-zone-group + .fleet-zone-group {
+.aggregate-zone-group + .aggregate-zone-group {
   border-top: 1px solid var(--pf-t--global--border--color--default);
   padding-top: var(--pf-t--global--spacer--sm);
 }
 
-.fleet-zone-group__header {
+.aggregate-zone-group__header {
   display: inline-flex;
   align-items: center;
   gap: var(--pf-t--global--spacer--sm);
 }
 
-.fleet-zone-group__label {
+.aggregate-zone-group__label {
   font-weight: var(--pf-t--global--font--weight--body--bold);
   font-size: var(--pf-t--global--font--size--body--default);
 }
 
-/* ─── Fleet banner ───────────────────────────────────────────────────── */
+/* ─── Aggregate banner ───────────────────────────────────────────────────── */
 
-.fleet-banner {
+.aggregate-banner {
   border-radius: var(--pf-t--global--border--radius--small);
   padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
   margin-bottom: var(--pf-t--global--spacer--md);
@@ -188,41 +188,41 @@
   color: var(--pf-t--global--text--color--regular);
 }
 
-.fleet-banner button {
+.aggregate-banner button {
   color: inherit;
 }
 
-.fleet-banner--success {
+.aggregate-banner--success {
   /* Use transparent tint so text stays readable in both light and dark themes */
   background-color: color-mix(in srgb, var(--pf-t--global--color--status--success--default, #3e8635) 12%, transparent);
   border-color: var(--pf-t--global--color--status--success--default, #3e8635);
 }
 
-.fleet-banner--warning {
+.aggregate-banner--warning {
   background-color: color-mix(in srgb, var(--pf-t--global--color--status--warning--default, #f0ab00) 12%, transparent);
   border-color: var(--pf-t--global--color--status--warning--default, #f0ab00);
 }
 
-.fleet-banner--danger {
+.aggregate-banner--danger {
   background-color: color-mix(in srgb, var(--pf-t--global--color--status--danger--default, #c9190b) 12%, transparent);
   border-color: var(--pf-t--global--color--status--danger--default, #c9190b);
 }
 
-.fleet-banner__headline {
+.aggregate-banner__headline {
   font-weight: var(--pf-t--global--font--weight--body--bold);
 }
 
-.fleet-banner__items {
+.aggregate-banner__items {
   margin: var(--pf-t--global--spacer--xs) 0 0;
   padding: 0;
   list-style: none;
 }
 
-.fleet-banner__item {
+.aggregate-banner__item {
   padding: 2px 0;
 }
 
-.fleet-banner__item-tag {
+.aggregate-banner__item-tag {
   display: inline-block;
   font-size: var(--pf-t--global--font--size--body--sm);
   font-weight: var(--pf-t--global--font--weight--body--bold);
@@ -230,7 +230,7 @@
   margin-right: var(--pf-t--global--spacer--xs);
 }
 
-.fleet-banner__item-link {
+.aggregate-banner__item-link {
   background: none;
   border: none;
   padding: 0;
@@ -240,29 +240,29 @@
   font-size: inherit;
 }
 
-.fleet-banner__item-link:hover {
+.aggregate-banner__item-link:hover {
   color: var(--pf-t--global--color--brand--default);
 }
 
-.fleet-banner__item-count {
+.aggregate-banner__item-count {
   margin-left: var(--pf-t--global--spacer--xs);
   font-size: var(--pf-t--global--font--size--body--sm);
   color: var(--pf-t--global--text--color--subtle);
 }
 
-.fleet-banner__cross-section {
+.aggregate-banner__cross-section {
   margin-top: var(--pf-t--global--spacer--xs);
   font-size: var(--pf-t--global--font--size--body--sm);
   color: var(--pf-t--global--text--color--subtle);
 }
 
-.fleet-banner__info {
+.aggregate-banner__info {
   margin-top: var(--pf-t--global--spacer--xs);
   font-size: var(--pf-t--global--font--size--body--sm);
   color: var(--pf-t--global--text--color--subtle);
 }
 
-/* ─── Fleet sidebar active state ─────────────────────────────────────── */
+/* ─── Aggregate sidebar active state ─────────────────────────────────────── */
 
 /* PF6 NavItem sets .pf-m-current on the <a>/<button> link child, not the <li>.
    Target the link element and style the parent <li> via :has() for the left border. */
@@ -275,18 +275,18 @@
   border-left: 3px solid var(--pf-t--global--color--brand--default);
 }
 
-/* ─── Fleet sidebar ack progress ─────────────────────────────────────── */
+/* ─── Aggregate sidebar ack progress ─────────────────────────────────────── */
 
-.fleet-sidebar__ack-progress {
+.aggregate-sidebar__ack-progress {
   display: block;
   font-size: var(--pf-t--global--font--size--body--sm);
   color: var(--pf-t--global--text--color--subtle);
   margin-top: 2px;
 }
 
-/* ─── Fleet ack progress (toolbar indicator) ─────────────────────────── */
+/* ─── Aggregate ack progress (toolbar indicator) ─────────────────────────── */
 
-.fleet-ack-progress {
+.aggregate-ack-progress {
   font-size: var(--pf-t--global--font--size--body--sm);
   color: var(--pf-t--global--text--color--subtle);
 }
@@ -302,9 +302,9 @@
 
 .variant-view,
 .item-detail-pane,
-.fleet-zone-group,
-.fleet-item-row,
-.fleet-banner {
+.aggregate-zone-group,
+.aggregate-item-row,
+.aggregate-banner {
   box-sizing: border-box;
   max-width: 100%;
 }

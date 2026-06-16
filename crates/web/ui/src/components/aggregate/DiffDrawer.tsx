@@ -1,8 +1,8 @@
 import { Button, Spinner } from "@patternfly/react-core";
-import type { FleetDiffResponse, DiffHunk } from "../../api/types";
+import type { AggregateDiffResponse, DiffHunk } from "../../api/types";
 
 export interface DiffDrawerProps {
-  diff: FleetDiffResponse | null;
+  diff: AggregateDiffResponse | null;
   isLoading: boolean;
   error: string | null;
   onRetry: () => void;

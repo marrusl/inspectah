@@ -9,8 +9,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
 import type {
-  FleetViewResponse,
-  FleetHealthInfo,
+  AggregateViewResponse,
+  AggregateHealthInfo,
   HealthResponse,
 } from "../../../api/types";
 
@@ -18,10 +18,10 @@ import type {
 // Module mocks
 // ---------------------------------------------------------------------------
 
-const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
-vi.mock("../../../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn().mockResolvedValue({}),
+const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
+vi.mock("../../../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../../../api/client", () => ({
@@ -65,7 +65,7 @@ if (typeof globalThis.localStorage === "undefined") {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const MOCK_AGGREGATE: FleetHealthInfo = {
+const MOCK_AGGREGATE: AggregateHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: false,
@@ -90,7 +90,7 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-function makeViewWithReferenceSection(): FleetViewResponse {
+function makeViewWithReferenceSection(): AggregateViewResponse {
   return {
     generation: 1,
     can_undo: false,
@@ -156,13 +156,13 @@ function makeViewWithReferenceSection(): FleetViewResponse {
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
   localStorage.clear();
 });
 
 describe("context section read-only behavior", () => {
   it("clicking a context-section item does not open VariantView", async () => {
-    mockFetchFleetView.mockResolvedValue(makeViewWithReferenceSection());
+    mockFetchAggregateView.mockResolvedValue(makeViewWithReferenceSection());
     const user = userEvent.setup();
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);

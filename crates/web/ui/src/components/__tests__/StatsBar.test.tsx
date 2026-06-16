@@ -123,7 +123,7 @@ describe("StatsBar", () => {
     expect(onExport).toHaveBeenCalled();
   });
 
-  it("renders fleet summary when fleetSummary is provided", () => {
+  it("renders aggregate summary when aggregateSummary is provided", () => {
     render(
       <StatsBar
         stats={MOCK_STATS}
@@ -131,7 +131,7 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{
+        aggregateSummary={{
           hostCount: 5,
           hostnames: ["host-a", "host-b", "host-c", "host-d", "host-e"],
           totalItems: 2480,
@@ -140,7 +140,7 @@ describe("StatsBar", () => {
       />,
     );
 
-    const summary = screen.getByTestId("fleet-stats-summary");
+    const summary = screen.getByTestId("aggregate-stats-summary");
     expect(summary).toBeInTheDocument();
     expect(summary).toHaveTextContent("5");
     expect(summary).toHaveTextContent("hosts");
@@ -153,7 +153,7 @@ describe("StatsBar", () => {
     expect(screen.queryByText(/Configs:/)).not.toBeInTheDocument();
   });
 
-  it("shows all-reviewed label in fleet summary when needsReviewCount is 0", () => {
+  it("shows all-reviewed label in aggregate summary when needsReviewCount is 0", () => {
     render(
       <StatsBar
         stats={MOCK_STATS}
@@ -161,7 +161,7 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{
+        aggregateSummary={{
           hostCount: 3,
           hostnames: ["a", "b", "c"],
           totalItems: 100,
@@ -170,7 +170,7 @@ describe("StatsBar", () => {
       />,
     );
 
-    expect(screen.getByTestId("fleet-stats-summary")).toHaveTextContent(
+    expect(screen.getByTestId("aggregate-stats-summary")).toHaveTextContent(
       "All reviewed",
     );
   });
@@ -183,7 +183,7 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{
+        aggregateSummary={{
           hostCount: 3,
           hostnames: ["zulu-host", "alpha-host", "mid-host"],
           totalItems: 100,
@@ -192,20 +192,20 @@ describe("StatsBar", () => {
       />,
     );
 
-    await userEvent.click(screen.getByTestId("fleet-host-trigger"));
+    await userEvent.click(screen.getByTestId("aggregate-host-trigger"));
 
-    const list = screen.getByTestId("fleet-hostname-list");
+    const list = screen.getByTestId("aggregate-hostname-list");
     expect(list).toBeInTheDocument();
 
     // Hostnames should be sorted alphabetically
-    const entries = list.querySelectorAll(".fleet-hostname-entry");
+    const entries = list.querySelectorAll(".aggregate-hostname-entry");
     expect(entries).toHaveLength(3);
     expect(entries[0]).toHaveTextContent("alpha-host");
     expect(entries[1]).toHaveTextContent("mid-host");
     expect(entries[2]).toHaveTextContent("zulu-host");
 
     // Copy button should be present
-    expect(screen.getByTestId("fleet-hostname-copy")).toHaveTextContent(
+    expect(screen.getByTestId("aggregate-hostname-copy")).toHaveTextContent(
       "Copy all",
     );
   });
@@ -221,7 +221,7 @@ describe("StatsBar", () => {
         onRedo={vi.fn()}
         onExport={vi.fn()}
         isPending={false}
-        fleetSummary={{
+        aggregateSummary={{
           hostCount: 2,
           hostnames: ["beta", "alpha"],
           totalItems: 50,
@@ -230,8 +230,8 @@ describe("StatsBar", () => {
       />,
     );
 
-    await userEvent.click(screen.getByTestId("fleet-host-trigger"));
-    await userEvent.click(screen.getByTestId("fleet-hostname-copy"));
+    await userEvent.click(screen.getByTestId("aggregate-host-trigger"));
+    await userEvent.click(screen.getByTestId("aggregate-hostname-copy"));
 
     expect(writeText).toHaveBeenCalledWith("alpha\nbeta");
   });

@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
-  FleetViewResponse,
-  FleetDiffRequest,
-  FleetDiffResponse,
+  AggregateViewResponse,
+  AggregateDiffRequest,
+  AggregateDiffResponse,
 } from "../types";
 import { ApiError } from "../types";
-import { fetchFleetView, fetchFleetDiff } from "../fleet-client";
+import { fetchAggregateView, fetchAggregateDiff } from "../aggregate-client";
 
 // --- Test fixtures ---
 
-const mockFleetView: FleetViewResponse = {
+const mockAggregateView: AggregateViewResponse = {
   generation: 1,
   can_undo: false,
   can_redo: false,
@@ -88,13 +88,13 @@ const mockFleetView: FleetViewResponse = {
   repo_conflict_count: 0,
 };
 
-const mockDiffRequest: FleetDiffRequest = {
+const mockDiffRequest: AggregateDiffRequest = {
   item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
   base: "abc123",
   target: "def456",
 };
 
-const mockDiffResponse: FleetDiffResponse = {
+const mockDiffResponse: AggregateDiffResponse = {
   base_hash: "abc123",
   target_hash: "def456",
   base_hosts: ["host1", "host2", "host3"],
@@ -117,7 +117,7 @@ const mockDiffResponse: FleetDiffResponse = {
   },
 };
 
-describe("fleet-client", () => {
+describe("aggregate-client", () => {
   let mockFetch: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -126,19 +126,19 @@ describe("fleet-client", () => {
     vi.stubGlobal("fetch", mockFetch);
   });
 
-  describe("fetchFleetView", () => {
-    it("fetches fleet view successfully", async () => {
+  describe("fetchAggregateView", () => {
+    it("fetches aggregate view successfully", async () => {
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => mockFleetView,
+        json: async () => mockAggregateView,
       });
 
-      const result = await fetchFleetView();
+      const result = await fetchAggregateView();
 
-      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/view", {
+      expect(mockFetch).toHaveBeenCalledWith("/api/aggregate/view", {
         method: "GET",
       });
-      expect(result).toEqual(mockFleetView);
+      expect(result).toEqual(mockAggregateView);
     });
 
     it("throws ApiError on non-200 response", async () => {
@@ -148,24 +148,24 @@ describe("fleet-client", () => {
         json: async () => ({ error: "Internal server error" }),
       });
 
-      await expect(fetchFleetView()).rejects.toThrow(ApiError);
-      await expect(fetchFleetView()).rejects.toMatchObject({
+      await expect(fetchAggregateView()).rejects.toThrow(ApiError);
+      await expect(fetchAggregateView()).rejects.toMatchObject({
         status: 500,
         body: { error: "Internal server error" },
       });
     });
   });
 
-  describe("fetchFleetDiff", () => {
+  describe("fetchAggregateDiff", () => {
     it("posts diff request and returns response", async () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => mockDiffResponse,
       });
 
-      const result = await fetchFleetDiff(mockDiffRequest);
+      const result = await fetchAggregateDiff(mockDiffRequest);
 
-      expect(mockFetch).toHaveBeenCalledWith("/api/fleet/diff", {
+      expect(mockFetch).toHaveBeenCalledWith("/api/aggregate/diff", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(mockDiffRequest),
@@ -179,7 +179,7 @@ describe("fleet-client", () => {
         json: async () => mockDiffResponse,
       });
 
-      const configItemRequest: FleetDiffRequest = {
+      const configItemRequest: AggregateDiffRequest = {
         item_id: {
           kind: "Config",
           key: { path: "/etc/httpd/conf/httpd.conf" },
@@ -188,7 +188,7 @@ describe("fleet-client", () => {
         target: "uvw012",
       };
 
-      await fetchFleetDiff(configItemRequest);
+      await fetchAggregateDiff(configItemRequest);
 
       const callArgs = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(callArgs[1].body);
@@ -205,8 +205,8 @@ describe("fleet-client", () => {
         json: async () => ({ error: "Invalid diff request" }),
       });
 
-      await expect(fetchFleetDiff(mockDiffRequest)).rejects.toThrow(ApiError);
-      await expect(fetchFleetDiff(mockDiffRequest)).rejects.toMatchObject({
+      await expect(fetchAggregateDiff(mockDiffRequest)).rejects.toThrow(ApiError);
+      await expect(fetchAggregateDiff(mockDiffRequest)).rejects.toMatchObject({
         status: 400,
         body: { error: "Invalid diff request" },
       });

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useFleetMutation } from "../useFleetMutation";
-import type { FleetViewResponse, RefinementOp } from "../../api/types";
+import { useAggregateMutation } from "../useAggregateMutation";
+import type { AggregateViewResponse, RefinementOp } from "../../api/types";
 
-const MOCK_FLEET_VIEW: FleetViewResponse = {
+const MOCK_AGGREGATE_VIEW: AggregateViewResponse = {
   generation: 1,
   can_undo: true,
   can_redo: false,
@@ -19,8 +19,8 @@ const MOCK_FLEET_VIEW: FleetViewResponse = {
   repo_conflict_count: 0,
 };
 
-const MOCK_FLEET_VIEW_2: FleetViewResponse = {
-  ...MOCK_FLEET_VIEW,
+const MOCK_AGGREGATE_VIEW_2: AggregateViewResponse = {
+  ...MOCK_AGGREGATE_VIEW,
   generation: 2,
 };
 
@@ -47,25 +47,25 @@ function mockFetch(routes: Record<string, () => Promise<Response>>) {
   });
 }
 
-describe("useFleetMutation", () => {
-  it("calls applyOp then re-fetches fleet view", async () => {
+describe("useAggregateMutation", () => {
+  it("calls applyOp then re-fetches aggregate view", async () => {
     mockFetch({
       "/api/op": () =>
         Promise.resolve({
           ok: true,
           json: () => Promise.resolve({}), // ignored
         } as Response),
-      "/api/fleet/view": () =>
+      "/api/aggregate/view": () =>
         Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(MOCK_FLEET_VIEW),
+          json: () => Promise.resolve(MOCK_AGGREGATE_VIEW),
         } as Response),
     });
 
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     const op: RefinementOp = {
@@ -78,10 +78,10 @@ describe("useFleetMutation", () => {
     });
 
     await waitFor(() =>
-      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_FLEET_VIEW),
+      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_AGGREGATE_VIEW),
     );
     expect(onError).not.toHaveBeenCalled();
-    expect(result.current.lastConfirmedView.current).toBe(MOCK_FLEET_VIEW);
+    expect(result.current.lastConfirmedView.current).toBe(MOCK_AGGREGATE_VIEW);
   });
 
   it("clears queue on mutation failure", async () => {
@@ -97,7 +97,7 @@ describe("useFleetMutation", () => {
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     act(() => {
@@ -113,16 +113,16 @@ describe("useFleetMutation", () => {
   });
 
   it("holds lastConfirmedView on refetch failure", async () => {
-    let fleetCallCount = 0;
+    let aggregateCallCount = 0;
     mockFetch({
       "/api/op": () =>
         Promise.resolve({
           ok: true,
           json: () => Promise.resolve({}),
         } as Response),
-      "/api/fleet/view": () => {
-        fleetCallCount++;
-        if (fleetCallCount === 1) {
+      "/api/aggregate/view": () => {
+        aggregateCallCount++;
+        if (aggregateCallCount === 1) {
           // First refetch fails
           return Promise.resolve({
             ok: false,
@@ -133,7 +133,7 @@ describe("useFleetMutation", () => {
         // Retry succeeds
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(MOCK_FLEET_VIEW),
+          json: () => Promise.resolve(MOCK_AGGREGATE_VIEW),
         } as Response);
       },
     });
@@ -141,7 +141,7 @@ describe("useFleetMutation", () => {
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     act(() => {
@@ -162,8 +162,8 @@ describe("useFleetMutation", () => {
     });
 
     expect(result.current.refetchError).toBeNull();
-    expect(onViewUpdate).toHaveBeenCalledWith(MOCK_FLEET_VIEW);
-    expect(result.current.lastConfirmedView.current).toBe(MOCK_FLEET_VIEW);
+    expect(onViewUpdate).toHaveBeenCalledWith(MOCK_AGGREGATE_VIEW);
+    expect(result.current.lastConfirmedView.current).toBe(MOCK_AGGREGATE_VIEW);
   });
 
   it("queues mutations sequentially", async () => {
@@ -177,15 +177,15 @@ describe("useFleetMutation", () => {
           json: () => Promise.resolve({}),
         } as Response);
       },
-      "/api/fleet/view": () => {
-        callOrder.push("fleet");
+      "/api/aggregate/view": () => {
+        callOrder.push("aggregate");
         return Promise.resolve({
           ok: true,
           json: () =>
             Promise.resolve(
-              callOrder.filter((c) => c === "fleet").length === 1
-                ? MOCK_FLEET_VIEW
-                : MOCK_FLEET_VIEW_2,
+              callOrder.filter((c) => c === "aggregate").length === 1
+                ? MOCK_AGGREGATE_VIEW
+                : MOCK_AGGREGATE_VIEW_2,
             ),
         } as Response);
       },
@@ -194,7 +194,7 @@ describe("useFleetMutation", () => {
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     act(() => {
@@ -210,28 +210,28 @@ describe("useFleetMutation", () => {
 
     await waitFor(() => expect(onViewUpdate).toHaveBeenCalledTimes(2));
 
-    // Each op is followed by a fleet refetch: op, fleet, op, fleet
-    expect(callOrder).toEqual(["op", "fleet", "op", "fleet"]);
+    // Each op is followed by a aggregate refetch: op, aggregate, op, aggregate
+    expect(callOrder).toEqual(["op", "aggregate", "op", "aggregate"]);
   });
 
-  it("calls undo endpoint then re-fetches fleet view", async () => {
+  it("calls undo endpoint then re-fetches aggregate view", async () => {
     const fetchSpy = mockFetch({
       "/api/undo": () =>
         Promise.resolve({
           ok: true,
           json: () => Promise.resolve({}),
         } as Response),
-      "/api/fleet/view": () =>
+      "/api/aggregate/view": () =>
         Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(MOCK_FLEET_VIEW),
+          json: () => Promise.resolve(MOCK_AGGREGATE_VIEW),
         } as Response),
     });
 
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     act(() => {
@@ -239,29 +239,29 @@ describe("useFleetMutation", () => {
     });
 
     await waitFor(() =>
-      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_FLEET_VIEW),
+      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_AGGREGATE_VIEW),
     );
     expect(fetchSpy).toHaveBeenCalledWith("/api/undo", expect.any(Object));
   });
 
-  it("calls redo endpoint then re-fetches fleet view", async () => {
+  it("calls redo endpoint then re-fetches aggregate view", async () => {
     const fetchSpy = mockFetch({
       "/api/redo": () =>
         Promise.resolve({
           ok: true,
           json: () => Promise.resolve({}),
         } as Response),
-      "/api/fleet/view": () =>
+      "/api/aggregate/view": () =>
         Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(MOCK_FLEET_VIEW),
+          json: () => Promise.resolve(MOCK_AGGREGATE_VIEW),
         } as Response),
     });
 
     const onViewUpdate = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
-      useFleetMutation(onViewUpdate, onError),
+      useAggregateMutation(onViewUpdate, onError),
     );
 
     act(() => {
@@ -269,7 +269,7 @@ describe("useFleetMutation", () => {
     });
 
     await waitFor(() =>
-      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_FLEET_VIEW),
+      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_AGGREGATE_VIEW),
     );
     expect(fetchSpy).toHaveBeenCalledWith("/api/redo", expect.any(Object));
   });

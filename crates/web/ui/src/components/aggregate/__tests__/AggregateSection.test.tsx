@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { AggregateSectionContent } from "../FleetSection";
-import type { FleetSection, FleetItem, ItemId } from "../../../api/types";
+import { AggregateSectionContent } from "../AggregateSection";
+import type { AggregateSection, AggregateItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
 const defaultAck: UseVariantAckResult = {
@@ -15,8 +15,8 @@ const defaultAck: UseVariantAckResult = {
 };
 
 function makeItem(
-  overrides: Partial<FleetItem> & { item_id: ItemId },
-): FleetItem {
+  overrides: Partial<AggregateItem> & { item_id: ItemId },
+): AggregateItem {
   return {
     include: true,
     triage: {
@@ -31,8 +31,8 @@ function makeItem(
 
 const pkgItem = (
   name: string,
-  overrides: Partial<FleetItem> = {},
-): FleetItem => {
+  overrides: Partial<AggregateItem> = {},
+): AggregateItem => {
   const [n, a] = name.includes(".") ? name.split(".") : [name, "x86_64"];
   return makeItem({
     item_id: { kind: "Package", key: { name: n, arch: a } },
@@ -40,7 +40,7 @@ const pkgItem = (
   });
 };
 
-const cfgItem = (path: string, overrides: Partial<FleetItem> = {}): FleetItem =>
+const cfgItem = (path: string, overrides: Partial<AggregateItem> = {}): AggregateItem =>
   makeItem({
     item_id: { kind: "Config", key: { path } },
     ...overrides,
@@ -48,7 +48,7 @@ const cfgItem = (path: string, overrides: Partial<FleetItem> = {}): FleetItem =>
 
 describe("AggregateSectionContent", () => {
   it("renders zone groups when zones are present", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "packages",
       display_name: "Packages",
       is_decision_section: true,
@@ -75,7 +75,7 @@ describe("AggregateSectionContent", () => {
   });
 
   it("renders flat items when zones are null", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "packages",
       display_name: "Packages",
       is_decision_section: true,
@@ -98,7 +98,7 @@ describe("AggregateSectionContent", () => {
   });
 
   it("filters items by filterText", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "packages",
       display_name: "Packages",
       is_decision_section: true,
@@ -125,7 +125,7 @@ describe("AggregateSectionContent", () => {
   });
 
   it("suppresses zone headers when only one zone has items", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "configs",
       display_name: "Config Files",
       is_decision_section: true,
@@ -155,7 +155,7 @@ describe("AggregateSectionContent", () => {
   });
 
   it("renders AggregateItemRow for each item", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "packages",
       display_name: "Packages",
       is_decision_section: true,
@@ -192,7 +192,7 @@ describe("AggregateSectionContent", () => {
   });
 
   it("filters items within zone groups", () => {
-    const section: FleetSection = {
+    const section: AggregateSection = {
       id: "configs",
       display_name: "Config Files",
       is_decision_section: true,

@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { useState } from "react";
-import { useFleetFocusRecovery } from "../useFleetFocusRecovery";
+import { useAggregateFocusRecovery } from "../useAggregateFocusRecovery";
 
 // Test harness that exposes generation bumping
 function TestHarness({ initialGeneration }: { initialGeneration: number }) {
   const [gen, setGen] = useState(initialGeneration);
-  useFleetFocusRecovery(gen);
+  useAggregateFocusRecovery(gen);
 
   return (
     <div>
@@ -23,7 +23,7 @@ function TestHarness({ initialGeneration }: { initialGeneration: number }) {
   );
 }
 
-describe("useFleetFocusRecovery", () => {
+describe("useAggregateFocusRecovery", () => {
   let rafCallbacks: FrameRequestCallback[];
 
   beforeEach(() => {
@@ -71,7 +71,7 @@ describe("useFleetFocusRecovery", () => {
     function RemovableHarness() {
       const [gen, setGen] = useState(1);
       const [showC, setShowC] = useState(true);
-      useFleetFocusRecovery(gen);
+      useAggregateFocusRecovery(gen);
 
       return (
         <div>
@@ -120,7 +120,7 @@ describe("useFleetFocusRecovery", () => {
 
   it("does nothing when generation is null", () => {
     function NullGenHarness() {
-      useFleetFocusRecovery(null);
+      useAggregateFocusRecovery(null);
       return (
         <div data-item-id="item-a" tabIndex={0} data-testid="item-a">
           Item A

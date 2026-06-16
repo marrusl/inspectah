@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DiffDrawer } from "../DiffDrawer";
-import type { FleetDiffResponse } from "../../../api/types";
+import type { AggregateDiffResponse } from "../../../api/types";
 
-const sampleDiff: FleetDiffResponse = {
+const sampleDiff: AggregateDiffResponse = {
   base_hash: "aaa111",
   target_hash: "bbb222",
   base_hosts: ["host-a"],

@@ -1,16 +1,16 @@
 import { useState, useCallback, useRef } from "react";
-import type { RefinementOp, FleetViewResponse } from "../api/types";
+import type { RefinementOp, AggregateViewResponse } from "../api/types";
 import { applyOp, undo as apiUndo, redo as apiRedo } from "../api/client";
-import { fetchFleetView } from "../api/fleet-client";
+import { fetchAggregateView } from "../api/aggregate-client";
 
-export interface UseFleetMutationResult {
+export interface UseAggregateMutationResult {
   mutate: (op: RefinementOp) => void;
   undo: () => void;
   redo: () => void;
   isPending: boolean;
   refetchError: string | null;
   retry: () => Promise<void>;
-  lastConfirmedView: React.RefObject<FleetViewResponse | null>;
+  lastConfirmedView: React.RefObject<AggregateViewResponse | null>;
 }
 
 type QueueEntry =
@@ -18,13 +18,13 @@ type QueueEntry =
   | { kind: "undo" }
   | { kind: "redo" };
 
-export function useFleetMutation(
-  onViewUpdate: (view: FleetViewResponse) => void,
+export function useAggregateMutation(
+  onViewUpdate: (view: AggregateViewResponse) => void,
   onError: (err: Error) => void,
-): UseFleetMutationResult {
+): UseAggregateMutationResult {
   const [isPending, setIsPending] = useState(false);
   const [refetchError, setRefetchError] = useState<string | null>(null);
-  const lastConfirmedView = useRef<FleetViewResponse | null>(null);
+  const lastConfirmedView = useRef<AggregateViewResponse | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
   const processingRef = useRef(false);
 
@@ -37,7 +37,7 @@ export function useFleetMutation(
     while (queueRef.current.length > 0) {
       const entry = queueRef.current[0];
       try {
-        // Apply the mutation (ignore the ViewResponse — we refetch fleet view)
+        // Apply the mutation (ignore the ViewResponse — we refetch aggregate view)
         if (entry.kind === "op") {
           await applyOp(entry.op);
         } else if (entry.kind === "undo") {
@@ -47,11 +47,11 @@ export function useFleetMutation(
         }
         queueRef.current.shift();
 
-        // Re-fetch fleet-aggregated view
+        // Re-fetch aggregated view
         try {
-          const fleetView = await fetchFleetView();
-          lastConfirmedView.current = fleetView;
-          onViewUpdate(fleetView);
+          const aggregateView = await fetchAggregateView();
+          lastConfirmedView.current = aggregateView;
+          onViewUpdate(aggregateView);
         } catch (refetchErr: unknown) {
           setRefetchError(
             refetchErr instanceof Error
@@ -92,9 +92,9 @@ export function useFleetMutation(
   const retry = useCallback(async () => {
     setRefetchError(null);
     try {
-      const fleetView = await fetchFleetView();
-      lastConfirmedView.current = fleetView;
-      onViewUpdate(fleetView);
+      const aggregateView = await fetchAggregateView();
+      lastConfirmedView.current = aggregateView;
+      onViewUpdate(aggregateView);
     } catch (err: unknown) {
       setRefetchError(err instanceof Error ? err.message : "Retry failed");
     }

@@ -68,10 +68,10 @@ export function highestAttention(
 /**
  * Extract the triage bucket string from a TriageTag.
  * SingleHost: the bucket name is the key with null value (serde quirk).
- * Fleet: bucket is a direct field.
+ * Aggregate: bucket is a direct field.
  */
 export function extractTriageBucket(tag: TriageTag): string {
-  if (tag.triage.mode === "fleet") {
+  if (tag.triage.mode === "aggregate") {
     return tag.triage.bucket;
   }
   // SingleHost: {"mode":"single_host","<bucket>":null}

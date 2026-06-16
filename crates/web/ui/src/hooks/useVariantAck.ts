@@ -61,11 +61,11 @@ function persistToStorage(
 }
 
 export function useVariantAck(
-  fleetLabel: string,
+  aggregateLabel: string,
   mergedAt: string,
   actionableIds: ItemId[],
 ): UseVariantAckResult {
-  const storageKey = `fleet-ack:${fleetLabel}:${mergedAt}`;
+  const storageKey = `aggregate-ack:${aggregateLabel}:${mergedAt}`;
 
   const actionableKeys = useMemo(
     () => new Set(actionableIds.map(itemKey)),

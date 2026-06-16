@@ -1,14 +1,14 @@
 import { useEffect, useRef, useCallback } from "react";
 
 /**
- * Tracks the last focused fleet item (by data-item-id) and restores
+ * Tracks the last focused aggregate item (by data-item-id) and restores
  * focus after view updates (e.g. refetch). If the previously focused
  * item no longer exists, falls back to the first item with data-item-id.
  *
  * @param generation - The view generation counter; focus recovery runs
  *   whenever this changes (indicating a refetch).
  */
-export function useFleetFocusRecovery(generation: number | null): void {
+export function useAggregateFocusRecovery(generation: number | null): void {
   const lastFocusedItemIdRef = useRef<string | null>(null);
 
   // Track focus changes — record the data-item-id of the focused element

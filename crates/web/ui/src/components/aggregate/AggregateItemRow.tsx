@@ -1,9 +1,9 @@
 import { Label, Switch } from "@patternfly/react-core";
-import type { FleetItem, ItemId } from "../../api/types";
+import type { AggregateItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
 export interface AggregateItemRowProps {
-  item: FleetItem;
+  item: AggregateItem;
   isDecisionSection: boolean;
   onToggle: (itemId: ItemId, include: boolean) => void;
   ack: UseVariantAckResult;

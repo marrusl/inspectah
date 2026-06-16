@@ -8,22 +8,22 @@ import {
   Spinner,
 } from "@patternfly/react-core";
 import type {
-  FleetHealthInfo,
+  AggregateHealthInfo,
   HealthResponse,
-  FleetViewResponse,
-  FleetSection,
-  FleetItem,
+  AggregateViewResponse,
+  AggregateSection,
+  AggregateItem,
   ItemId,
   RefinementOp,
   RefineStats,
   ReferenceSection,
 } from "../api/types";
-import { fetchFleetView } from "../api/fleet-client";
-import "../fleet.css";
-import { useFleetMutation } from "../hooks/useFleetMutation";
+import { fetchAggregateView } from "../api/aggregate-client";
+import "../aggregate.css";
+import { useAggregateMutation } from "../hooks/useAggregateMutation";
 import { useVariantAck } from "../hooks/useVariantAck";
-import { useFleetDiff } from "../hooks/useFleetDiff";
-import { useFleetFocusRecovery } from "../hooks/useFleetFocusRecovery";
+import { useAggregateDiff } from "../hooks/useAggregateDiff";
+import { useAggregateFocusRecovery } from "../hooks/useAggregateFocusRecovery";
 import { AppShell } from "./AppShell";
 import { AggregateSidebar } from "./aggregate/AggregateSidebar";
 import { AggregateBanner } from "./aggregate/AggregateBanner";
@@ -34,7 +34,7 @@ import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 
 export interface AggregateAppProps {
-  aggregate: FleetHealthInfo;
+  aggregate: AggregateHealthInfo;
   health: HealthResponse;
 }
 
@@ -71,7 +71,7 @@ function DivergentProgress({
 }
 
 /** Collect all AggregateItems from a section (flat items or zone items). */
-function sectionItems(section: FleetSection): FleetItem[] {
+function sectionItems(section: AggregateSection): AggregateItem[] {
   if (section.items) return section.items;
   if (!section.zones) return [];
   return [
@@ -82,8 +82,8 @@ function sectionItems(section: FleetSection): FleetItem[] {
 }
 
 /** Collect all divergent-zone AggregateItems across all sections. */
-function allDivergentItems(sections: FleetSection[]): FleetItem[] {
-  const result: FleetItem[] = [];
+function allDivergentItems(sections: AggregateSection[]): AggregateItem[] {
+  const result: AggregateItem[] = [];
   for (const section of sections) {
     if (section.zones) {
       result.push(...section.zones.divergent.items);
@@ -99,7 +99,7 @@ function itemIdKey(id: ItemId): string {
 
 /** Build ReferenceSection[] from aggregate sections for GlobalSearch indexing. */
 function buildAggregateSearchSections(
-  sections: FleetSection[],
+  sections: AggregateSection[],
 ): ReferenceSection[] {
   return sections.map((s) => ({
     id: s.id,
@@ -123,7 +123,7 @@ function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
 }
 
 export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) {
-  const [view, setView] = useState<FleetViewResponse | null>(null);
+  const [view, setView] = useState<AggregateViewResponse | null>(null);
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
@@ -133,13 +133,13 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
     itemId: ItemId;
   } | null>(null);
   useEffect(() => {
-    fetchFleetView()
+    fetchAggregateView()
       .then(setView)
       .catch((e) => setError(e.message));
   }, []);
 
   const { mutate, undo, redo, isPending, refetchError, retry } =
-    useFleetMutation(setView, (err) => setError(err.message));
+    useAggregateMutation(setView, (err) => setError(err.message));
 
   // --- Divergent review tracking (session-layer state) ---
   const [confirmedDivergentIds, setConfirmedDivergentIds] = useState<
@@ -149,10 +149,10 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
   const actionableIds =
     view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
   const ack = useVariantAck(aggregate.label, aggregate.merged_at, actionableIds);
-  const diffHook = useFleetDiff();
+  const diffHook = useAggregateDiff();
 
   // Restore focus to the last-focused aggregate item after view updates
-  useFleetFocusRecovery(view?.generation ?? null);
+  useAggregateFocusRecovery(view?.generation ?? null);
 
   // Portal flow: when pendingNavTarget is set (by banner or search),
   // switch the active section. AggregateSectionContent handles the rest:
@@ -262,7 +262,7 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
 
   // --- Package / repo toggle handlers for unified PackageList ---
 
-  // Convert FleetItem[] from the packages section to PackageListPackage[]
+  // Convert AggregateItem[] from the packages section to PackageListPackage[]
   const aggregatePackages: PackageListPackage[] = useMemo(() => {
     if (!view) return [];
     const pkgSection = view.sections.find((s) => s.id === "packages");
@@ -338,7 +338,7 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
                 variant="link"
                 onClick={() => {
                   setError(null);
-                  fetchFleetView()
+                  fetchAggregateView()
                     .then(setView)
                     .catch((e) => setError(e.message));
                 }}
@@ -433,7 +433,7 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
         onUndo={undo}
         onRedo={redo}
         onExportComplete={() => {
-          fetchFleetView().then(setView);
+          fetchAggregateView().then(setView);
         }}
         isPending={isPending}
         activeSection={activeSection}

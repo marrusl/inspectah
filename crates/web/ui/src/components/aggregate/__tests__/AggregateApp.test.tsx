@@ -5,16 +5,16 @@ import { AggregateApp } from "../../AggregateApp";
 import type { AggregateAppProps } from "../../AggregateApp";
 import { AggregateSidebar } from "../AggregateSidebar";
 import type {
-  FleetViewResponse,
-  FleetHealthInfo,
+  AggregateViewResponse,
+  AggregateHealthInfo,
   HealthResponse,
 } from "../../../api/types";
 
 // Mock aggregate-client
-const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
-vi.mock("../../../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn(),
+const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
+vi.mock("../../../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn(),
 }));
 
 // Mock client (used by useAggregateMutation)
@@ -27,10 +27,10 @@ vi.mock("../../../api/client", () => ({
 // Mock fetch for ExportDialog internals
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
 });
 
-const MOCK_AGGREGATE: FleetHealthInfo = {
+const MOCK_AGGREGATE: AggregateHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
@@ -56,8 +56,8 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 function makeAggregateView(
-  overrides: Partial<FleetViewResponse> = {},
-): FleetViewResponse {
+  overrides: Partial<AggregateViewResponse> = {},
+): AggregateViewResponse {
   return {
     generation: 1,
     can_undo: false,
@@ -130,13 +130,13 @@ function renderAggregateApp(overrides: Partial<AggregateAppProps> = {}) {
 
 describe("AggregateApp", () => {
   it("shows loading state before data arrives", () => {
-    mockFetchFleetView.mockReturnValue(new Promise(() => {})); // never resolves
+    mockFetchAggregateView.mockReturnValue(new Promise(() => {})); // never resolves
     renderAggregateApp();
     expect(screen.getByText(/Loading aggregate view/)).toBeInTheDocument();
   });
 
   it("shows error state on fetch failure", async () => {
-    mockFetchFleetView.mockRejectedValue(new Error("Network error"));
+    mockFetchAggregateView.mockRejectedValue(new Error("Network error"));
     renderAggregateApp();
     await waitFor(() => {
       expect(screen.getByText(/Failed to load aggregate view/)).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("AggregateApp", () => {
 
   it("fetches aggregate view on mount and renders sections", async () => {
     const aggregateView = makeAggregateView();
-    mockFetchFleetView.mockResolvedValue(aggregateView);
+    mockFetchAggregateView.mockResolvedValue(aggregateView);
     renderAggregateApp();
 
     await waitFor(() => {
@@ -156,11 +156,11 @@ describe("AggregateApp", () => {
     // Packages render via unified RepoBar + PackageList
     expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
     expect(screen.getByTestId("package-list")).toBeInTheDocument();
-    expect(mockFetchFleetView).toHaveBeenCalledOnce();
+    expect(mockFetchAggregateView).toHaveBeenCalledOnce();
   });
 
   it("renders AggregateSidebar with sections", async () => {
-    mockFetchFleetView.mockResolvedValue(makeAggregateView());
+    mockFetchAggregateView.mockResolvedValue(makeAggregateView());
     renderAggregateApp();
 
     await waitFor(() => {
@@ -174,7 +174,7 @@ describe("AggregateApp", () => {
   });
 
   it("handles section navigation", async () => {
-    mockFetchFleetView.mockResolvedValue(makeAggregateView());
+    mockFetchAggregateView.mockResolvedValue(makeAggregateView());
     renderAggregateApp();
 
     await waitFor(() => {
@@ -195,7 +195,7 @@ describe("AggregateApp", () => {
 
   it("wires undo/redo to mutation hook", async () => {
     const aggregateView = makeAggregateView({ can_undo: true, can_redo: true });
-    mockFetchFleetView.mockResolvedValue(aggregateView);
+    mockFetchAggregateView.mockResolvedValue(aggregateView);
     renderAggregateApp();
 
     await waitFor(() => {
@@ -212,7 +212,7 @@ describe("AggregateApp", () => {
   it("shows refetch error with retry button", async () => {
     // First call succeeds, simulating a state where refetchError is set
     const aggregateView = makeAggregateView();
-    mockFetchFleetView.mockResolvedValue(aggregateView);
+    mockFetchAggregateView.mockResolvedValue(aggregateView);
     renderAggregateApp();
 
     await waitFor(() => {

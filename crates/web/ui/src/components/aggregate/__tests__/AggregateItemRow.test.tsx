@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateItemRow } from "../AggregateItemRow";
-import type { FleetItem, ItemId } from "../../../api/types";
+import type { AggregateItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
 const defaultAck: UseVariantAckResult = {
@@ -16,8 +16,8 @@ const defaultAck: UseVariantAckResult = {
 };
 
 function makeItem(
-  overrides: Partial<FleetItem> & { item_id: ItemId },
-): FleetItem {
+  overrides: Partial<AggregateItem> & { item_id: ItemId },
+): AggregateItem {
   return {
     include: true,
     triage: {

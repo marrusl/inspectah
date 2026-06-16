@@ -1,8 +1,8 @@
-import type { FleetItem } from "../../api/types";
+import type { AggregateItem } from "../../api/types";
 import { itemDisplayName } from "./AggregateItemRow";
 
 export interface ItemDetailPaneProps {
-  item: FleetItem;
+  item: AggregateItem;
 }
 
 export function ItemDetailPane({ item }: ItemDetailPaneProps) {

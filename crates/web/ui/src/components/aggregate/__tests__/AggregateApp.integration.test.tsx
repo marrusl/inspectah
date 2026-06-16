@@ -25,11 +25,11 @@ import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
 import type { AggregateAppProps } from "../../AggregateApp";
 import type {
-  FleetViewResponse,
-  FleetHealthInfo,
+  AggregateViewResponse,
+  AggregateHealthInfo,
   HealthResponse,
-  FleetSection,
-  FleetItem,
+  AggregateSection,
+  AggregateItem,
   ActionableVariantItem,
 } from "../../../api/types";
 
@@ -68,10 +68,10 @@ if (typeof globalThis.localStorage === "undefined") {
 // Module mocks — mock the API layer, let hooks run for real
 // ---------------------------------------------------------------------------
 
-const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
-vi.mock("../../../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn().mockResolvedValue({
+const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
+vi.mock("../../../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn().mockResolvedValue({
     item_id: { kind: "Config", key: { path: "/etc/test" } },
     base_hash: "aaa",
     target_hash: "bbb",
@@ -92,7 +92,7 @@ vi.mock("../../../api/client", () => ({
 // Fixture builders
 // ---------------------------------------------------------------------------
 
-function mockAggregateItem(overrides?: Partial<FleetItem>): FleetItem {
+function mockAggregateItem(overrides?: Partial<AggregateItem>): AggregateItem {
   return {
     item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     include: true,
@@ -108,8 +108,8 @@ function mockAggregateItem(overrides?: Partial<FleetItem>): FleetItem {
 
 function mockConfigItem(
   path: string,
-  overrides?: Partial<FleetItem>,
-): FleetItem {
+  overrides?: Partial<AggregateItem>,
+): AggregateItem {
   return mockAggregateItem({
     item_id: { kind: "Config", key: { path } },
     triage: {
@@ -136,8 +136,8 @@ function mockConfigItem(
 
 function mockAggregateSection(
   id: string,
-  overrides?: Partial<FleetSection>,
-): FleetSection {
+  overrides?: Partial<AggregateSection>,
+): AggregateSection {
   return {
     id,
     display_name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -147,9 +147,9 @@ function mockAggregateSection(
   };
 }
 
-function mockFleetViewResponse(
-  overrides?: Partial<FleetViewResponse>,
-): FleetViewResponse {
+function mockAggregateViewResponse(
+  overrides?: Partial<AggregateViewResponse>,
+): AggregateViewResponse {
   const configItem1 = mockConfigItem("/etc/httpd/conf/httpd.conf");
   const configItem2 = mockConfigItem("/etc/sysconfig/network", {
     item_id: { kind: "Config", key: { path: "/etc/sysconfig/network" } },
@@ -250,7 +250,7 @@ function mockFleetViewResponse(
   };
 }
 
-const MOCK_AGGREGATE: FleetHealthInfo = {
+const MOCK_AGGREGATE: AggregateHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
@@ -310,7 +310,7 @@ function pressCtrlShiftZ() {
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
   mockApplyOp.mockReset().mockResolvedValue({});
   mockUndo.mockReset().mockResolvedValue({});
   mockRedo.mockReset().mockResolvedValue({});
@@ -331,7 +331,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("full aggregate view render with zones", () => {
     it("renders sidebar sections and aggregate content from zone-grouped data", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
@@ -349,7 +349,7 @@ describe("AggregateApp integration", () => {
     });
 
     it("shows zone-based item counts in sidebar for sections with zones", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
@@ -371,7 +371,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("ack flow", () => {
     it("shows ack progress labels on decision sections in sidebar", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
@@ -391,14 +391,14 @@ describe("AggregateApp integration", () => {
     });
 
     it("does not show ack labels when no actionable variants exist", async () => {
-      const view = mockFleetViewResponse({
+      const view = mockAggregateViewResponse({
         summary: {
           host_count: 3,
           actionable_variant_items: [],
           informational_variant_count: 0,
         },
       });
-      mockFetchFleetView.mockResolvedValue(view);
+      mockFetchAggregateView.mockResolvedValue(view);
       renderAggregateApp();
       await waitForContent();
 
@@ -418,8 +418,8 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("undo/redo flow", () => {
     it("Ctrl+Z calls undo API and updates view on successful refetch", async () => {
-      const initialView = mockFleetViewResponse();
-      const updatedView = mockFleetViewResponse({
+      const initialView = mockAggregateViewResponse();
+      const updatedView = mockAggregateViewResponse({
         generation: 2,
         sections: [
           mockAggregateSection("packages", {
@@ -429,7 +429,7 @@ describe("AggregateApp integration", () => {
         ],
       });
 
-      mockFetchFleetView
+      mockFetchAggregateView
         .mockResolvedValueOnce(initialView) // initial load
         .mockResolvedValueOnce(updatedView); // refetch after undo
 
@@ -457,10 +457,10 @@ describe("AggregateApp integration", () => {
     });
 
     it("Ctrl+Shift+Z calls redo API", async () => {
-      const initialView = mockFleetViewResponse();
-      const updatedView = mockFleetViewResponse({ generation: 2 });
+      const initialView = mockAggregateViewResponse();
+      const updatedView = mockAggregateViewResponse({ generation: 2 });
 
-      mockFetchFleetView
+      mockFetchAggregateView
         .mockResolvedValueOnce(initialView)
         .mockResolvedValueOnce(updatedView);
 
@@ -482,12 +482,12 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("refetch failure", () => {
     it("shows refetch error with Retry after undo fails to refetch", async () => {
-      const initialView = mockFleetViewResponse();
+      const initialView = mockAggregateViewResponse();
 
-      mockFetchFleetView.mockResolvedValueOnce(initialView); // initial load
+      mockFetchAggregateView.mockResolvedValueOnce(initialView); // initial load
       mockUndo.mockResolvedValueOnce({}); // undo API succeeds
       // But the subsequent refetch fails
-      mockFetchFleetView.mockRejectedValueOnce(new Error("Server unavailable"));
+      mockFetchAggregateView.mockRejectedValueOnce(new Error("Server unavailable"));
 
       renderAggregateApp();
       await waitForContent();
@@ -515,13 +515,13 @@ describe("AggregateApp integration", () => {
     });
 
     it("retry clears error and updates view on success", async () => {
-      const initialView = mockFleetViewResponse();
-      const recoveredView = mockFleetViewResponse({ generation: 3 });
+      const initialView = mockAggregateViewResponse();
+      const recoveredView = mockAggregateViewResponse({ generation: 3 });
 
-      mockFetchFleetView.mockResolvedValueOnce(initialView); // initial load
+      mockFetchAggregateView.mockResolvedValueOnce(initialView); // initial load
       mockUndo.mockResolvedValueOnce({});
-      mockFetchFleetView.mockRejectedValueOnce(new Error("Transient error")); // refetch fails
-      mockFetchFleetView.mockResolvedValueOnce(recoveredView); // retry succeeds
+      mockFetchAggregateView.mockRejectedValueOnce(new Error("Transient error")); // refetch fails
+      mockFetchAggregateView.mockResolvedValueOnce(recoveredView); // retry succeeds
 
       renderAggregateApp();
       await waitForContent();
@@ -553,7 +553,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("aggregate-of-2 flat rendering", () => {
     it("renders with flat items when sections have no zones", async () => {
-      const flatView = mockFleetViewResponse({
+      const flatView = mockAggregateViewResponse({
         sections: [
           mockAggregateSection("packages", {
             display_name: "Packages",
@@ -580,7 +580,7 @@ describe("AggregateApp integration", () => {
         ],
       });
 
-      mockFetchFleetView.mockResolvedValue(flatView);
+      mockFetchAggregateView.mockResolvedValue(flatView);
       renderAggregateApp({ aggregate: { ...MOCK_AGGREGATE, zones_active: false } });
       await waitForContent();
 
@@ -599,7 +599,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("section navigation", () => {
     it("switches active section when sidebar items are clicked", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
@@ -619,7 +619,7 @@ describe("AggregateApp integration", () => {
     });
 
     it("highlights active section in sidebar with aria-current", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
@@ -647,7 +647,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("keyboard navigation", () => {
     it("switches sections with number keys 1-3 (maps to SECTION_IDS)", async () => {
-      mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       const user = userEvent.setup();
       renderAggregateApp();
       await waitForContent();
@@ -678,7 +678,7 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("initial load failure", () => {
     it("shows full error page when initial fetch fails", async () => {
-      mockFetchFleetView.mockRejectedValue(new Error("Connection refused"));
+      mockFetchAggregateView.mockRejectedValue(new Error("Connection refused"));
       renderAggregateApp();
 
       await waitFor(() => {
@@ -698,8 +698,8 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("view update propagation", () => {
     it("updates sidebar after Ctrl+Z triggers view refresh", async () => {
-      const threeSection = mockFleetViewResponse();
-      const twoSection = mockFleetViewResponse({
+      const threeSection = mockAggregateViewResponse();
+      const twoSection = mockAggregateViewResponse({
         generation: 2,
         sections: [
           mockAggregateSection("packages", { display_name: "Packages" }),
@@ -707,7 +707,7 @@ describe("AggregateApp integration", () => {
         ],
       });
 
-      mockFetchFleetView
+      mockFetchAggregateView
         .mockResolvedValueOnce(threeSection)
         .mockResolvedValueOnce(twoSection);
 
@@ -733,10 +733,10 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("containerfile preview", () => {
     it("passes containerfile_preview from view response to AppShell", async () => {
-      const view = mockFleetViewResponse({
+      const view = mockAggregateViewResponse({
         containerfile_preview: "FROM ubi9:latest\nRUN dnf install -y httpd",
       });
-      mockFetchFleetView.mockResolvedValue(view);
+      mockFetchAggregateView.mockResolvedValue(view);
       renderAggregateApp();
       await waitForContent();
 
@@ -751,8 +751,8 @@ describe("AggregateApp integration", () => {
   // 11. Aggregate conflict dismiss/restore flow (RepoBar ↔ PackageList)
   // -------------------------------------------------------------------------
   describe("aggregate conflict dismiss/restore flow", () => {
-    function makeConflictView(): FleetViewResponse {
-      return mockFleetViewResponse({
+    function makeConflictView(): AggregateViewResponse {
+      return mockAggregateViewResponse({
         repo_conflict_count: 1,
         repo_groups: [
           {
@@ -813,7 +813,7 @@ describe("AggregateApp integration", () => {
     }
 
     it("conflict popover trigger appears on aggregate row, dismiss hides it, RepoBar restore brings it back", async () => {
-      mockFetchFleetView.mockResolvedValue(makeConflictView());
+      mockFetchAggregateView.mockResolvedValue(makeConflictView());
       renderAggregateApp();
       await waitForContent();
 

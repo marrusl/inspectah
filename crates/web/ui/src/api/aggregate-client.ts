@@ -1,7 +1,7 @@
 import type {
-  FleetViewResponse,
-  FleetDiffRequest,
-  FleetDiffResponse,
+  AggregateViewResponse,
+  AggregateDiffRequest,
+  AggregateDiffResponse,
 } from "./types";
 import { ApiError } from "./types";
 
@@ -28,14 +28,14 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// --- Fleet endpoints ---
+// --- Aggregate endpoints ---
 
-export function fetchFleetView(): Promise<FleetViewResponse> {
-  return getJson("/api/fleet/view");
+export function fetchAggregateView(): Promise<AggregateViewResponse> {
+  return getJson("/api/aggregate/view");
 }
 
-export function fetchFleetDiff(
-  req: FleetDiffRequest,
-): Promise<FleetDiffResponse> {
-  return postJson("/api/fleet/diff", req);
+export function fetchAggregateDiff(
+  req: AggregateDiffRequest,
+): Promise<AggregateDiffResponse> {
+  return postJson("/api/aggregate/diff", req);
 }

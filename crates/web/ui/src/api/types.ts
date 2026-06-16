@@ -12,7 +12,7 @@ export type PackageState =
   | "local_install"
   | "no_repo";
 
-export interface FleetPrevalence {
+export interface AggregatePrevalence {
   count: number;
   total: number;
   hosts: string[];
@@ -29,7 +29,7 @@ export interface PackageEntry {
   locked?: boolean;
   acknowledged?: boolean;
   source_repo: string;
-  fleet: FleetPrevalence | null;
+  aggregate: AggregatePrevalence | null;
 }
 
 // --- Config types (inspectah-core/src/types/config.rs) ---
@@ -69,7 +69,7 @@ export interface ConfigFileEntry {
   attention_reason?: string | null;
   tie: boolean;
   tie_winner: boolean;
-  fleet: FleetPrevalence | null;
+  aggregate: AggregatePrevalence | null;
 }
 
 // --- Refine types (inspectah-refine/src/types.rs) ---
@@ -113,26 +113,26 @@ export interface AttentionTag {
 export type TriageBucket = "baseline" | "site" | "investigate";
 
 /** Rust: #[serde(rename_all = "snake_case")] */
-export type FleetBucket = "investigate" | "divergent" | "partial" | "universal";
+export type AggregateBucket = "investigate" | "divergent" | "partial" | "universal";
 
 export interface Prevalence {
   count: number;
   total: number;
 }
 
-export interface FleetTriage {
-  bucket: FleetBucket;
+export interface AggregateTriage {
+  bucket: AggregateBucket;
   prevalence: Prevalence;
 }
 
 /**
  * Rust: #[serde(tag = "mode")] with internally-tagged enum.
  * SingleHost(TriageBucket) serializes as {"mode":"single_host","<bucket>":null}
- * Fleet(FleetTriage) serializes as {"mode":"fleet","bucket":"...","prevalence":{...}}
+ * Aggregate(AggregateTriage) serializes as {"mode":"aggregate","bucket":"...","prevalence":{...}}
  */
 export type Triage =
   | { mode: "single_host"; baseline?: null; site?: null; investigate?: null }
-  | ({ mode: "fleet" } & FleetTriage);
+  | ({ mode: "aggregate" } & AggregateTriage);
 
 /**
  * Rust: #[serde(rename_all = "snake_case")]
@@ -364,7 +364,7 @@ export interface RepoGroupInfo {
   enabled: boolean;
 }
 
-export interface FleetHealthInfo {
+export interface AggregateHealthInfo {
   host_count: number;
   hostnames: string[];
   zones_active: boolean;
@@ -385,7 +385,7 @@ export interface HealthResponse {
   };
   completeness: string;
   policy: { distro_repos: string[] };
-  fleet: FleetHealthInfo | null;
+  aggregate: AggregateHealthInfo | null;
   session_is_sensitive: boolean;
 }
 
@@ -540,7 +540,7 @@ export interface UserPreviewResponse {
   sensitive: boolean;
 }
 
-// --- Fleet types (inspectah-web/src/handlers/fleet.rs) ---
+// --- Aggregate types (inspectah-web/src/handlers/aggregate.rs) ---
 
 /** ItemId uses tag/content serde (Rust: #[serde(tag = "kind", content = "key")]) */
 export interface ItemIdPackage {
@@ -690,84 +690,84 @@ export interface ActionableVariantItem {
   max_host_spread: number;
 }
 
-export interface FleetSummary {
+export interface AggregateSummary {
   host_count: number;
   actionable_variant_items: ActionableVariantItem[];
   informational_variant_count: number;
 }
 
-/** @deprecated Use FleetTriageDto instead. */
-export interface FleetAttention {
+/** @deprecated Use AggregateTriageDto instead. */
+export interface AggregateAttention {
   level: string;
   reason: string;
   zone?: string;
   prevalence: number;
 }
 
-/** Fleet triage classification from the backend. */
-export interface FleetTriageDto {
-  bucket: FleetBucket;
+/** Aggregate triage classification from the backend. */
+export interface AggregateTriageDto {
+  bucket: AggregateBucket;
   prevalence: Prevalence;
 }
 
-export interface FleetVariantOption {
+export interface AggregateVariantOption {
   hash: string;
   hosts: string[];
   host_count: number;
   selected: boolean;
 }
 
-export interface FleetVariants {
+export interface AggregateVariants {
   count: number;
   selected: string; // content hash
-  options: FleetVariantOption[];
+  options: AggregateVariantOption[];
 }
 
-export interface FleetItemPrevalence {
+export interface AggregateItemPrevalence {
   count: number;
   total: number;
 }
 
-export interface FleetItem {
+export interface AggregateItem {
   item_id: ItemId;
   include: boolean;
   locked?: boolean;
   attention_reason?: string | null;
-  triage: FleetTriageDto;
+  triage: AggregateTriageDto;
   /** @deprecated Use triage.prevalence instead. */
-  prevalence: FleetItemPrevalence;
-  variants?: FleetVariants;
+  prevalence: AggregateItemPrevalence;
+  variants?: AggregateVariants;
   source_repo: string;
   repo_conflict?: RepoSourceEntry[];
 }
 
-export interface FleetZoneGroup {
-  items: FleetItem[];
+export interface AggregateZoneGroup {
+  items: AggregateItem[];
   count: number;
 }
 
-export interface FleetZones {
-  consensus: FleetZoneGroup;
-  near_consensus: FleetZoneGroup;
-  divergent: FleetZoneGroup;
+export interface AggregateZones {
+  consensus: AggregateZoneGroup;
+  near_consensus: AggregateZoneGroup;
+  divergent: AggregateZoneGroup;
 }
 
-export interface FleetSection {
+export interface AggregateSection {
   id: string;
   display_name: string;
   is_decision_section: boolean;
-  zones?: FleetZones;
-  items?: FleetItem[];
+  zones?: AggregateZones;
+  items?: AggregateItem[];
 }
 
-export interface FleetViewResponse {
+export interface AggregateViewResponse {
   generation: number;
   can_undo: boolean;
   can_redo: boolean;
   containerfile_preview: string;
   session_is_sensitive: boolean;
-  summary: FleetSummary;
-  sections: FleetSection[];
+  summary: AggregateSummary;
+  sections: AggregateSection[];
   repo_groups: RepoGroupInfo[];
   repo_conflict_count: number;
 }
@@ -794,13 +794,13 @@ export interface DiffStats {
   deletions: number;
 }
 
-export interface FleetDiffRequest {
+export interface AggregateDiffRequest {
   item_id: ItemId;
   base: string;
   target: string;
 }
 
-export interface FleetDiffResponse {
+export interface AggregateDiffResponse {
   base_hash: string;
   target_hash: string;
   base_hosts: string[];

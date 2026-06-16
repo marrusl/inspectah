@@ -9,10 +9,10 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
 import type {
-  FleetViewResponse,
-  FleetHealthInfo,
+  AggregateViewResponse,
+  AggregateHealthInfo,
   HealthResponse,
-  FleetItem,
+  AggregateItem,
   ActionableVariantItem,
 } from "../../../api/types";
 
@@ -20,10 +20,10 @@ import type {
 // Module mocks
 // ---------------------------------------------------------------------------
 
-const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
-vi.mock("../../../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn().mockResolvedValue({
+const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
+vi.mock("../../../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn().mockResolvedValue({
     base_hash: "aaa",
     target_hash: "bbb",
     base_hosts: ["host1"],
@@ -74,7 +74,7 @@ if (typeof globalThis.localStorage === "undefined") {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const MOCK_AGGREGATE: FleetHealthInfo = {
+const MOCK_AGGREGATE: AggregateHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
@@ -99,7 +99,7 @@ const MOCK_HEALTH: HealthResponse = {
   session_is_sensitive: false,
 };
 
-function configItemWithVariants(): FleetItem {
+function configItemWithVariants(): AggregateItem {
   return {
     item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
     include: true,
@@ -125,7 +125,7 @@ function configItemWithVariants(): FleetItem {
   };
 }
 
-function makeAggregateViewWithVariants(): FleetViewResponse {
+function makeAggregateViewWithVariants(): AggregateViewResponse {
   const item = configItemWithVariants();
   const actionable: ActionableVariantItem[] = [
     {
@@ -172,14 +172,14 @@ function makeAggregateViewWithVariants(): FleetViewResponse {
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
   localStorage.clear();
 });
 
 describe("portal idempotency", () => {
   it("calling banner navigate twice with same target keeps variant view open", async () => {
     const view = makeAggregateViewWithVariants();
-    mockFetchFleetView.mockResolvedValue(view);
+    mockFetchAggregateView.mockResolvedValue(view);
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 

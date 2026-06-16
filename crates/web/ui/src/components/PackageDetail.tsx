@@ -116,11 +116,11 @@ export function PackageDetail({
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {pkg.entry.fleet && (
+        {pkg.entry.aggregate && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Fleet</DescriptionListTerm>
+            <DescriptionListTerm>Aggregate</DescriptionListTerm>
             <DescriptionListDescription>
-              {pkg.entry.fleet.count} of {pkg.entry.fleet.total} hosts
+              {pkg.entry.aggregate.count} of {pkg.entry.aggregate.total} hosts
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}

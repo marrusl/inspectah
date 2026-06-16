@@ -1,5 +1,5 @@
 import type {
-  FleetSummary,
+  AggregateSummary,
   ActionableVariantItem,
   ItemId,
 } from "../../api/types";
@@ -7,7 +7,7 @@ import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import { itemDisplayName } from "./AggregateItemRow";
 
 export interface AggregateBannerProps {
-  summary: FleetSummary;
+  summary: AggregateSummary;
   ackState: UseVariantAckResult;
   onNavigate: (sectionId: string, itemId: ItemId) => void;
   /** When set, only show items for this section; summarize others. */

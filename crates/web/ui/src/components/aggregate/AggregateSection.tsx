@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import type { FleetSection, FleetItem, ItemId } from "../../api/types";
+import type { AggregateSection, AggregateItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
-import type { UseFleetDiffResult } from "../../hooks/useFleetDiff";
+import type { UseAggregateDiffResult } from "../../hooks/useAggregateDiff";
 import { ZoneGroup } from "./ZoneGroup";
 import { AggregateItemRow, itemDisplayName } from "./AggregateItemRow";
 import { VariantView } from "./VariantView";
@@ -13,7 +13,7 @@ export interface NavTarget {
 }
 
 export interface AggregateSectionContentProps {
-  section: FleetSection | undefined;
+  section: AggregateSection | undefined;
   filterText: string;
   isDecisionSection: boolean;
   onToggle: (itemId: ItemId, include: boolean) => void;
@@ -28,10 +28,10 @@ export interface AggregateSectionContentProps {
   /** Callback when a variant option is selected. */
   onSelectVariant?: (itemId: ItemId, hash: string) => void;
   /** Diff hook for variant comparison. */
-  diffHook?: UseFleetDiffResult;
+  diffHook?: UseAggregateDiffResult;
 }
 
-function filterItems(items: FleetItem[], filterText: string): FleetItem[] {
+function filterItems(items: AggregateItem[], filterText: string): AggregateItem[] {
   if (!filterText) return items;
   const lower = filterText.toLowerCase();
   return items.filter((item) =>
@@ -44,7 +44,7 @@ function itemIdKey(id: ItemId): string {
 }
 
 function findItemZone(
-  section: FleetSection,
+  section: AggregateSection,
   targetId: string,
 ): "consensus" | "near_consensus" | "divergent" | null {
   if (!section.zones) return null;
@@ -127,7 +127,7 @@ export function AggregateSectionContent({
 
   const rowProps = { isDecisionSection, onToggle, ack, onExpandVariant };
 
-  const isItemExpanded = (item: FleetItem) =>
+  const isItemExpanded = (item: AggregateItem) =>
     expandedItemId != null &&
     JSON.stringify(item.item_id) === JSON.stringify(expandedItemId);
 
@@ -183,7 +183,7 @@ export function AggregateSectionContent({
 
   const suppressHeaders = populatedZones <= 1;
 
-  const renderItems = (items: FleetItem[]) =>
+  const renderItems = (items: AggregateItem[]) =>
     items.map((item) => {
       const key = itemIdKey(item.item_id);
       const expanded = isItemExpanded(item);

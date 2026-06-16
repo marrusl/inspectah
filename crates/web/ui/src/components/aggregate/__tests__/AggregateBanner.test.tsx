@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateBanner } from "../AggregateBanner";
-import type { FleetSummary, ItemId } from "../../../api/types";
+import type { AggregateSummary, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
 const defaultAck: UseVariantAckResult = {
@@ -15,7 +15,7 @@ const defaultAck: UseVariantAckResult = {
   totalCount: 0,
 };
 
-function makeSummary(overrides: Partial<FleetSummary> = {}): FleetSummary {
+function makeSummary(overrides: Partial<AggregateSummary> = {}): AggregateSummary {
   return {
     host_count: 3,
     actionable_variant_items: [],

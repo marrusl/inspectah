@@ -10,7 +10,7 @@ import { ExportDialog } from "./ExportDialog";
 import type { RefineStats, ReferenceSection } from "../api/types";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
-import type { FleetSummary } from "./StatsBar";
+import type { AggregateSummary } from "./StatsBar";
 
 const LS_PANEL_KEY = "inspectah-cf-panel-open";
 
@@ -77,14 +77,14 @@ export interface AppShellProps {
   onSearchNavigate: (sectionId: string, itemId: string) => void;
   /** Extra shortcuts appended to the overlay. */
   extraShortcuts?: Array<{ key: string; description: string }>;
-  /** Fleet-specific toolbar additions. */
+  /** Aggregate-specific toolbar additions. */
   toolbarExtra?: React.ReactNode;
   /** Hamburger button for mobile responsive layout. */
   hamburger?: React.ReactNode;
-  /** Fleet-mode one-line summary for StatsBar. */
-  fleetSummary?: FleetSummary;
+  /** Aggregate-mode one-line summary for StatsBar. */
+  aggregateSummary?: AggregateSummary;
   /** When true, Containerfile panel defaults to open regardless of viewport width. */
-  isFleetMode?: boolean;
+  isAggregateMode?: boolean;
 }
 
 /**
@@ -97,7 +97,7 @@ export interface AppShellProps {
  * - ContainerfilePanel (Ctrl+E)
  * - useKeyboard bindings
  *
- * Used by both single-host mode (App.tsx) and fleet mode (FleetApp).
+ * Used by both single-host mode (App.tsx) and aggregate mode (AggregateApp).
  */
 export function AppShell({
   sidebar,
@@ -121,11 +121,11 @@ export function AppShell({
   extraShortcuts,
   toolbarExtra,
   hamburger,
-  fleetSummary,
-  isFleetMode = false,
+  aggregateSummary,
+  isAggregateMode = false,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(() =>
-    isFleetMode ? readPanelPref() : initialPanelOpen(),
+    isAggregateMode ? readPanelPref() : initialPanelOpen(),
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
@@ -209,7 +209,7 @@ export function AppShell({
         onExport={handleExport}
         isPending={isPending}
         hamburger={hamburger}
-        fleetSummary={fleetSummary}
+        aggregateSummary={aggregateSummary}
       />
       {toolbarExtra && (
         <div className="inspectah-toolbar-extra" data-testid="toolbar-extra">

@@ -3,17 +3,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
 import type {
-  FleetViewResponse,
-  FleetHealthInfo,
+  AggregateViewResponse,
+  AggregateHealthInfo,
   HealthResponse,
-  FleetItem,
+  AggregateItem,
 } from "../../../api/types";
 
 // Mock aggregate-client
-const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
-vi.mock("../../../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn(),
+const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
+vi.mock("../../../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn(),
 }));
 
 // Mock client (used by useAggregateMutation)
@@ -25,10 +25,10 @@ vi.mock("../../../api/client", () => ({
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
 });
 
-const MOCK_AGGREGATE: FleetHealthInfo = {
+const MOCK_AGGREGATE: AggregateHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
@@ -54,7 +54,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 /** A divergent config item for testing. */
-function makeDivergentItem(path: string, include = true): FleetItem {
+function makeDivergentItem(path: string, include = true): AggregateItem {
   return {
     item_id: { kind: "Config", key: { path } },
     include,
@@ -65,9 +65,9 @@ function makeDivergentItem(path: string, include = true): FleetItem {
 }
 
 function makeAggregateViewWithDivergent(
-  divergentItems: FleetItem[],
-  extraServiceItems: FleetItem[] = [],
-): FleetViewResponse {
+  divergentItems: AggregateItem[],
+  extraServiceItems: AggregateItem[] = [],
+): AggregateViewResponse {
   return {
     generation: 1,
     can_undo: false,
@@ -115,7 +115,7 @@ describe("AggregateApp divergent review tracking", () => {
       makeDivergentItem("/etc/bar.conf"),
       makeDivergentItem("/etc/baz.conf"),
     ]);
-    mockFetchFleetView.mockResolvedValue(view);
+    mockFetchAggregateView.mockResolvedValue(view);
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
@@ -131,7 +131,7 @@ describe("AggregateApp divergent review tracking", () => {
 
   it("hides divergent progress when no divergent items exist", async () => {
     const view = makeAggregateViewWithDivergent([]);
-    mockFetchFleetView.mockResolvedValue(view);
+    mockFetchAggregateView.mockResolvedValue(view);
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
@@ -149,7 +149,7 @@ describe("AggregateApp divergent review tracking", () => {
       makeDivergentItem("/etc/bar.conf"),
     ]);
     // First call: initial load. Second call: after mutation refetch.
-    mockFetchFleetView.mockResolvedValue(view);
+    mockFetchAggregateView.mockResolvedValue(view);
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
@@ -181,7 +181,7 @@ describe("AggregateApp divergent review tracking", () => {
 
   it("does not add non-divergent items to confirmed set", async () => {
     // Put a non-divergent service item in a flat section (no zones)
-    const serviceItem: FleetItem = {
+    const serviceItem: AggregateItem = {
       item_id: { kind: "Service", key: { unit: "httpd.service" } },
       include: true,
       triage: { bucket: "universal", prevalence: { count: 3, total: 3 } },
@@ -192,7 +192,7 @@ describe("AggregateApp divergent review tracking", () => {
       [makeDivergentItem("/etc/divergent.conf")],
       [serviceItem],
     );
-    mockFetchFleetView.mockResolvedValue(view);
+    mockFetchAggregateView.mockResolvedValue(view);
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
