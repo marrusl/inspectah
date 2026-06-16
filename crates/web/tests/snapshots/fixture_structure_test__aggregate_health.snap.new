@@ -1,0 +1,36 @@
+---
+source: crates/web/tests/fixture_structure_test.rs
+assertion_line: 22
+expression: value
+---
+{
+  "completeness": "full",
+  "fleet": {
+    "host_count": 3,
+    "hostnames": [
+      "host-01.example.com",
+      "host-02.example.com",
+      "host-03.example.com"
+    ],
+    "label": "web-tier",
+    "merged_at": "2025-01-15T10:30:00Z",
+    "variant_count": 2,
+    "zones_active": true
+  },
+  "host": {
+    "hostname": "fleet-merged",
+    "os_id": "rhel",
+    "os_name": "Red Hat Enterprise Linux",
+    "os_version": "9.4",
+    "schema_version": 3,
+    "system_type": "package"
+  },
+  "policy": {
+    "distro_repos": [
+      "rhel-9-for-x86_64-baseos-rpms",
+      "rhel-9-for-x86_64-appstream-rpms"
+    ]
+  },
+  "session_is_sensitive": false,
+  "status": "ok"
+}

@@ -24,7 +24,7 @@ fn state_change(
         include: true,
         locked: false,
         owning_package: owning_package.map(str::to_string),
-        fleet: None,
+        aggregate: None,
         attention_reason: None,
     }
 }
@@ -666,17 +666,17 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
     assert!(plan.lines.iter().any(|l| l.contains("httpd.service")));
 }
 
-/// Fleet mode: `packages_added` is leaf-only, so `classify_service_presence`
+/// Aggregate mode: `packages_added` is leaf-only, so `classify_service_presence`
 /// would incorrectly omit services owned by auto (non-leaf) packages via
-/// Tier 7. In fleet mode, skip classification entirely — all services Emit,
+/// Tier 7. In aggregate mode, skip classification entirely — all services Emit,
 /// no omissions, no package-derived advisories.
 #[test]
-fn test_fleet_snapshot_skips_service_omission_and_advisories() {
-    use inspectah_core::types::fleet::FleetSnapshotMeta;
+fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
+    use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "test-aggregate".into(),
         host_count: 2,
         hostnames: vec!["alpha".into(), "beta".into()],
         merged_at: "2026-06-09T00:00:00Z".into(),
@@ -709,16 +709,16 @@ fn test_fleet_snapshot_skips_service_omission_and_advisories() {
 
     let plan = render_service_intent(&snap);
 
-    // Fleet: no omissions, no advisories, service must be emitted
-    assert!(plan.omissions.is_empty(), "fleet must not omit services");
+    // Aggregate: no omissions, no advisories, service must be emitted
+    assert!(plan.omissions.is_empty(), "aggregate must not omit services");
     assert!(
         plan.advisories.is_empty(),
-        "fleet must not emit package-derived advisories"
+        "aggregate must not emit package-derived advisories"
     );
     assert!(
         plan.lines
             .iter()
             .any(|l| l.contains("perl-related.service")),
-        "fleet must emit perl-related.service"
+        "aggregate must emit perl-related.service"
     );
 }

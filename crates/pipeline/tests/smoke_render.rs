@@ -30,7 +30,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
             ServiceStateChange {
@@ -40,7 +40,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
         ],
@@ -99,7 +99,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
             source: "/etc/sysctl.d/99-custom.conf".into(),
             include: true,
             locked: false,
-            fleet: None,
+            aggregate: None,
         }],
         modules_load_d: vec![ConfigSnippet {
             path: "etc/modules-load.d/br_netfilter.conf".into(),

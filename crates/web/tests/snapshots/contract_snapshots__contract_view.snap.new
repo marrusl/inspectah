@@ -1,0 +1,131 @@
+---
+source: crates/web/tests/contract_snapshots.rs
+assertion_line: 229
+expression: json
+---
+{
+  "baseline_summary": null,
+  "config_files": [],
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n# 1 custom audit rule file(s) materialized under config/etc/audit/rules.d/\n# 1 custom PAM config file(s) materialized under config/etc/pam.d/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "flatpaks": [],
+  "generation": 0,
+  "package_groups": [],
+  "packages": [
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "epoch": "",
+        "include": false,
+        "name": "httpd",
+        "release": "11.el9",
+        "source_repo": "",
+        "state": "added",
+        "version": "2.4.57"
+      },
+      "triage": {
+        "primary_reason": "package_no_repo_source",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      }
+    }
+  ],
+  "quadlets": [
+    {
+      "content": "[Container]\nImage=quay.io/myorg/myapp:latest",
+      "image": "quay.io/myorg/myapp:latest",
+      "include": false,
+      "locked": false,
+      "name": "myapp.container",
+      "path": "/etc/containers/systemd/myapp.container",
+      "triage": {
+        "primary_reason": "quadlet_user_deployed",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "repo_groups": [
+    {
+      "enabled": true,
+      "is_distro": false,
+      "package_count": 1,
+      "provenance": "unknown",
+      "section_id": "",
+      "tier": "none"
+    }
+  ],
+  "service_dropins": [],
+  "service_states": [
+    {
+      "current_state": "enabled",
+      "default_state": "disable",
+      "include": false,
+      "locked": false,
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "httpd.service"
+    }
+  ],
+  "session_is_sensitive": false,
+  "stats": {
+    "baseline_available": false,
+    "can_redo": false,
+    "can_undo": false,
+    "needs_review_count": 1,
+    "ops_applied": 0,
+    "sections": [
+      {
+        "excluded": 1,
+        "included": 0,
+        "kind": "package",
+        "total": 1
+      },
+      {
+        "excluded": 0,
+        "included": 0,
+        "kind": "config",
+        "total": 0
+      }
+    ]
+  },
+  "sysctls": [
+    {
+      "default": "0",
+      "include": false,
+      "key": "net.ipv4.ip_forward",
+      "locked": false,
+      "runtime": "1",
+      "source": "/etc/sysctl.d/k8s.conf",
+      "triage": {
+        "primary_reason": "sysctl_file_backed_override",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "tuned": [],
+  "users_groups_decisions": [],
+  "version_changes": [
+    {
+      "arch": "x86_64",
+      "base_epoch": "",
+      "base_version": "3.0.7-27.el9",
+      "direction": "upgrade",
+      "host_epoch": "",
+      "host_version": "3.0.7-28.el9",
+      "name": "openssl"
+    }
+  ]
+}

@@ -75,8 +75,8 @@ fn fixture_fleet_view() {
 }
 
 #[test]
-fn fixture_fleet_health() {
-    snapshot_fixture("fleet_health", "fleet/health.json");
+fn fixture_aggregate_health() {
+    snapshot_fixture("aggregate_health", "fleet/health.json");
 }
 
 #[test]

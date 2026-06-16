@@ -1,0 +1,140 @@
+---
+source: crates/web/tests/contract_snapshots.rs
+assertion_line: 354
+expression: json
+---
+{
+  "baseline_summary": null,
+  "config_files": [],
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# \"Web Server\" degraded (member excluded): members rendered individually\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n# TODO: 'mod_ssl.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "flatpaks": [],
+  "generation": 0,
+  "package_groups": [
+    {
+      "added_count": 2,
+      "degradation_reason": "member_excluded",
+      "locked_count": 0,
+      "member_count": 4,
+      "members": [
+        {
+          "in_base_image": false,
+          "locked": false,
+          "name": "httpd",
+          "overlap_groups": []
+        },
+        {
+          "in_base_image": false,
+          "locked": false,
+          "name": "mod_ssl",
+          "overlap_groups": []
+        },
+        {
+          "in_base_image": true,
+          "locked": false,
+          "name": "apr",
+          "overlap_groups": []
+        },
+        {
+          "in_base_image": true,
+          "locked": false,
+          "name": "apr-util",
+          "overlap_groups": []
+        }
+      ],
+      "name": "Web Server",
+      "optional_spillover_count": 0,
+      "render_state": "degraded"
+    }
+  ],
+  "package_provenances": {
+    "httpd.x86_64": {
+      "group_name": "Web Server",
+      "kind": "degraded_member"
+    },
+    "mod_ssl.x86_64": {
+      "group_name": "Web Server",
+      "kind": "degraded_member"
+    }
+  },
+  "packages": [
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "epoch": "",
+        "include": false,
+        "name": "httpd",
+        "release": "11.el9",
+        "source_repo": "",
+        "state": "added",
+        "version": "2.4.57"
+      },
+      "triage": {
+        "primary_reason": "package_no_repo_source",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "epoch": "",
+        "include": false,
+        "name": "mod_ssl",
+        "release": "11.el9",
+        "source_repo": "",
+        "state": "added",
+        "version": "2.4.57"
+      },
+      "triage": {
+        "primary_reason": "package_no_repo_source",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      }
+    }
+  ],
+  "quadlets": [],
+  "repo_groups": [
+    {
+      "enabled": true,
+      "is_distro": false,
+      "package_count": 2,
+      "provenance": "unknown",
+      "section_id": "",
+      "tier": "none"
+    }
+  ],
+  "service_dropins": [],
+  "service_states": [],
+  "session_is_sensitive": false,
+  "stats": {
+    "baseline_available": false,
+    "can_redo": false,
+    "can_undo": false,
+    "needs_review_count": 2,
+    "ops_applied": 0,
+    "sections": [
+      {
+        "excluded": 2,
+        "included": 0,
+        "kind": "package",
+        "total": 2
+      },
+      {
+        "excluded": 0,
+        "included": 0,
+        "kind": "config",
+        "total": 0
+      }
+    ]
+  },
+  "sysctls": [],
+  "tuned": [],
+  "users_groups_decisions": [],
+  "version_changes": []
+}

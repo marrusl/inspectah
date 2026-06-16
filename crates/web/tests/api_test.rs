@@ -441,7 +441,7 @@ fn rich_snapshot() -> InspectionSnapshot {
             include: false,
             locked: false,
             owning_package: None,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         }],
         drop_ins: vec![
@@ -1311,7 +1311,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 include: true,
                 locked: false,
                 owning_package: Some("custom-app".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
             ServiceStateChange {
@@ -1321,7 +1321,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 include: true,
                 locked: false,
                 owning_package: Some("sssd".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
         ],

@@ -4,7 +4,7 @@ use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, VariantSelection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
@@ -60,9 +60,9 @@ fn single_host_state() -> Arc<AppState> {
     })
 }
 
-fn fleet_state() -> Arc<AppState> {
+fn aggregate_state() -> Arc<AppState> {
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "web-tier".into(),
         host_count: 5,
         hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
@@ -77,26 +77,26 @@ fn fleet_state() -> Arc<AppState> {
 }
 
 #[tokio::test]
-async fn fleet_health_returns_fleet_context() {
-    let state = fleet_state();
+async fn aggregate_health_returns_aggregate_context() {
+    let state = aggregate_state();
     let app = app(state);
     let (status, json) = get_json(&app, "/api/health").await;
 
     assert_eq!(status, StatusCode::OK);
 
-    let fleet = json
-        .get("fleet")
-        .expect("fleet field should be present for fleet snapshots");
+    let agg = json
+        .get("aggregate")
+        .expect("aggregate field should be present for aggregate snapshots");
     assert!(
-        !fleet.is_null(),
-        "fleet should not be null for fleet snapshots"
+        !agg.is_null(),
+        "aggregate should not be null for aggregate snapshots"
     );
 
-    assert_eq!(fleet["host_count"], 5);
-    assert_eq!(fleet["label"], "web-tier");
-    assert_eq!(fleet["merged_at"], "2026-05-21T12:00:00Z");
+    assert_eq!(agg["host_count"], 5);
+    assert_eq!(agg["label"], "web-tier");
+    assert_eq!(agg["merged_at"], "2026-05-21T12:00:00Z");
 
-    let hostnames = fleet["hostnames"]
+    let hostnames = agg["hostnames"]
         .as_array()
         .expect("hostnames should be an array");
     assert_eq!(hostnames.len(), 3);
@@ -104,33 +104,33 @@ async fn fleet_health_returns_fleet_context() {
 
     // zones_active and variant_count should be present
     assert!(
-        fleet.get("zones_active").is_some(),
+        agg.get("zones_active").is_some(),
         "zones_active should be present"
     );
     assert!(
-        fleet.get("variant_count").is_some(),
+        agg.get("variant_count").is_some(),
         "variant_count should be present"
     );
 }
 
 #[tokio::test]
-async fn single_host_health_returns_null_fleet() {
+async fn single_host_health_returns_null_aggregate() {
     let state = single_host_state();
     let app = app(state);
     let (status, json) = get_json(&app, "/api/health").await;
 
     assert_eq!(status, StatusCode::OK);
 
-    let fleet = json.get("fleet").expect("fleet field should be present");
+    let agg = json.get("aggregate").expect("aggregate field should be present");
     assert!(
-        fleet.is_null(),
-        "fleet should be null for single-host snapshots"
+        agg.is_null(),
+        "aggregate should be null for single-host snapshots"
     );
 }
 
 #[tokio::test]
-async fn fleet_health_includes_session_is_sensitive() {
-    let state = fleet_state();
+async fn aggregate_health_includes_session_is_sensitive() {
+    let state = aggregate_state();
     let app = app(state);
     let (status, json) = get_json(&app, "/api/health").await;
 
@@ -157,10 +157,10 @@ async fn single_host_health_includes_session_is_sensitive() {
 }
 
 #[tokio::test]
-async fn fleet_view_returns_zone_grouped_sections() {
-    let state = fleet_state();
+async fn aggregate_view_returns_zone_grouped_sections() {
+    let state = aggregate_state();
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -193,7 +193,7 @@ async fn fleet_view_returns_zone_grouped_sections() {
         .as_array()
         .expect("sections should be an array");
 
-    // For a 5-host fleet, zones should be grouped
+    // For a 5-host aggregate, zones should be grouped
     // Assert: sections have zones with consensus/near_consensus/divergent
     for section in sections {
         // Check whether this section uses zone grouping (presence of zones field)
@@ -262,11 +262,11 @@ async fn fleet_view_returns_zone_grouped_sections() {
 }
 
 #[tokio::test]
-async fn fleet_view_returns_flat_for_fleet_of_2() {
-    // Create a fleet-of-2 fixture
+async fn aggregate_view_returns_flat_for_aggregate_of_2() {
+    // Create a aggregate-of-2 fixture
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "small-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "small-aggregate".into(),
         host_count: 2,
         hostnames: vec!["host-01".into(), "host-02".into()],
         merged_at: "2026-05-21T12:00:00Z".into(),
@@ -278,11 +278,11 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
         sections_cache: OnceLock::new(),
     });
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
 
-    // For a 2-host fleet, sections should use flat listing (no zone grouping)
+    // For a 2-host aggregate, sections should use flat listing (no zone grouping)
     let sections = json
         .get("sections")
         .expect("sections should be present")
@@ -290,7 +290,7 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
         .expect("sections should be an array");
 
     for section in sections {
-        // In a small fleet, zones should be absent or null (flat listing mode)
+        // In a small aggregate, zones should be absent or null (flat listing mode)
         let zones = section.get("zones");
         let has_zones = zones.is_some() && !zones.unwrap().is_null();
 
@@ -305,10 +305,10 @@ async fn fleet_view_returns_flat_for_fleet_of_2() {
 }
 
 #[tokio::test]
-async fn fleet_view_returns_error_for_single_host() {
+async fn aggregate_view_returns_error_for_single_host() {
     let state = single_host_state();
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -317,25 +317,25 @@ async fn fleet_view_returns_error_for_single_host() {
         .get("error")
         .expect("error field should be present for single-host session");
     assert_eq!(
-        error, "not a fleet session",
-        "error message should indicate not a fleet session"
+        error, "not an aggregate session",
+        "error message should indicate not an aggregate session"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Fleet diff tests
+// Aggregate diff tests
 // ---------------------------------------------------------------------------
 
 const VARIANT_A_CONTENT: &str = "# Config A\nserver_name = web-01\nport = 8080\n";
 const VARIANT_B_CONTENT: &str = "# Config A\nserver_name = web-02\nport = 9090\ntimeout = 30\n";
 
-fn fleet_state_with_variants() -> Arc<AppState> {
+fn aggregate_state_with_variants() -> Arc<AppState> {
     let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
     let hash_b = ContentHash::from_content(VARIANT_B_CONTENT.as_bytes());
     _ = (&hash_a, &hash_b); // suppress unused warnings in fixture
 
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "web-tier".into(),
         host_count: 5,
         hostnames: vec![
@@ -358,7 +358,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: 5,
                     hosts: vec!["web-01".into(), "web-02".into(), "web-03".into()],
@@ -373,7 +373,7 @@ fn fleet_state_with_variants() -> Arc<AppState> {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: 5,
                     hosts: vec!["web-04".into(), "web-05".into()],
@@ -390,8 +390,8 @@ fn fleet_state_with_variants() -> Arc<AppState> {
 }
 
 #[tokio::test]
-async fn fleet_diff_returns_unified_diff() {
-    let state = fleet_state_with_variants();
+async fn aggregate_diff_returns_unified_diff() {
+    let state = aggregate_state_with_variants();
     let app = app(state);
 
     let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
@@ -399,7 +399,7 @@ async fn fleet_diff_returns_unified_diff() {
 
     let (status, json) = post_json(
         &app,
-        "/api/fleet/diff",
+        "/api/aggregate/diff",
         serde_json::json!({
             "item_id": {"kind": "Config", "key": {"path": "/etc/app/config.conf"}},
             "base": hash_a.as_str(),
@@ -463,13 +463,13 @@ async fn fleet_diff_returns_unified_diff() {
 }
 
 #[tokio::test]
-async fn fleet_diff_422_unknown_item() {
-    let state = fleet_state_with_variants();
+async fn aggregate_diff_422_unknown_item() {
+    let state = aggregate_state_with_variants();
     let app = app(state);
 
     let (status, json) = post_json(
         &app,
-        "/api/fleet/diff",
+        "/api/aggregate/diff",
         serde_json::json!({
             "item_id": {"kind": "Config", "key": {"path": "/etc/nonexistent.conf"}},
             "base": "abc123",
@@ -489,15 +489,15 @@ async fn fleet_diff_422_unknown_item() {
 }
 
 #[tokio::test]
-async fn fleet_diff_422_unknown_hash() {
-    let state = fleet_state_with_variants();
+async fn aggregate_diff_422_unknown_hash() {
+    let state = aggregate_state_with_variants();
     let app = app(state);
 
     let hash_a = ContentHash::from_content(VARIANT_A_CONTENT.as_bytes());
 
     let (status, json) = post_json(
         &app,
-        "/api/fleet/diff",
+        "/api/aggregate/diff",
         serde_json::json!({
             "item_id": {"kind": "Config", "key": {"path": "/etc/app/config.conf"}},
             "base": hash_a.as_str(),
@@ -517,13 +517,13 @@ async fn fleet_diff_422_unknown_hash() {
 }
 
 #[tokio::test]
-async fn fleet_diff_422_binary() {
+async fn aggregate_diff_422_binary() {
     // Build a state with binary content (contains null bytes)
     let binary_content = "binary\0content";
     let text_content = "normal text content\n";
 
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "test".into(),
         host_count: 2,
         hostnames: vec!["h1".into(), "h2".into()],
@@ -540,7 +540,7 @@ async fn fleet_diff_422_binary() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 2,
                     hosts: vec!["h1".into()],
@@ -555,7 +555,7 @@ async fn fleet_diff_422_binary() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 2,
                     hosts: vec!["h2".into()],
@@ -576,7 +576,7 @@ async fn fleet_diff_422_binary() {
 
     let (status, json) = post_json(
         &app,
-        "/api/fleet/diff",
+        "/api/aggregate/diff",
         serde_json::json!({
             "item_id": {"kind": "Config", "key": {"path": "/etc/binary.conf"}},
             "base": hash_binary.as_str(),
@@ -597,9 +597,9 @@ async fn fleet_diff_422_binary() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
+async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "web-tier".into(),
         host_count: 3,
         hostnames: vec!["h1".into(), "h2".into(), "h3".into()],
@@ -618,7 +618,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: 3,
                     hosts: vec!["h1".into(), "h2".into()],
@@ -633,7 +633,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 3,
                     hosts: vec!["h3".into()],
@@ -656,7 +656,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: 3,
                     hosts: vec!["h1".into(), "h2".into()],
@@ -671,7 +671,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 3,
                     hosts: vec!["h3".into()],
@@ -687,7 +687,7 @@ async fn fleet_view_informational_variants_from_quadlets_and_dropins() {
         sections_cache: OnceLock::new(),
     });
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -776,8 +776,8 @@ fn find_item_in_section<'a>(
 // Repo groups / repo conflict tests
 // ---------------------------------------------------------------------------
 
-fn fleet_state_with_packages() -> Arc<AppState> {
-    use inspectah_core::fleet::merge_snapshots;
+fn aggregate_state_with_packages() -> Arc<AppState> {
+    use inspectah_core::aggregate::merge_snapshots;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
@@ -872,8 +872,8 @@ fn fleet_state_with_packages() -> Arc<AppState> {
     })
 }
 
-/// Collect all fleet items matching a given source_repo from all sections.
-fn fleet_items_by_repo<'a>(json: &'a serde_json::Value, repo: &str) -> Vec<&'a serde_json::Value> {
+/// Collect all aggregate items matching a given source_repo from all sections.
+fn aggregate_items_by_repo<'a>(json: &'a serde_json::Value, repo: &str) -> Vec<&'a serde_json::Value> {
     json["sections"]
         .as_array()
         .unwrap()
@@ -897,10 +897,10 @@ fn fleet_items_by_repo<'a>(json: &'a serde_json::Value, repo: &str) -> Vec<&'a s
 }
 
 #[tokio::test]
-async fn fleet_view_includes_repo_groups() {
-    let state = fleet_state_with_packages();
+async fn aggregate_view_includes_repo_groups() {
+    let state = aggregate_state_with_packages();
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
     let repo_groups = json.get("repo_groups").unwrap().as_array().unwrap();
@@ -926,10 +926,10 @@ async fn fleet_view_includes_repo_groups() {
 }
 
 #[tokio::test]
-async fn fleet_view_items_have_source_repo_and_conflict() {
-    let state = fleet_state_with_packages();
+async fn aggregate_view_items_have_source_repo_and_conflict() {
+    let state = aggregate_state_with_packages();
     let app = app(state);
-    let (_, json) = get_json(&app, "/api/fleet/view").await;
+    let (_, json) = get_json(&app, "/api/aggregate/view").await;
 
     // Find the packages section
     let packages_section = json["sections"]
@@ -985,13 +985,13 @@ async fn fleet_view_items_have_source_repo_and_conflict() {
 }
 
 #[tokio::test]
-async fn fleet_exclude_repo_round_trip() {
-    let state = fleet_state_with_packages();
+async fn aggregate_exclude_repo_round_trip() {
+    let state = aggregate_state_with_packages();
     let app = app(state);
 
     // 1. Initial view — epel packages included, repo enabled
-    let (_, initial) = get_json(&app, "/api/fleet/view").await;
-    let epel_items = fleet_items_by_repo(&initial, "epel");
+    let (_, initial) = get_json(&app, "/api/aggregate/view").await;
+    let epel_items = aggregate_items_by_repo(&initial, "epel");
     assert!(!epel_items.is_empty(), "should have epel packages");
     for item in &epel_items {
         assert_eq!(
@@ -1023,9 +1023,9 @@ async fn fleet_exclude_repo_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // 3. After exclude — FleetItem.include=false AND repo_groups.enabled=false
-    let (_, after_exclude) = get_json(&app, "/api/fleet/view").await;
-    let epel_items = fleet_items_by_repo(&after_exclude, "epel");
+    // 3. After exclude — AggregateItem.include=false AND repo_groups.enabled=false
+    let (_, after_exclude) = get_json(&app, "/api/aggregate/view").await;
+    let epel_items = aggregate_items_by_repo(&after_exclude, "epel");
     for item in &epel_items {
         assert_eq!(
             item["include"], false,
@@ -1060,8 +1060,8 @@ async fn fleet_exclude_repo_round_trip() {
     assert_eq!(status, StatusCode::OK);
 
     // 5. After include — all back to include=true, repo enabled=true
-    let (_, after_include) = get_json(&app, "/api/fleet/view").await;
-    let epel_items = fleet_items_by_repo(&after_include, "epel");
+    let (_, after_include) = get_json(&app, "/api/aggregate/view").await;
+    let epel_items = aggregate_items_by_repo(&after_include, "epel");
     for item in &epel_items {
         assert_eq!(
             item["include"], true,
@@ -1081,12 +1081,12 @@ async fn fleet_exclude_repo_round_trip() {
 }
 
 #[tokio::test]
-async fn fleet_view_contains_leaf_authority_metadata() {
-    // Fleet snapshot with partial leaf authority: 2 of 3 hosts had
-    // leaf classification data. The fleet/view response must surface
+async fn aggregate_view_contains_leaf_authority_metadata() {
+    // Aggregate snapshot with partial leaf authority: 2 of 3 hosts had
+    // leaf classification data. The aggregate/view response must surface
     // leaf_authority_hosts and leaf_total_hosts for downstream rendering.
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "web-tier".into(),
         host_count: 3,
         hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
@@ -1105,21 +1105,21 @@ async fn fleet_view_contains_leaf_authority_metadata() {
         sections_cache: OnceLock::new(),
     });
     let app = app(state);
-    let (status, json) = get_json(&app, "/api/fleet/view").await;
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
 
     assert_eq!(status, StatusCode::OK);
 
     let summary = json
         .get("summary")
-        .expect("fleet/view must include summary");
+        .expect("aggregate/view must include summary");
     assert_eq!(
         summary.get("leaf_authority_hosts").and_then(|v| v.as_u64()),
         Some(2),
-        "fleet/view summary must include leaf_authority_hosts"
+        "aggregate/view summary must include leaf_authority_hosts"
     );
     assert_eq!(
         summary.get("leaf_total_hosts").and_then(|v| v.as_u64()),
         Some(3),
-        "fleet/view summary must include leaf_total_hosts"
+        "aggregate/view summary must include leaf_total_hosts"
     );
 }
