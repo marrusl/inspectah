@@ -15,6 +15,6 @@
       "rhel-9-for-x86_64-appstream-rpms"
     ]
   },
-  "fleet": null,
+  "aggregate": null,
   "session_is_sensitive": false
 }

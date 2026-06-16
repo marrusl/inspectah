@@ -7,14 +7,14 @@ import {
 } from "./helpers/mock-api";
 import { expectNoAxeViolations } from "./helpers/assertions";
 
-test.describe("Fleet mode", () => {
+test.describe("Aggregate mode", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ page }) => {
-    await applyMockApi(page, "fleet-3");
+    await applyMockApi(page, "aggregate-3");
     await page.goto("/");
-    // Fleet app renders with data-testid="fleet-app"
-    await expect(page.getByTestId("fleet-app")).toBeVisible({ timeout: 10_000 });
+    // Aggregate app renders with data-testid="aggregate-app"
+    await expect(page.getByTestId("aggregate-app")).toBeVisible({ timeout: 10_000 });
   });
 
   test.afterEach(async ({ page }) => {
@@ -22,25 +22,25 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 1. Fleet app loads
+  // 1. Aggregate app loads
   // -----------------------------------------------------------------------
-  test("fleet app loads with fleet preset", async ({ page }) => {
-    const fleetApp = page.getByTestId("fleet-app");
-    await expect(fleetApp).toBeVisible();
+  test("aggregate app loads with aggregate preset", async ({ page }) => {
+    const aggregateApp = page.getByTestId("aggregate-app");
+    await expect(aggregateApp).toBeVisible();
 
-    // Fleet host trigger in StatsBar shows "3 hosts"
-    const hostTrigger = page.getByTestId("fleet-host-trigger");
+    // Aggregate host trigger in StatsBar shows "3 hosts"
+    const hostTrigger = page.getByTestId("aggregate-host-trigger");
     await expect(hostTrigger).toBeVisible();
     await expect(hostTrigger).toContainText("3");
     await expect(hostTrigger).toContainText("hosts");
   });
 
   // -----------------------------------------------------------------------
-  // 2. Zone groups render (Config Files section uses FleetSectionContent)
+  // 2. Zone groups render (Config Files section uses AggregateSectionContent)
   // -----------------------------------------------------------------------
   test("zone groups render on config files section", async ({ page }) => {
     // Packages section uses unified PackageList (flat, no zone groups).
-    // Navigate to Config Files which renders via FleetSectionContent with zones.
+    // Navigate to Config Files which renders via AggregateSectionContent with zones.
     const sidebar = page.locator(".inspectah-layout__sidebar");
     await sidebar.getByText("Config Files").click();
 
@@ -54,10 +54,10 @@ test.describe("Fleet mode", () => {
     await expect(consensus).toBeVisible();
 
     // Zone labels
-    await expect(divergent.locator(".fleet-zone-group__label")).toContainText(
+    await expect(divergent.locator(".aggregate-zone-group__label")).toContainText(
       "Divergent",
     );
-    await expect(consensus.locator(".fleet-zone-group__label")).toContainText(
+    await expect(consensus.locator(".aggregate-zone-group__label")).toContainText(
       "Consensus",
     );
 
@@ -67,21 +67,21 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 3. Fleet banner
+  // 3. Aggregate banner
   // -----------------------------------------------------------------------
-  test("fleet banner shows variant review status", async ({ page }) => {
+  test("aggregate banner shows variant review status", async ({ page }) => {
     // The fixture has 1 actionable variant item (/etc/chrony.conf).
     // useVariantAck may auto-ack from localStorage, so the banner can show
     // either "N items have variants requiring review" (danger/warning) or
     // "All N variants reviewed" (success). Both are valid banner states.
-    const banner = page.getByTestId("fleet-banner");
+    const banner = page.getByTestId("aggregate-banner");
     await expect(banner).toBeVisible();
 
     // Banner has role="status" for accessibility
     await expect(banner).toHaveAttribute("role", "status");
 
     // Banner headline references variants (reviewed or needing review)
-    const headline = banner.locator(".fleet-banner__headline");
+    const headline = banner.locator(".aggregate-banner__headline");
     await expect(headline).toBeVisible();
     await expect(headline).toContainText(/variant/i);
   });
@@ -98,9 +98,9 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 5. Fleet undo/redo (packages section uses PackageList with checkboxes)
+  // 5. Aggregate undo/redo (packages section uses PackageList with checkboxes)
   // -----------------------------------------------------------------------
-  test("undo reverts a fleet toggle and redo restores it", async ({
+  test("undo reverts a aggregate toggle and redo restores it", async ({
     page,
   }) => {
     // Wire up POST handlers for op, undo, redo
@@ -120,15 +120,15 @@ test.describe("Fleet mode", () => {
       "post-responses/redo/success.json",
     );
 
-    // Set up the fleet view sequence: initial -> after toggle -> after undo
-    // Fleet mutations always re-fetch GET /api/fleet/view; POST body discarded.
+    // Set up the aggregate view sequence: initial -> after toggle -> after undo
+    // Aggregate mutations always re-fetch GET /api/aggregate/view; POST body discarded.
     await mockSequence(
       page,
-      "/api/fleet/view",
+      "/api/aggregate/view",
       [
-        "fleet/fleet-view.json",
-        "sequences/fleet-toggle-undo/01-after-toggle.json",
-        "sequences/fleet-toggle-undo/02-after-undo.json",
+        "aggregate/aggregate-view.json",
+        "sequences/aggregate-toggle-undo/01-after-toggle.json",
+        "sequences/aggregate-toggle-undo/02-after-undo.json",
       ],
       { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
     );
@@ -163,11 +163,11 @@ test.describe("Fleet mode", () => {
   // 6. Diff drawer (Config Files section has variant items)
   // -----------------------------------------------------------------------
   test("diff drawer opens for variant comparison", async ({ page }) => {
-    // Wire the fleet diff POST endpoint
+    // Wire the aggregate diff POST endpoint
     await mockPostResponse(
       page,
-      "/api/fleet/diff",
-      "post-responses/fleet-diff/success.json",
+      "/api/aggregate/diff",
+      "post-responses/aggregate-diff/success.json",
     );
 
     // Navigate to Config Files section via sidebar
@@ -180,7 +180,7 @@ test.describe("Fleet mode", () => {
 
     // Find the chrony.conf item row (it has 2 variants)
     const chronyRow = page.locator(
-      '[data-testid="fleet-item-row"][data-item-id*="chrony"]',
+      '[data-testid="aggregate-item-row"][data-item-id*="chrony"]',
     );
     await expect(chronyRow.first()).toBeVisible({ timeout: 3_000 });
 
@@ -188,7 +188,7 @@ test.describe("Fleet mode", () => {
     await chronyRow.first().click();
 
     // The variant expand button shows "2 variants" — click it if separate
-    const variantBtn = chronyRow.first().locator(".fleet-item-row__variants");
+    const variantBtn = chronyRow.first().locator(".aggregate-item-row__variants");
     const hasSeparateBtn = await variantBtn.isVisible().catch(() => false);
     if (hasSeparateBtn) {
       await variantBtn.click();
@@ -210,15 +210,15 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 7. Fleet keyboard shortcuts
+  // 7. Aggregate keyboard shortcuts
   // -----------------------------------------------------------------------
-  test("? opens shortcut overlay with fleet shortcuts", async ({ page }) => {
+  test("? opens shortcut overlay with aggregate shortcuts", async ({ page }) => {
     await page.keyboard.press("?");
 
     const overlay = page.locator('[data-testid="shortcut-overlay"]');
     await expect(overlay).toBeVisible({ timeout: 2_000 });
 
-    // Fleet mode adds the "c" shortcut for "Compare variants"
+    // Aggregate mode adds the "c" shortcut for "Compare variants"
     await expect(overlay).toContainText("Compare variants");
 
     // Close the overlay
@@ -227,14 +227,14 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 8. Fleet axe scan
+  // 8. Aggregate axe scan
   // -----------------------------------------------------------------------
-  test("fleet view has no critical accessibility violations", async ({
+  test("aggregate view has no critical accessibility violations", async ({
     page,
   }) => {
     // Disable color-contrast (false positives with PatternFly theme variables)
     // and aria-allowed-attr (aria-sort="none" on sort-header buttons is a
-    // known upstream PatternFly/component issue, not a fleet-specific bug).
+    // known upstream PatternFly/component issue, not a aggregate-specific bug).
     await expectNoAxeViolations(page, undefined, [
       "color-contrast",
       "aria-allowed-attr",
@@ -242,10 +242,10 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 9. Fleet banner ARIA
+  // 9. Aggregate banner ARIA
   // -----------------------------------------------------------------------
-  test("fleet banner has appropriate ARIA attributes", async ({ page }) => {
-    const banner = page.getByTestId("fleet-banner");
+  test("aggregate banner has appropriate ARIA attributes", async ({ page }) => {
+    const banner = page.getByTestId("aggregate-banner");
     await expect(banner).toBeVisible();
 
     // Banner uses role="status" for live region semantics
@@ -257,7 +257,7 @@ test.describe("Fleet mode", () => {
 
     // Banner items list may be empty if all variants are acked.
     // When unacked items exist, navigation buttons have aria-label.
-    const navButtons = banner.locator(".fleet-banner__item-link");
+    const navButtons = banner.locator(".aggregate-banner__item-link");
     const navCount = await navButtons.count();
     if (navCount > 0) {
       const firstBtn = navButtons.first();
@@ -268,18 +268,18 @@ test.describe("Fleet mode", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 10. Fleet item rows focusable (Config Files section uses FleetItemRow)
+  // 10. Aggregate item rows focusable (Config Files section uses AggregateItemRow)
   // -----------------------------------------------------------------------
-  test("fleet item rows have tabindex for keyboard navigation", async ({
+  test("aggregate item rows have tabindex for keyboard navigation", async ({
     page,
   }) => {
-    // Navigate to Config Files section which uses FleetSectionContent
-    // and renders FleetItemRow components (Packages uses PackageList instead).
+    // Navigate to Config Files section which uses AggregateSectionContent
+    // and renders AggregateItemRow components (Packages uses PackageList instead).
     const sidebar = page.locator(".inspectah-layout__sidebar");
     await sidebar.getByText("Config Files").click();
 
-    // Fleet item rows have role="row" and tabIndex={0}
-    const itemRows = page.locator('[data-testid="fleet-item-row"]');
+    // Aggregate item rows have role="row" and tabIndex={0}
+    const itemRows = page.locator('[data-testid="aggregate-item-row"]');
     const rowCount = await itemRows.count();
     expect(rowCount).toBeGreaterThan(0);
 

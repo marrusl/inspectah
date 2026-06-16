@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 
-export type Preset = "single-host" | "fleet-3" | "empty";
+export type Preset = "single-host" | "aggregate-3" | "empty";
 export type RouteOverrides = Record<string, string>;
 export type ErrorKind = "500" | "timeout" | "malformed";
 
@@ -21,12 +21,12 @@ const PRESET_ROUTE_MAP: Record<string, string> = {
   "viewed-empty.json": "/api/viewed",
   "sections.json": "/api/snapshot/sections",
   "user-preview.json": "/api/user-preview",
-  "fleet-view.json": "/api/fleet/view",
+  "aggregate-view.json": "/api/aggregate/view",
 };
 
 const PRESET_DIR_MAP: Record<Preset, string> = {
   "single-host": "single-host",
-  "fleet-3": "fleet",
+  "aggregate-3": "aggregate",
   "empty": "empty",
 };
 

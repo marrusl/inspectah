@@ -1,7 +1,7 @@
 {
   "status": "ok",
   "host": {
-    "hostname": "fleet-merged",
+    "hostname": "aggregate-merged",
     "os_name": "Red Hat Enterprise Linux",
     "os_version": "9.4",
     "os_id": "rhel",
@@ -15,7 +15,7 @@
       "rhel-9-for-x86_64-appstream-rpms"
     ]
   },
-  "fleet": {
+  "aggregate": {
     "host_count": 3,
     "hostnames": [
       "host-01.example.com",
