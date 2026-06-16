@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" font-family="-apple-system, 'RedHatText', 'Helvetica Neue', sans-serif">
-  <title>Option A: Inline Popover — Small Fleet (3 hosts)</title>
+  <title>Option A: Inline Popover — Small Aggregate (3 hosts)</title>
 
   <!-- Background -->
   <rect width="1200" height="700" fill="#f0f0f0"/>
@@ -8,7 +8,7 @@
   <rect x="0" y="0" width="1200" height="44" fill="#ffffff"/>
   <line x1="0" y1="44" x2="1200" y2="44" stroke="#d2d2d2" stroke-width="1"/>
 
-  <!-- Fleet stats text -->
+  <!-- Aggregate stats text -->
   <text x="16" y="27" font-size="13" fill="#151515">
     <tspan font-weight="700" fill="#0066cc" text-decoration="underline" cursor="pointer">3 hosts</tspan>
     <tspan fill="#6a6e73"> · </tspan>
@@ -115,7 +115,7 @@
   <rect x="16" y="54" width="220" height="130" rx="6" fill="#ffffff" stroke="#d2d2d2" stroke-width="1" filter="url(#popoverShadow)"/>
 
   <!-- Popover title -->
-  <text x="28" y="76" font-size="13" fill="#151515" font-weight="700">Fleet Hosts</text>
+  <text x="28" y="76" font-size="13" fill="#151515" font-weight="700">Aggregate Hosts</text>
   <line x1="28" y1="84" x2="224" y2="84" stroke="#d2d2d2" stroke-width="1"/>
 
   <!-- Host list (monospace) -->
@@ -136,7 +136,7 @@
   <!-- ═══ Annotation ═══ -->
   <rect x="300" y="530" rx="4" ry="4" width="640" height="120" fill="#ffffff" stroke="#d2d2d2" stroke-width="1"/>
   <text x="320" y="556" font-size="14" fill="#151515" font-weight="700">Option A: Inline Popover from StatsBar</text>
-  <text x="320" y="576" font-size="12" fill="#6a6e73">Small fleet (3 hosts: web-01, web-02, web-03)</text>
+  <text x="320" y="576" font-size="12" fill="#6a6e73">Small aggregate (3 hosts: web-01, web-02, web-03)</text>
   <text x="320" y="596" font-size="12" fill="#6a6e73">Click the "3 hosts" link in the StatsBar to open the popover.</text>
   <text x="320" y="616" font-size="12" fill="#6a6e73">Zero layout cost when closed. Monospace hostname list, sorted alphabetically.</text>
   <text x="320" y="636" font-size="12" fill="#0066cc">PF components: Popover, Button variant="link", Content</text>

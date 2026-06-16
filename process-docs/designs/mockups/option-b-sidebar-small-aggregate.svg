@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" font-family="-apple-system, 'RedHatText', 'Helvetica Neue', sans-serif">
-  <title>Option B: Expandable Sidebar Section — Small Fleet (3 hosts, expanded)</title>
+  <title>Option B: Expandable Sidebar Section — Small Aggregate (3 hosts, expanded)</title>
 
   <!-- Background -->
   <rect width="1200" height="700" fill="#f0f0f0"/>
@@ -8,7 +8,7 @@
   <rect x="0" y="0" width="1200" height="44" fill="#ffffff"/>
   <line x1="0" y1="44" x2="1200" y2="44" stroke="#d2d2d2" stroke-width="1"/>
 
-  <!-- Fleet stats text (count is NOT clickable in this option) -->
+  <!-- Aggregate stats text (count is NOT clickable in this option) -->
   <text x="16" y="27" font-size="13" fill="#151515">
     <tspan font-weight="700">3</tspan>
     <tspan fill="#6a6e73"> hosts · </tspan>
@@ -40,7 +40,7 @@
     <rect x="0" y="44" width="240" height="32" fill="#fafafa"/>
     <!-- Down chevron (expanded state) -->
     <text x="16" y="65" font-size="10" fill="#6a6e73">&#9660;</text>
-    <text x="30" y="65" font-size="13" fill="#151515" font-weight="600">Fleet Hosts</text>
+    <text x="30" y="65" font-size="13" fill="#151515" font-weight="600">Aggregate Hosts</text>
     <rect x="130" y="53" rx="10" ry="10" width="22" height="16" fill="#f0f0f0"/>
     <text x="141" y="64" font-size="10" fill="#6a6e73" text-anchor="middle">3</text>
   </g>
@@ -121,9 +121,9 @@
 
   <!-- ═══ Annotation ═══ -->
   <rect x="300" y="530" rx="4" ry="4" width="640" height="140" fill="#ffffff" stroke="#d2d2d2" stroke-width="1"/>
-  <text x="320" y="556" font-size="14" fill="#151515" font-weight="700">Option B: Expandable Section in FleetSidebar</text>
-  <text x="320" y="576" font-size="12" fill="#6a6e73">Small fleet (3 hosts) — shown expanded. Collapsed by default.</text>
-  <text x="320" y="596" font-size="12" fill="#6a6e73">Toggle header shows "Fleet Hosts" with badge count. Chevron indicates state.</text>
+  <text x="320" y="556" font-size="14" fill="#151515" font-weight="700">Option B: Expandable Section in AggregateSidebar</text>
+  <text x="320" y="576" font-size="12" fill="#6a6e73">Small aggregate (3 hosts) — shown expanded. Collapsed by default.</text>
+  <text x="320" y="596" font-size="12" fill="#6a6e73">Toggle header shows "Aggregate Hosts" with badge count. Chevron indicates state.</text>
   <text x="320" y="616" font-size="12" fill="#6a6e73">Consistent with single-host mode's .inspectah-sidebar__host block position.</text>
   <text x="320" y="636" font-size="12" fill="#6a6e73">Sidebar nav is pushed down when expanded, but only ~100px for 3 hosts.</text>
   <text x="320" y="656" font-size="12" fill="#0066cc">PF components: ExpandableSection, Badge</text>

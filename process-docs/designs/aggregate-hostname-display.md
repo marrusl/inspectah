@@ -1,8 +1,8 @@
-# Fleet Hostname Display — Design Options
+# Aggregate Hostname Display — Design Options
 
 **Date:** 2026-05-26
-**Context:** The fleet health endpoint returns `hostnames: string[]` in
-`FleetHealthInfo`. The StatsBar currently shows host *count* but not the
+**Context:** The aggregate health endpoint returns `hostnames: string[]` in
+`AggregateHealthInfo`. The StatsBar currently shows host *count* but not the
 actual names. This design proposes tasteful ways to surface them.
 
 ## Constraints
@@ -17,14 +17,14 @@ actual names. This design proposes tasteful ways to surface them.
 
 Hostnames show up *per-item* in the variant view (`VariantView.tsx`) as a
 comma-separated list inside each variant option. That works at the item
-level. What's missing is a *fleet-level* roster — "which hosts are in this
+level. What's missing is a *aggregate-level* roster — "which hosts are in this
 merge?"
 
 Two natural anchor points:
 
 1. **StatsBar** — where the host count already lives (`3 hosts · 1,247
    items · ...`). The count is clickable/expandable to show the roster.
-2. **FleetSidebar** — above the section nav, in the same spot single-host
+2. **AggregateSidebar** — above the section nav, in the same spot single-host
    mode uses for the hostname block (`.inspectah-sidebar__host`).
 
 ---
@@ -45,7 +45,7 @@ PatternFly `Popover` with the full hostname list.
  Click "3 hosts" → popover appears below:
 
  ┌─────────────────────────────────┐
- │ Fleet Hosts                     │
+ │ Aggregate Hosts                     │
  │ ─────────────────────────────── │
  │  web-01                         │
  │  web-02                         │
@@ -55,7 +55,7 @@ PatternFly `Popover` with the full hostname list.
  With 50+ hosts and long FQDNs:
 
  ┌─────────────────────────────────────────┐
- │ Fleet Hosts (54)                        │
+ │ Aggregate Hosts (54)                        │
  │ ─────────────────────────────────────── │
  │  prod-web-east-01.datacenter.exampl...  │
  │  prod-web-east-02.datacenter.exampl...  │
@@ -70,7 +70,7 @@ PatternFly `Popover` with the full hostname list.
 - Wrap the host count text in StatsBar with a PF `Popover` or `Button
   variant="link"` that opens a popover.
 - Popover body: a `<ul>` with monospace font, sorted alphabetically.
-- `max-height: 300px; overflow-y: auto` for large fleets.
+- `max-height: 300px; overflow-y: auto` for large aggregates.
 - Long FQDNs truncated with `text-overflow: ellipsis`, full name on
   hover via `title` attribute.
 
@@ -80,14 +80,14 @@ PatternFly `Popover` with the full hostname list.
 - (+) Zero footprint when closed — doesn't affect layout at all
 - (+) Discoverable — the count is already visible, making it clickable
   is a natural affordance
-- (+) Works at any fleet size — scroll handles 100+ hosts
+- (+) Works at any aggregate size — scroll handles 100+ hosts
 - (-) Popover can feel transient; no persistent view
 - (-) Long FQDNs still get truncated even inside the popover (though
   you can widen it or wrap)
 
 ---
 
-## Option B: Expandable Section in FleetSidebar
+## Option B: Expandable Section in AggregateSidebar
 
 A collapsible hostname roster sits at the top of the sidebar, above the
 section navigation. Collapsed by default; shows the count as a heading.
@@ -95,7 +95,7 @@ section navigation. Collapsed by default; shows the count as a heading.
 ```
  Sidebar (collapsed — default)
  ┌──────────────────────────┐
- │ [>] Fleet Hosts (3)      │
+ │ [>] Aggregate Hosts (3)      │
  │ ─────────────────────────│
  │  Review                  │
  │    Packages         [42] │
@@ -105,7 +105,7 @@ section navigation. Collapsed by default; shows the count as a heading.
 
  Sidebar (expanded)
  ┌──────────────────────────┐
- │ [v] Fleet Hosts (3)      │
+ │ [v] Aggregate Hosts (3)      │
  │   web-01                 │
  │   web-02                 │
  │   web-03                 │
@@ -118,7 +118,7 @@ section navigation. Collapsed by default; shows the count as a heading.
 
  With 50+ hosts (expanded):
  ┌──────────────────────────┐
- │ [v] Fleet Hosts (54)     │
+ │ [v] Aggregate Hosts (54)     │
  │   prod-web-east-01.da... │
  │   prod-web-east-02.da... │
  │   prod-web-east-03.da... │
@@ -131,8 +131,8 @@ section navigation. Collapsed by default; shows the count as a heading.
 ```
 
 **Implementation:**
-- Use PF `ExpandableSection` with `isIndented` in `FleetSidebar.tsx`.
-- The toggle text shows the count: "Fleet Hosts (N)".
+- Use PF `ExpandableSection` with `isIndented` in `AggregateSidebar.tsx`.
+- The toggle text shows the count: "Aggregate Hosts (N)".
 - Inner list: monospace, sorted, with a `max-height` (~200px) and
   scroll when expanded to prevent the nav from being pushed off screen.
 - FQDNs truncated via CSS with `title` for hover.
@@ -188,7 +188,7 @@ to expand.
 
 **Implementation:**
 - New thin bar component rendered between StatsBar and the
-  `inspectah-layout` div in `FleetApp`.
+  `inspectah-layout` div in `AggregateApp`.
 - Uses PF `Label` (compact, `isCompact` prop) for each hostname.
 - Labels use `color="grey"` to stay visually subdued.
 - Show up to 8 labels inline; if more, add a "+N more" link/button
@@ -200,14 +200,14 @@ to expand.
 variant="link"`.
 
 **Tradeoffs:**
-- (+) Always visible without clicking — good for small fleets
+- (+) Always visible without clicking — good for small aggregates
 - (+) PF Label components look native and handle theming automatically
 - (+) Full width available, so FQDNs get more room than sidebar
 - (-) Adds permanent vertical space to the UI, even when you don't
   care about hostnames
 - (-) At 100 hosts the expanded view is very tall — could push the
   actual content far down the page
-- (-) The label strip can feel noisy for large fleets even when
+- (-) The label strip can feel noisy for large aggregates even when
   collapsed, because the labels have visual weight (borders,
   backgrounds)
 
@@ -245,8 +245,8 @@ that most users check once and then ignore.
   hostname text to maintain the technical-data feel.
 - **Copy affordance:** Consider a "Copy all" button in the popover or
   expanded view — useful for ops workflows.
-- **Data source:** `FleetHealthInfo.hostnames` from the health
-  endpoint, already available as `fleet.hostnames` in
-  `FleetApp.tsx` via the `fleet` prop.
+- **Data source:** `AggregateHealthInfo.hostnames` from the health
+  endpoint, already available as `aggregate.hostnames` in
+  `AggregateApp.tsx` via the `aggregate` prop.
 - **Component location:** `StatsBar.tsx` for Option A,
-  `FleetSidebar.tsx` for Option B, `FleetApp.tsx` for Option C.
+  `AggregateSidebar.tsx` for Option B, `AggregateApp.tsx` for Option C.

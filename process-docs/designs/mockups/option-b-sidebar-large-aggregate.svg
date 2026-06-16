@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 750" font-family="-apple-system, 'RedHatText', 'Helvetica Neue', sans-serif">
-  <title>Option B: Expandable Sidebar Section — Large Fleet (54 hosts, long FQDNs, expanded)</title>
+  <title>Option B: Expandable Sidebar Section — Large Aggregate (54 hosts, long FQDNs, expanded)</title>
 
   <!-- Background -->
   <rect width="1200" height="750" fill="#f0f0f0"/>
@@ -30,13 +30,13 @@
   <rect x="0" y="44" width="240" height="706" fill="#ffffff"/>
   <line x1="240" y1="44" x2="240" y2="750" stroke="#d2d2d2" stroke-width="1"/>
 
-  <!-- ═══ EXPANDABLE SECTION — expanded, large fleet ═══ -->
+  <!-- ═══ EXPANDABLE SECTION — expanded, large aggregate ═══ -->
 
   <!-- Toggle header -->
   <g cursor="pointer">
     <rect x="0" y="44" width="240" height="32" fill="#fafafa"/>
     <text x="16" y="65" font-size="10" fill="#6a6e73">&#9660;</text>
-    <text x="30" y="65" font-size="13" fill="#151515" font-weight="600">Fleet Hosts</text>
+    <text x="30" y="65" font-size="13" fill="#151515" font-weight="600">Aggregate Hosts</text>
     <rect x="130" y="53" rx="10" ry="10" width="28" height="16" fill="#f0f0f0"/>
     <text x="144" y="64" font-size="10" fill="#6a6e73" text-anchor="middle">54</text>
   </g>
@@ -130,7 +130,7 @@
 
   <!-- ═══ Annotation ═══ -->
   <rect x="300" y="580" rx="4" ry="4" width="640" height="140" fill="#ffffff" stroke="#d2d2d2" stroke-width="1"/>
-  <text x="320" y="606" font-size="14" fill="#151515" font-weight="700">Option B: Expandable Sidebar Section — Large Fleet Pain Point</text>
+  <text x="320" y="606" font-size="14" fill="#151515" font-weight="700">Option B: Expandable Sidebar Section — Large Aggregate Pain Point</text>
   <text x="320" y="626" font-size="12" fill="#6a6e73">54 hosts with long FQDNs — shown expanded with max-height: 200px scroll area.</text>
   <text x="320" y="646" font-size="12" fill="#ee0000">FQDNs aggressively truncated at ~22 chars in 240px sidebar. Scroll-within-scroll.</text>
   <text x="320" y="666" font-size="12" fill="#6a6e73">Section nav pushed down 230px+ below the fold. Sidebar feels heavy.</text>

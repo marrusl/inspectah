@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" font-family="-apple-system, 'RedHatText', 'Helvetica Neue', sans-serif">
-  <title>Option C: Compact Label Strip — Small Fleet (3 hosts)</title>
+  <title>Option C: Compact Label Strip — Small Aggregate (3 hosts)</title>
 
   <!-- Background -->
   <rect width="1200" height="700" fill="#f0f0f0"/>
@@ -115,9 +115,9 @@
   <!-- ═══ Annotation ═══ -->
   <rect x="300" y="530" rx="4" ry="4" width="640" height="140" fill="#ffffff" stroke="#d2d2d2" stroke-width="1"/>
   <text x="320" y="556" font-size="14" fill="#151515" font-weight="700">Option C: Compact Label Strip Below StatsBar</text>
-  <text x="320" y="576" font-size="12" fill="#6a6e73">Small fleet (3 hosts) — labels fit inline on a single row.</text>
+  <text x="320" y="576" font-size="12" fill="#6a6e73">Small aggregate (3 hosts) — labels fit inline on a single row.</text>
   <text x="320" y="596" font-size="12" fill="#6a6e73">Always visible, no click required. Clean PF Label components (isCompact, grey).</text>
   <text x="320" y="616" font-size="12" fill="#6a6e73">Adds 34px of permanent vertical space below the StatsBar.</text>
-  <text x="320" y="636" font-size="12" fill="#6a6e73">For a small fleet this looks proportional and unobtrusive.</text>
+  <text x="320" y="636" font-size="12" fill="#6a6e73">For a small aggregate this looks proportional and unobtrusive.</text>
   <text x="320" y="656" font-size="12" fill="#0066cc">PF components: Label isCompact color="grey", Button variant="link"</text>
 </svg>

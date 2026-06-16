@@ -37,7 +37,7 @@ concrete bugs:
    leaf on one arch can be misclassified as a dependency of the
    same-named package on another arch.
 
-In fleet/merged snapshots, the same package name can appear with
+In aggregate/merged snapshots, the same package name can appear with
 different arches across hosts. The `name.arch` format keeps these
 distinct.
 

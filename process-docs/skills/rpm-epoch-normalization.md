@@ -39,7 +39,7 @@ let epoch_cmp = rpmvercmp(norm_epoch(&pkg.epoch), norm_epoch(&base.epoch));
 ### What This Means for New Code
 
 Any code that compares RPM epochs across serialization boundaries (host
-vs. baseline, snapshot vs. snapshot, fleet aggregation) must normalize
+vs. baseline, snapshot vs. snapshot, aggregate aggregation) must normalize
 first. The raw `epoch` field on `PackageEntry` can be either `""` or
 `"0"` -- both mean "no epoch." Do not use `==` on raw epoch strings.
 
