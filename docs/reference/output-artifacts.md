@@ -12,7 +12,7 @@ conditional ones.
 
 Source of truth: `crates/pipeline/src/render/mod.rs` (scan),
 `crates/refine/src/session.rs` (refine export),
-`crates/cli/src/commands/fleet.rs` (fleet aggregate).
+`crates/cli/src/commands/aggregate.rs` aggregate.
 
 ---
 
@@ -75,28 +75,28 @@ rendered artifacts.
 
 ---
 
-## `inspectah fleet aggregate`
+## `inspectah aggregate`
 
-Fleet aggregate merges multiple scan tarballs into a single fleet-level
+Aggregate aggregate merges multiple scan tarballs into a single aggregate-level
 snapshot and renders a combined tarball.
 
 ### Tarball naming
 
 ```
-fleet-<label>-<YYYYMMDD>-<HHMMSS>.tar.gz
+aggregate-<label>-<YYYYMMDD>-<HHMMSS>.tar.gz
 ```
 
 ### Artifacts
 
-Fleet aggregate calls `render_all()` on the merged snapshot, producing the
+Aggregate aggregate calls `render_all()` on the merged snapshot, producing the
 same always-written and conditional artifacts as `inspectah scan` (see
-above). The following additional artifacts are fleet-specific:
+above). The following additional artifacts are aggregate-specific:
 
 | File / Directory | Condition | Description |
 |------------------|-----------|-------------|
 | `schema/snapshot.schema.json` | Always written | JSON Schema placeholder for the snapshot format. |
 
-The Containerfile receives a prepended header with fleet metadata (host
+The Containerfile receives a prepended header with aggregate metadata (host
 count, baseline image, provisionality note).
 
 ### `--json-only` mode
@@ -107,13 +107,13 @@ rendered artifacts.
 
 ---
 
-## `inspectah fleet init`
+## `inspectah aggregate init`
 
-Produces a fleet manifest file, not a tarball.
+Produces a aggregate manifest file, not a tarball.
 
 | File | Description |
 |------|-------------|
-| `fleet.toml` (default) or `--output` path | TOML manifest listing tarball sources, baseline image, and fleet label. |
+| `aggregate.toml` (default) or `--output` path | TOML manifest listing tarball sources, baseline image, and aggregate label. |
 
 ---
 
@@ -243,11 +243,11 @@ export.tar.gz  (no prefix directory)
 └── users/                                (conditional)
 ```
 
-### Fleet aggregate tarball
+### Aggregate aggregate tarball
 
 ```
-fleet-<label>-20260527-143000.tar.gz
-└── fleet-<label>-20260527-143000/
+aggregate-<label>-20260527-143000.tar.gz
+└── aggregate-<label>-20260527-143000/
     ├── (same structure as scan tarball)
     └── schema/
         └── snapshot.schema.json

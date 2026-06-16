@@ -1,21 +1,21 @@
 ---
-title: Fleet Manifest
+title: Aggregate Manifest
 parent: Reference
 nav_order: 6
 ---
 
-# Fleet Manifest
+# Aggregate Manifest
 
-A fleet manifest is a TOML file that declares which host snapshots to aggregate
-into a fleet view. It is consumed by `inspectah fleet aggregate`.
+An aggregate manifest is a TOML file that declares which host snapshots to aggregate
+into a multi-host view. It is consumed by `inspectah aggregate`.
 
-**Source:** `crates/core/src/fleet/manifest.rs`
+**Source:** `crates/core/src/aggregate/manifest.rs`
 {: .text-grey-dk-000 }
 
 ## Format
 
 ```toml
-# inspectah fleet manifest
+# inspectah aggregate manifest
 # Edit label and target_image as needed. Sources are relative to this file.
 
 label = "web-servers"
@@ -40,7 +40,7 @@ The `target_image` value depends on your distro. Common base images:
 
 | Field | Type | Required | Description |
 |:------|:-----|:---------|:------------|
-| `label` | string | No | Human-readable name for the fleet (e.g., `"web-servers"`, `"db-tier"`). Used in output filenames and fleet metadata. |
+| `label` | string | No | Human-readable name for this group (e.g., `"web-servers"`, `"db-tier"`). Used in output filenames and aggregate metadata. |
 | `target_image` | string | No | Target base image reference for baseline comparison (e.g., `"quay.io/centos-bootc/centos-bootc:stream9"`). Overridable via `--target-image` CLI flag. |
 | `sources` | array of strings | **Yes** | Paths to host snapshot tarballs. Relative paths are resolved relative to the manifest file's parent directory. |
 
@@ -54,23 +54,23 @@ Source paths in the manifest can be either absolute or relative:
 For example, given this layout:
 
 ```
-fleet/
-  fleet.toml        # contains sources = ["scans/a.tar.gz"]
+aggregate/
+  aggregate.toml        # contains sources = ["scans/a.tar.gz"]
   scans/
     a.tar.gz
 ```
 
-The path `scans/a.tar.gz` resolves to `fleet/scans/a.tar.gz`.
+The path `scans/a.tar.gz` resolves to `aggregate/scans/a.tar.gz`.
 
 ## Generating a manifest
 
-Use `inspectah fleet init` to generate a manifest from a directory of tarballs:
+Use `inspectah aggregate init` to generate a manifest from a directory of tarballs:
 
 ```bash
-inspectah fleet init /path/to/scans/
+inspectah aggregate init /path/to/scans/
 ```
 
-This scans the directory for `.tar.gz` files and writes a `fleet.toml` with:
+This scans the directory for `.tar.gz` files and writes an `aggregate.toml` with:
 
 - `label` derived from the directory name
 - `target_image` commented out (placeholder)
@@ -80,15 +80,15 @@ This scans the directory for `.tar.gz` files and writes a `fleet.toml` with:
 
 | Flag | Description |
 |:-----|:------------|
-| `--output <PATH>` | Output path for the generated manifest. Defaults to `fleet.toml` in the current directory. |
+| `--output <PATH>` | Output path for the generated manifest. Defaults to `aggregate.toml` in the current directory. |
 | `--overwrite` | Overwrite an existing manifest file. Without this flag, existing files are not overwritten. |
 
-## Using a manifest with fleet aggregate
+## Using a manifest with aggregate
 
-Pass the manifest to `fleet aggregate` via the `--manifest` flag:
+Pass the manifest to `aggregate` via the `--manifest` flag:
 
 ```bash
-inspectah fleet aggregate --manifest fleet.toml
+inspectah aggregate --manifest aggregate.toml
 ```
 
 When using `--manifest`, positional input arguments are not allowed -- the manifest
@@ -99,8 +99,8 @@ is the sole source of truth for which tarballs to include.
 | Flag | Behavior |
 |:-----|:---------|
 | `--target-image <IMAGE>` | Overrides the `target_image` field from the manifest. |
-| `--output-dir <DIR>` | Output directory for the fleet tarball. |
-| `--output-file <FILE>` | Output file path for the fleet tarball. |
+| `--output-dir <DIR>` | Output directory for the aggregate tarball. |
+| `--output-file <FILE>` | Output file path for the aggregate tarball. |
 | `--json-only` | Write JSON snapshot instead of tarball. |
 | `--strict` | Treat warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |
@@ -113,11 +113,11 @@ Only `sources` is required. A minimal manifest:
 sources = ["a.tar.gz", "b.tar.gz"]
 ```
 
-This produces a fleet snapshot with no label and no target image comparison.
+This produces an aggregate snapshot with no label and no target image comparison.
 
 ## Validation
 
-During `fleet aggregate`, the following validations apply:
+During aggregation, the following validations apply:
 
 - Each source path must point to a readable tarball file.
 - Each tarball must contain a valid inspection snapshot.

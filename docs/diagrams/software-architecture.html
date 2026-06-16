@@ -44,14 +44,14 @@ const crates = [
     tier: 'entry',
     color: 'green',
     deps: ['core', 'collect', 'pipeline', 'web', 'refine', 'tui'],
-    tooltip: 'Binary crate. Parses CLI arguments, orchestrates scan/fleet/refine commands, manages progress display, and launches the web server.',
+    tooltip: 'Binary crate. Parses CLI arguments, orchestrates scan/aggregate/refine commands, manages progress display, and launches the web server.',
     modules: [
       {
         name: 'commands/',
         desc: 'CLI subcommands',
         children: [
           { text: 'scan', detail: 'Single-host scan command — runs inspectors, renders output' },
-          { text: 'fleet', detail: 'Fleet aggregation command — combines multiple host snapshots' },
+          { text: 'aggregate', detail: 'Aggregate aggregation command — combines multiple host snapshots' },
           { text: 'refine', detail: 'Interactive triage command — launches web UI for review' },
           { text: 'build', detail: 'Build command — extracts tarball, plans subscription mounts, runs podman build' },
           { text: 'version', detail: 'Version and build info display' },
@@ -78,7 +78,7 @@ const crates = [
     tier: 'entry',
     color: 'green',
     deps: ['core', 'pipeline', 'refine'],
-    tooltip: 'Embedded web server (axum) serving the React triage UI. Handles API routes for snapshot data, fleet state, and refine operations.',
+    tooltip: 'Embedded web server (axum) serving the React triage UI. Handles API routes for snapshot data, aggregate state, and refine operations.',
     modules: [
       {
         name: 'handlers',
@@ -88,10 +88,10 @@ const crates = [
         ],
       },
       {
-        name: 'fleet_handlers',
-        desc: 'Fleet API routes',
+        name: 'aggregate_handlers',
+        desc: 'Aggregate API routes',
         children: [
-          { text: 'fleet_handlers.rs', detail: 'Fleet consensus endpoints, variant operations, fleet-level triage' },
+          { text: 'aggregate_handlers.rs', detail: 'Aggregate consensus endpoints, variant operations, aggregate-level triage' },
         ],
       },
       {
@@ -259,11 +259,11 @@ const crates = [
   {
     id: 'refine',
     label: 'inspectah-refine',
-    sublabel: 'Triage + fleet logic',
+    sublabel: 'Triage + aggregate logic',
     tier: 'orchestration',
     color: 'teal',
     deps: ['core', 'pipeline'],
-    tooltip: 'Interactive triage engine: classifies items, tracks decisions, manages fleet consensus, and persists session state across iterations.',
+    tooltip: 'Interactive triage engine: classifies items, tracks decisions, manages aggregate consensus, and persists session state across iterations.',
     modules: [
       {
         name: 'classify',
@@ -280,12 +280,12 @@ const crates = [
         ],
       },
       {
-        name: 'fleet/',
-        desc: 'Fleet consensus engine',
+        name: 'aggregate/',
+        desc: 'Aggregate consensus engine',
         children: [
-          { text: 'classify', detail: 'Fleet-level classification: consensus vs. host-specific items' },
+          { text: 'classify', detail: 'Aggregate-level classification: consensus vs. host-specific items' },
           { text: 'diff', detail: 'Cross-host diff computation — identifies divergent state' },
-          { text: 'variant_ops', detail: 'Variant management — create, merge, split fleet variants' },
+          { text: 'variant_ops', detail: 'Variant management — create, merge, split aggregate variants' },
         ],
       },
       {
@@ -380,7 +380,7 @@ const crates = [
     tier: 'foundation',
     color: 'purple',
     deps: [],
-    tooltip: 'Foundation crate. Defines all shared types (Snapshot, RPM, Config, etc.), core traits (Inspector, Executor, Renderer), fleet data structures, default_true serde helper, and locked field support. Zero business logic.',
+    tooltip: 'Foundation crate. Defines all shared types (Snapshot, RPM, Config, etc.), core traits (Inspector, Executor, Renderer), aggregate data structures, default_true serde helper, and locked field support. Zero business logic.',
     modules: [
       {
         name: 'types/',
@@ -397,7 +397,7 @@ const crates = [
           { text: 'selinux', detail: 'SELinux types — mode, policy version, custom modules' },
           { text: 'nonrpm', detail: 'Non-RPM software types — pip, npm, go, standalone' },
           { text: 'users', detail: 'User/group types — uid, gid, shell, home, groups' },
-          { text: 'fleet', detail: 'Fleet types — consensus items, variant definitions' },
+          { text: 'aggregate', detail: 'Aggregate types — consensus items, variant definitions' },
           { text: 'repo', detail: 'Repository definitions — id, name, baseurl, enabled, gpgcheck' },
           { text: 'system / os', detail: 'System info — hostname, OS version, kernel, arch' },
           { text: 'subscription', detail: 'SubscriptionFile, SubscriptionSection, EntitlementPair types' },
@@ -419,12 +419,12 @@ const crates = [
         ],
       },
       {
-        name: 'fleet/',
-        desc: 'Fleet data structures',
+        name: 'aggregate/',
+        desc: 'Aggregate data structures',
         children: [
-          { text: 'manifest', detail: 'Fleet manifest — list of hosts, scan metadata, merge config' },
-          { text: 'merge', detail: 'Fleet merge logic — combine per-host snapshots into consensus' },
-          { text: 'validate', detail: 'Fleet validation — check consistency across hosts' },
+          { text: 'manifest', detail: 'Aggregate manifest — list of hosts, scan metadata, merge config' },
+          { text: 'merge', detail: 'Aggregate merge logic — combine per-host snapshots into consensus' },
+          { text: 'validate', detail: 'Aggregate validation — check consistency across hosts' },
         ],
       },
       {

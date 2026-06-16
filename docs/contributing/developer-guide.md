@@ -42,10 +42,10 @@ inspectah is a Cargo workspace with seven member crates, all located under
 
 | Crate | Directory | Purpose |
 |---|---|---|
-| `inspectah-core` | `crates/core/` | Shared traits (`Inspector`, `Executor`, `Renderer`), type definitions, snapshot structures, and fleet logic |
+| `inspectah-core` | `crates/core/` | Shared traits (`Inspector`, `Executor`, `Renderer`), type definitions, snapshot structures, and aggregate logic |
 | `inspectah-collect` | `crates/collect/` | Inspector implementations -- each inspector gathers data from one system domain |
 | `inspectah-pipeline` | `crates/pipeline/` | Orchestrates collection, rendering, output generation, and build planning |
-| `inspectah-refine` | `crates/refine/` | Refinement engine -- triage classification, decision projection, fleet consensus |
+| `inspectah-refine` | `crates/refine/` | Refinement engine -- triage classification, decision projection, aggregate consensus |
 | `inspectah-web` | `crates/web/` | Web UI (refine interface) for interactive triage |
 | `inspectah-tui` | `crates/tui/` | Terminal UI for interactive triage (ratatui-based alternative to the web UI) |
 | `inspectah-cli` | `crates/cli/` | Command-line interface and progress display |

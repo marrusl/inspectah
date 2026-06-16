@@ -115,14 +115,14 @@ const singleHostBranches = [
   },
 ];
 
-// ─── Data: Fleet consensus classifications ──────────────────────────
-const fleetBranches = [
+// ─── Data: Aggregate consensus classifications ──────────────────────────
+const aggregateBranches = [
   {
     id: 'fl-universal',
     label: 'Universal',
     sublabel: 'All hosts agree',
     color: 'green',
-    tooltip: 'Found on every host in the fleet. Version differences are normal.',
+    tooltip: 'Found on every host in the aggregate. Version differences are normal.',
     definition: 'Item is present on 100% of scanned hosts.',
     example: 'httpd installed on all 12 hosts (versions may differ: 2.4.57, 2.4.58).',
     hostPattern: 'all-present', // all 3 boxes filled
@@ -152,7 +152,7 @@ const fleetBranches = [
     label: 'Investigate',
     sublabel: 'Unclear pattern',
     color: 'red',
-    tooltip: 'Fleet pattern unclear. Requires manual review.',
+    tooltip: 'Aggregate pattern unclear. Requires manual review.',
     definition: 'Cannot be categorized — insufficient data or ambiguous pattern.',
     example: 'Orphan RPM with no repo origin on a single host.',
     hostPattern: 'unclear',
@@ -169,7 +169,7 @@ const { svg, g, width, height, zoom } = createDiagramShell({
     { color: colors.amber.stroke,  label: 'Site / Partial' },
     { color: colors.orange.stroke, label: 'Divergent' },
     { color: colors.red.stroke,    label: 'Investigate' },
-    { color: colors.blue.stroke,   label: 'Partial (fleet)' },
+    { color: colors.blue.stroke,   label: 'Partial (aggregate)' },
     { color: colors.teal.stroke,   label: 'Input / Root' },
   ],
 });
@@ -183,13 +183,13 @@ svg.append('title').text('Triage Decision Tree');
 svg.append('desc').text(
   'Two-layer diagram showing how inspectah classifies found items. ' +
   'Top layer: single-host triage into Baseline, Site, or Investigate. ' +
-  'Bottom layer: fleet consensus into Universal, Partial, Divergent, or Investigate.'
+  'Bottom layer: aggregate consensus into Universal, Partial, Divergent, or Investigate.'
 );
 
 // ─── Layout constants ───────────────────────────────────────────────
 const nodeW = 180;
 const nodeH = 64;
-const fleetNodeH = 84;
+const aggregateNodeH = 84;
 const rootNodeW = 200;
 const rootNodeH = 72;
 const gapX = 80;
@@ -209,24 +209,24 @@ singleHostBranches.forEach((b, i) => {
   b.y = shBranchY;
 });
 
-// Fleet layer
-const fleetLabelY = shBranchY + nodeH + layerGap;
-const flRootY = fleetLabelY + 30;
-const flBranchY = flRootY + rootNodeH + gapY;
-const flTotalW = fleetBranches.length * (nodeW + gapX) - gapX;
-const flStartX = width / 2 - flTotalW / 2;
+// Aggregate layer
+const aggregateLabelY = shBranchY + nodeH + layerGap;
+const aggregateRootY = aggregateLabelY + 30;
+const flBranchY = aggregateRootY + rootNodeH + gapY;
+const aggregateTotalW = aggregateBranches.length * (nodeW + gapX) - gapX;
+const flStartX = width / 2 - aggregateTotalW / 2;
 
-const fleetRoot = {
-  id: 'fleet-item',
-  label: 'Fleet Analysis',
+const aggregateRoot = {
+  id: 'aggregate-item',
+  label: 'Aggregate Analysis',
   sublabel: 'Cross-host consensus',
   color: 'teal',
   tooltip: 'Aggregate view comparing items across all scanned hosts.',
   x: width / 2 - rootNodeW / 2,
-  y: flRootY,
+  y: aggregateRootY,
 };
 
-fleetBranches.forEach((b, i) => {
+aggregateBranches.forEach((b, i) => {
   b.x = flStartX + i * (nodeW + gapX);
   b.y = flBranchY;
 });
@@ -254,10 +254,10 @@ g.append('text')
 g.append('text')
   .attr('class', 'layer-label')
   .attr('x', width / 2)
-  .attr('y', flRootY - 30)
+  .attr('y', aggregateRootY - 30)
   .attr('text-anchor', 'middle')
   .attr('fill', textDim)
-  .text('Fleet Consensus');
+  .text('Aggregate Consensus');
 
 // ─── Draw branch connector lines ───────────────────────────────────
 const connectors = g.append('g').attr('class', 'connectors');
@@ -283,16 +283,16 @@ singleHostBranches.forEach(b => {
     .attr('marker-end', 'url(#arrow-default)');
 });
 
-// Fleet root to branches
-const flRootCenterX = fleetRoot.x + rootNodeW / 2;
-const flRootBottom = fleetRoot.y + rootNodeH;
+// Aggregate root to branches
+const aggregateRootCenterX = aggregateRoot.x + rootNodeW / 2;
+const flRootBottom = aggregateRoot.y + rootNodeH;
 
-fleetBranches.forEach(b => {
+aggregateBranches.forEach(b => {
   const targetCenterX = b.x + nodeW / 2;
   const path = d3.path();
-  path.moveTo(flRootCenterX, flRootBottom);
+  path.moveTo(aggregateRootCenterX, flRootBottom);
   path.bezierCurveTo(
-    flRootCenterX, flRootBottom + gapY * 0.4,
+    aggregateRootCenterX, flRootBottom + gapY * 0.4,
     targetCenterX, b.y - gapY * 0.4,
     targetCenterX, b.y
   );
@@ -354,18 +354,18 @@ const shRoot = drawNode(nodeGroup, {
   y: shRootY,
 }, rootNodeW, rootNodeH);
 
-const flRoot = drawNode(nodeGroup, fleetRoot, rootNodeW, rootNodeH);
+const flRoot = drawNode(nodeGroup, aggregateRoot, rootNodeW, rootNodeH);
 
 // ─── Draw single-host branch nodes ─────────────────────────────────
 const shNodes = singleHostBranches.map(b => drawNode(nodeGroup, b, nodeW, nodeH));
 
-// ─── Draw fleet branch nodes with host-pattern icons ────────────────
-const flNodes = fleetBranches.map(b => {
-  const node = drawNode(nodeGroup, b, nodeW, fleetNodeH);
+// ─── Draw aggregate branch nodes with host-pattern icons ────────────────
+const flNodes = aggregateBranches.map(b => {
+  const node = drawNode(nodeGroup, b, nodeW, aggregateNodeH);
 
   // Draw host-pattern icon inside the node (bottom area)
   const iconG = node.append('g')
-    .attr('transform', `translate(${nodeW / 2 - 27}, ${fleetNodeH - 22})`)
+    .attr('transform', `translate(${nodeW / 2 - 27}, ${aggregateNodeH - 22})`)
     .attr('aria-hidden', 'true');
 
   const boxW = 14;
@@ -510,8 +510,8 @@ shLockG.append('text')
   .attr('font-size', '10px')
   .text('Classified items may be locked — prevents toggling in refine UI');
 
-// Fleet locked note (below fleet branches, centered)
-const flLockY = flBranchY + fleetNodeH + 24;
+// Aggregate locked note (below aggregate branches, centered)
+const flLockY = flBranchY + aggregateNodeH + 24;
 
 const flLockG = lockAnnotation.append('g')
   .attr('transform', `translate(${shLockX}, ${flLockY})`);
@@ -530,14 +530,14 @@ flLockG.append('text')
   .attr('text-anchor', 'start')
   .attr('fill', textDim)
   .attr('font-size', '10px')
-  .text('Fleet narrowing applies locked: true to items below consensus threshold');
+  .text('Aggregate narrowing applies locked: true to items below consensus threshold');
 
 // ─── Expand indicator hints ─────────────────────────────────────────
 const allBranchNodes = [...shNodes, ...flNodes];
 allBranchNodes.forEach(node => {
   const d = node.datum();
-  const isFleet = fleetBranches.some(b => b.id === d.id);
-  const h = isFleet ? fleetNodeH : nodeH;
+  const isAggregate = aggregateBranches.some(b => b.id === d.id);
+  const h = isAggregate ? aggregateNodeH : nodeH;
   node.append('text')
     .attr('x', nodeW / 2)
     .attr('y', h - 4)
@@ -566,8 +566,8 @@ document.body.appendChild(tooltipDescContainer);
 const allData = [
   { ...singleHostRoot, x: shRootX, y: shRootY },
   ...singleHostBranches,
-  fleetRoot,
-  ...fleetBranches,
+  aggregateRoot,
+  ...aggregateBranches,
 ];
 allData.forEach(d => {
   const descEl = document.createElement('span');
@@ -583,7 +583,7 @@ nodeGroup.selectAll('.node')
 function renderExpand(nodeId, isExpanded) {
   // Find data for this node
   const data = singleHostBranches.find(b => b.id === nodeId)
-    || fleetBranches.find(b => b.id === nodeId);
+    || aggregateBranches.find(b => b.id === nodeId);
   if (!data) return;
 
   const isSingleHost = singleHostBranches.some(b => b.id === nodeId);
@@ -620,7 +620,7 @@ function renderExpand(nodeId, isExpanded) {
   const padV = 12;
   const panelH = headerH + lines.length * lineH + padV * 2;
   const panelX = data.x + (nodeW - panelW) / 2;
-  const nodeHeight = isSingleHost ? nodeH : fleetNodeH;
+  const nodeHeight = isSingleHost ? nodeH : aggregateNodeH;
   const panelY = data.y + nodeHeight + 16;
 
   const panel = panelGroup.append('g')
@@ -729,7 +729,7 @@ nodeGroup.selectAll('.node')
   .on('mouseenter', (event, d) => {
     const expandState = expanded.get(d.id) ? ' (expanded)' : '';
     const clickHint = singleHostBranches.some(b => b.id === d.id)
-      || fleetBranches.some(b => b.id === d.id)
+      || aggregateBranches.some(b => b.id === d.id)
       ? ' (click to expand)' : '';
     tooltip.show(`<strong>${d.label}</strong><br>${d.tooltip}${expandState || clickHint}`, event);
   })
@@ -750,7 +750,7 @@ setupKeyboardNav(allNodeElements, {
     if (data && data.id) {
       // Only branch nodes expand
       const isBranch = singleHostBranches.some(b => b.id === data.id)
-        || fleetBranches.some(b => b.id === data.id);
+        || aggregateBranches.some(b => b.id === data.id);
       if (isBranch) {
         toggleExpand(data.id, expanded, renderExpand);
       }
@@ -775,11 +775,11 @@ setupKeyboardNav(allNodeElements, {
 // ─── Initial centering ─────────────────────────────────────────────
 requestAnimationFrame(() => {
   const contentTop = shRootY - 60;
-  const contentBottom = flBranchY + fleetNodeH + 220;
+  const contentBottom = flBranchY + aggregateNodeH + 220;
   const contentLeft = Math.min(shStartX, flStartX) - 40;
   const contentRight = Math.max(
     shStartX + shTotalW,
-    flStartX + flTotalW
+    flStartX + aggregateTotalW
   ) + 40;
 
   centerView(svg, zoom, {

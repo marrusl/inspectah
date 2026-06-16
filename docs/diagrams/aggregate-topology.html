@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>inspectah - Fleet Topology</title>
+  <title>inspectah - Aggregate Topology</title>
   <style>
     /* Diagram-specific overrides layered on top of shared theme */
     .flow-dot {
@@ -57,17 +57,17 @@ const hosts = [
   { id: 'db01',   label: 'db-01',   sublabel: 'RHEL 8.9',            color: 'blue' },
 ];
 
-const fleetOps = [
+const aggregateOps = [
   {
     id: 'aggregate',
-    label: 'Fleet Aggregate',
+    label: 'Aggregate Aggregate',
     sublabel: 'Consensus Matrix',
     color: 'rose',
-    tooltip: 'Combines per-host snapshots into a fleet-wide consensus view. Identifies common packages, shared configs, and divergent state. Applies prevalence-based include narrowing.',
+    tooltip: 'Combines per-host snapshots into a aggregate-wide consensus view. Identifies common packages, shared configs, and divergent state. Applies prevalence-based include narrowing.',
     children: [
       { text: 'Package consensus', detail: 'Identify packages common to all hosts vs. host-specific additions' },
       { text: 'Config convergence', detail: 'Detect configuration drift between hosts' },
-      { text: 'Service alignment', detail: 'Compare enabled/running services across fleet' },
+      { text: 'Service alignment', detail: 'Compare enabled/running services across aggregate' },
       { text: 'Repository union', detail: 'Combine repo definitions, flag per-host extras' },
       { text: 'Subscription merge', detail: 'Deduplicate subscription certs across hosts by latest expiry (--ack-sensitive required)' },
       { text: 'Include narrowing', detail: 'Prevalence-based narrowing — items below consensus threshold get include: false' },
@@ -76,14 +76,14 @@ const fleetOps = [
   },
   {
     id: 'refine',
-    label: 'Fleet Refine',
+    label: 'Aggregate Refine',
     sublabel: 'Iterate & Decide',
     color: 'rose',
-    tooltip: 'Interactive review of fleet consensus. Accept, reject, or modify aggregate decisions. Iterate until fleet plan is satisfactory.',
+    tooltip: 'Interactive review of aggregate consensus. Accept, reject, or modify aggregate decisions. Iterate until aggregate plan is satisfactory.',
     children: [
       { text: 'Section-by-section review', detail: 'Packages, configs, services, repos reviewed independently' },
       { text: 'Include/exclude toggles', detail: 'Decide what goes into the shared base image' },
-      { text: 'Per-host overrides', detail: 'Mark items as host-specific instead of fleet-wide' },
+      { text: 'Per-host overrides', detail: 'Mark items as host-specific instead of aggregate-wide' },
       { text: 'Iterate until done', detail: 'Refine loop: review, adjust, re-evaluate consensus' },
     ],
   },
@@ -95,7 +95,7 @@ const artifacts = [
     label: 'Containerfiles',
     sublabel: 'Per-Host Build Defs',
     color: 'orange',
-    tooltip: 'Generated Containerfile for each host in the fleet, based on fleet consensus plus host-specific additions.',
+    tooltip: 'Generated Containerfile for each host in the aggregate, based on aggregate consensus plus host-specific additions.',
     children: [
       { text: 'Shared base layers', detail: 'Common packages and configs from consensus' },
       { text: 'Host-specific additions', detail: 'Packages/configs unique to each host' },
@@ -104,14 +104,14 @@ const artifacts = [
   },
   {
     id: 'reports',
-    label: 'Fleet Reports',
+    label: 'Aggregate Reports',
     sublabel: 'Migration Summary',
     color: 'orange',
-    tooltip: 'Fleet-wide migration report summarizing consensus decisions, per-host deltas, and recommended actions.',
+    tooltip: 'Aggregate-wide migration report summarizing consensus decisions, per-host deltas, and recommended actions.',
     children: [
-      { text: 'Consensus summary', detail: 'What the fleet agreed on' },
+      { text: 'Consensus summary', detail: 'What the aggregate agreed on' },
       { text: 'Divergence report', detail: 'Where hosts differ and why' },
-      { text: 'Migration plan', detail: 'Ordered steps for fleet-wide migration' },
+      { text: 'Migration plan', detail: 'Ordered steps for aggregate-wide migration' },
     ],
   },
 ];
@@ -124,7 +124,7 @@ const futureNodes = [
     color: 'purple',
     tooltip: 'Planned capability — build-time image composition, not runtime layer boundaries.',
     children: [
-      { text: 'Base layer', detail: 'Shared OS foundation from fleet consensus' },
+      { text: 'Base layer', detail: 'Shared OS foundation from aggregate consensus' },
       { text: 'App layer', detail: 'Application-specific packages and configs' },
       { text: 'Role layer', detail: 'Role-based customization (web, db, worker)' },
     ],
@@ -134,11 +134,11 @@ const futureNodes = [
 // ─── Shell setup ────────────────────────────────────────────────────
 const { svg, g, width, height, zoom } = createDiagramShell({
   title: 'inspectah',
-  subtitle: 'Fleet Topology',
-  backUrl: '../how-to/fleet-aggregation.html',
+  subtitle: 'Aggregate Topology',
+  backUrl: '../how-to/aggregate-aggregation.html',
   legendItems: [
     { color: colors.blue.stroke,   label: 'Hosts' },
-    { color: colors.rose.stroke,   label: 'Fleet Ops' },
+    { color: colors.rose.stroke,   label: 'Aggregate Ops' },
     { color: colors.orange.stroke, label: 'Output' },
     { color: colors.purple.stroke, label: 'Future' },
   ],
@@ -164,13 +164,13 @@ hosts.forEach((h, i) => {
   h.y = hostY;
 });
 
-// Row 2: Fleet ops (centered, 2 nodes)
+// Row 2: Aggregate ops (centered, 2 nodes)
 const opsGap = 80;
-const totalOpsW = fleetOps.length * (nodeW + opsGap) - opsGap;
+const totalOpsW = aggregateOps.length * (nodeW + opsGap) - opsGap;
 const opsStartX = (width - totalOpsW) / 2;
 const opsY = hostY + nodeH + rowGap;
 
-fleetOps.forEach((op, i) => {
+aggregateOps.forEach((op, i) => {
   op.x = opsStartX + i * (nodeW + opsGap);
   op.y = opsY;
 });
@@ -194,13 +194,13 @@ futureNodes.forEach(f => {
 });
 
 // All interactive nodes for keyboard nav
-const allNodes = [...hosts, ...fleetOps, ...artifacts, ...futureNodes];
+const allNodes = [...hosts, ...aggregateOps, ...artifacts, ...futureNodes];
 
 // ─── Draw connectors ───────────────────────────────────────────────
 const connectors = g.append('g').attr('class', 'connectors');
 
 // Host → Aggregate (fan-in)
-const agg = fleetOps[0];
+const agg = aggregateOps[0];
 hosts.forEach(h => {
   connectors.append('line')
     .attr('class', 'link')
@@ -214,7 +214,7 @@ hosts.forEach(h => {
 });
 
 // Aggregate → Refine
-const ref = fleetOps[1];
+const ref = aggregateOps[1];
 connectors.append('line')
   .attr('class', 'link')
   .attr('x1', agg.x + nodeW)
@@ -377,7 +377,7 @@ g.append('text')
   .attr('fill', textDim)
   .attr('font-size', '11px')
   .attr('font-weight', 600)
-  .text('FLEET OPS');
+  .text('AGGREGATE OPS');
 
 g.append('text')
   .attr('x', labelX)
@@ -469,7 +469,7 @@ const hostGroup = g.append('g').attr('class', 'host-nodes');
 const hostNodes = drawNodes(hosts, hostGroup);
 
 const opsGroup = g.append('g').attr('class', 'ops-nodes');
-const opsNodes = drawNodes(fleetOps, opsGroup);
+const opsNodes = drawNodes(aggregateOps, opsGroup);
 
 const artGroup = g.append('g').attr('class', 'art-nodes');
 const artNodes = drawNodes(artifacts, artGroup);

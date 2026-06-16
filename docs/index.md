@@ -19,7 +19,7 @@ inspectah is a migration analysis tool that scans package-mode RHEL, CentOS, and
 Step-by-step lessons for learning inspectah. Start here if you're new.
 
 ### [How-To Guides](how-to/)
-Task-oriented instructions for specific scenarios — fleet aggregation, secrets handling, custom configurations.
+Task-oriented instructions for specific scenarios — aggregate aggregation, secrets handling, custom configurations.
 
 ### [Reference](reference/)
 Technical specifications and API documentation — CLI flags, output schemas, configuration options.

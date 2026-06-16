@@ -226,7 +226,7 @@ const commandBadges = {
   ],
   tarball: [
     { cmd: 'scan', note: 'Complete tarball' },
-    { cmd: 'fleet', note: 'Aggregates multiple tarballs' },
+    { cmd: 'aggregate', note: 'Aggregates multiple tarballs' },
   ],
   build: [
     { cmd: 'build', note: 'Automates podman build' },
@@ -386,7 +386,7 @@ nodes.append('text')
   .attr('text-anchor', 'middle')
   .text(d => d.sublabel);
 
-// Command badges (scan/refine/fleet distinctions)
+// Command badges (scan/refine/aggregate distinctions)
 nodes.each(function(d) {
   const badges = commandBadges[d.id];
   if (!badges) return;

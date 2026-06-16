@@ -153,46 +153,46 @@ const singleHostStages = [
   },
 ];
 
-const fleetStages = [
+const aggregateStages = [
   {
-    id: 'fleet-init',
-    label: 'Fleet Init',
-    sublabel: 'inspectah fleet init',
+    id: 'aggregate-init',
+    label: 'Aggregate Init',
+    sublabel: 'inspectah aggregate init',
     color: 'teal',
-    tooltip: 'Initialize a fleet workspace from multiple host scan tarballs.',
+    tooltip: 'Initialize a aggregate workspace from multiple host scan tarballs.',
     children: [
-      { text: 'inspectah fleet init', detail: 'Create fleet workspace from scan outputs' },
-      { text: 'Multiple tarballs', detail: 'One per host in the fleet' },
-      { text: 'Fleet manifest', detail: 'Tracks hosts, base images, shared state' },
+      { text: 'inspectah aggregate init', detail: 'Create aggregate workspace from scan outputs' },
+      { text: 'Multiple tarballs', detail: 'One per host in the aggregate' },
+      { text: 'Aggregate manifest', detail: 'Tracks hosts, base images, shared state' },
     ],
-    docLink: '../fleet-workflow.html',
+    docLink: '../aggregate-workflow.html',
   },
   {
-    id: 'fleet-aggregate',
+    id: 'aggregate-aggregate',
     label: 'Aggregate',
     sublabel: 'Cross-host analysis',
     color: 'teal',
-    tooltip: 'Compute fleet-wide intersections, outliers, and common patterns.',
+    tooltip: 'Compute aggregate-wide intersections, outliers, and common patterns.',
     children: [
       { text: 'Package intersection', detail: 'Packages present on all hosts' },
-      { text: 'Service commonality', detail: 'Services enabled across the fleet' },
+      { text: 'Service commonality', detail: 'Services enabled across the aggregate' },
       { text: 'Outlier detection', detail: 'Host-specific deviations from baseline' },
       { text: 'Config convergence', detail: 'Shared vs. divergent configurations' },
     ],
-    docLink: '../fleet-workflow.html',
+    docLink: '../aggregate-workflow.html',
   },
   {
-    id: 'fleet-refine',
-    label: 'Fleet Refine',
-    sublabel: 'Fleet-wide decisions',
+    id: 'aggregate-refine',
+    label: 'Aggregate Refine',
+    sublabel: 'Aggregate-wide decisions',
     color: 'teal',
-    tooltip: 'Review fleet-aggregated findings and make decisions at scale.',
+    tooltip: 'Review aggregate-aggregated findings and make decisions at scale.',
     children: [
-      { text: 'inspectah fleet refine', detail: 'Interactive fleet review UI' },
+      { text: 'inspectah aggregate refine', detail: 'Interactive aggregate review UI' },
       { text: 'Bulk accept / reject', detail: 'Apply decisions across all hosts' },
       { text: 'Per-host overrides', detail: 'Customize decisions for outlier hosts' },
     ],
-    docLink: '../fleet-workflow.html',
+    docLink: '../aggregate-workflow.html',
   },
 ];
 
@@ -219,7 +219,7 @@ const { svg, g, width, height, zoom } = createDiagramShell({
   legendItems: [
     { color: colors.amber.stroke,  label: 'User Journey' },
     { color: colors.green.stroke,  label: 'Output' },
-    { color: colors.teal.stroke,   label: 'Fleet Path' },
+    { color: colors.teal.stroke,   label: 'Aggregate Path' },
     { color: colors.purple.stroke, label: 'Future Direction' },
   ],
 });
@@ -252,20 +252,20 @@ const branchX = refineNode.x + nodeW + gapX;
 singleHostStages[0].x = branchX;
 singleHostStages[0].y = coreY - gapY - 20;
 
-// Fleet path: below from branch
-const fleetStartX = branchX;
-fleetStages.forEach((s, i) => {
-  s.x = fleetStartX + i * (nodeW + gapX);
+// Aggregate path: below from branch
+const aggregateStartX = branchX;
+aggregateStages.forEach((s, i) => {
+  s.x = aggregateStartX + i * (nodeW + gapX);
   s.y = coreY + gapY + 20;
 });
 
-// Future direction: after fleet refine, offset right-down
-const lastFleet = fleetStages[fleetStages.length - 1];
-futureStages[0].x = lastFleet.x + nodeW + gapX;
-futureStages[0].y = lastFleet.y;
+// Future direction: after aggregate refine, offset right-down
+const lastAggregate = aggregateStages[aggregateStages.length - 1];
+futureStages[0].x = lastAggregate.x + nodeW + gapX;
+futureStages[0].y = lastAggregate.y;
 
 // Combine all stages for rendering
-const allStages = [...coreStages, ...singleHostStages, ...fleetStages, ...futureStages];
+const allStages = [...coreStages, ...singleHostStages, ...aggregateStages, ...futureStages];
 
 // ─── Connector definitions ──────────────────────────────────────────
 const connectorDefs = [];
@@ -287,26 +287,26 @@ connectorDefs.push({
   label: 'Single Host',
 });
 
-// Branch: Refine → Fleet Init
+// Branch: Refine → Aggregate Init
 connectorDefs.push({
   from: refineNode,
-  to: fleetStages[0],
-  type: 'branch-fleet',
-  label: 'Fleet',
+  to: aggregateStages[0],
+  type: 'branch-aggregate',
+  label: 'Aggregate',
 });
 
-// Fleet chain
-for (let i = 0; i < fleetStages.length - 1; i++) {
+// Aggregate chain
+for (let i = 0; i < aggregateStages.length - 1; i++) {
   connectorDefs.push({
-    from: fleetStages[i],
-    to: fleetStages[i + 1],
-    type: 'fleet',
+    from: aggregateStages[i],
+    to: aggregateStages[i + 1],
+    type: 'aggregate',
   });
 }
 
-// Future: Fleet Refine → Architect (dashed)
+// Future: Aggregate Refine → Architect (dashed)
 connectorDefs.push({
-  from: lastFleet,
+  from: lastAggregate,
   to: futureStages[0],
   type: 'future',
 });
@@ -323,13 +323,13 @@ connectorDefs.forEach(c => {
 
   // Determine color for the arrow marker
   let markerColor = 'default';
-  if (c.type === 'branch-fleet' || c.type === 'fleet') markerColor = 'teal';
+  if (c.type === 'branch-aggregate' || c.type === 'aggregate') markerColor = 'teal';
   else if (c.type === 'branch-single') markerColor = 'green';
   else if (isFuture) markerColor = 'purple';
 
   // Determine stroke color
   let strokeColor = border;
-  if (c.type === 'branch-fleet' || c.type === 'fleet') strokeColor = colors.teal.stroke;
+  if (c.type === 'branch-aggregate' || c.type === 'aggregate') strokeColor = colors.teal.stroke;
   else if (c.type === 'branch-single') strokeColor = colors.green.stroke;
   else if (isFuture) strokeColor = colors.purple.stroke;
 
