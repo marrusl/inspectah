@@ -205,7 +205,7 @@ fn service_surface_agreement() {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
             ServiceStateChange {
@@ -215,7 +215,7 @@ fn service_surface_agreement() {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             },
         ],

@@ -5,7 +5,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, QuadletUnit,
 };
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, VariantSelection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
@@ -14,9 +14,9 @@ use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a fleet snapshot with config variants for testing.
+/// Build a aggregate snapshot with config variants for testing.
 ///
-/// Creates a fleet of `host_count` hosts with a config file at `path` that has
+/// Creates a aggregate of `host_count` hosts with a config file at `path` that has
 /// two variants: `content_a` (Selected, seen on `count_a` hosts) and
 /// `content_b` (Alternative, seen on `count_b` hosts).
 fn make_variant_snapshot(
@@ -28,7 +28,7 @@ fn make_variant_snapshot(
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -46,7 +46,7 @@ fn make_variant_snapshot(
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
@@ -60,7 +60,7 @@ fn make_variant_snapshot(
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_b,
                     total: host_count as i32,
                     hosts: (count_a as usize..host_count)
@@ -75,14 +75,14 @@ fn make_variant_snapshot(
     snap
 }
 
-/// Build a fleet snapshot with a single "Only" config variant.
+/// Build a aggregate snapshot with a single "Only" config variant.
 fn make_single_variant_snapshot(
     path: &str,
     content: &str,
     host_count: usize,
 ) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -99,7 +99,7 @@ fn make_single_variant_snapshot(
             include: true,
             locked: false,
             variant_selection: VariantSelection::Only,
-            fleet: Some(FleetPrevalence {
+            aggregate: Some(AggregatePrevalence {
                 count: host_count as i32,
                 total: host_count as i32,
                 hosts: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -659,7 +659,7 @@ fn discard_variant_unknown_hash_fails() {
 // DropIn/Quadlet/Compose helper functions
 // ===========================================================================
 
-/// Build a fleet snapshot with two DropIn variants for testing.
+/// Build a aggregate snapshot with two DropIn variants for testing.
 fn make_dropin_variant_snapshot(
     path: &str,
     content_a: &str,
@@ -669,7 +669,7 @@ fn make_dropin_variant_snapshot(
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -689,7 +689,7 @@ fn make_dropin_variant_snapshot(
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
@@ -704,7 +704,7 @@ fn make_dropin_variant_snapshot(
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_b,
                     total: host_count as i32,
                     hosts: (count_a as usize..host_count)
@@ -719,7 +719,7 @@ fn make_dropin_variant_snapshot(
     snap
 }
 
-/// Build a fleet snapshot with two Quadlet variants for testing.
+/// Build a aggregate snapshot with two Quadlet variants for testing.
 fn make_quadlet_variant_snapshot(
     path: &str,
     content_a: &str,
@@ -729,7 +729,7 @@ fn make_quadlet_variant_snapshot(
 ) -> InspectionSnapshot {
     let host_count = (count_a + count_b) as usize;
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -749,7 +749,7 @@ fn make_quadlet_variant_snapshot(
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_a,
                     total: host_count as i32,
                     hosts: (0..count_a as usize).map(|i| format!("host-{i}")).collect(),
@@ -765,7 +765,7 @@ fn make_quadlet_variant_snapshot(
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: count_b,
                     total: host_count as i32,
                     hosts: (count_a as usize..host_count)
@@ -781,11 +781,11 @@ fn make_quadlet_variant_snapshot(
     snap
 }
 
-/// Build a fleet snapshot with two Compose variants (different images lists).
+/// Build a aggregate snapshot with two Compose variants (different images lists).
 fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
     let host_count = 5;
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -806,7 +806,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: host_count as i32,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
@@ -822,7 +822,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: host_count as i32,
                     hosts: vec!["host-3".into(), "host-4".into()],
@@ -1132,7 +1132,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
     // Hash from path A used as based_on for EditVariant on path B should fail.
     let host_count = 5;
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
+        aggregate_meta: Some(AggregateSnapshotMeta {
             label: "test".into(),
             host_count,
             hostnames: (0..host_count).map(|i| format!("host-{i}")).collect(),
@@ -1151,7 +1151,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: host_count as i32,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
@@ -1165,7 +1165,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: host_count as i32,
                     hosts: vec!["host-3".into(), "host-4".into()],
@@ -1180,7 +1180,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 4,
                     total: host_count as i32,
                     hosts: vec![
@@ -1199,7 +1199,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: host_count as i32,
                     hosts: vec!["host-4".into()],

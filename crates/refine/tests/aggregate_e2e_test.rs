@@ -1,36 +1,36 @@
-//! End-to-end lifecycle test for the fleet refine engine.
+//! End-to-end lifecycle test for the aggregate refine engine.
 //!
-//! Exercises the full fleet refine pipeline in a single test:
-//! zone classification, fleet detection, attention scoring, variant ops,
+//! Exercises the full aggregate refine pipeline in a single test:
+//! zone classification, aggregate detection, attention scoring, variant ops,
 //! diff engine, variant summary, undo, and export.
 
 use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::fleet::{
-    FleetPrevalence, FleetSnapshotMeta, PrevalenceZone, VariantSelection,
+use inspectah_core::types::aggregate::{
+    AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone, VariantSelection,
 };
-use inspectah_refine::fleet::classify::classify_fleet_bucket;
-use inspectah_refine::fleet::diff::compute_diff;
-use inspectah_refine::fleet::variant_summary;
+use inspectah_refine::aggregate::classify::classify_aggregate_bucket;
+use inspectah_refine::aggregate::diff::compute_diff;
+use inspectah_refine::aggregate::variant_summary;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    ContentHash, FleetBucket, ItemId, RefinementOp, Triage, TriageBucket, TriageReason,
+    ContentHash, AggregateBucket, ItemId, RefinementOp, Triage, TriageBucket, TriageReason,
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a fleet snapshot with 5 hosts, two config paths:
+/// Build a aggregate snapshot with 5 hosts, two config paths:
 /// - `/etc/app/main.conf`: 3 variants (3 hosts, 1 host, 1 host)
 /// - `/etc/app/db.conf`: 2 variants (4 hosts, 1 host)
 /// - `/etc/app/logging.conf`: 1 variant (all 5 hosts — no divergence)
 fn make_e2e_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot {
-        fleet_meta: Some(FleetSnapshotMeta {
-            label: "e2e-fleet".into(),
+        aggregate_meta: Some(AggregateSnapshotMeta {
+            label: "e2e-aggregate".into(),
             host_count: 5,
             hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
             merged_at: "2026-05-21T00:00:00Z".into(),
@@ -47,7 +47,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "setting=alpha".into(),
                 include: true,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
@@ -61,7 +61,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "setting=beta".into(),
                 include: true,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-3".into()],
@@ -75,7 +75,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "setting=gamma".into(),
                 include: true,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-4".into()],
@@ -89,7 +89,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "host=db-primary".into(),
                 include: true,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 4,
                     total: 5,
                     hosts: vec![
@@ -108,7 +108,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "host=db-replica".into(),
                 include: true,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 1,
                     total: 5,
                     hosts: vec!["host-4".into()],
@@ -122,7 +122,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
                 content: "level=info".into(),
                 include: true,
                 variant_selection: VariantSelection::Only,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 5,
                     total: 5,
                     hosts: (0..5).map(|i| format!("host-{i}")).collect(),
@@ -149,11 +149,11 @@ fn variants_for_path(snap: &InspectionSnapshot, path: &str) -> Vec<ConfigFileEnt
 
 #[test]
 fn summary_none_for_single_host() {
-    // Single-host snapshot — no fleet_meta, no FleetContext.
+    // Single-host snapshot — no aggregate_meta, no AggregateContext.
     let snap = InspectionSnapshot::default();
     let session = RefineSession::new(snap);
     assert!(
-        variant_summary(&session.snapshot_projected(), session.fleet_context()).is_none(),
+        variant_summary(&session.snapshot_projected(), session.aggregate_context()).is_none(),
         "variant_summary must return None for single-host sessions",
     );
 }
@@ -162,8 +162,8 @@ fn summary_none_for_single_host() {
 fn summary_counts_paths_with_variants() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context())
-        .expect("fleet session should produce a summary");
+    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context())
+        .expect("aggregate session should produce a summary");
 
     // Two paths have variants: main.conf (3 variants) and db.conf (2 variants).
     // logging.conf has only 1 variant (Only) so it's excluded.
@@ -192,7 +192,7 @@ fn summary_counts_paths_with_variants() {
 fn summary_reports_variant_count_per_path() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context()).unwrap();
+    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
 
     assert_eq!(
         summary.variant_distribution["/etc/app/main.conf"].variant_count,
@@ -208,7 +208,7 @@ fn summary_reports_variant_count_per_path() {
 fn summary_reports_host_split_sorted_descending() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context()).unwrap();
+    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
 
     // main.conf: 3 hosts, 1 host, 1 host → [3, 1, 1]
     assert_eq!(
@@ -227,23 +227,23 @@ fn summary_reports_host_split_sorted_descending() {
 // ===========================================================================
 
 #[test]
-fn fleet_refine_full_lifecycle() {
+fn aggregate_refine_full_lifecycle() {
     // -----------------------------------------------------------------------
-    // 1. Build fleet snapshot: 5 hosts, configs with variants, mixed prevalence
+    // 1. Build aggregate snapshot: 5 hosts, configs with variants, mixed prevalence
     // -----------------------------------------------------------------------
     let snap = make_e2e_snapshot();
 
     // -----------------------------------------------------------------------
-    // 2. Init session — verify fleet mode, zones computed
+    // 2. Init session — verify aggregate mode, zones computed
     // -----------------------------------------------------------------------
     let mut session = RefineSession::new(snap);
-    let fleet_ctx = session
-        .fleet_context()
-        .expect("session must detect fleet mode");
-    assert_eq!(fleet_ctx.total_hosts, 5);
+    let aggregate_ctx = session
+        .aggregate_context()
+        .expect("session must detect aggregate mode");
+    assert_eq!(aggregate_ctx.total_hosts, 5);
     assert!(
-        fleet_ctx.zones_active,
-        "zones must be active for fleet of 5",
+        aggregate_ctx.zones_active,
+        "zones must be active for aggregate of 5",
     );
 
     // -----------------------------------------------------------------------
@@ -255,7 +255,7 @@ fn fleet_refine_full_lifecycle() {
     // Zone uses most-divergent variant: 3/5→NearConsensus, 1/5→Divergent, 1/5→Divergent.
     // The path-level zone is the min (most-divergent): Divergent.
     assert_eq!(
-        fleet_ctx.zones.get(&main_id),
+        aggregate_ctx.zones.get(&main_id),
         Some(&PrevalenceZone::Divergent),
         "main.conf zone should use most-divergent variant (1/5 → Divergent)",
     );
@@ -265,16 +265,16 @@ fn fleet_refine_full_lifecycle() {
         path: "/etc/app/logging.conf".into(),
     };
     assert_eq!(
-        fleet_ctx.zones.get(&log_id),
+        aggregate_ctx.zones.get(&log_id),
         Some(&PrevalenceZone::Consensus),
         "logging.conf (5/5) must be Consensus",
     );
 
     // -----------------------------------------------------------------------
-    // 4. Attention scoring — verify fleet-aware scoring works
+    // 4. Attention scoring — verify aggregate-aware scoring works
     // -----------------------------------------------------------------------
-    let tag = classify_fleet_bucket(
-        fleet_ctx,
+    let tag = classify_aggregate_bucket(
+        aggregate_ctx,
         &main_id,
         TriageBucket::Investigate,
         TriageReason::PackageProvenanceUnavailable,
@@ -282,11 +282,11 @@ fn fleet_refine_full_lifecycle() {
         5,
     );
     match &tag.triage {
-        Triage::Fleet(ft) => {
-            assert_eq!(ft.bucket, FleetBucket::Divergent);
+        Triage::Aggregate(ft) => {
+            assert_eq!(ft.bucket, AggregateBucket::Divergent);
         }
         Triage::SingleHost(_) => {
-            panic!("fleet session must produce Fleet triage");
+            panic!("aggregate session must produce Aggregate triage");
         }
     }
 
@@ -361,8 +361,8 @@ fn fleet_refine_full_lifecycle() {
     // -----------------------------------------------------------------------
     // 8. Variant summary — verify it reflects the edit
     // -----------------------------------------------------------------------
-    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context())
-        .expect("fleet session must produce a summary");
+    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context())
+        .expect("aggregate session must produce a summary");
     // main.conf now has 4 variants (3 original + 1 user edit)
     assert_eq!(
         summary.variant_distribution["/etc/app/main.conf"].variant_count,
@@ -403,7 +403,7 @@ fn fleet_refine_full_lifecycle() {
     );
 
     // -----------------------------------------------------------------------
-    // 10. Export — verify tarball has fleet/variants/ directory
+    // 10. Export — verify tarball has aggregate/variants/ directory
     // -----------------------------------------------------------------------
     let tmpdir = tempfile::tempdir().expect("tempdir for export");
     let tarball_path = tmpdir.path().join("export.tar.gz");
@@ -412,7 +412,7 @@ fn fleet_refine_full_lifecycle() {
         .expect("export should succeed");
 
     // Read tarball entries (strip the archive prefix directory) and check
-    // for fleet/variants/ content.
+    // for aggregate/variants/ content.
     let f = std::fs::File::open(&tarball_path).expect("open tarball");
     let gz = flate2::read::GzDecoder::new(f);
     let mut archive = tar::Archive::new(gz);
@@ -427,10 +427,10 @@ fn fleet_refine_full_lifecycle() {
         })
         .collect();
 
-    // Fleet snapshot with alternatives should produce fleet/variants/ entries
+    // Aggregate snapshot with alternatives should produce aggregate/variants/ entries
     assert!(
-        entry_paths.iter().any(|p| p.starts_with("fleet/variants/")),
-        "export must contain fleet/variants/ directory for alternative variants; entries: {entry_paths:?}",
+        entry_paths.iter().any(|p| p.starts_with("aggregate/variants/")),
+        "export must contain aggregate/variants/ directory for alternative variants; entries: {entry_paths:?}",
     );
 
     // Core export artifacts must also be present
@@ -464,8 +464,8 @@ fn fleet_refine_full_lifecycle() {
 fn variant_summary_distribution_is_sorted() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.fleet_context())
-        .expect("fleet session must produce a summary");
+    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context())
+        .expect("aggregate session must produce a summary");
 
     // BTreeMap keys are always sorted — verify this contract
     let keys: Vec<_> = summary.variant_distribution.keys().cloned().collect();

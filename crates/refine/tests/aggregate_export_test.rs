@@ -3,14 +3,14 @@ use std::collections::BTreeSet;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta, VariantSelection};
+use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, VariantSelection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::{RefineSession, render_refine_export};
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
-/// Build a single-host snapshot (no fleet_meta) with one config file.
+/// Build a single-host snapshot (no aggregate_meta) with one config file.
 fn single_host_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot {
         schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -46,12 +46,12 @@ fn single_host_snapshot() -> InspectionSnapshot {
     snap
 }
 
-/// Build a fleet snapshot with Selected + Alternative config variants.
-fn fleet_snapshot_with_variants() -> InspectionSnapshot {
+/// Build a aggregate snapshot with Selected + Alternative config variants.
+fn aggregate_snapshot_with_variants() -> InspectionSnapshot {
     let mut snap = single_host_snapshot();
 
-    // Set fleet_meta so it's recognized as a fleet snapshot
-    snap.fleet_meta = Some(FleetSnapshotMeta {
+    // Set aggregate_meta so it's recognized as a aggregate snapshot
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "web-servers".into(),
         host_count: 5,
         hostnames: vec![
@@ -105,7 +105,7 @@ fn fleet_snapshot_with_variants() -> InspectionSnapshot {
 /// Collect all file entries from a tarball as a sorted set of paths.
 /// The tarball prefix directory (derived from the archive filename stem)
 /// is stripped so tests can assert against logical paths like
-/// "fleet/variants/..." rather than "output/fleet/variants/...".
+/// "aggregate/variants/..." rather than "output/aggregate/variants/...".
 fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
     let file = std::fs::File::open(tarball_path).unwrap();
     let gz = flate2::read::GzDecoder::new(file);
@@ -164,7 +164,7 @@ fn tarball_read_file(tarball_path: &std::path::Path, target: &str) -> Option<Str
 }
 
 #[test]
-fn single_host_export_has_no_fleet_dir() {
+fn single_host_export_has_no_aggregate_dir() {
     let snap = single_host_snapshot();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
@@ -173,14 +173,14 @@ fn single_host_export_has_no_fleet_dir() {
 
     let files = tarball_file_set(&tarball_path);
     assert!(
-        !files.iter().any(|f| f.starts_with("fleet/")),
-        "single-host export must NOT contain fleet/, got: {files:?}"
+        !files.iter().any(|f| f.starts_with("aggregate/")),
+        "single-host export must NOT contain aggregate/, got: {files:?}"
     );
 }
 
 #[test]
-fn fleet_export_creates_variant_files() {
-    let snap = fleet_snapshot_with_variants();
+fn aggregate_export_creates_variant_files() {
+    let snap = aggregate_snapshot_with_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -188,10 +188,10 @@ fn fleet_export_creates_variant_files() {
 
     let files = tarball_file_set(&tarball_path);
 
-    // fleet/variants/ must exist with files for each Alternative entry
+    // aggregate/variants/ must exist with files for each Alternative entry
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
     assert!(
         variant_files.len() >= 2,
@@ -202,7 +202,7 @@ fn fleet_export_creates_variant_files() {
     // Check directory hierarchy exists for both config paths
     let httpd_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/etc/httpd/conf/httpd.conf/"))
+        .filter(|f| f.starts_with("aggregate/variants/etc/httpd/conf/httpd.conf/"))
         .collect();
     assert!(
         !httpd_variants.is_empty(),
@@ -211,7 +211,7 @@ fn fleet_export_creates_variant_files() {
 
     let sysctl_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/etc/sysctl.conf/"))
+        .filter(|f| f.starts_with("aggregate/variants/etc/sysctl.conf/"))
         .collect();
     assert!(
         !sysctl_variants.is_empty(),
@@ -220,8 +220,8 @@ fn fleet_export_creates_variant_files() {
 }
 
 #[test]
-fn fleet_variant_content_is_materialized() {
-    let snap = fleet_snapshot_with_variants();
+fn aggregate_variant_content_is_materialized() {
+    let snap = aggregate_snapshot_with_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -232,7 +232,7 @@ fn fleet_variant_content_is_materialized() {
     // Find the httpd variant file and read its content
     let httpd_variant = files
         .iter()
-        .find(|f| f.starts_with("fleet/variants/etc/httpd/conf/httpd.conf/"))
+        .find(|f| f.starts_with("aggregate/variants/etc/httpd/conf/httpd.conf/"))
         .expect("httpd variant file must exist");
 
     let content = tarball_read_file(&tarball_path, httpd_variant)
@@ -245,7 +245,7 @@ fn fleet_variant_content_is_materialized() {
     // Verify the sysctl variant content
     let sysctl_variant = files
         .iter()
-        .find(|f| f.starts_with("fleet/variants/etc/sysctl.conf/"))
+        .find(|f| f.starts_with("aggregate/variants/etc/sysctl.conf/"))
         .expect("sysctl variant file must exist");
 
     let content = tarball_read_file(&tarball_path, sysctl_variant)
@@ -257,8 +257,8 @@ fn fleet_variant_content_is_materialized() {
 }
 
 #[test]
-fn fleet_variant_file_uses_hash_prefix() {
-    let snap = fleet_snapshot_with_variants();
+fn aggregate_variant_file_uses_hash_prefix() {
+    let snap = aggregate_snapshot_with_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -267,7 +267,7 @@ fn fleet_variant_file_uses_hash_prefix() {
     let files = tarball_file_set(&tarball_path);
 
     // Every variant file must end with .content and have a 12-char hex prefix
-    for file in files.iter().filter(|f| f.starts_with("fleet/variants/")) {
+    for file in files.iter().filter(|f| f.starts_with("aggregate/variants/")) {
         let filename = file.rsplit('/').next().unwrap();
         assert!(
             filename.ends_with(".content"),
@@ -288,8 +288,8 @@ fn fleet_variant_file_uses_hash_prefix() {
 }
 
 #[test]
-fn fleet_export_selected_not_in_variants() {
-    let snap = fleet_snapshot_with_variants();
+fn aggregate_export_selected_not_in_variants() {
+    let snap = aggregate_snapshot_with_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -298,7 +298,7 @@ fn fleet_export_selected_not_in_variants() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     // Selected httpd variant content is "MaxClients 256" — should NOT be in variants/
@@ -306,16 +306,16 @@ fn fleet_export_selected_not_in_variants() {
         if let Some(content) = tarball_read_file(&tarball_path, vf) {
             assert!(
                 !content.contains("MaxClients 256"),
-                "Selected variant content must NOT appear in fleet/variants/"
+                "Selected variant content must NOT appear in aggregate/variants/"
             );
         }
     }
 }
 
 #[test]
-fn fleet_export_via_session_export_tarball() {
-    // Verify the session-level export_tarball method also produces fleet/variants/
-    let snap = fleet_snapshot_with_variants();
+fn aggregate_export_via_session_export_tarball() {
+    // Verify the session-level export_tarball method also produces aggregate/variants/
+    let snap = aggregate_snapshot_with_variants();
     let session = RefineSession::new(snap);
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -326,8 +326,8 @@ fn fleet_export_via_session_export_tarball() {
 
     let files = tarball_file_set(&tarball_path);
     assert!(
-        files.iter().any(|f| f.starts_with("fleet/variants/")),
-        "session export_tarball must produce fleet/variants/ for fleet snapshots"
+        files.iter().any(|f| f.starts_with("aggregate/variants/")),
+        "session export_tarball must produce aggregate/variants/ for aggregate snapshots"
     );
 }
 
@@ -335,11 +335,11 @@ fn fleet_export_via_session_export_tarball() {
 // DropIn/Quadlet export tests
 // ===========================================================================
 
-/// Build a fleet snapshot with an Alternative drop-in variant.
-fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
+/// Build a aggregate snapshot with an Alternative drop-in variant.
+fn aggregate_snapshot_with_dropin_variants() -> InspectionSnapshot {
     let mut snap = single_host_snapshot();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "test-aggregate".into(),
         host_count: 5,
         hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
         merged_at: "2026-05-21T00:00:00Z".into(),
@@ -356,7 +356,7 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
@@ -371,7 +371,7 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 locked: false,
                 attention_reason: None,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: 5,
                     hosts: vec!["host-3".into(), "host-4".into()],
@@ -384,11 +384,11 @@ fn fleet_snapshot_with_dropin_variants() -> InspectionSnapshot {
     snap
 }
 
-/// Build a fleet snapshot with an Alternative quadlet variant.
-fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
+/// Build a aggregate snapshot with an Alternative quadlet variant.
+fn aggregate_snapshot_with_quadlet_variants() -> InspectionSnapshot {
     let mut snap = single_host_snapshot();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "test-aggregate".into(),
         host_count: 5,
         hostnames: (0..5).map(|i| format!("host-{i}")).collect(),
         merged_at: "2026-05-21T00:00:00Z".into(),
@@ -405,7 +405,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Selected,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 3,
                     total: 5,
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
@@ -421,7 +421,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 include: true,
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
-                fleet: Some(FleetPrevalence {
+                aggregate: Some(AggregatePrevalence {
                     count: 2,
                     total: 5,
                     hosts: vec!["host-3".into(), "host-4".into()],
@@ -437,7 +437,7 @@ fn fleet_snapshot_with_quadlet_variants() -> InspectionSnapshot {
 
 #[test]
 fn export_includes_dropin_alternative_variants() {
-    let snap = fleet_snapshot_with_dropin_variants();
+    let snap = aggregate_snapshot_with_dropin_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -446,14 +446,14 @@ fn export_includes_dropin_alternative_variants() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     // Should have a variant file for the drop-in Alternative
     let dropin_variants: Vec<_> = variant_files
         .iter()
         .filter(|f| {
-            f.starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/")
+            f.starts_with("aggregate/variants/etc/systemd/system/httpd.service.d/override.conf/")
         })
         .collect();
     assert!(
@@ -471,7 +471,7 @@ fn export_includes_dropin_alternative_variants() {
 
 #[test]
 fn export_includes_quadlet_alternative_variants() {
-    let snap = fleet_snapshot_with_quadlet_variants();
+    let snap = aggregate_snapshot_with_quadlet_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -480,13 +480,13 @@ fn export_includes_quadlet_alternative_variants() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     // Should have a variant file for the quadlet Alternative
     let quadlet_variants: Vec<_> = variant_files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/etc/containers/systemd/app.container/"))
+        .filter(|f| f.starts_with("aggregate/variants/etc/containers/systemd/app.container/"))
         .collect();
     assert!(
         !quadlet_variants.is_empty(),
@@ -507,7 +507,7 @@ fn export_includes_quadlet_alternative_variants() {
 
 #[test]
 fn export_variant_paths_use_directory_hierarchy() {
-    let snap = fleet_snapshot_with_variants();
+    let snap = aggregate_snapshot_with_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -516,7 +516,7 @@ fn export_variant_paths_use_directory_hierarchy() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     assert!(!variant_files.is_empty(), "must have variant files to test");
@@ -525,19 +525,19 @@ fn export_variant_paths_use_directory_hierarchy() {
     assert!(
         variant_files
             .iter()
-            .any(|f| f.starts_with("fleet/variants/etc/httpd/conf/httpd.conf/")),
+            .any(|f| f.starts_with("aggregate/variants/etc/httpd/conf/httpd.conf/")),
         "expected directory hierarchy for httpd.conf, got: {variant_files:?}"
     );
     assert!(
         variant_files
             .iter()
-            .any(|f| f.starts_with("fleet/variants/etc/sysctl.conf/")),
+            .any(|f| f.starts_with("aggregate/variants/etc/sysctl.conf/")),
         "expected directory hierarchy for sysctl.conf, got: {variant_files:?}"
     );
 
     // No underscore-escaped paths should exist
     for file in &variant_files {
-        let after_prefix = file.strip_prefix("fleet/variants/").unwrap();
+        let after_prefix = file.strip_prefix("aggregate/variants/").unwrap();
         assert!(
             !after_prefix.contains("etc_"),
             "variant path must use directory hierarchy, not underscore escaping: {file}"
@@ -547,7 +547,7 @@ fn export_variant_paths_use_directory_hierarchy() {
 
 #[test]
 fn export_dropin_variant_paths_use_directory_hierarchy() {
-    let snap = fleet_snapshot_with_dropin_variants();
+    let snap = aggregate_snapshot_with_dropin_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -556,21 +556,21 @@ fn export_dropin_variant_paths_use_directory_hierarchy() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     assert!(
         variant_files
             .iter()
             .any(|f| f
-                .starts_with("fleet/variants/etc/systemd/system/httpd.service.d/override.conf/")),
+                .starts_with("aggregate/variants/etc/systemd/system/httpd.service.d/override.conf/")),
         "expected directory hierarchy for drop-in, got: {variant_files:?}"
     );
 }
 
 #[test]
 fn export_quadlet_variant_paths_use_directory_hierarchy() {
-    let snap = fleet_snapshot_with_quadlet_variants();
+    let snap = aggregate_snapshot_with_quadlet_variants();
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
@@ -579,13 +579,13 @@ fn export_quadlet_variant_paths_use_directory_hierarchy() {
     let files = tarball_file_set(&tarball_path);
     let variant_files: Vec<_> = files
         .iter()
-        .filter(|f| f.starts_with("fleet/variants/"))
+        .filter(|f| f.starts_with("aggregate/variants/"))
         .collect();
 
     assert!(
         variant_files
             .iter()
-            .any(|f| f.starts_with("fleet/variants/etc/containers/systemd/app.container/")),
+            .any(|f| f.starts_with("aggregate/variants/etc/containers/systemd/app.container/")),
         "expected directory hierarchy for quadlet, got: {variant_files:?}"
     );
 }
@@ -596,7 +596,7 @@ fn export_quadlet_variant_paths_use_directory_hierarchy() {
 
 #[test]
 fn export_reimport_preserves_variant_state() {
-    let snap = fleet_snapshot_with_variants();
+    let snap = aggregate_snapshot_with_variants();
 
     // Apply a SelectVariant op — switch /etc/httpd/conf/httpd.conf to Alternative
     let alt_content = "ServerRoot /etc/httpd\nMaxClients 128";
