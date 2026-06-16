@@ -4,7 +4,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
-use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
@@ -55,15 +55,15 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
     lines.push("# Audit Report".into());
     lines.push(String::new());
 
-    // Fleet aggregate summary section
-    if let Some(meta) = &snap.fleet_meta {
-        lines.push("## Fleet Aggregate Summary".into());
+    // Aggregate summary section
+    if let Some(meta) = &snap.aggregate_meta {
+        lines.push("## Aggregate Summary".into());
         lines.push(String::new());
 
         lines.push(format!("- **Label:** {}", meta.label));
         lines.push(format!("- **Host count:** {}", meta.host_count));
         lines.push(format!(
-            "- **Fleet baseline:** {}",
+            "- **Aggregate baseline:** {}",
             if meta.baseline_provisional {
                 "Provisional (multiple target images detected)"
             } else {
@@ -138,7 +138,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         if conflict_count > 0 {
             lines.push(String::new());
             lines.push(format!(
-                "**Variant conflicts:** {} path(s) with multiple content versions across the fleet",
+                "**Variant conflicts:** {} path(s) with multiple content versions across the aggregate",
                 conflict_count
             ));
         }
@@ -854,12 +854,12 @@ mod tests {
     }
 
     #[test]
-    fn test_audit_fleet_summary_section() {
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+    fn test_audit_aggregate_summary_section() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use std::collections::BTreeMap;
 
         let snap = InspectionSnapshot {
-            fleet_meta: Some(FleetSnapshotMeta {
+            aggregate_meta: Some(AggregateSnapshotMeta {
                 label: "web-servers".into(),
                 host_count: 3,
                 hostnames: vec!["host1".into(), "host2".into(), "host3".into()],
@@ -876,11 +876,11 @@ mod tests {
 
         let report = render_audit(&snap);
 
-        assert!(report.contains("## Fleet Aggregate Summary"));
+        assert!(report.contains("## Aggregate Summary"));
         assert!(report.contains("**Label:** web-servers"));
         assert!(report.contains("**Host count:** 3"));
         assert!(
-            report.contains("**Fleet baseline:** Provisional (multiple target images detected)")
+            report.contains("**Aggregate baseline:** Provisional (multiple target images detected)")
         );
         assert!(report.contains("### Hosts"));
         assert!(report.contains("- host1"));
@@ -893,15 +893,15 @@ mod tests {
     }
 
     #[test]
-    fn test_audit_fleet_variant_conflicts() {
+    fn test_audit_aggregate_variant_conflicts() {
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-        use inspectah_core::types::fleet::{FleetSnapshotMeta, VariantSelection};
+        use inspectah_core::types::aggregate::{AggregateSnapshotMeta, VariantSelection};
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use std::collections::BTreeMap;
 
         let mut snap = InspectionSnapshot {
-            fleet_meta: Some(FleetSnapshotMeta {
-                label: "test-fleet".into(),
+            aggregate_meta: Some(AggregateSnapshotMeta {
+                label: "test-aggregate".into(),
                 host_count: 2,
                 hostnames: vec!["host1".into(), "host2".into()],
                 merged_at: "2026-05-20T12:00:00Z".into(),
@@ -939,15 +939,15 @@ mod tests {
 
         let report = render_audit(&snap);
 
-        assert!(report.contains("**Fleet baseline:** Unanimous (all hosts match)"));
+        assert!(report.contains("**Aggregate baseline:** Unanimous (all hosts match)"));
         assert!(report.contains("**Variant conflicts:** 2 path(s)"));
     }
 
     #[test]
-    fn test_audit_no_fleet_summary_for_single_host() {
+    fn test_audit_no_aggregate_summary_for_single_host() {
         let snap = InspectionSnapshot::default();
         let report = render_audit(&snap);
-        assert!(!report.contains("Fleet Aggregate Summary"));
+        assert!(!report.contains("Aggregate Summary"));
     }
 
     #[test]

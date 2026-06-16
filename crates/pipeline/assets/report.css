@@ -579,7 +579,7 @@ details.report-section-inner[open] > summary::before {
   letter-spacing: 0.05em;
 }
 
-.source-info-fleet,
+.source-info-aggregate,
 .source-info-baseline {
   font-size: var(--pf-t--global--font--size--sm, 0.875rem);
 }
@@ -595,8 +595,8 @@ details.report-section-inner[open] > summary::before {
   word-break: break-all;
 }
 
-/* ── Fleet summary ───────────────────────────────────────────── */
-.fleet-summary {
+/* ── Aggregate summary ──────────────────────────────────────── */
+.aggregate-summary {
   padding: var(--pf-t--global--spacer--md, 1rem) var(--pf-t--global--spacer--xl, 2rem);
   border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
     var(--pf-t--global--border--color--default, #e0e0e0);

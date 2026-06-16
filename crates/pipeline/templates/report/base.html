@@ -15,8 +15,8 @@
     {% include "report/completeness.html" %}
   {% endif %}
   {% include "report/source-info.html" %}
-  {% if is_fleet %}
-    {% include "report/fleet-summary.html" %}
+  {% if is_aggregate %}
+    {% include "report/aggregate-summary.html" %}
   {% endif %}
 
   <main>

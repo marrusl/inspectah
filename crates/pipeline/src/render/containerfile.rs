@@ -295,7 +295,7 @@ fn packages_section_lines(
         None => return lines,
     };
 
-    // Partial leaf authority indicator for fleet snapshots
+    // Partial leaf authority indicator for aggregate snapshots
     if let (Some(auth), Some(total)) = (rpm.leaf_authority_hosts, rpm.leaf_total_hosts)
         && auth < total
     {
@@ -1239,7 +1239,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into());
     }
 
-    // Tuned — gated on include flag (set by collectors / fleet merge).
+    // Tuned — gated on include flag (set by collectors / aggregate merge).
     let tuned_included = kb.tuned_include;
     if tuned_included && !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
@@ -1644,7 +1644,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             ..Default::default()
@@ -1721,7 +1721,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -1731,7 +1731,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -1741,7 +1741,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2161,7 +2161,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2171,7 +2171,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2181,7 +2181,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2191,7 +2191,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2224,7 +2224,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2234,7 +2234,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2262,7 +2262,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2272,7 +2272,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2305,7 +2305,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2315,7 +2315,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2325,7 +2325,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2335,7 +2335,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2432,9 +2432,9 @@ mod tests {
     fn test_excluded_quadlet_generates_no_containerfile_output() {
         use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
         let mut snap = InspectionSnapshot::new();
-        // Fleet context: explicit include=false is honored (prevalence-based).
+        // Aggregate context: explicit include=false is honored (prevalence-based).
         // Single-host snapshots override include=false for quadlets.
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec![],
@@ -2514,7 +2514,7 @@ mod tests {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
         let mut snap = InspectionSnapshot::new();
         // Flatpaks with include=false produce no output.
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec![],
@@ -2529,7 +2529,7 @@ mod tests {
                 branch: "stable".into(),
                 include: false,
                 locked: false,
-                fleet: None,
+                aggregate: None,
                 remote: "flathub".into(),
                 remote_url: "https://flathub.org/repo/".into(),
             }],
@@ -2606,7 +2606,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2616,7 +2616,7 @@ mod tests {
                     include: false, // excluded by triage
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2656,7 +2656,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("httpd".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2666,7 +2666,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("cups".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -2676,7 +2676,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("avahi".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -2760,9 +2760,9 @@ mod tests {
     fn test_containerfile_tuned_excluded_no_output() {
         use inspectah_core::types::kernelboot::KernelBootSection;
         let mut snap = InspectionSnapshot::new();
-        // Fleet context: explicit tuned_include=false is honored.
+        // Aggregate context: explicit tuned_include=false is honored.
         // Single-host snapshots override to included when tuned_active is set.
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec![],
@@ -2839,7 +2839,7 @@ mod tests {
     #[test]
     fn test_partial_leaf_authority_comment_appears() {
         let mut snap = snapshot_with_packages(&["httpd"]);
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec!["a".into(), "b".into(), "c".into()],
@@ -2860,7 +2860,7 @@ mod tests {
     #[test]
     fn test_full_leaf_authority_no_comment() {
         let mut snap = snapshot_with_packages(&["httpd"]);
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 2,
             hostnames: vec!["a".into(), "b".into()],
@@ -2905,12 +2905,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fleet_containerfile_leaf_only_packages() {
-        // Fleet snapshot with pre-filtered leaf-only packages_added.
+    fn test_aggregate_containerfile_leaf_only_packages() {
+        // Aggregate snapshot with pre-filtered leaf-only packages_added.
         // Simulates what merge_rpm_sections produces: only leaf packages
         // survive into packages_added, transitive deps are stripped.
         let mut snap = InspectionSnapshot::new();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "web-tier".into(),
             host_count: 3,
             hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],

@@ -1,0 +1,50 @@
+<div class="aggregate-summary">
+  <h3>Aggregate Overview</h3>
+  <dl class="aggregate-summary-meta">
+    <dt>Aggregate Label</dt>
+    <dd>{{ aggregate_label }}</dd>
+    <dt>Host Count</dt>
+    <dd>{{ aggregate_host_count }}</dd>
+    <dt>Baseline Status</dt>
+    <dd>{% if aggregate_baseline_provisional %}provisional{% else %}unanimous{% endif %}</dd>
+    {% if aggregate_leaf_partial %}
+    <dt>Leaf Classification</dt>
+    <dd>{{ aggregate_leaf_authority_hosts }}/{{ aggregate_leaf_total_hosts }} hosts</dd>
+    {% endif %}
+    {% if aggregate_variant_conflict_count > 0 %}
+    <dt>Variant Conflicts</dt>
+    <dd>{{ aggregate_variant_conflict_count }}</dd>
+    {% endif %}
+  </dl>
+
+  <details class="aggregate-hostnames">
+    <summary>Hostnames ({{ aggregate_host_count }})</summary>
+    <ul>
+      {% for h in aggregate_hostnames %}
+        <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+
+  {% if aggregate_section_coverage | length > 0 %}
+  <details class="aggregate-coverage">
+    <summary>Section Coverage</summary>
+    <table class="pf-v6-c-table pf-m-compact pf-m-grid-md">
+      <thead>
+        <tr>
+          <th>Section</th>
+          <th>Hosts Reporting</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in aggregate_section_coverage %}
+        <tr>
+          <td>{{ entry.section }}</td>
+          <td>{{ entry.count }} / {{ aggregate_host_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</div>

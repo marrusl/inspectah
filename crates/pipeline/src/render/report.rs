@@ -35,8 +35,8 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../templates/report/config.html"),
     ),
     (
-        "report/fleet-summary.html",
-        include_str!("../../templates/report/fleet-summary.html"),
+        "report/aggregate-summary.html",
+        include_str!("../../templates/report/aggregate-summary.html"),
     ),
     (
         "report/header.html",
@@ -400,13 +400,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .map(|cfg| cfg.files.iter().any(|f| f.package.is_some()))
         .unwrap_or(false);
 
-    // Fleet conflict count: count config files that have fleet data with conflicts
+    // Aggregate conflict count: count config files that have aggregate data with conflicts
     let config_conflict_count: usize = snap
         .config
         .as_ref()
         .and_then(|cfg| {
-            if snap.fleet_meta.is_some() {
-                Some(cfg.files.iter().filter(|f| f.fleet.is_some()).count())
+            if snap.aggregate_meta.is_some() {
+                Some(cfg.files.iter().filter(|f| f.aggregate.is_some()).count())
             } else {
                 None
             }
@@ -801,23 +801,23 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
-    // Host count for fleet snapshots
+    // Host count for aggregate snapshots
     let host_count = snap
-        .fleet_meta
+        .aggregate_meta
         .as_ref()
         .map(|fm| fm.host_count as i64)
         .unwrap_or(0);
 
-    // ── Fleet aggregate data (conditional on fleet_meta) ─────────
-    let is_fleet = snap.fleet_meta.is_some();
-    let fleet_label = snap
-        .fleet_meta
+    // ── Aggregate data (conditional on aggregate_meta) ─────────
+    let is_aggregate = snap.aggregate_meta.is_some();
+    let aggregate_label = snap
+        .aggregate_meta
         .as_ref()
         .map(|f| f.label.clone())
         .unwrap_or_default();
-    let fleet_host_count = snap.fleet_meta.as_ref().map(|f| f.host_count).unwrap_or(0);
-    let fleet_hostnames: Vec<Value> = snap
-        .fleet_meta
+    let aggregate_host_count = snap.aggregate_meta.as_ref().map(|f| f.host_count).unwrap_or(0);
+    let aggregate_hostnames: Vec<Value> = snap
+        .aggregate_meta
         .as_ref()
         .map(|f| {
             f.hostnames
@@ -826,27 +826,27 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let fleet_baseline_provisional = snap
-        .fleet_meta
+    let aggregate_baseline_provisional = snap
+        .aggregate_meta
         .as_ref()
         .map(|f| f.baseline_provisional)
         .unwrap_or(false);
-    let fleet_leaf_authority_hosts = snap
+    let aggregate_leaf_authority_hosts = snap
         .rpm
         .as_ref()
         .and_then(|r| r.leaf_authority_hosts)
         .unwrap_or(0);
-    let fleet_leaf_total_hosts = snap
+    let aggregate_leaf_total_hosts = snap
         .rpm
         .as_ref()
         .and_then(|r| r.leaf_total_hosts)
         .unwrap_or(0);
-    let fleet_leaf_partial =
-        fleet_leaf_total_hosts > 0 && fleet_leaf_authority_hosts < fleet_leaf_total_hosts;
+    let aggregate_leaf_partial =
+        aggregate_leaf_total_hosts > 0 && aggregate_leaf_authority_hosts < aggregate_leaf_total_hosts;
 
-    let fleet_variant_conflict_count = snap.rpm_repo_conflicts.len();
-    let fleet_section_coverage: Vec<Value> = snap
-        .fleet_meta
+    let aggregate_variant_conflict_count = snap.rpm_repo_conflicts.len();
+    let aggregate_section_coverage: Vec<Value> = snap
+        .aggregate_meta
         .as_ref()
         .map(|f| {
             f.section_host_counts
@@ -904,17 +904,17 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         baseline_digest,
         baseline_strategy,
         host_count,
-        // Fleet aggregate (conditional)
-        is_fleet,
-        fleet_label,
-        fleet_host_count,
-        fleet_hostnames => Value::from(fleet_hostnames),
-        fleet_baseline_provisional,
-        fleet_leaf_authority_hosts,
-        fleet_leaf_total_hosts,
-        fleet_leaf_partial,
-        fleet_variant_conflict_count,
-        fleet_section_coverage => Value::from(fleet_section_coverage),
+        // Aggregate (conditional)
+        is_aggregate,
+        aggregate_label,
+        aggregate_host_count,
+        aggregate_hostnames => Value::from(aggregate_hostnames),
+        aggregate_baseline_provisional,
+        aggregate_leaf_authority_hosts,
+        aggregate_leaf_total_hosts,
+        aggregate_leaf_partial,
+        aggregate_variant_conflict_count,
+        aggregate_section_coverage => Value::from(aggregate_section_coverage),
         packages => packages_val,
         pkg_count,
         pkg_state => pkg_state_str,
@@ -1362,13 +1362,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Partial leaf authority in fleet report
+    // Partial leaf authority in aggregate report
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_report_fleet_partial_leaf_authority() {
+    fn test_report_aggregate_partial_leaf_authority() {
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "web-tier".into(),
             host_count: 3,
             hostnames: vec!["a".into(), "b".into(), "c".into()],
@@ -1572,7 +1572,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: Some("firewalld".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             enabled_units: vec!["firewalld.service".into()],
@@ -1606,7 +1606,7 @@ mod tests {
                 include: false,
                 locked: false,
                 owning_package: Some("openssh-server".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             enabled_units: vec![],
@@ -1670,7 +1670,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 inspectah_core::types::services::ServiceStateChange {
@@ -1680,7 +1680,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -1802,7 +1802,7 @@ mod tests {
                 source: "/etc/sysctl.d/99-custom.conf".into(),
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             }],
             ..Default::default()
         });
@@ -1832,7 +1832,7 @@ mod tests {
                 source: "/etc/sysctl.d/10-forwarding.conf".into(),
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             }],
             ..Default::default()
         });
@@ -2440,16 +2440,16 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Fleet Aggregate Summary tests (T12)
+    // Aggregate Summary tests (T12)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_report_fleet_summary_rendered() {
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+    fn test_report_aggregate_summary_rendered() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use std::collections::BTreeMap;
 
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(FleetSnapshotMeta {
+        snap.aggregate_meta = Some(AggregateSnapshotMeta {
             label: "web-servers".into(),
             host_count: 5,
             hostnames: vec![
@@ -2465,10 +2465,10 @@ mod tests {
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
-            html.contains("Fleet Overview"),
-            "must render fleet summary heading"
+            html.contains("Aggregate Overview"),
+            "must render aggregate summary heading"
         );
-        assert!(html.contains("web-servers"), "must show fleet label");
+        assert!(html.contains("web-servers"), "must show aggregate label");
         assert!(html.contains("host-a"), "must show hostname in list");
         assert!(
             html.contains("unanimous"),
@@ -2481,13 +2481,13 @@ mod tests {
     }
 
     #[test]
-    fn test_report_fleet_summary_provisional_baseline() {
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+    fn test_report_aggregate_summary_provisional_baseline() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use std::collections::BTreeMap;
 
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(FleetSnapshotMeta {
-            label: "mixed-fleet".into(),
+        snap.aggregate_meta = Some(AggregateSnapshotMeta {
+            label: "mixed-aggregate".into(),
             host_count: 3,
             hostnames: vec!["a".into(), "b".into(), "c".into()],
             merged_at: "2026-06-01T12:00:00Z".into(),
@@ -2502,23 +2502,23 @@ mod tests {
     }
 
     #[test]
-    fn test_report_fleet_summary_not_rendered_for_single_host() {
+    fn test_report_aggregate_summary_not_rendered_for_single_host() {
         let snap = test_snapshot();
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
-            !html.contains("Fleet Overview"),
-            "fleet summary must not render for single-host snapshot"
+            !html.contains("Aggregate Overview"),
+            "aggregate summary must not render for single-host snapshot"
         );
     }
 
     #[test]
-    fn test_report_fleet_variant_conflicts_shown() {
-        use inspectah_core::types::fleet::{FleetSnapshotMeta, RepoSourceEntry};
+    fn test_report_aggregate_variant_conflicts_shown() {
+        use inspectah_core::types::aggregate::{AggregateSnapshotMeta, RepoSourceEntry};
         use std::collections::BTreeMap;
 
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(FleetSnapshotMeta {
-            label: "conflict-fleet".into(),
+        snap.aggregate_meta = Some(AggregateSnapshotMeta {
+            label: "conflict-aggregate".into(),
             host_count: 3,
             hostnames: vec!["a".into(), "b".into(), "c".into()],
             merged_at: "2026-06-01T12:00:00Z".into(),
@@ -2652,7 +2652,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: None,
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             ..Default::default()

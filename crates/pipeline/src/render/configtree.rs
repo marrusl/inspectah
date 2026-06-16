@@ -311,7 +311,7 @@ pub fn write_config_tree(
             }
         }
         // Custom tuned profiles — written to tuned/ (promoted root),
-        // not config/. Gated on include flag (set by collectors / fleet merge).
+        // not config/. Gated on include flag (set by collectors / aggregate merge).
         let tuned_included = kb.tuned_include;
         if tuned_included {
             for tp in &kb.tuned_custom_profiles {
@@ -1281,10 +1281,10 @@ mod tests {
 
     #[test]
     fn test_excluded_quadlet_not_in_quadlet_dir() {
-        // Quadlet with include=false must not be materialized in fleet mode.
+        // Quadlet with include=false must not be materialized in aggregate mode.
         // Single-host snapshots override include=false for quadlets.
         let mut snap = InspectionSnapshot::new();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec![],
@@ -1340,7 +1340,7 @@ mod tests {
     fn test_excluded_flatpak_not_materialized() {
         // Flatpaks with include=false are not materialized.
         let mut snap = InspectionSnapshot::new();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "test".into(),
             host_count: 3,
             hostnames: vec![],
@@ -1355,7 +1355,7 @@ mod tests {
                 branch: "stable".to_string(),
                 include: false,
                 locked: false,
-                fleet: None,
+                aggregate: None,
                 remote: "flathub".to_string(),
                 remote_url: "https://flathub.org/repo/".to_string(),
             }],
