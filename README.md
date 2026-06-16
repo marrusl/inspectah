@@ -108,7 +108,7 @@ Use `--output <dir>` to get an unpacked directory instead of a tarball.
 |---------|-------------|
 | `scan` | Scan the current system and produce a migration snapshot |
 | `refine` | Interactively refine scan output and re-render artifacts |
-| `fleet` | Aggregate and manage fleet-wide migration snapshots |
+| `aggregate` | Aggregate and manage aggregate-wide migration snapshots |
 | `build` | Build a bootc container image from an inspectah tarball |
 | `version` | Print version, commit, and build date |
 
@@ -155,7 +155,7 @@ The browser opens automatically with the Refine dashboard. From here you can:
 - **Review classifications** — inspectah auto-classifies items; refine lets you override
 - **Export** — regenerate the Containerfile, audit report, and all output artifacts with your changes applied, then download the updated tarball. Refining alone doesn't produce buildable artifacts with your changes — you must export to render final output and package it.
 
-Refine works on both single-host inspection tarballs and fleet-aggregated tarballs.
+Refine works on both single-host inspection tarballs and aggregated tarballs.
 
 #### Terminal UI (experimental)
 
@@ -167,31 +167,31 @@ inspectah refine --tui hostname-*.tar.gz
 
 The TUI provides keyboard-driven navigation and inline item toggling without leaving the terminal. This is an experimental feature — the browser-based workflow is recommended for most users.
 
-### Fleet Aggregation
+### Aggregation
 
-For managing multiple hosts, use `inspectah fleet`:
+For managing multiple hosts, use `inspectah aggregate`:
 
 ```bash
-# Generate a fleet manifest from a directory of tarballs
-inspectah fleet init ./scans/
+# Generate a aggregate manifest from a directory of tarballs
+inspectah aggregate init ./scans/
 
-# Aggregate the fleet into a single fleet tarball
-inspectah fleet aggregate --manifest fleet.toml
+# Aggregate the aggregate into a single aggregate tarball
+inspectah aggregate --manifest aggregate.toml
 
 # Refine the aggregated output
-inspectah refine fleet-*.tar.gz
+inspectah refine aggregate-*.tar.gz
 ```
 
-Fleet mode finds the intersection of packages/configs across hosts and identifies per-host exceptions.
+Aggregate mode finds the intersection of packages/configs across hosts and identifies per-host exceptions.
 
 ## Workflows
 
 ```
 One host:    Scan ───► Refine ───► Build
-Many hosts:  Scan ───► Fleet ────► Refine ───► Build
+Many hosts:  Scan ───► Aggregate ────► Refine ───► Build
 ```
 
-Each step consumes and produces tarballs. Refine and Fleet are optional.
+Each step consumes and produces tarballs. Refine and Aggregate are optional.
 
 ## Configuration
 
