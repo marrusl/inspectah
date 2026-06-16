@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::QuadletUnit;
-use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::services::SystemdDropIn;
 
 use crate::types::{ContentHash, ItemId, RefineError};
@@ -424,7 +424,7 @@ fn materialize_config_variants(
                 ..Default::default()
             });
             entry.content = content.clone();
-            entry.fleet = None;
+            entry.aggregate = None;
             entry.variant_selection = VariantSelection::Alternative;
             config.files.push(entry);
         }
@@ -510,7 +510,7 @@ fn materialize_dropin_variants(
                 ..Default::default()
             });
             entry.content = content.clone();
-            entry.fleet = None;
+            entry.aggregate = None;
             entry.variant_selection = VariantSelection::Alternative;
             services.drop_ins.push(entry);
         }
@@ -601,7 +601,7 @@ fn materialize_quadlet_variants(
                 ..Default::default()
             });
             entry.content = content.clone();
-            entry.fleet = None;
+            entry.aggregate = None;
             entry.variant_selection = VariantSelection::Alternative;
             containers.quadlet_units.push(entry);
         }

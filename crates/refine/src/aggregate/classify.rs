@@ -1,18 +1,18 @@
 use crate::types::{
-    FleetBucket, FleetContext, FleetTriage, ItemId, Prevalence, Triage, TriageBucket, TriageReason,
-    TriageTag,
+    AggregateBucket, AggregateContext, AggregateTriage, ItemId, Prevalence, Triage, TriageBucket,
+    TriageReason, TriageTag,
 };
-use inspectah_core::types::fleet::PrevalenceZone;
+use inspectah_core::types::aggregate::PrevalenceZone;
 
-/// Compute a fleet-aware triage classification for an item.
+/// Compute an aggregate-aware triage classification for an item.
 ///
-/// Maps the item's `PrevalenceZone` (from `FleetContext.zones`) to a
-/// `FleetBucket` and wraps it in a `TriageTag` with `Triage::Fleet`.
+/// Maps the item's `PrevalenceZone` (from `AggregateContext.zones`) to an
+/// `AggregateBucket` and wraps it in a `TriageTag` with `Triage::Aggregate`.
 ///
-/// Items not found in the zone map get `FleetBucket::Universal` as a
+/// Items not found in the zone map get `AggregateBucket::Universal` as a
 /// conservative default.
-pub fn classify_fleet_bucket(
-    ctx: &FleetContext,
+pub fn classify_aggregate_bucket(
+    ctx: &AggregateContext,
     item_id: &ItemId,
     single_host_bucket: TriageBucket,
     single_host_reason: TriageReason,
@@ -21,26 +21,26 @@ pub fn classify_fleet_bucket(
 ) -> TriageTag {
     let zone = ctx.zones.get(item_id).copied();
 
-    let fleet_bucket = match zone {
+    let aggregate_bucket = match zone {
         Some(PrevalenceZone::Divergent) if prevalence_count >= prevalence_total => {
-            FleetBucket::Investigate
+            AggregateBucket::Investigate
         }
-        Some(PrevalenceZone::Divergent) => FleetBucket::Divergent,
-        Some(PrevalenceZone::NearConsensus) => FleetBucket::Partial,
-        Some(PrevalenceZone::Consensus) => FleetBucket::Universal,
+        Some(PrevalenceZone::Divergent) => AggregateBucket::Divergent,
+        Some(PrevalenceZone::NearConsensus) => AggregateBucket::Partial,
+        Some(PrevalenceZone::Consensus) => AggregateBucket::Universal,
         None => {
             // No zone info — fall back to single-host bucket mapping
             match single_host_bucket {
-                TriageBucket::Investigate => FleetBucket::Investigate,
-                TriageBucket::Site => FleetBucket::Divergent,
-                TriageBucket::Baseline => FleetBucket::Universal,
+                TriageBucket::Investigate => AggregateBucket::Investigate,
+                TriageBucket::Site => AggregateBucket::Divergent,
+                TriageBucket::Baseline => AggregateBucket::Universal,
             }
         }
     };
 
     TriageTag {
-        triage: Triage::Fleet(FleetTriage {
-            bucket: fleet_bucket,
+        triage: Triage::Aggregate(AggregateTriage {
+            bucket: aggregate_bucket,
             prevalence: Prevalence {
                 count: prevalence_count,
                 total: prevalence_total,
@@ -54,13 +54,13 @@ pub fn classify_fleet_bucket(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::FleetContext;
-    use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone};
+    use crate::types::AggregateContext;
+    use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone};
     use std::collections::{BTreeMap, HashMap};
 
-    fn test_ctx(zones: HashMap<ItemId, PrevalenceZone>) -> FleetContext {
-        FleetContext {
-            fleet_meta: FleetSnapshotMeta {
+    fn test_ctx(zones: HashMap<ItemId, PrevalenceZone>) -> AggregateContext {
+        AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
                 label: "test".into(),
                 host_count: 5,
                 hostnames: vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
@@ -84,7 +84,7 @@ mod tests {
         let zones = HashMap::from([(item.clone(), PrevalenceZone::Divergent)]);
         let ctx = test_ctx(zones);
 
-        let tag = classify_fleet_bucket(
+        let tag = classify_aggregate_bucket(
             &ctx,
             &item,
             TriageBucket::Investigate,
@@ -93,12 +93,12 @@ mod tests {
             5,
         );
         match &tag.triage {
-            Triage::Fleet(ft) => {
-                assert_eq!(ft.bucket, FleetBucket::Divergent);
+            Triage::Aggregate(ft) => {
+                assert_eq!(ft.bucket, AggregateBucket::Divergent);
                 assert_eq!(ft.prevalence.count, 2);
                 assert_eq!(ft.prevalence.total, 5);
             }
-            _ => panic!("expected Fleet triage"),
+            _ => panic!("expected Aggregate triage"),
         }
     }
 
@@ -111,7 +111,7 @@ mod tests {
         let zones = HashMap::from([(item.clone(), PrevalenceZone::Divergent)]);
         let ctx = test_ctx(zones);
 
-        let tag = classify_fleet_bucket(
+        let tag = classify_aggregate_bucket(
             &ctx,
             &item,
             TriageBucket::Investigate,
@@ -120,10 +120,10 @@ mod tests {
             5,
         );
         match &tag.triage {
-            Triage::Fleet(ft) => {
-                assert_eq!(ft.bucket, FleetBucket::Investigate);
+            Triage::Aggregate(ft) => {
+                assert_eq!(ft.bucket, AggregateBucket::Investigate);
             }
-            _ => panic!("expected Fleet triage"),
+            _ => panic!("expected Aggregate triage"),
         }
     }
 
@@ -135,7 +135,7 @@ mod tests {
         };
         let ctx = test_ctx(HashMap::new());
 
-        let tag = classify_fleet_bucket(
+        let tag = classify_aggregate_bucket(
             &ctx,
             &item,
             TriageBucket::Investigate,
@@ -144,10 +144,10 @@ mod tests {
             5,
         );
         match &tag.triage {
-            Triage::Fleet(ft) => {
-                assert_eq!(ft.bucket, FleetBucket::Investigate);
+            Triage::Aggregate(ft) => {
+                assert_eq!(ft.bucket, AggregateBucket::Investigate);
             }
-            _ => panic!("expected Fleet triage"),
+            _ => panic!("expected Aggregate triage"),
         }
     }
 
@@ -160,7 +160,7 @@ mod tests {
         let zones = HashMap::from([(item.clone(), PrevalenceZone::Consensus)]);
         let ctx = test_ctx(zones);
 
-        let tag = classify_fleet_bucket(
+        let tag = classify_aggregate_bucket(
             &ctx,
             &item,
             TriageBucket::Baseline,
@@ -169,10 +169,10 @@ mod tests {
             5,
         );
         match &tag.triage {
-            Triage::Fleet(ft) => {
-                assert_eq!(ft.bucket, FleetBucket::Universal);
+            Triage::Aggregate(ft) => {
+                assert_eq!(ft.bucket, AggregateBucket::Universal);
             }
-            _ => panic!("expected Fleet triage"),
+            _ => panic!("expected Aggregate triage"),
         }
     }
 }

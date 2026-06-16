@@ -147,7 +147,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("httpd".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
@@ -257,7 +257,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("openssh-server".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 ..Default::default()

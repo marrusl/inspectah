@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 
-use crate::types::FleetContext;
+use crate::types::AggregateContext;
 
-/// Summary of config-file variant distribution across a fleet.
+/// Summary of config-file variant distribution across an aggregate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariantSummary {
     /// Number of config-file paths that have 2+ distinct content variants.
@@ -26,17 +26,17 @@ pub struct VariantInfo {
     pub host_split: Vec<usize>,
 }
 
-/// Compute a summary of config-file variant distribution for a fleet session.
+/// Compute a summary of config-file variant distribution for an aggregate session.
 ///
-/// Returns `None` for non-fleet sessions (no `FleetContext`). For fleet
+/// Returns `None` for non-aggregate sessions (no `AggregateContext`). For aggregate
 /// sessions, groups config entries by path, identifies paths with multiple
-/// content variants, and builds host-split vectors from `FleetPrevalence`.
+/// content variants, and builds host-split vectors from `AggregatePrevalence`.
 pub fn variant_summary(
     snapshot: &InspectionSnapshot,
-    fleet_ctx: Option<&FleetContext>,
+    aggregate_ctx: Option<&AggregateContext>,
 ) -> Option<VariantSummary> {
-    // Non-fleet sessions have no variant summary.
-    let _ctx = fleet_ctx?;
+    // Non-aggregate sessions have no variant summary.
+    let _ctx = aggregate_ctx?;
 
     let config = snapshot.config.as_ref()?;
 
@@ -58,7 +58,7 @@ pub fn variant_summary(
         let mut host_split: Vec<usize> = entries
             .iter()
             .map(|e| {
-                e.fleet
+                e.aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as usize)
                     .unwrap_or(0)

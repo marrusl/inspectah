@@ -867,7 +867,7 @@ mod tests {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
@@ -1599,7 +1599,7 @@ mod anaconda_classification {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
@@ -1811,7 +1811,7 @@ mod anaconda_classification {
                     include: true,
                     owning_package: Some("firewalld".into()),
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec![],
@@ -2129,7 +2129,7 @@ mod anaconda_classification {
                     include: true,
                     owning_package: None, // degraded — missing attribution
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec![],
@@ -2186,7 +2186,7 @@ mod anaconda_classification {
                     include: true,
                     owning_package: Some("openssh-server".into()),
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec![],
@@ -2224,7 +2224,7 @@ mod service_classification {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
@@ -2239,7 +2239,7 @@ mod service_classification {
                     include: true,
                     locked: false,
                     owning_package: Some("openssh-server".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 ..Default::default()
@@ -2268,7 +2268,7 @@ mod service_classification {
                     include: true,
                     locked: false,
                     owning_package: Some("firewalld".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 ..Default::default()
@@ -2295,7 +2295,7 @@ mod service_classification {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 ..Default::default()
@@ -2354,7 +2354,7 @@ mod container_classification {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
@@ -2484,7 +2484,7 @@ mod sysctl_classification {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
@@ -2499,7 +2499,7 @@ mod sysctl_classification {
                     source: "/etc/sysctl.d/99-custom.conf".into(),
                     include: true,
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                 }],
                 ..Default::default()
             }),
@@ -2529,7 +2529,7 @@ mod sysctl_classification {
                     source: "/etc/sysctl.conf".into(),
                     include: true,
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                 }],
                 ..Default::default()
             }),
@@ -2555,7 +2555,7 @@ mod sysctl_classification {
                     source: "runtime".into(),
                     include: true,
                     locked: false,
-                    fleet: None,
+                    aggregate: None,
                 }],
                 ..Default::default()
             }),
@@ -2589,7 +2589,7 @@ mod sysctl_classification {
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
                         locked: false,
-                        fleet: None,
+                        aggregate: None,
                     },
                     SysctlOverride {
                         key: "vm.compact_memory".into(),
@@ -2598,7 +2598,7 @@ mod sysctl_classification {
                         source: "runtime".into(),
                         include: true,
                         locked: false,
-                        fleet: None,
+                        aggregate: None,
                     },
                     SysctlOverride {
                         key: "kernel.sysrq".into(),
@@ -2607,7 +2607,7 @@ mod sysctl_classification {
                         source: "/etc/sysctl.d/10-sysrq.conf".into(),
                         include: true,
                         locked: false,
-                        fleet: None,
+                        aggregate: None,
                     },
                 ],
                 ..Default::default()
@@ -2639,7 +2639,7 @@ mod tuned_classification {
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
             Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Fleet(_) => panic!("expected SingleHost, got Fleet"),
+            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
         }
     }
 
