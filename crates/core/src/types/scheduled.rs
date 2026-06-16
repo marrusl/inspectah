@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct CronJob {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct SystemdTimer {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 impl Default for SystemdTimer {
@@ -55,7 +55,7 @@ impl Default for SystemdTimer {
             timer_content: Default::default(),
             service_content: Default::default(),
             locked: Default::default(),
-            fleet: Default::default(),
+            aggregate: Default::default(),
         }
     }
 }
@@ -75,7 +75,7 @@ pub struct AtJob {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 impl Default for AtJob {
@@ -87,7 +87,7 @@ impl Default for AtJob {
             user: Default::default(),
             working_dir: Default::default(),
             locked: Default::default(),
-            fleet: Default::default(),
+            aggregate: Default::default(),
         }
     }
 }
@@ -110,7 +110,7 @@ pub struct GeneratedTimerUnit {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct PackageEntry {
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub struct EnabledModuleStream {
     pub locked: bool,
     #[serde(default)]
     pub baseline_match: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ pub struct VersionLockEntry {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +151,7 @@ pub struct RepoFile {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 /// A single package's file ownership entry: package name and owned paths.

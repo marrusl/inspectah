@@ -1,7 +1,7 @@
+pub mod aggregate;
 pub mod completeness;
 pub mod config;
 pub mod containers;
-pub mod fleet;
 pub mod group_render;
 pub mod kernelboot;
 pub mod network;

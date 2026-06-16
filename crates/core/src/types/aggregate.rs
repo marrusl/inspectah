@@ -10,7 +10,7 @@ pub enum VariantSelection {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FleetPrevalence {
+pub struct AggregatePrevalence {
     #[serde(default)]
     pub count: i32,
     #[serde(default)]
@@ -27,7 +27,7 @@ pub struct FleetPrevalence {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FleetMeta {
+pub struct AggregateMeta {
     #[serde(default)]
     pub source_hosts: Vec<String>,
     #[serde(default)]
@@ -37,7 +37,7 @@ pub struct FleetMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FleetSnapshotMeta {
+pub struct AggregateSnapshotMeta {
     pub label: String,
     pub host_count: usize,
     pub hostnames: Vec<String>,
@@ -56,7 +56,7 @@ pub enum PrevalenceZone {
 }
 
 /// Tracks which repo a package was sourced from and how many hosts used it.
-/// Used to detect repo-source conflicts in fleet merge (e.g., nginx from epel
+/// Used to detect repo-source conflicts in aggregate merge (e.g., nginx from epel
 /// on 2 hosts vs appstream on 1 host).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoSourceEntry {
@@ -70,21 +70,21 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn test_fleet_prevalence_roundtrip() {
-        let fp = FleetPrevalence {
+    fn test_aggregate_prevalence_roundtrip() {
+        let fp = AggregatePrevalence {
             count: 3,
             total: 5,
             hosts: vec!["host1".into(), "host2".into(), "host3".into()],
             ..Default::default()
         };
         let json = serde_json::to_string(&fp).unwrap();
-        let parsed: FleetPrevalence = serde_json::from_str(&json).unwrap();
+        let parsed: AggregatePrevalence = serde_json::from_str(&json).unwrap();
         assert_eq!(fp, parsed);
     }
 
     #[test]
-    fn test_fleet_prevalence_null_deserialize() {
-        let val: Option<FleetPrevalence> = serde_json::from_str("null").unwrap();
+    fn test_aggregate_prevalence_null_deserialize() {
+        let val: Option<AggregatePrevalence> = serde_json::from_str("null").unwrap();
         assert!(val.is_none());
     }
 
@@ -108,8 +108,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fleet_snapshot_meta_roundtrip() {
-        let meta = FleetSnapshotMeta {
+    fn test_aggregate_snapshot_meta_roundtrip() {
+        let meta = AggregateSnapshotMeta {
             label: "web-servers".into(),
             host_count: 50,
             hostnames: vec!["host-a".into(), "host-b".into()],
@@ -118,7 +118,7 @@ mod tests {
             section_host_counts: BTreeMap::from([("config".into(), 48usize), ("rpm".into(), 50)]),
         };
         let json = serde_json::to_string(&meta).unwrap();
-        let parsed: FleetSnapshotMeta = serde_json::from_str(&json).unwrap();
+        let parsed: AggregateSnapshotMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(meta, parsed);
     }
 }

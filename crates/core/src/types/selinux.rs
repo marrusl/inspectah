@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct SelinuxPortLabel {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 /// A file that the security inspector carries forward for materialization
@@ -80,7 +80,7 @@ mod tests {
                 label_type: "http_port_t".to_string(),
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             }],
         };
 

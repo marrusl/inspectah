@@ -1,4 +1,4 @@
-use super::fleet::{FleetPrevalence, VariantSelection};
+use super::aggregate::{AggregatePrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
 /// Durable systemd unit states that represent administrator intent.
@@ -71,7 +71,7 @@ pub struct ServiceStateChange {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub owning_package: Option<String>,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
 }
@@ -109,7 +109,7 @@ pub struct SystemdDropIn {
     pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
 }
@@ -138,7 +138,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("firewalld".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
                 ServiceStateChange {
@@ -148,7 +148,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("cups".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 },
             ],
@@ -173,7 +173,7 @@ mod tests {
             include: true,
             locked: false,
             owning_package: Some("firewalld".into()),
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         };
         let disabled = ServiceStateChange {
@@ -183,7 +183,7 @@ mod tests {
             include: true,
             locked: false,
             owning_package: Some("openssh-server".into()),
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         };
         let masked = ServiceStateChange {
@@ -193,7 +193,7 @@ mod tests {
             include: true,
             locked: false,
             owning_package: Some("cups".into()),
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         };
 
@@ -211,7 +211,7 @@ mod tests {
             include: true,
             locked: false,
             owning_package: Some("firewalld".into()),
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         };
         let json = serde_json::to_string(&with_preset).unwrap();
@@ -225,7 +225,7 @@ mod tests {
             include: true,
             locked: false,
             owning_package: Some("cups".into()),
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         };
         let json = serde_json::to_string(&without_preset).unwrap();
@@ -238,7 +238,7 @@ mod tests {
             "default_state":null,
             "include":true,
             "owning_package":"cups",
-            "fleet":null
+            "aggregate":null
         }"#;
         let parsed: ServiceStateChange = serde_json::from_str(null_json).unwrap();
         assert_eq!(parsed.default_state, None);
@@ -279,7 +279,7 @@ mod tests {
             "current_state":"enabled",
             "include":true,
             "owning_package":"firewalld",
-            "fleet":null
+            "aggregate":null
         }"#;
 
         let err = serde_json::from_str::<ServiceStateChange>(json).unwrap_err();

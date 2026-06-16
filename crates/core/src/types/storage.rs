@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub struct FstabEntry {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
 }
@@ -33,7 +33,7 @@ impl Default for FstabEntry {
             options: Default::default(),
             locked: Default::default(),
             acknowledged: Default::default(),
-            fleet: Default::default(),
+            aggregate: Default::default(),
             attention_reason: Default::default(),
         }
     }

@@ -1,4 +1,4 @@
-use super::fleet::{FleetPrevalence, VariantSelection};
+use super::aggregate::{AggregatePrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct QuadletUnit {
     pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -60,7 +60,7 @@ pub struct ComposeFile {
     pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,7 +94,7 @@ pub struct RunningContainer {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 impl Default for RunningContainer {
@@ -114,7 +114,7 @@ impl Default for RunningContainer {
             inspect_data: Default::default(),
             locked: Default::default(),
             acknowledged: Default::default(),
-            fleet: Default::default(),
+            aggregate: Default::default(),
         }
     }
 }
@@ -132,7 +132,7 @@ pub struct FlatpakApp {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub remote: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
