@@ -3,7 +3,7 @@ import type { FleetSection, FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import type { UseFleetDiffResult } from "../../hooks/useFleetDiff";
 import { ZoneGroup } from "./ZoneGroup";
-import { FleetItemRow, itemDisplayName } from "./FleetItemRow";
+import { AggregateItemRow, itemDisplayName } from "./AggregateItemRow";
 import { VariantView } from "./VariantView";
 import { ItemDetailPane } from "./ItemDetailPane";
 
@@ -12,7 +12,7 @@ export interface NavTarget {
   itemId: ItemId;
 }
 
-export interface FleetSectionContentProps {
+export interface AggregateSectionContentProps {
   section: FleetSection | undefined;
   filterText: string;
   isDecisionSection: boolean;
@@ -60,7 +60,7 @@ function findItemZone(
   return null;
 }
 
-export function FleetSectionContent({
+export function AggregateSectionContent({
   section,
   filterText,
   isDecisionSection,
@@ -73,7 +73,7 @@ export function FleetSectionContent({
   expandedItemId,
   onSelectVariant,
   diffHook,
-}: FleetSectionContentProps) {
+}: AggregateSectionContentProps) {
   const [forceExpandZone, setForceExpandZone] = useState<string | null>(null);
   const [revealCounter, setRevealCounter] = useState(0);
 
@@ -131,18 +131,18 @@ export function FleetSectionContent({
     expandedItemId != null &&
     JSON.stringify(item.item_id) === JSON.stringify(expandedItemId);
 
-  // Flat mode: section has items directly (fleet-of-2 or no zones)
+  // Flat mode: section has items directly (aggregate-of-2 or no zones)
   if (!section.zones) {
     const filtered = filterItems(section.items ?? [], filterText);
     return (
-      <div className="fleet-section" data-testid="fleet-section">
+      <div className="aggregate-section" data-testid="aggregate-section">
         {filtered.map((item) => {
           const key = itemIdKey(item.item_id);
           const expanded = isItemExpanded(item);
           const hasVariants = item.variants != null && item.variants.count > 1;
           return (
             <div key={key}>
-              <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
+              <AggregateItemRow item={item} {...rowProps} isExpanded={expanded} />
               {expanded &&
                 hasVariants &&
                 isDecisionSection &&
@@ -190,7 +190,7 @@ export function FleetSectionContent({
       const hasVariants = item.variants != null && item.variants.count > 1;
       return (
         <div key={key}>
-          <FleetItemRow item={item} {...rowProps} isExpanded={expanded} />
+          <AggregateItemRow item={item} {...rowProps} isExpanded={expanded} />
           {expanded &&
             hasVariants &&
             isDecisionSection &&
@@ -212,7 +212,7 @@ export function FleetSectionContent({
 
   if (suppressHeaders) {
     return (
-      <div className="fleet-section" data-testid="fleet-section">
+      <div className="aggregate-section" data-testid="aggregate-section">
         {renderItems(divergentFiltered)}
         {renderItems(nearConsensusFiltered)}
         {renderItems(consensusFiltered)}
@@ -221,7 +221,7 @@ export function FleetSectionContent({
   }
 
   return (
-    <div className="fleet-section" data-testid="fleet-section">
+    <div className="aggregate-section" data-testid="aggregate-section">
       {divergentFiltered.length > 0 && (
         <ZoneGroup
           zone="divergent"

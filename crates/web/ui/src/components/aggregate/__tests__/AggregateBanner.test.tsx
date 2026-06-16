@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetBanner } from "../FleetBanner";
+import { AggregateBanner } from "../AggregateBanner";
 import type { FleetSummary, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
@@ -41,11 +41,11 @@ const pkgItem = (nameArch: string, sectionId: string, variantCount: number) => {
   };
 };
 
-describe("FleetBanner", () => {
+describe("AggregateBanner", () => {
   it("does not render when no actionable variant items", () => {
     const summary = makeSummary({ actionable_variant_items: [] });
     const { container } = render(
-      <FleetBanner
+      <AggregateBanner
         summary={summary}
         ackState={defaultAck}
         onNavigate={vi.fn()}
@@ -68,10 +68,10 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
-    const banner = screen.getByTestId("fleet-banner");
+    const banner = screen.getByTestId("aggregate-banner");
     expect(banner).toHaveAttribute("data-severity", "danger");
     expect(
       screen.getByText("2 items have variants requiring review"),
@@ -92,10 +92,10 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
-    const banner = screen.getByTestId("fleet-banner");
+    const banner = screen.getByTestId("aggregate-banner");
     expect(banner).toHaveAttribute("data-severity", "warning");
   });
 
@@ -110,10 +110,10 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
-    const banner = screen.getByTestId("fleet-banner");
+    const banner = screen.getByTestId("aggregate-banner");
     expect(banner).toHaveAttribute("data-severity", "success");
     expect(screen.getByText("All 1 variants reviewed")).toBeInTheDocument();
   });
@@ -131,7 +131,7 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
     expect(screen.getByText("[Config]")).toBeInTheDocument();
@@ -152,7 +152,7 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={onNavigate} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={onNavigate} />,
     );
 
     const link = screen.getByRole("button", {
@@ -179,7 +179,7 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
     expect(
@@ -202,7 +202,7 @@ describe("FleetBanner", () => {
     };
 
     render(
-      <FleetBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
+      <AggregateBanner summary={summary} ackState={ack} onNavigate={vi.fn()} />,
     );
 
     expect(screen.getByText(/4 variants/)).toBeInTheDocument();

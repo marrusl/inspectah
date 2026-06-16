@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetApp } from "../../FleetApp";
+import { AggregateApp } from "../../AggregateApp";
 import type {
   FleetViewResponse,
   FleetHealthInfo,
@@ -65,12 +65,12 @@ if (typeof globalThis.localStorage === "undefined") {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const MOCK_FLEET: FleetHealthInfo = {
+const MOCK_AGGREGATE: FleetHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: false,
   variant_count: 0,
-  label: "test-fleet",
+  label: "test-aggregate",
   merged_at: "2025-01-01T00:00:00Z",
 };
 
@@ -86,7 +86,7 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: [] },
-  fleet: MOCK_FLEET,
+  aggregate: MOCK_AGGREGATE,
   session_is_sensitive: false,
 };
 
@@ -165,24 +165,24 @@ describe("context section read-only behavior", () => {
     mockFetchFleetView.mockResolvedValue(makeViewWithReferenceSection());
     const user = userEvent.setup();
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     // Default active section is packages (empty). Navigate to Services.
     await user.click(screen.getByText("Services"));
 
     // Verify the item row renders
-    const itemRow = screen.getByTestId("fleet-item-row");
+    const itemRow = screen.getByTestId("aggregate-item-row");
     expect(itemRow).toBeInTheDocument();
     expect(screen.getByText("httpd.service")).toBeInTheDocument();
 
     // The item has variants but is_decision_section is false,
     // so the variants button should show as readonly (span, not button)
     const variantButton = itemRow.querySelector(
-      "button.fleet-item-row__variants",
+      "button.aggregate-item-row__variants",
     );
     expect(variantButton).toBeNull(); // No clickable variant button
 
@@ -193,7 +193,7 @@ describe("context section read-only behavior", () => {
     expect(screen.queryByTestId("variant-view")).not.toBeInTheDocument();
 
     // No toggle switch should be present for context sections
-    const toggleSwitch = itemRow.querySelector(".fleet-item-row__toggle");
+    const toggleSwitch = itemRow.querySelector(".aggregate-item-row__toggle");
     expect(toggleSwitch).toBeNull();
   });
 });

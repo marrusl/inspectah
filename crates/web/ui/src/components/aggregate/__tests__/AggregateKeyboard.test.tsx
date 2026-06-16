@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { VariantView } from "../VariantView";
 import type { FleetItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
-import type { UseFleetDiffResult } from "../../../hooks/useFleetDiff";
+import type { UseFleetDiffResult } from "../../../hooks/useAggregateDiff";
 
 // --- Helpers ---
 
@@ -69,7 +69,7 @@ function makeDiffHook(
   };
 }
 
-describe("Fleet keyboard", () => {
+describe("Aggregate keyboard", () => {
   it("Escape closes DiffDrawer", async () => {
     const user = userEvent.setup();
     const clearDiff = vi.fn();
@@ -135,7 +135,7 @@ describe("Focus recovery", () => {
   });
 
   it("focus recovery restores focus after refetch", async () => {
-    // Simulate a fleet item list with data-item-id attributes
+    // Simulate an aggregate item list with data-item-id attributes
     const container = document.createElement("div");
     document.body.appendChild(container);
 

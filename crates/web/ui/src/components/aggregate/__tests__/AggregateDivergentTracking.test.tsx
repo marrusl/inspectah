@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetApp } from "../../FleetApp";
+import { AggregateApp } from "../../AggregateApp";
 import type {
   FleetViewResponse,
   FleetHealthInfo,
@@ -9,14 +9,14 @@ import type {
   FleetItem,
 } from "../../../api/types";
 
-// Mock fleet-client
+// Mock aggregate-client
 const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
 vi.mock("../../../api/fleet-client", () => ({
   fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
   fetchFleetDiff: vi.fn(),
 }));
 
-// Mock client (used by useFleetMutation)
+// Mock client (used by useAggregateMutation)
 vi.mock("../../../api/client", () => ({
   applyOp: vi.fn().mockResolvedValue({}),
   undo: vi.fn().mockResolvedValue({}),
@@ -28,12 +28,12 @@ beforeEach(() => {
   mockFetchFleetView.mockReset();
 });
 
-const MOCK_FLEET: FleetHealthInfo = {
+const MOCK_AGGREGATE: FleetHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
   variant_count: 0,
-  label: "test-fleet",
+  label: "test-aggregate",
   merged_at: "2025-01-01T00:00:00Z",
 };
 
@@ -49,7 +49,7 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: [] },
-  fleet: MOCK_FLEET,
+  aggregate: MOCK_AGGREGATE,
   session_is_sensitive: false,
 };
 
@@ -64,7 +64,7 @@ function makeDivergentItem(path: string, include = true): FleetItem {
   };
 }
 
-function makeFleetViewWithDivergent(
+function makeAggregateViewWithDivergent(
   divergentItems: FleetItem[],
   extraServiceItems: FleetItem[] = [],
 ): FleetViewResponse {
@@ -108,16 +108,16 @@ function makeFleetViewWithDivergent(
   };
 }
 
-describe("FleetApp divergent review tracking", () => {
+describe("AggregateApp divergent review tracking", () => {
   it("shows divergent progress when divergent items exist", async () => {
-    const view = makeFleetViewWithDivergent([
+    const view = makeAggregateViewWithDivergent([
       makeDivergentItem("/etc/foo.conf"),
       makeDivergentItem("/etc/bar.conf"),
       makeDivergentItem("/etc/baz.conf"),
     ]);
     mockFetchFleetView.mockResolvedValue(view);
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("divergent-progress")).toBeInTheDocument();
@@ -130,13 +130,13 @@ describe("FleetApp divergent review tracking", () => {
   });
 
   it("hides divergent progress when no divergent items exist", async () => {
-    const view = makeFleetViewWithDivergent([]);
+    const view = makeAggregateViewWithDivergent([]);
     mockFetchFleetView.mockResolvedValue(view);
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId("divergent-progress")).not.toBeInTheDocument();
@@ -144,14 +144,14 @@ describe("FleetApp divergent review tracking", () => {
 
   it("marks divergent item as confirmed on SetInclude toggle", async () => {
     const divergentItem = makeDivergentItem("/etc/foo.conf");
-    const view = makeFleetViewWithDivergent([
+    const view = makeAggregateViewWithDivergent([
       divergentItem,
       makeDivergentItem("/etc/bar.conf"),
     ]);
     // First call: initial load. Second call: after mutation refetch.
     mockFetchFleetView.mockResolvedValue(view);
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("divergent-progress")).toHaveTextContent(
@@ -162,7 +162,7 @@ describe("FleetApp divergent review tracking", () => {
     // Navigate to configs section to interact with the divergent item
     await userEvent.click(screen.getByText("Config Files"));
 
-    // Find the toggle for /etc/foo.conf — the FleetItemRow renders a switch
+    // Find the toggle for /etc/foo.conf — the AggregateItemRow renders a switch
     await waitFor(() => {
       expect(screen.getByText("/etc/foo.conf")).toBeInTheDocument();
     });
@@ -188,13 +188,13 @@ describe("FleetApp divergent review tracking", () => {
       prevalence: { count: 3, total: 3 },
       source_repo: "",
     };
-    const view = makeFleetViewWithDivergent(
+    const view = makeAggregateViewWithDivergent(
       [makeDivergentItem("/etc/divergent.conf")],
       [serviceItem],
     );
     mockFetchFleetView.mockResolvedValue(view);
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("divergent-progress")).toHaveTextContent(

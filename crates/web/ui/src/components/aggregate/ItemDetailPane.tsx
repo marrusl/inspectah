@@ -1,5 +1,5 @@
 import type { FleetItem } from "../../api/types";
-import { itemDisplayName } from "./FleetItemRow";
+import { itemDisplayName } from "./AggregateItemRow";
 
 export interface ItemDetailPaneProps {
   item: FleetItem;

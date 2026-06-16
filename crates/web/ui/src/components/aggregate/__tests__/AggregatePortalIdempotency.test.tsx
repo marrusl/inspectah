@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetApp } from "../../FleetApp";
+import { AggregateApp } from "../../AggregateApp";
 import type {
   FleetViewResponse,
   FleetHealthInfo,
@@ -74,12 +74,12 @@ if (typeof globalThis.localStorage === "undefined") {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const MOCK_FLEET: FleetHealthInfo = {
+const MOCK_AGGREGATE: FleetHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
   variant_count: 2,
-  label: "test-fleet",
+  label: "test-aggregate",
   merged_at: "2025-01-01T00:00:00Z",
 };
 
@@ -95,7 +95,7 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: [] },
-  fleet: MOCK_FLEET,
+  aggregate: MOCK_AGGREGATE,
   session_is_sensitive: false,
 };
 
@@ -125,7 +125,7 @@ function configItemWithVariants(): FleetItem {
   };
 }
 
-function makeFleetViewWithVariants(): FleetViewResponse {
+function makeAggregateViewWithVariants(): FleetViewResponse {
   const item = configItemWithVariants();
   const actionable: ActionableVariantItem[] = [
     {
@@ -178,22 +178,22 @@ beforeEach(() => {
 
 describe("portal idempotency", () => {
   it("calling banner navigate twice with same target keeps variant view open", async () => {
-    const view = makeFleetViewWithVariants();
+    const view = makeAggregateViewWithVariants();
     mockFetchFleetView.mockResolvedValue(view);
 
-    render(<FleetApp fleet={MOCK_FLEET} health={MOCK_HEALTH} />);
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
-    // Wait for fleet content
+    // Wait for aggregate content
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     // Navigate to config_files section so the banner shows the config item
     const configNav = screen.getByText("Config Files");
     await userEvent.click(configNav);
 
-    // FleetBanner should be visible with actionable variants for this section
-    const banner = screen.getByTestId("fleet-banner");
+    // AggregateBanner should be visible with actionable variants for this section
+    const banner = screen.getByTestId("aggregate-banner");
     expect(banner).toBeInTheDocument();
 
     // Find the banner navigate button by its aria-label (config path)

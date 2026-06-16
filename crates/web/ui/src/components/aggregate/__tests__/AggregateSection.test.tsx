@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { FleetSectionContent } from "../FleetSection";
+import { AggregateSectionContent } from "../FleetSection";
 import type { FleetSection, FleetItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
@@ -46,7 +46,7 @@ const cfgItem = (path: string, overrides: Partial<FleetItem> = {}): FleetItem =>
     ...overrides,
   });
 
-describe("FleetSectionContent", () => {
+describe("AggregateSectionContent", () => {
   it("renders zone groups when zones are present", () => {
     const section: FleetSection = {
       id: "packages",
@@ -60,7 +60,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText=""
         isDecisionSection={true}
@@ -83,7 +83,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText=""
         isDecisionSection={true}
@@ -110,7 +110,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText="http"
         isDecisionSection={true}
@@ -137,7 +137,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText=""
         isDecisionSection={true}
@@ -154,7 +154,7 @@ describe("FleetSectionContent", () => {
     expect(screen.getByText("/etc/httpd/conf/httpd.conf")).toBeInTheDocument();
   });
 
-  it("renders FleetItemRow for each item", () => {
+  it("renders AggregateItemRow for each item", () => {
     const section: FleetSection = {
       id: "packages",
       display_name: "Packages",
@@ -163,7 +163,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText=""
         isDecisionSection={true}
@@ -173,13 +173,13 @@ describe("FleetSectionContent", () => {
     );
 
     // Each item should have a data-item-id attribute
-    const rows = screen.getAllByTestId("fleet-item-row");
+    const rows = screen.getAllByTestId("aggregate-item-row");
     expect(rows).toHaveLength(2);
   });
 
   it("renders nothing when section is undefined", () => {
     const { container } = render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={undefined}
         filterText=""
         isDecisionSection={false}
@@ -210,7 +210,7 @@ describe("FleetSectionContent", () => {
     };
 
     render(
-      <FleetSectionContent
+      <AggregateSectionContent
         section={section}
         filterText="httpd"
         isDecisionSection={true}

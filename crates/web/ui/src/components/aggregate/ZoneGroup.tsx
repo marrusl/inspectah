@@ -32,15 +32,15 @@ export function ZoneGroup({
 
   return (
     <div
-      className={`fleet-zone-group fleet-zone-group--${zone}`}
+      className={`aggregate-zone-group aggregate-zone-group--${zone}`}
       data-testid={`zone-${zone}`}
     >
       <ExpandableSection
         isExpanded={isExpanded}
         onToggle={(_event, expanded) => setIsExpanded(expanded)}
         toggleContent={
-          <span className="fleet-zone-group__header">
-            <span className="fleet-zone-group__label">{label}</span>{" "}
+          <span className="aggregate-zone-group__header">
+            <span className="aggregate-zone-group__label">{label}</span>{" "}
             <Badge isRead>{count}</Badge>
           </span>
         }

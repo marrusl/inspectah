@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetApp } from "../../FleetApp";
-import type { FleetAppProps } from "../../FleetApp";
-import { FleetSidebar } from "../FleetSidebar";
+import { AggregateApp } from "../../AggregateApp";
+import type { AggregateAppProps } from "../../AggregateApp";
+import { AggregateSidebar } from "../AggregateSidebar";
 import type {
   FleetViewResponse,
   FleetHealthInfo,
   HealthResponse,
 } from "../../../api/types";
 
-// Mock fleet-client
+// Mock aggregate-client
 const mockFetchFleetView = vi.fn<() => Promise<FleetViewResponse>>();
 vi.mock("../../../api/fleet-client", () => ({
   fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
   fetchFleetDiff: vi.fn(),
 }));
 
-// Mock client (used by useFleetMutation)
+// Mock client (used by useAggregateMutation)
 vi.mock("../../../api/client", () => ({
   applyOp: vi.fn().mockResolvedValue({}),
   undo: vi.fn().mockResolvedValue({}),
@@ -30,12 +30,12 @@ beforeEach(() => {
   mockFetchFleetView.mockReset();
 });
 
-const MOCK_FLEET: FleetHealthInfo = {
+const MOCK_AGGREGATE: FleetHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
   variant_count: 5,
-  label: "test-fleet",
+  label: "test-aggregate",
   merged_at: "2025-01-01T00:00:00Z",
 };
 
@@ -51,11 +51,11 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: [] },
-  fleet: MOCK_FLEET,
+  aggregate: MOCK_AGGREGATE,
   session_is_sensitive: false,
 };
 
-function makeFleetView(
+function makeAggregateView(
   overrides: Partial<FleetViewResponse> = {},
 ): FleetViewResponse {
   return {
@@ -119,38 +119,38 @@ function makeFleetView(
   };
 }
 
-function renderFleetApp(overrides: Partial<FleetAppProps> = {}) {
-  const props: FleetAppProps = {
-    fleet: MOCK_FLEET,
+function renderAggregateApp(overrides: Partial<AggregateAppProps> = {}) {
+  const props: AggregateAppProps = {
+    aggregate: MOCK_AGGREGATE,
     health: MOCK_HEALTH,
     ...overrides,
   };
-  return render(<FleetApp {...props} />);
+  return render(<AggregateApp {...props} />);
 }
 
-describe("FleetApp", () => {
+describe("AggregateApp", () => {
   it("shows loading state before data arrives", () => {
     mockFetchFleetView.mockReturnValue(new Promise(() => {})); // never resolves
-    renderFleetApp();
-    expect(screen.getByText(/Loading fleet view/)).toBeInTheDocument();
+    renderAggregateApp();
+    expect(screen.getByText(/Loading aggregate view/)).toBeInTheDocument();
   });
 
   it("shows error state on fetch failure", async () => {
     mockFetchFleetView.mockRejectedValue(new Error("Network error"));
-    renderFleetApp();
+    renderAggregateApp();
     await waitFor(() => {
-      expect(screen.getByText(/Failed to load fleet view/)).toBeInTheDocument();
+      expect(screen.getByText(/Failed to load aggregate view/)).toBeInTheDocument();
     });
     expect(screen.getByText("Network error")).toBeInTheDocument();
   });
 
-  it("fetches fleet view on mount and renders sections", async () => {
-    const fleetView = makeFleetView();
-    mockFetchFleetView.mockResolvedValue(fleetView);
-    renderFleetApp();
+  it("fetches aggregate view on mount and renders sections", async () => {
+    const aggregateView = makeAggregateView();
+    mockFetchFleetView.mockResolvedValue(aggregateView);
+    renderAggregateApp();
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     // Packages render via unified RepoBar + PackageList
@@ -159,26 +159,26 @@ describe("FleetApp", () => {
     expect(mockFetchFleetView).toHaveBeenCalledOnce();
   });
 
-  it("renders FleetSidebar with sections", async () => {
-    mockFetchFleetView.mockResolvedValue(makeFleetView());
-    renderFleetApp();
+  it("renders AggregateSidebar with sections", async () => {
+    mockFetchFleetView.mockResolvedValue(makeAggregateView());
+    renderAggregateApp();
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-sidebar")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-sidebar")).toBeInTheDocument();
     });
 
-    const sidebar = screen.getByTestId("fleet-sidebar");
+    const sidebar = screen.getByTestId("aggregate-sidebar");
     expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
     expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
     expect(within(sidebar).getByText("Services")).toBeInTheDocument();
   });
 
   it("handles section navigation", async () => {
-    mockFetchFleetView.mockResolvedValue(makeFleetView());
-    renderFleetApp();
+    mockFetchFleetView.mockResolvedValue(makeAggregateView());
+    renderAggregateApp();
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-sidebar")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-sidebar")).toBeInTheDocument();
     });
 
     // Default active section is packages — verify unified PackageList renders
@@ -189,17 +189,17 @@ describe("FleetApp", () => {
     const configNav = screen.getByText("Config Files");
     await userEvent.click(configNav);
 
-    // Config section renders via FleetSectionContent (non-package section)
+    // Config section renders via AggregateSectionContent (non-package section)
     expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
   });
 
   it("wires undo/redo to mutation hook", async () => {
-    const fleetView = makeFleetView({ can_undo: true, can_redo: true });
-    mockFetchFleetView.mockResolvedValue(fleetView);
-    renderFleetApp();
+    const aggregateView = makeAggregateView({ can_undo: true, can_redo: true });
+    mockFetchFleetView.mockResolvedValue(aggregateView);
+    renderAggregateApp();
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     // AppShell renders StatsBar which has undo/redo buttons
@@ -211,12 +211,12 @@ describe("FleetApp", () => {
 
   it("shows refetch error with retry button", async () => {
     // First call succeeds, simulating a state where refetchError is set
-    const fleetView = makeFleetView();
-    mockFetchFleetView.mockResolvedValue(fleetView);
-    renderFleetApp();
+    const aggregateView = makeAggregateView();
+    mockFetchFleetView.mockResolvedValue(aggregateView);
+    renderAggregateApp();
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
 
     // Verify no refetch error initially
@@ -224,7 +224,7 @@ describe("FleetApp", () => {
   });
 });
 
-describe("FleetSidebar", () => {
+describe("AggregateSidebar", () => {
   const defaultAck = {
     isAcked: () => false,
     getStatus: () => "unreviewed" as const,
@@ -276,7 +276,7 @@ describe("FleetSidebar", () => {
 
   it("renders all sections", () => {
     render(
-      <FleetSidebar
+      <AggregateSidebar
         sections={sections}
         activeSection="packages"
         onSelect={vi.fn()}
@@ -290,7 +290,7 @@ describe("FleetSidebar", () => {
 
   it("highlights active section", () => {
     render(
-      <FleetSidebar
+      <AggregateSidebar
         sections={sections}
         activeSection="configs"
         onSelect={vi.fn()}
@@ -307,7 +307,7 @@ describe("FleetSidebar", () => {
   it("calls onSelect when clicking a section", async () => {
     const onSelect = vi.fn();
     render(
-      <FleetSidebar
+      <AggregateSidebar
         sections={sections}
         activeSection="packages"
         onSelect={onSelect}
@@ -320,7 +320,7 @@ describe("FleetSidebar", () => {
 
   it("shows ack progress for decision sections with variants", () => {
     render(
-      <FleetSidebar
+      <AggregateSidebar
         sections={sections}
         activeSection="packages"
         onSelect={vi.fn()}
@@ -342,7 +342,7 @@ describe("FleetSidebar", () => {
 
   it("shows zone-based item counts for sections with zones", () => {
     render(
-      <FleetSidebar
+      <AggregateSidebar
         sections={sections}
         activeSection="packages"
         onSelect={vi.fn()}

@@ -1,7 +1,7 @@
 /**
- * Integration tests for FleetApp.
+ * Integration tests for AggregateApp.
  *
- * These test end-to-end flows through the real hook layer (useFleetMutation,
+ * These test end-to-end flows through the real hook layer (useAggregateMutation,
  * useVariantAck) with mocked API responses. They verify behaviors that span
  * multiple components — sidebar + content + toolbar — rather than individual
  * component rendering (which is covered by the unit tests).
@@ -10,7 +10,7 @@
  * not yet render it (destructured as _toolbarExtra). Tests verify ack state
  * through the sidebar's ack labels instead. Undo/redo are tested via Ctrl+Z
  * keyboard shortcuts which bypass the StatsBar disabled check (StatsBar
- * disables undo/redo when stats is null, and FleetApp passes stats={null}).
+ * disables undo/redo when stats is null, and AggregateApp passes stats={null}).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
@@ -22,8 +22,8 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetApp } from "../../FleetApp";
-import type { FleetAppProps } from "../../FleetApp";
+import { AggregateApp } from "../../AggregateApp";
+import type { AggregateAppProps } from "../../AggregateApp";
 import type {
   FleetViewResponse,
   FleetHealthInfo,
@@ -92,7 +92,7 @@ vi.mock("../../../api/client", () => ({
 // Fixture builders
 // ---------------------------------------------------------------------------
 
-function mockFleetItem(overrides?: Partial<FleetItem>): FleetItem {
+function mockAggregateItem(overrides?: Partial<FleetItem>): FleetItem {
   return {
     item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     include: true,
@@ -110,7 +110,7 @@ function mockConfigItem(
   path: string,
   overrides?: Partial<FleetItem>,
 ): FleetItem {
-  return mockFleetItem({
+  return mockAggregateItem({
     item_id: { kind: "Config", key: { path } },
     triage: {
       bucket: "divergent" as const,
@@ -134,7 +134,7 @@ function mockConfigItem(
   });
 }
 
-function mockFleetSection(
+function mockAggregateSection(
   id: string,
   overrides?: Partial<FleetSection>,
 ): FleetSection {
@@ -142,7 +142,7 @@ function mockFleetSection(
     id,
     display_name: id.charAt(0).toUpperCase() + id.slice(1),
     is_decision_section: true,
-    items: [mockFleetItem()],
+    items: [mockAggregateItem()],
     ...overrides,
   };
 }
@@ -191,17 +191,17 @@ function mockFleetViewResponse(
       informational_variant_count: 1,
     },
     sections: [
-      mockFleetSection("packages", {
+      mockAggregateSection("packages", {
         display_name: "Packages",
         items: [
-          mockFleetItem({
+          mockAggregateItem({
             item_id: {
               kind: "Package",
               key: { name: "httpd", arch: "x86_64" },
             },
             prevalence: { count: 3, total: 3 },
           }),
-          mockFleetItem({
+          mockAggregateItem({
             item_id: {
               kind: "Package",
               key: { name: "nginx", arch: "x86_64" },
@@ -214,7 +214,7 @@ function mockFleetViewResponse(
           }),
         ],
       }),
-      mockFleetSection("config_files", {
+      mockAggregateSection("config_files", {
         display_name: "Config Files",
         is_decision_section: true,
         zones: {
@@ -229,7 +229,7 @@ function mockFleetViewResponse(
           divergent: { items: [], count: 0 },
         },
       }),
-      mockFleetSection("services", {
+      mockAggregateSection("services", {
         display_name: "Services",
         is_decision_section: false,
         items: [],
@@ -250,12 +250,12 @@ function mockFleetViewResponse(
   };
 }
 
-const MOCK_FLEET: FleetHealthInfo = {
+const MOCK_AGGREGATE: FleetHealthInfo = {
   host_count: 3,
   hostnames: ["host1", "host2", "host3"],
   zones_active: true,
   variant_count: 5,
-  label: "test-fleet",
+  label: "test-aggregate",
   merged_at: "2025-01-01T00:00:00Z",
 };
 
@@ -271,7 +271,7 @@ const MOCK_HEALTH: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: ["baseos", "appstream"] },
-  fleet: MOCK_FLEET,
+  aggregate: MOCK_AGGREGATE,
   session_is_sensitive: false,
 };
 
@@ -279,18 +279,18 @@ const MOCK_HEALTH: HealthResponse = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function renderFleetApp(overrides?: Partial<FleetAppProps>) {
-  const props: FleetAppProps = {
-    fleet: MOCK_FLEET,
+function renderAggregateApp(overrides?: Partial<AggregateAppProps>) {
+  const props: AggregateAppProps = {
+    aggregate: MOCK_AGGREGATE,
     health: MOCK_HEALTH,
     ...overrides,
   };
-  return render(<FleetApp {...props} />);
+  return render(<AggregateApp {...props} />);
 }
 
 async function waitForContent() {
   await waitFor(() => {
-    expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+    expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
   });
 }
 
@@ -325,18 +325,18 @@ afterEach(() => {
 // Integration test suites
 // ===========================================================================
 
-describe("FleetApp integration", () => {
+describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
-  // 1. Full fleet view render with zones
+  // 1. Full aggregate view render with zones
   // -------------------------------------------------------------------------
-  describe("full fleet view render with zones", () => {
-    it("renders sidebar sections and fleet content from zone-grouped data", async () => {
+  describe("full aggregate view render with zones", () => {
+    it("renders sidebar sections and aggregate content from zone-grouped data", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Sidebar renders all three sections
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
       expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
       expect(within(sidebar).getByText("Services")).toBeInTheDocument();
@@ -344,16 +344,16 @@ describe("FleetApp integration", () => {
       // Packages render via unified RepoBar + PackageList
       expect(screen.getByTestId("repo-bar")).toBeInTheDocument();
       expect(screen.getByTestId("package-list")).toBeInTheDocument();
-      // Fleet banner is rendered (there are actionable variant items)
-      expect(screen.getByTestId("fleet-banner")).toBeInTheDocument();
+      // Aggregate banner is rendered (there are actionable variant items)
+      expect(screen.getByTestId("aggregate-banner")).toBeInTheDocument();
     });
 
     it("shows zone-based item counts in sidebar for sections with zones", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
       // Services has 0 items — use exact match to avoid collisions with
       // other numeric text (ack labels like "0/2 confirmed" contain "0" too)
       const badges = within(sidebar).getAllByText("0");
@@ -372,10 +372,10 @@ describe("FleetApp integration", () => {
   describe("ack flow", () => {
     it("shows ack progress labels on decision sections in sidebar", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
 
       // Decision sections (packages, config_files) should show ack labels
       expect(
@@ -399,10 +399,10 @@ describe("FleetApp integration", () => {
         },
       });
       mockFetchFleetView.mockResolvedValue(view);
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
       // totalCount is 0, so ackLabel returns null — no ack-progress testids
       expect(
         within(sidebar).queryByTestId("ack-progress-packages"),
@@ -422,9 +422,9 @@ describe("FleetApp integration", () => {
       const updatedView = mockFleetViewResponse({
         generation: 2,
         sections: [
-          mockFleetSection("packages", {
+          mockAggregateSection("packages", {
             display_name: "Packages",
-            items: [mockFleetItem()],
+            items: [mockAggregateItem()],
           }),
         ],
       });
@@ -433,19 +433,19 @@ describe("FleetApp integration", () => {
         .mockResolvedValueOnce(initialView) // initial load
         .mockResolvedValueOnce(updatedView); // refetch after undo
 
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Verify initial state — sidebar shows 3 sections
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
       expect(within(sidebar).getByText("Services")).toBeInTheDocument();
 
-      // Ctrl+Z triggers useKeyboard → onUndo → useFleetMutation.undo()
+      // Ctrl+Z triggers useKeyboard → onUndo → useAggregateMutation.undo()
       await act(async () => {
         pressCtrlZ();
       });
 
-      // useFleetMutation calls apiUndo then refetches
+      // useAggregateMutation calls apiUndo then refetches
       await waitFor(() => {
         expect(mockUndo).toHaveBeenCalledOnce();
       });
@@ -464,7 +464,7 @@ describe("FleetApp integration", () => {
         .mockResolvedValueOnce(initialView)
         .mockResolvedValueOnce(updatedView);
 
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       await act(async () => {
@@ -489,7 +489,7 @@ describe("FleetApp integration", () => {
       // But the subsequent refetch fails
       mockFetchFleetView.mockRejectedValueOnce(new Error("Server unavailable"));
 
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Content is visible with initial data — packages render via unified components
@@ -505,7 +505,7 @@ describe("FleetApp integration", () => {
         expect(screen.getByTestId("refetch-error")).toBeInTheDocument();
       });
 
-      // Content still visible (FleetApp holds last successful view in state)
+      // Content still visible (AggregateApp holds last successful view in state)
       expect(screen.getByTestId("package-list")).toBeInTheDocument();
 
       // Retry button should be present
@@ -523,7 +523,7 @@ describe("FleetApp integration", () => {
       mockFetchFleetView.mockRejectedValueOnce(new Error("Transient error")); // refetch fails
       mockFetchFleetView.mockResolvedValueOnce(recoveredView); // retry succeeds
 
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Trigger undo → refetch fails
@@ -549,22 +549,22 @@ describe("FleetApp integration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 5. Flat rendering (fleet-of-2, no zones)
+  // 5. Flat rendering (aggregate-of-2, no zones)
   // -------------------------------------------------------------------------
-  describe("fleet-of-2 flat rendering", () => {
+  describe("aggregate-of-2 flat rendering", () => {
     it("renders with flat items when sections have no zones", async () => {
       const flatView = mockFleetViewResponse({
         sections: [
-          mockFleetSection("packages", {
+          mockAggregateSection("packages", {
             display_name: "Packages",
             items: [
-              mockFleetItem({
+              mockAggregateItem({
                 item_id: {
                   kind: "Package",
                   key: { name: "vim", arch: "x86_64" },
                 },
               }),
-              mockFleetItem({
+              mockAggregateItem({
                 item_id: {
                   kind: "Package",
                   key: { name: "emacs", arch: "x86_64" },
@@ -572,7 +572,7 @@ describe("FleetApp integration", () => {
               }),
             ],
           }),
-          mockFleetSection("config_files", {
+          mockAggregateSection("config_files", {
             display_name: "Config Files",
             is_decision_section: true,
             items: [mockConfigItem("/etc/hosts")],
@@ -581,11 +581,11 @@ describe("FleetApp integration", () => {
       });
 
       mockFetchFleetView.mockResolvedValue(flatView);
-      renderFleetApp({ fleet: { ...MOCK_FLEET, zones_active: false } });
+      renderAggregateApp({ aggregate: { ...MOCK_AGGREGATE, zones_active: false } });
       await waitForContent();
 
       // Sidebar still renders sections
-      const sidebar = screen.getByTestId("fleet-sidebar");
+      const sidebar = screen.getByTestId("aggregate-sidebar");
       expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
       expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
 
@@ -600,7 +600,7 @@ describe("FleetApp integration", () => {
   describe("section navigation", () => {
     it("switches active section when sidebar items are clicked", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Default is packages — verify package items render
@@ -620,7 +620,7 @@ describe("FleetApp integration", () => {
 
     it("highlights active section in sidebar with aria-current", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Config Files should not be current initially
@@ -649,7 +649,7 @@ describe("FleetApp integration", () => {
     it("switches sections with number keys 1-3 (maps to SECTION_IDS)", async () => {
       mockFetchFleetView.mockResolvedValue(mockFleetViewResponse());
       const user = userEvent.setup();
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Default section is packages — package items visible
@@ -679,17 +679,17 @@ describe("FleetApp integration", () => {
   describe("initial load failure", () => {
     it("shows full error page when initial fetch fails", async () => {
       mockFetchFleetView.mockRejectedValue(new Error("Connection refused"));
-      renderFleetApp();
+      renderAggregateApp();
 
       await waitFor(() => {
         expect(
-          screen.getByText(/Failed to load fleet view/),
+          screen.getByText(/Failed to load aggregate view/),
         ).toBeInTheDocument();
       });
       expect(screen.getByText("Connection refused")).toBeInTheDocument();
 
       // Content area should not be rendered
-      expect(screen.queryByTestId("fleet-content")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("aggregate-content")).not.toBeInTheDocument();
     });
   });
 
@@ -702,8 +702,8 @@ describe("FleetApp integration", () => {
       const twoSection = mockFleetViewResponse({
         generation: 2,
         sections: [
-          mockFleetSection("packages", { display_name: "Packages" }),
-          mockFleetSection("config_files", { display_name: "Config Files" }),
+          mockAggregateSection("packages", { display_name: "Packages" }),
+          mockAggregateSection("config_files", { display_name: "Config Files" }),
         ],
       });
 
@@ -711,7 +711,7 @@ describe("FleetApp integration", () => {
         .mockResolvedValueOnce(threeSection)
         .mockResolvedValueOnce(twoSection);
 
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
       // Verify initial state — sidebar has Services
       expect(screen.getByText("Services")).toBeInTheDocument();
@@ -737,20 +737,20 @@ describe("FleetApp integration", () => {
         containerfile_preview: "FROM ubi9:latest\nRUN dnf install -y httpd",
       });
       mockFetchFleetView.mockResolvedValue(view);
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // AppShell's ContainerfilePanel should have access to preview content
       // We can verify the toggle button exists (Ctrl+E opens it)
       // The panel renders via AppShell but starts collapsed on narrow viewports
-      expect(screen.getByTestId("fleet-content")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
     });
   });
 
   // -------------------------------------------------------------------------
-  // 11. Fleet conflict dismiss/restore flow (RepoBar ↔ PackageList)
+  // 11. Aggregate conflict dismiss/restore flow (RepoBar ↔ PackageList)
   // -------------------------------------------------------------------------
-  describe("fleet conflict dismiss/restore flow", () => {
+  describe("aggregate conflict dismiss/restore flow", () => {
     function makeConflictView(): FleetViewResponse {
       return mockFleetViewResponse({
         repo_conflict_count: 1,
@@ -773,10 +773,10 @@ describe("FleetApp integration", () => {
           },
         ],
         sections: [
-          mockFleetSection("packages", {
+          mockAggregateSection("packages", {
             display_name: "Packages",
             items: [
-              mockFleetItem({
+              mockAggregateItem({
                 item_id: {
                   kind: "Package",
                   key: { name: "httpd", arch: "x86_64" },
@@ -788,7 +788,7 @@ describe("FleetApp integration", () => {
                   { repo: "epel", host_count: 1 },
                 ],
               }),
-              mockFleetItem({
+              mockAggregateItem({
                 item_id: {
                   kind: "Package",
                   key: { name: "curl", arch: "x86_64" },
@@ -798,12 +798,12 @@ describe("FleetApp integration", () => {
               }),
             ],
           }),
-          mockFleetSection("config_files", {
+          mockAggregateSection("config_files", {
             display_name: "Config Files",
             is_decision_section: true,
             items: [],
           }),
-          mockFleetSection("services", {
+          mockAggregateSection("services", {
             display_name: "Services",
             is_decision_section: false,
             items: [],
@@ -812,9 +812,9 @@ describe("FleetApp integration", () => {
       });
     }
 
-    it("conflict popover trigger appears on fleet row, dismiss hides it, RepoBar restore brings it back", async () => {
+    it("conflict popover trigger appears on aggregate row, dismiss hides it, RepoBar restore brings it back", async () => {
       mockFetchFleetView.mockResolvedValue(makeConflictView());
-      renderFleetApp();
+      renderAggregateApp();
       await waitForContent();
 
       // Conflict popover trigger should be present on httpd row

@@ -4,9 +4,9 @@ import type {
   ItemId,
 } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
-import { itemDisplayName } from "./FleetItemRow";
+import { itemDisplayName } from "./AggregateItemRow";
 
-export interface FleetBannerProps {
+export interface AggregateBannerProps {
   summary: FleetSummary;
   ackState: UseVariantAckResult;
   onNavigate: (sectionId: string, itemId: ItemId) => void;
@@ -33,12 +33,12 @@ function getSeverity(unacked: number, total: number): Severity {
   return "danger";
 }
 
-export function FleetBanner({
+export function AggregateBanner({
   summary,
   ackState,
   onNavigate,
   activeSection,
-}: FleetBannerProps) {
+}: AggregateBannerProps) {
   const { actionable_variant_items, informational_variant_count } = summary;
 
   if (actionable_variant_items.length === 0) return null;
@@ -92,15 +92,15 @@ export function FleetBanner({
 
   return (
     <div
-      className={`fleet-banner fleet-banner--${severity}`}
-      data-testid="fleet-banner"
+      className={`aggregate-banner aggregate-banner--${severity}`}
+      data-testid="aggregate-banner"
       data-severity={severity}
       role="status"
     >
-      <div className="fleet-banner__headline">{headline}</div>
+      <div className="aggregate-banner__headline">{headline}</div>
 
       {unackedSectionItems.length > 0 && (
-        <ul className="fleet-banner__items">
+        <ul className="aggregate-banner__items">
           {unackedSectionItems.map((item) => (
             <BannerItem
               key={JSON.stringify(item.item_id)}
@@ -112,7 +112,7 @@ export function FleetBanner({
       )}
 
       {Object.keys(otherSectionSummary).length > 0 && (
-        <div className="fleet-banner__cross-section">
+        <div className="aggregate-banner__cross-section">
           Also:{" "}
           {Object.entries(otherSectionSummary)
             .map(
@@ -124,7 +124,7 @@ export function FleetBanner({
       )}
 
       {informational_variant_count > 0 && (
-        <div className="fleet-banner__info">
+        <div className="aggregate-banner__info">
           {informational_variant_count} additional items in other sections have
           variants (read-only)
         </div>
@@ -144,17 +144,17 @@ function BannerItem({
   const tag = sectionTag(item.section_id);
 
   return (
-    <li className="fleet-banner__item">
-      <span className="fleet-banner__item-tag">[{tag}]</span>
+    <li className="aggregate-banner__item">
+      <span className="aggregate-banner__item-tag">[{tag}]</span>
       <button
         type="button"
-        className="fleet-banner__item-link"
+        className="aggregate-banner__item-link"
         onClick={() => onNavigate(item.section_id, item.item_id)}
         aria-label={`Navigate to ${name}`}
       >
         {name}
       </button>
-      <span className="fleet-banner__item-count">
+      <span className="aggregate-banner__item-count">
         {" — "}
         {item.variant_count} variants
       </span>

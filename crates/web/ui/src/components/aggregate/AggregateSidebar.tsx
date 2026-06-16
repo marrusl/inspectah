@@ -2,7 +2,7 @@ import { Nav, NavGroup, NavItem, Badge } from "@patternfly/react-core";
 import type { FleetSection } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
-export interface FleetSidebarProps {
+export interface AggregateSidebarProps {
   sections: FleetSection[];
   activeSection: string;
   onSelect: (sectionId: string) => void;
@@ -31,13 +31,13 @@ function ackLabel(
   return `${confirmed}/${ack.totalCount} confirmed`;
 }
 
-export function FleetSidebar({
+export function AggregateSidebar({
   sections,
   activeSection,
   onSelect,
   ackState,
   searchSlot,
-}: FleetSidebarProps) {
+}: AggregateSidebarProps) {
   const reviewSections = sections.filter((s) => s.is_decision_section);
   const referenceSections = sections.filter((s) => !s.is_decision_section);
 
@@ -54,7 +54,7 @@ export function FleetSidebar({
         {section.display_name} <Badge isRead>{sectionItemCount(section)}</Badge>
         {ack && (
           <span
-            className="fleet-sidebar__ack-progress"
+            className="aggregate-sidebar__ack-progress"
             data-testid={`ack-progress-${section.id}`}
           >
             {ack}
@@ -67,11 +67,11 @@ export function FleetSidebar({
   return (
     <nav
       className="inspectah-sidebar"
-      aria-label="Fleet section navigation"
-      data-testid="fleet-sidebar"
+      aria-label="Aggregate section navigation"
+      data-testid="aggregate-sidebar"
     >
       {searchSlot}
-      <Nav aria-label="Fleet sections">
+      <Nav aria-label="Aggregate sections">
         <NavGroup title="Review">{reviewSections.map(renderItem)}</NavGroup>
         {referenceSections.length > 0 && (
           <NavGroup title="Reference">

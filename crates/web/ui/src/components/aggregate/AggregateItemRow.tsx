@@ -2,7 +2,7 @@ import { Label, Switch } from "@patternfly/react-core";
 import type { FleetItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
-export interface FleetItemRowProps {
+export interface AggregateItemRowProps {
   item: FleetItem;
   isDecisionSection: boolean;
   onToggle: (itemId: ItemId, include: boolean) => void;
@@ -88,14 +88,14 @@ function prevalenceLevel(count: number, total: number): string {
   return "low";
 }
 
-export function FleetItemRow({
+export function AggregateItemRow({
   item,
   isDecisionSection,
   onToggle,
   ack: _ack,
   onExpandVariant,
   isExpanded = false,
-}: FleetItemRowProps) {
+}: AggregateItemRowProps) {
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
@@ -117,8 +117,8 @@ export function FleetItemRow({
 
   return (
     <div
-      className={`fleet-item-row${locked ? " fleet-item-row--locked" : ""}`}
-      data-testid="fleet-item-row"
+      className={`aggregate-item-row${locked ? " aggregate-item-row--locked" : ""}`}
+      data-testid="aggregate-item-row"
       data-item-id={JSON.stringify(item.item_id)}
       data-locked={locked ? "true" : undefined}
       onClick={handleRowClick}
@@ -127,11 +127,11 @@ export function FleetItemRow({
     >
       {isDecisionSection && (
         <div
-          className="fleet-item-row__toggle"
+          className="aggregate-item-row__toggle"
           onClick={(e) => e.stopPropagation()}
         >
           <Switch
-            id={`fleet-switch-${name}`}
+            id={`aggregate-switch-${name}`}
             isChecked={item.include}
             onChange={handleToggle}
             isDisabled={locked}
@@ -140,35 +140,35 @@ export function FleetItemRow({
         </div>
       )}
 
-      <div className="fleet-item-row__name">{name}</div>
+      <div className="aggregate-item-row__name">{name}</div>
 
       {locked && (
         <Label
           color="grey"
           isCompact
-          data-testid={`locked-badge-fleet-${name}`}
-          className="fleet-item-row__locked-badge"
+          data-testid={`locked-badge-aggregate-${name}`}
+          className="aggregate-item-row__locked-badge"
         >
           {item.attention_reason ?? "LOCKED"}
         </Label>
       )}
 
       <span
-        className={`fleet-item-row__prevalence fleet-item-row__prevalence--${prevalenceLevel(count, total)}`}
+        className={`aggregate-item-row__prevalence aggregate-item-row__prevalence--${prevalenceLevel(count, total)}`}
       >
         {count}/{total} hosts
       </span>
 
       {hasVariants && isDecisionSection && (
         <button
-          className="fleet-item-row__variants"
+          className="aggregate-item-row__variants"
           onClick={handleVariantClick}
           type="button"
           aria-expanded={isExpanded}
         >
           {item.variants!.count} variants{" "}
           <span
-            className={`fleet-item-row__variants-chevron${isExpanded ? " fleet-item-row__variants-chevron--expanded" : ""}`}
+            className={`aggregate-item-row__variants-chevron${isExpanded ? " aggregate-item-row__variants-chevron--expanded" : ""}`}
             aria-hidden="true"
           >
             &#9656;
@@ -176,7 +176,7 @@ export function FleetItemRow({
         </button>
       )}
       {hasVariants && !isDecisionSection && (
-        <span className="fleet-item-row__variants fleet-item-row__variants--readonly">
+        <span className="aggregate-item-row__variants aggregate-item-row__variants--readonly">
           {item.variants!.count} variants
         </span>
       )}

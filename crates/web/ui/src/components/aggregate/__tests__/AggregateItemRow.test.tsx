@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { FleetItemRow } from "../FleetItemRow";
+import { AggregateItemRow } from "../AggregateItemRow";
 import type { FleetItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
@@ -30,14 +30,14 @@ function makeItem(
   };
 }
 
-describe("FleetItemRow", () => {
+describe("AggregateItemRow", () => {
   it("renders item name from Package item_id", () => {
     const item = makeItem({
       item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -54,7 +54,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -72,7 +72,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -98,7 +98,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -115,7 +115,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -132,7 +132,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -149,7 +149,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={false}
         onToggle={vi.fn()}
@@ -168,7 +168,7 @@ describe("FleetItemRow", () => {
     const item = makeItem({ item_id: itemId });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -176,7 +176,7 @@ describe("FleetItemRow", () => {
       />,
     );
 
-    const row = screen.getByTestId("fleet-item-row");
+    const row = screen.getByTestId("aggregate-item-row");
     expect(row).toHaveAttribute("data-item-id", JSON.stringify(itemId));
   });
 
@@ -189,7 +189,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={onToggle}
@@ -223,7 +223,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}
@@ -241,7 +241,7 @@ describe("FleetItemRow", () => {
     });
   });
 
-  it("does not render attention badges in fleet item rows", () => {
+  it("does not render attention badges in aggregate item rows", () => {
     const levels = ["needs_review", "informational", "routine"];
     for (const level of levels) {
       const item = makeItem({
@@ -256,7 +256,7 @@ describe("FleetItemRow", () => {
       });
 
       const { unmount } = render(
-        <FleetItemRow
+        <AggregateItemRow
           item={item}
           isDecisionSection={true}
           onToggle={vi.fn()}
@@ -279,7 +279,7 @@ describe("FleetItemRow", () => {
     });
 
     render(
-      <FleetItemRow
+      <AggregateItemRow
         item={item}
         isDecisionSection={true}
         onToggle={vi.fn()}

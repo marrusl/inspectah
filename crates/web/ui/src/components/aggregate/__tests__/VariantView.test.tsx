@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { VariantView } from "../VariantView";
 import type { FleetItem, ItemId } from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
-import type { UseFleetDiffResult } from "../../../hooks/useFleetDiff";
+import type { UseFleetDiffResult } from "../../../hooks/useAggregateDiff";
 
 const configItemId: ItemId = {
   kind: "Config",

@@ -25,16 +25,16 @@ import { useVariantAck } from "../hooks/useVariantAck";
 import { useFleetDiff } from "../hooks/useFleetDiff";
 import { useFleetFocusRecovery } from "../hooks/useFleetFocusRecovery";
 import { AppShell } from "./AppShell";
-import { FleetSidebar } from "./fleet/FleetSidebar";
-import { FleetBanner } from "./fleet/FleetBanner";
-import { FleetSectionContent } from "./fleet/FleetSection";
-import { itemDisplayName } from "./fleet/FleetItemRow";
+import { AggregateSidebar } from "./aggregate/AggregateSidebar";
+import { AggregateBanner } from "./aggregate/AggregateBanner";
+import { AggregateSectionContent } from "./aggregate/AggregateSection";
+import { itemDisplayName } from "./aggregate/AggregateItemRow";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 
-export interface FleetAppProps {
-  fleet: FleetHealthInfo;
+export interface AggregateAppProps {
+  aggregate: FleetHealthInfo;
   health: HealthResponse;
 }
 
@@ -48,7 +48,7 @@ function AckProgress({
 }) {
   if (totalCount === 0) return null;
   return (
-    <span className="fleet-ack-progress" data-testid="ack-progress">
+    <span className="aggregate-ack-progress" data-testid="ack-progress">
       {unackedCount} of {totalCount} variants need review
     </span>
   );
@@ -64,13 +64,13 @@ function DivergentProgress({
 }) {
   if (totalCount === 0) return null;
   return (
-    <span className="fleet-ack-progress" data-testid="divergent-progress">
+    <span className="aggregate-ack-progress" data-testid="divergent-progress">
       Divergent: {totalCount} ({unconfirmedCount} unconfirmed)
     </span>
   );
 }
 
-/** Collect all FleetItems from a section (flat items or zone items). */
+/** Collect all AggregateItems from a section (flat items or zone items). */
 function sectionItems(section: FleetSection): FleetItem[] {
   if (section.items) return section.items;
   if (!section.zones) return [];
@@ -81,7 +81,7 @@ function sectionItems(section: FleetSection): FleetItem[] {
   ];
 }
 
-/** Collect all divergent-zone FleetItems across all sections. */
+/** Collect all divergent-zone AggregateItems across all sections. */
 function allDivergentItems(sections: FleetSection[]): FleetItem[] {
   const result: FleetItem[] = [];
   for (const section of sections) {
@@ -97,8 +97,8 @@ function itemIdKey(id: ItemId): string {
   return JSON.stringify(id);
 }
 
-/** Build ReferenceSection[] from fleet sections for GlobalSearch indexing. */
-function buildFleetSearchSections(
+/** Build ReferenceSection[] from aggregate sections for GlobalSearch indexing. */
+function buildAggregateSearchSections(
   sections: FleetSection[],
 ): ReferenceSection[] {
   return sections.map((s) => ({
@@ -117,12 +117,12 @@ function buildFleetSearchSections(
   }));
 }
 
-/** Build the correct RefinementOp for a fleet item toggle. */
+/** Build the correct RefinementOp for a aggregate item toggle. */
 function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
   return { op: "SetInclude", target: { item_id: itemId, include } };
 }
 
-export function FleetApp({ fleet, health: _health }: FleetAppProps) {
+export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) {
   const [view, setView] = useState<FleetViewResponse | null>(null);
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
@@ -148,14 +148,14 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const actionableIds =
     view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
-  const ack = useVariantAck(fleet.label, fleet.merged_at, actionableIds);
+  const ack = useVariantAck(aggregate.label, aggregate.merged_at, actionableIds);
   const diffHook = useFleetDiff();
 
-  // Restore focus to the last-focused fleet item after view updates
+  // Restore focus to the last-focused aggregate item after view updates
   useFleetFocusRecovery(view?.generation ?? null);
 
   // Portal flow: when pendingNavTarget is set (by banner or search),
-  // switch the active section. FleetSectionContent handles the rest:
+  // switch the active section. AggregateSectionContent handles the rest:
   // force-expand the zone, auto-expand variants, scroll, highlight, focus.
   useEffect(() => {
     if (!pendingNavTarget) return;
@@ -237,7 +237,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
 
   const handleSearchNavigate = useCallback(
     (sectionId: string, itemId: string) => {
-      // itemId was serialized via JSON.stringify in buildFleetSearchSections
+      // itemId was serialized via JSON.stringify in buildAggregateSearchSections
       setFilterText(""); // clear any active section filter
       try {
         const parsed = JSON.parse(itemId) as ItemId;
@@ -263,7 +263,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // --- Package / repo toggle handlers for unified PackageList ---
 
   // Convert FleetItem[] from the packages section to PackageListPackage[]
-  const fleetPackages: PackageListPackage[] = useMemo(() => {
+  const aggregatePackages: PackageListPackage[] = useMemo(() => {
     if (!view) return [];
     const pkgSection = view.sections.find((s) => s.id === "packages");
     if (!pkgSection) return [];
@@ -280,8 +280,8 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     }));
   }, [view]);
 
-  // Package toggle for unified PackageList: "name.arch" string → fleet ItemId toggle
-  const handleFleetPackageToggle = useCallback(
+  // Package toggle for unified PackageList: "name.arch" string → aggregate ItemId toggle
+  const handleAggregatePackageToggle = useCallback(
     (nameArch: string) => {
       if (!view) return;
       const pkgSection = view.sections.find((s) => s.id === "packages");
@@ -296,7 +296,7 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   );
 
   // Repo toggle for unified RepoBar
-  const handleFleetRepoToggle = useCallback(
+  const handleAggregateRepoToggle = useCallback(
     (sectionId: string) => {
       if (!view) return;
       const repo = view.repo_groups.find((r) => r.section_id === sectionId);
@@ -315,9 +315,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Loading state
   if (!view && !error) {
     return (
-      <Page className="inspectah-page" data-testid="fleet-app">
+      <Page className="inspectah-page" data-testid="aggregate-app">
         <PageSection>
-          <EmptyState titleText="Loading fleet view..." headingLevel="h2">
+          <EmptyState titleText="Loading aggregate view..." headingLevel="h2">
             <Spinner size="xl" />
           </EmptyState>
         </PageSection>
@@ -328,9 +328,9 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   // Error state (no data at all)
   if (error && !view) {
     return (
-      <Page className="inspectah-page" data-testid="fleet-app">
+      <Page className="inspectah-page" data-testid="aggregate-app">
         <PageSection>
-          <EmptyState titleText="Failed to load fleet view" headingLevel="h2">
+          <EmptyState titleText="Failed to load aggregate view" headingLevel="h2">
             <EmptyStateBody>
               {error}
               <br />
@@ -353,16 +353,16 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
   }
 
   // view is guaranteed non-null past this point
-  const fleetView = view!;
+  const aggregateView = view!;
 
-  const activeFleetSection = fleetView.sections.find(
+  const activeAggregateSection = aggregateView.sections.find(
     (s) => s.id === activeSection,
   );
 
-  const searchContextSections = buildFleetSearchSections(fleetView.sections);
+  const searchContextSections = buildAggregateSearchSections(aggregateView.sections);
 
-  // Compute fleet-level stats from section data
-  const fleetSectionCounts = fleetView.sections.reduce(
+  // Compute aggregate-level stats from section data
+  const aggregateSectionCounts = aggregateView.sections.reduce(
     (acc, section) => {
       const items = sectionItems(section);
       const included = items.filter((i) => i.include).length;
@@ -388,30 +388,30 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     },
   );
 
-  const fleetStats: RefineStats = {
+  const aggregateStats: RefineStats = {
     sections: [
       {
         kind: "package",
-        total: fleetSectionCounts.totalPkg,
-        included: fleetSectionCounts.inclPkg,
-        excluded: fleetSectionCounts.exclPkg,
+        total: aggregateSectionCounts.totalPkg,
+        included: aggregateSectionCounts.inclPkg,
+        excluded: aggregateSectionCounts.exclPkg,
       },
       {
         kind: "config",
-        total: fleetSectionCounts.totalCfg,
-        included: fleetSectionCounts.inclCfg,
-        excluded: fleetSectionCounts.exclCfg,
+        total: aggregateSectionCounts.totalCfg,
+        included: aggregateSectionCounts.inclCfg,
+        excluded: aggregateSectionCounts.exclCfg,
       },
     ],
     needs_review_count: ack.unackedCount,
     ops_applied: 0,
     baseline_available: false,
-    can_undo: fleetView.can_undo,
-    can_redo: fleetView.can_redo,
+    can_undo: aggregateView.can_undo,
+    can_redo: aggregateView.can_redo,
   };
 
   // Compute total items across all sections
-  const totalItems = fleetView.sections.reduce(
+  const totalItems = aggregateView.sections.reduce(
     (sum, section) => sum + sectionItems(section).length,
     0,
   );
@@ -423,13 +423,13 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
     [...divergentKeySet].filter((key) => confirmedDivergentIds.has(key)).length;
 
   return (
-    <div data-testid="fleet-app">
+    <div data-testid="aggregate-app">
       <AppShell
         sidebar={null}
-        containerfilePreview={fleetView.containerfile_preview}
-        stats={fleetStats}
-        generation={fleetView.generation}
-        sessionIsSensitive={fleetView.session_is_sensitive}
+        containerfilePreview={aggregateView.containerfile_preview}
+        stats={aggregateStats}
+        generation={aggregateView.generation}
+        sessionIsSensitive={aggregateView.session_is_sensitive}
         onUndo={undo}
         onRedo={redo}
         onExportComplete={() => {
@@ -455,13 +455,13 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
           </>
         }
         extraShortcuts={[{ key: "c", description: "Compare variants" }]}
-        fleetSummary={{
-          hostCount: fleet.host_count,
-          hostnames: fleet.hostnames,
+        aggregateSummary={{
+          hostCount: aggregate.host_count,
+          hostnames: aggregate.hostnames,
           totalItems,
           needsReviewCount: ack.unackedCount,
         }}
-        isFleetMode
+        isAggregateMode
       >
         {({
           sectionSearchOpen,
@@ -479,8 +479,8 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
           return (
             <>
               <div className="inspectah-layout__sidebar">
-                <FleetSidebar
-                  sections={fleetView.sections}
+                <AggregateSidebar
+                  sections={aggregateView.sections}
                   activeSection={activeSection}
                   onSelect={setActiveSection}
                   ackState={ack}
@@ -488,19 +488,19 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
                 />
               </div>
               <div
-                className="inspectah-layout__main fleet-content"
-                data-testid="fleet-content"
+                className="inspectah-layout__main aggregate-content"
+                data-testid="aggregate-content"
               >
-                <FleetBanner
-                  summary={fleetView.summary}
+                <AggregateBanner
+                  summary={aggregateView.summary}
                   ackState={ack}
                   onNavigate={handleBannerNavigate}
                   activeSection={activeSection}
                 />
                 {sectionSearchOpen && (
                   <div
-                    className="fleet-section-search"
-                    data-testid="fleet-section-search"
+                    className="aggregate-section-search"
+                    data-testid="aggregate-section-search"
                   >
                     <input
                       type="text"
@@ -529,28 +529,28 @@ export function FleetApp({ fleet, health: _health }: FleetAppProps) {
                 {activeSection === "packages" ? (
                   <>
                     <RepoBar
-                      repos={fleetView.repo_groups}
-                      onToggle={handleFleetRepoToggle}
-                      conflictCount={fleetView.repo_conflict_count}
+                      repos={aggregateView.repo_groups}
+                      onToggle={handleAggregateRepoToggle}
+                      conflictCount={aggregateView.repo_conflict_count}
                       dismissedCount={dismissedCount}
                       onRestoreDismissed={handleRestoreDismissed}
                     />
                     <PackageList
-                      mode="fleet"
-                      packages={fleetPackages}
-                      repoGroups={fleetView.repo_groups}
-                      onToggle={handleFleetPackageToggle}
-                      onRepoToggle={handleFleetRepoToggle}
+                      mode="aggregate"
+                      packages={aggregatePackages}
+                      repoGroups={aggregateView.repo_groups}
+                      onToggle={handleAggregatePackageToggle}
+                      onRepoToggle={handleAggregateRepoToggle}
                       onDismissedCountChange={setDismissedCount}
                       onRestoreDismissed={restoreDismissed}
                     />
                   </>
                 ) : (
-                  <FleetSectionContent
-                    section={activeFleetSection}
+                  <AggregateSectionContent
+                    section={activeAggregateSection}
                     filterText={filterText}
                     isDecisionSection={
-                      activeFleetSection?.is_decision_section ?? false
+                      activeAggregateSection?.is_decision_section ?? false
                     }
                     onToggle={handleToggle}
                     ack={ack}
