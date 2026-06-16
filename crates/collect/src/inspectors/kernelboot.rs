@@ -234,7 +234,7 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
                 used_by,
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             });
         }
     }
@@ -288,7 +288,7 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
                 source: source.clone(),
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             });
         }
     }

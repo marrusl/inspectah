@@ -340,7 +340,7 @@ impl Inspector for ServicesInspector {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 });
                 continue;
@@ -371,7 +371,7 @@ impl Inspector for ServicesInspector {
                     include: true,
                     locked: false,
                     owning_package: None,
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 });
             } else if preset.is_some() {

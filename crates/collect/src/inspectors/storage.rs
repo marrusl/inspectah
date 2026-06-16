@@ -179,7 +179,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
             include: true,
             locked: false,
             acknowledged: false,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         });
     }

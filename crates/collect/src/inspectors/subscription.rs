@@ -60,7 +60,7 @@ impl Inspector for SubscriptionInspector {
         let mut section = SubscriptionSection::default();
         let mut warnings = Vec::new();
 
-        // Populate source hostname for fleet provenance.
+        // Populate source hostname for aggregate provenance.
         // InspectionContext has no hostname field -- read /etc/hostname via executor,
         // matching how collect.rs populates snapshot.meta["hostname"] (line 211).
         section.source_hostname = exec
