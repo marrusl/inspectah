@@ -311,9 +311,9 @@ was excluded by your triage decisions.
 - **Refine further** — review the
   [How to Review and Refine](../how-to/review-and-refine.md) guide for
   advanced triage techniques.
-- **Aggregate a fleet** — if you have multiple hosts to migrate, scan
-  them all and use fleet aggregation to find common patterns. See
-  [How to Aggregate a Fleet](../how-to/fleet-aggregation.md).
+- **Aggregate an aggregate** — if you have multiple hosts to migrate, scan
+  them all and use aggregate aggregation to find common patterns. See
+  [How to Aggregate Multiple Hosts](../how-to/aggregation.md).
 - **Subtract a baseline** — learn how baseline subtraction works and
   how to use custom base images. See
   [How to Subtract a Baseline](../how-to/baseline-subtraction.md).

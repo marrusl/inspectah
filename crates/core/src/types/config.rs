@@ -1,4 +1,4 @@
-use super::fleet::{FleetPrevalence, VariantSelection};
+use super::aggregate::{AggregatePrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub struct ConfigFileEntry {
     pub locked: bool,
     #[serde(default)]
     pub variant_selection: VariantSelection,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
 }

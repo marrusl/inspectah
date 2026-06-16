@@ -10,7 +10,7 @@
         "state": "base_image_only",
         "include": true,
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "baseline" },
@@ -28,7 +28,7 @@
         "state": "added",
         "include": true,
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
@@ -46,7 +46,7 @@
         "state": "modified",
         "include": true,
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "investigate" },
@@ -64,7 +64,7 @@
         "state": "added",
         "include": false,
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
@@ -82,7 +82,7 @@
         "state": "local_install",
         "include": true,
         "source_repo": "",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "investigate" },
@@ -100,7 +100,7 @@
         "state": "added",
         "include": true,
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
@@ -122,7 +122,7 @@
         "include": true,
         "tie": false,
         "tie_winner": false,
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
@@ -142,7 +142,7 @@
         "include": true,
         "tie": false,
         "tie_winner": false,
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
@@ -162,7 +162,7 @@
         "include": false,
         "tie": false,
         "tie_winner": false,
-        "fleet": null
+        "aggregate": null
       },
       "triage": {
         "triage": { "mode": "single_host", "baseline": "investigate" },

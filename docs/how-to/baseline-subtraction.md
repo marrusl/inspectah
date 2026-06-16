@@ -119,9 +119,9 @@ The resolution strategy tells you which step in the chain was used. If
 auto-detection selected the wrong image, re-run with `--base-image` to
 override.
 
-## Fleet baseline
+## Aggregate baseline
 
-When aggregating fleet scans, you can override the baseline for the entire
-fleet using the `baseline` field in `fleet.toml` or the `--target-image` flag
-on `inspectah fleet aggregate`. See the
-[Fleet Aggregation](fleet-aggregation.md) guide for details.
+When aggregating aggregate scans, you can override the baseline for the entire
+aggregate using the `baseline` field in `aggregate.toml` or the `--target-image` flag
+on `inspectah aggregate`. See the
+[Aggregate Aggregation](aggregation.md) guide for details.

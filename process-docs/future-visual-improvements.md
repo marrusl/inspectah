@@ -8,7 +8,7 @@ Last audited: 2026-03-17
 
 ## Quick Fixes
 
-- **Compare button text cramped** — "Compare" label barely fits in fleet variant compare buttons. Needs `white-space: nowrap` and adequate padding.
+- **Compare button text cramped** — "Compare" label barely fits in aggregate variant compare buttons. Needs `white-space: nowrap` and adequate padding.
 - **Re-render button typo** — extra space after opening parenthesis: `( 0 files changed)` should be `(0 files changed)`.
 
 ## Larger Features
@@ -32,5 +32,5 @@ Power-user keyboard shortcuts: `1-9` for tabs, `j/k` for next/previous item, `/`
 - **Animation/transitions polish** — tab fade, card expand/collapse, badge pulse, modal scale-up, reduced-motion guard. Spec: Part D
 - **Sticky sidebar** — `position: sticky` applied via PF6 classes
 - **Toggle switches** — `pf-v6-c-switch` component used across all tabs (replaced checkboxes)
-- **Diff view** — custom line-based diff via `lineDiff()` in fleet variant comparison modal (not CM6 merge extension, but functional)
-- **Hover preview** — fleet popover functionality with host lists on bar click; config file hover not specifically implemented but editor link (pencil icon) provides quick access
+- **Diff view** — custom line-based diff via `lineDiff()` in aggregate variant comparison modal (not CM6 merge extension, but functional)
+- **Hover preview** — aggregate popover functionality with host lists on bar click; config file hover not specifically implemented but editor link (pencil icon) provides quick access

@@ -54,7 +54,7 @@ pub struct FirewallZone {
 Every toggleable item type follows this pattern: `include` defaults to `true`
 via `crate::default_true`, and `locked` defaults to `false`. This is the
 unified include-default model -- all items start included and are narrowed
-during triage and fleet aggregation. Locked items cannot be toggled in the
+during triage and aggregate aggregation. Locked items cannot be toggled in the
 refine UI.
 
 Then register the module in `crates/core/src/types/mod.rs`:

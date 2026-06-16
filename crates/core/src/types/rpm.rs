@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct PackageEntry {
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub struct EnabledModuleStream {
     pub locked: bool,
     #[serde(default)]
     pub baseline_match: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ pub struct VersionLockEntry {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +151,7 @@ pub struct RepoFile {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 /// A single package's file ownership entry: package name and owned paths.
@@ -224,11 +224,11 @@ pub struct RpmSection {
     pub baseline_suppressed: Option<Vec<String>>,
     pub baseline_package_names: Option<Vec<String>>,
     /// Number of hosts with authoritative leaf classification data.
-    /// Only meaningful for fleet-aggregated snapshots.
+    /// Only meaningful for aggregated snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_authority_hosts: Option<u32>,
-    /// Total number of hosts in the fleet.
-    /// Only meaningful for fleet-aggregated snapshots.
+    /// Total number of hosts in the aggregate.
+    /// Only meaningful for aggregated snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_total_hosts: Option<u32>,
     /// File ownership data from `rpm -qa --queryformat '%{NAME}\t[%{FILENAMES}\n]'`.

@@ -65,24 +65,24 @@ for the full command reference.
 | `--fresh` | Start a fresh session, discarding any saved progress. |
 | `--tui` | Use terminal UI instead of web browser. |
 
-## CLI flags (fleet aggregate)
+## CLI flags (aggregate)
 
 | Flag | Description |
 |:-----|:------------|
-| `--manifest <PATH>` | Path to a fleet manifest (TOML). Cannot be combined with positional inputs. |
+| `--manifest <PATH>` | Path to a aggregate manifest (TOML). Cannot be combined with positional inputs. |
 | `--target-image <IMAGE>` | Override the target image reference from the manifest. |
-| `--output-dir <DIR>` | Output directory for the fleet tarball. |
-| `--output-file <FILE>` | Output file path for the fleet tarball. |
+| `--output-dir <DIR>` | Output directory for the aggregate tarball. |
+| `--output-file <FILE>` | Output file path for the aggregate tarball. |
 | `--json-only` | Write JSON snapshot to stdout (or file) instead of tarball. |
 | `--strict` | Treat aggregation warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |
 | `--ack-sensitive` | Acknowledge that the merged output may contain sensitive data. Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive`. |
 
-## CLI flags (fleet init)
+## CLI flags (init)
 
 | Flag | Description |
 |:-----|:------------|
-| `--output <PATH>` | Output path for the generated manifest. Defaults to `fleet.toml`. |
+| `--output <PATH>` | Output path for the generated manifest. Defaults to `aggregate.toml`. |
 | `--overwrite` | Overwrite an existing manifest file. |
 
 ## Exit codes

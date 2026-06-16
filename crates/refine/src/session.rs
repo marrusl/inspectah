@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use inspectah_core::fleet::classify_zone;
+use inspectah_core::aggregate::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::fleet::PrevalenceZone;
+use inspectah_core::types::aggregate::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
@@ -11,12 +11,12 @@ use inspectah_pipeline::render::containerfile::{
 
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
-use crate::fleet::variant_ops::{self, VariantProjectionState};
+use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::group_state::{GroupEvalContext, derive_group_state};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, FleetContext, ItemId,
+    AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, AggregateContext, ItemId,
     RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
     SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
     UserPasswordOp, ViewDirective,
@@ -280,11 +280,11 @@ impl RefineSession {
             .and_then(|r| r.baseline_package_names.as_ref())
             .is_some();
 
-        // Fleet snapshots use prevalence-based intersection, not leaf
+        // Aggregate snapshots use prevalence-based intersection, not leaf
         // filtering. Clear leaf_packages before normalization so
         // normalize_package_defaults does not exclude non-leaf packages.
-        let is_fleet_snapshot = snapshot.fleet_meta.is_some();
-        if is_fleet_snapshot && let Some(ref mut rpm) = snapshot.rpm {
+        let is_aggregate_snapshot = snapshot.aggregate_meta.is_some();
+        if is_aggregate_snapshot && let Some(ref mut rpm) = snapshot.rpm {
             rpm.leaf_packages = None;
         }
 
@@ -295,9 +295,9 @@ impl RefineSession {
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
 
-        // Detect fleet mode from snapshot metadata.
-        let refine_mode = if let Some(ref fleet_meta) = snapshot.fleet_meta {
-            let zones_active = fleet_meta.host_count >= 3;
+        // Detect aggregate mode from snapshot metadata.
+        let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
+            let zones_active = aggregate_meta.host_count >= 3;
             let mut zones = HashMap::new();
 
             // Classify multi-variant config paths by most-divergent variant.
@@ -308,7 +308,7 @@ impl RefineSession {
             if let Some(ref cfg) = snapshot.config {
                 let mut path_zones: HashMap<&str, PrevalenceZone> = HashMap::new();
                 for entry in &cfg.files {
-                    if let Some(ref prevalence) = entry.fleet {
+                    if let Some(ref prevalence) = entry.aggregate {
                         let variant_zone = classify_zone(prevalence);
                         path_zones
                             .entry(entry.path.as_str())
@@ -331,7 +331,7 @@ impl RefineSession {
             // Populate zone map from packages.
             if let Some(ref rpm) = snapshot.rpm {
                 for entry in &rpm.packages_added {
-                    if let Some(ref prevalence) = entry.fleet {
+                    if let Some(ref prevalence) = entry.aggregate {
                         let zone = classify_zone(prevalence);
                         let item_id = ItemId::Package {
                             name: entry.name.clone(),
@@ -346,7 +346,7 @@ impl RefineSession {
             if let Some(ref svc) = snapshot.services {
                 let mut dropin_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &svc.drop_ins {
-                    if let Some(ref prevalence) = entry.fleet {
+                    if let Some(ref prevalence) = entry.aggregate {
                         dropin_sum
                             .entry(entry.path.as_str())
                             .and_modify(|(sum, _)| {
@@ -356,7 +356,7 @@ impl RefineSession {
                     }
                 }
                 for (path, (count, total)) in &dropin_sum {
-                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                    let item_prev = inspectah_core::types::aggregate::AggregatePrevalence {
                         count: *count,
                         total: *total,
                         hosts: vec![],
@@ -375,7 +375,7 @@ impl RefineSession {
             if let Some(ref containers) = snapshot.containers {
                 let mut quadlet_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &containers.quadlet_units {
-                    if let Some(ref prevalence) = entry.fleet {
+                    if let Some(ref prevalence) = entry.aggregate {
                         quadlet_sum
                             .entry(entry.path.as_str())
                             .and_modify(|(sum, _)| {
@@ -385,7 +385,7 @@ impl RefineSession {
                     }
                 }
                 for (path, (count, total)) in &quadlet_sum {
-                    let item_prev = inspectah_core::types::fleet::FleetPrevalence {
+                    let item_prev = inspectah_core::types::aggregate::AggregatePrevalence {
                         count: *count,
                         total: *total,
                         hosts: vec![],
@@ -400,10 +400,10 @@ impl RefineSession {
                 }
             }
 
-            RefineMode::Fleet(FleetContext {
-                fleet_meta: fleet_meta.clone(),
+            RefineMode::Aggregate(AggregateContext {
+                aggregate_meta: aggregate_meta.clone(),
                 zones,
-                total_hosts: fleet_meta.host_count,
+                total_hosts: aggregate_meta.host_count,
                 zones_active,
                 repo_conflicts: snapshot.rpm_repo_conflicts.clone(),
             })
@@ -411,7 +411,7 @@ impl RefineSession {
             RefineMode::SingleHost
         };
 
-        // Fleet prevalence narrowing is handled in the aggregate merge layer
+        // Aggregate prevalence narrowing is handled in the aggregate merge layer
         // (merge.rs). Items below full prevalence arrive with include=false
         // already set before the session sees them.
 
@@ -558,11 +558,11 @@ impl RefineSession {
         &self.repo_index
     }
 
-    /// Returns the fleet context if this session was created from a fleet snapshot.
+    /// Returns the aggregate context if this session was created from an aggregate snapshot.
     /// Returns `None` for single-host snapshots.
-    pub fn fleet_context(&self) -> Option<&FleetContext> {
+    pub fn aggregate_context(&self) -> Option<&AggregateContext> {
         match &self.refine_mode {
-            RefineMode::Fleet(ctx) => Some(ctx),
+            RefineMode::Aggregate(ctx) => Some(ctx),
             RefineMode::SingleHost => None,
         }
     }
@@ -796,7 +796,7 @@ impl RefineSession {
         // values against originals. A variant op followed by its reverse
         // (e.g., select A->B then B->A) correctly reports variants_changed == 0.
         let variants_changed = {
-            use inspectah_core::types::fleet::VariantSelection;
+            use inspectah_core::types::aggregate::VariantSelection;
             let mut count = 0usize;
 
             // Config variants
@@ -1267,7 +1267,7 @@ impl RefineSession {
                     return Err(RefineError::UnknownTarget(uname.clone()));
                 }
             }
-            // Fleet variant ops: validate using projection state
+            // Aggregate variant ops: validate using projection state
             RefinementOp::SelectVariant { item_id, target } => {
                 let state = self.build_variant_state();
                 variant_ops::validate_select(&self.original, &state, item_id, target)?;
@@ -1494,7 +1494,7 @@ impl RefineSession {
             },
             // User ops are never noop — always replay to ensure correctness
             RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
-            // Fleet ops are never noop — projection-derived state makes idempotency detection fragile
+            // Aggregate ops are never noop — projection-derived state makes idempotency detection fragile
             RefinementOp::SelectVariant { .. }
             | RefinementOp::EditVariant { .. }
             | RefinementOp::DiscardVariant { .. } => false,
@@ -1833,7 +1833,7 @@ impl RefineSession {
                         }
                     }
                 }
-                // Fleet variant ops: accumulate into projection state
+                // Aggregate variant ops: accumulate into projection state
                 RefinementOp::SelectVariant { item_id, target } => {
                     variant_ops::apply_select(&mut variant_state, item_id, target);
                 }
@@ -1956,8 +1956,8 @@ impl RefineSession {
             }
         }
 
-        // Fleet triage scoring (when in fleet mode).
-        if let RefineMode::Fleet(ref ctx) = self.refine_mode {
+        // Aggregate triage scoring (when in aggregate mode).
+        if let RefineMode::Aggregate(ref ctx) = self.refine_mode {
             for pkg in &mut all_packages {
                 let item_id = ItemId::Package {
                     name: pkg.entry.name.clone(),
@@ -1965,17 +1965,17 @@ impl RefineSession {
                 };
                 let prevalence_count = pkg
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as u32)
                     .unwrap_or(0);
                 let prevalence_total = pkg
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.total.max(0) as u32)
                     .unwrap_or(ctx.total_hosts as u32);
-                let fleet_tag = crate::fleet::classify::classify_fleet_bucket(
+                let aggregate_tag = crate::aggregate::classify::classify_aggregate_bucket(
                     ctx,
                     &item_id,
                     pkg.triage.bucket(),
@@ -1983,7 +1983,7 @@ impl RefineSession {
                     prevalence_count,
                     prevalence_total,
                 );
-                pkg.triage.triage = fleet_tag.triage;
+                pkg.triage.triage = aggregate_tag.triage;
             }
             for cfg in &mut config_files {
                 let item_id = ItemId::Config {
@@ -1991,17 +1991,17 @@ impl RefineSession {
                 };
                 let prevalence_count = cfg
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as u32)
                     .unwrap_or(0);
                 let prevalence_total = cfg
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.total.max(0) as u32)
                     .unwrap_or(ctx.total_hosts as u32);
-                let fleet_tag = crate::fleet::classify::classify_fleet_bucket(
+                let aggregate_tag = crate::aggregate::classify::classify_aggregate_bucket(
                     ctx,
                     &item_id,
                     cfg.triage.bucket(),
@@ -2009,7 +2009,7 @@ impl RefineSession {
                     prevalence_count,
                     prevalence_total,
                 );
-                cfg.triage.triage = fleet_tag.triage;
+                cfg.triage.triage = aggregate_tag.triage;
             }
         }
 
@@ -2019,11 +2019,11 @@ impl RefineSession {
         // Packages the user explicitly excluded via ops remain visible so
         // the user can undo the exclusion.
         //
-        // In fleet mode, non-universal items arrive with include=false from
+        // In aggregate mode, non-universal items arrive with include=false from
         // the aggregate merge layer — those are NOT hidden here because they
         // should remain visible but unchecked. The merge layer tags them with
-        // fleet prevalence data, so we can distinguish them from normalized deps.
-        let is_fleet = matches!(self.refine_mode, RefineMode::Fleet(_));
+        // aggregate prevalence data, so we can distinguish them from normalized deps.
+        let is_aggregate = matches!(self.refine_mode, RefineMode::Aggregate(_));
         let hidden_deps: HashSet<(&str, &str)> = self
             .original
             .rpm
@@ -2035,11 +2035,11 @@ impl RefineSession {
                         if p.include {
                             return false;
                         }
-                        // In fleet mode, skip packages excluded by the merge
+                        // In aggregate mode, skip packages excluded by the merge
                         // layer's prevalence narrowing — those should remain
                         // visible but unchecked.
-                        if is_fleet
-                            && let Some(ref fp) = p.fleet
+                        if is_aggregate
+                            && let Some(ref fp) = p.aggregate
                             && fp.count < fp.total
                         {
                             return false;
@@ -2129,8 +2129,8 @@ impl RefineSession {
             };
 
             // Step 2: THEN apply leaf filter if available (single-host only —
-            // fleet mode uses prevalence-based intersection instead).
-            if !is_fleet && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
+            // aggregate mode uses prevalence-based intersection instead).
+            if !is_aggregate && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
                 packages
                     .into_iter()
@@ -2346,12 +2346,12 @@ impl RefineSession {
 /// Preview/export fidelity: both paths use `render_containerfile(snap,
 /// Some(&materialized_roots))` with the same materialized root set, so
 /// the exported Containerfile is byte-identical to what the preview shows.
-/// Write `fleet/variants/<path>/<hash>.content` files for every Alternative
-/// config entry, drop-in, and quadlet unit in a fleet snapshot.  Selected and
+/// Write `aggregate/variants/<path>/<hash>.content` files for every Alternative
+/// config entry, drop-in, and quadlet unit in an aggregate snapshot.  Selected and
 /// Only variants are materialized in the normal config tree; alternatives are
 /// preserved here so the export tarball captures all variant content.
-fn write_fleet_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), RefineError> {
-    use inspectah_core::types::fleet::VariantSelection;
+fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), RefineError> {
+    use inspectah_core::types::aggregate::VariantSelection;
     use sha2::{Digest, Sha256};
 
     let mut wrote_any = false;
@@ -2363,7 +2363,7 @@ fn write_fleet_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), Ref
                 let hash = format!("{:x}", Sha256::digest(entry.content.as_bytes()));
                 let short = &hash[..12];
                 let rel = entry.path.strip_prefix('/').unwrap_or(&entry.path);
-                let dir = out.join("fleet/variants").join(rel);
+                let dir = out.join("aggregate/variants").join(rel);
                 std::fs::create_dir_all(&dir)?;
                 std::fs::write(dir.join(format!("{short}.content")), &entry.content)?;
                 wrote_any = true;
@@ -2378,7 +2378,7 @@ fn write_fleet_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), Ref
                 let hash = format!("{:x}", Sha256::digest(dropin.content.as_bytes()));
                 let short = &hash[..12];
                 let rel = dropin.path.strip_prefix('/').unwrap_or(&dropin.path);
-                let dir = out.join("fleet/variants").join(rel);
+                let dir = out.join("aggregate/variants").join(rel);
                 std::fs::create_dir_all(&dir)?;
                 std::fs::write(dir.join(format!("{short}.content")), &dropin.content)?;
                 wrote_any = true;
@@ -2393,7 +2393,7 @@ fn write_fleet_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(), Ref
                 let hash = format!("{:x}", Sha256::digest(quadlet.content.as_bytes()));
                 let short = &hash[..12];
                 let rel = quadlet.path.strip_prefix('/').unwrap_or(&quadlet.path);
-                let dir = out.join("fleet/variants").join(rel);
+                let dir = out.join("aggregate/variants").join(rel);
                 std::fs::create_dir_all(&dir)?;
                 std::fs::write(dir.join(format!("{short}.content")), &quadlet.content)?;
                 wrote_any = true;
@@ -2435,10 +2435,10 @@ pub fn render_refine_export(
     inspectah_pipeline::render::users::stage_ssh_keys(snap, out)
         .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
 
-    // 2c. Materialize fleet variant files (conditional — only for fleet snapshots
+    // 2c. Materialize aggregate variant files (conditional — only for aggregate snapshots
     //     with Alternative config entries, drop-ins, or quadlet units).
-    if snap.fleet_meta.is_some() {
-        write_fleet_variants(snap, out)?;
+    if snap.aggregate_meta.is_some() {
+        write_aggregate_variants(snap, out)?;
     }
 
     // 2d. Remove any top-level artifacts outside the approved export contract.
@@ -2452,7 +2452,7 @@ pub fn render_refine_export(
         "sysctl",
         "tuned",
         "env-files",
-        "fleet",
+        "aggregate",
         "schema",
         "users",
         "inspection-snapshot.json",
@@ -3163,7 +3163,7 @@ mod tests {
                         include: true,
                         locked: false,
                         owning_package: Some("httpd".into()),
-                        fleet: None,
+                        aggregate: None,
                         attention_reason: None,
                     },
                     ServiceStateChange {
@@ -3173,7 +3173,7 @@ mod tests {
                         include: true,
                         locked: false,
                         owning_package: Some("openssh-server".into()),
-                        fleet: None,
+                        aggregate: None,
                         attention_reason: None,
                     },
                 ],
@@ -3585,7 +3585,7 @@ mod tests {
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
                         locked: false,
-                        fleet: None,
+                        aggregate: None,
                     },
                     SysctlOverride {
                         key: "vm.swappiness".into(),
@@ -3594,7 +3594,7 @@ mod tests {
                         source: "/etc/sysctl.d/99-custom.conf".into(),
                         include: true,
                         locked: false,
-                        fleet: None,
+                        aggregate: None,
                     },
                 ],
                 tuned_active: "throughput-performance".into(),
@@ -3878,7 +3878,7 @@ mod tests {
                     include: true,
                     locked: false,
                     owning_package: Some("httpd".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
@@ -3951,7 +3951,7 @@ mod tests {
                     include: false,
                     locked: false,
                     owning_package: Some("httpd".into()),
-                    fleet: None,
+                    aggregate: None,
                     attention_reason: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
@@ -4166,15 +4166,15 @@ mod tests {
         assert!(sshd.include, "clamp must not affect unlocked items");
     }
 
-    // ── Fleet pre-filtered packages regression tests ──────────────────
+    // ── Aggregate pre-filtered packages regression tests ──────────────────
 
     #[test]
-    fn fleet_pre_filtered_packages_drive_refine_view() {
-        // Fleet snapshot where merge already filtered packages_added to
+    fn aggregate_pre_filtered_packages_drive_refine_view() {
+        // Aggregate snapshot where merge already filtered packages_added to
         // leaf-only. The refine view must show only those pre-filtered
         // packages, not re-expand to include transitive deps.
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "web-tier".into(),
             host_count: 3,
             hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
@@ -4195,7 +4195,7 @@ mod tests {
             include: true,
             locked: false,
             source_repo: "appstream".into(),
-            fleet: Some(Default::default()),
+            aggregate: Some(Default::default()),
             ..Default::default()
         }];
         rpm.leaf_packages = Some(vec!["git.x86_64".into()]);
@@ -4217,11 +4217,11 @@ mod tests {
     }
 
     #[test]
-    fn fleet_leaf_authority_metadata_on_snapshot() {
+    fn aggregate_leaf_authority_metadata_on_snapshot() {
         // Partial authority metadata set during merge must be accessible
         // on the snapshot through the refine session.
         let mut snap = test_snapshot();
-        snap.fleet_meta = Some(inspectah_core::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(inspectah_core::types::aggregate::AggregateSnapshotMeta {
             label: "web-tier".into(),
             host_count: 3,
             hostnames: vec!["web-01".into(), "web-02".into(), "web-03".into()],
@@ -5298,7 +5298,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: Some("openssh-server".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             ..Default::default()
@@ -5381,7 +5381,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: Some("openssh-server".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             ..Default::default()
@@ -5438,7 +5438,7 @@ mod tests {
                 include: true,
                 locked: false,
                 owning_package: Some("openssh-server".into()),
-                fleet: None,
+                aggregate: None,
                 attention_reason: None,
             }],
             ..Default::default()

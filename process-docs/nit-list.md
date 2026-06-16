@@ -12,7 +12,7 @@ Small output quality and polish items. Not worth individual specs — just fix w
 
 - [ ] **RPM upload feature (needs spec):** Let users upload a local RPM into the tarball for repo-less packages. Separate folder in the tarball, direct `COPY + rpm -i` in the Containerfile. Turns "this package has no migration path" into "here's the RPM, install it directly." Solves the case for vendor installers, one-off downloads, and manual builds.
 
-## ~~Fleet Aggregate Output~~ (DONE — 2026-05-25)
+## ~~Aggregate Aggregate Output~~ (DONE — 2026-05-25)
 
 Moved to Completed section.
 
@@ -40,7 +40,7 @@ Moved to Completed section.
 
 Moved to Completed section.
 
-## ~~Fleet Refine UI~~ (DONE — 2026-05-26)
+## ~~Aggregate Refine UI~~ (DONE — 2026-05-26)
 
 Moved to Completed section.
 
@@ -62,7 +62,7 @@ Moved to Completed section.
 
 ## Preserve-Subscription Plan Deferrals
 
-- [ ] **Spec/plan provenance alignment:** Spec text says `source_hostname` belongs in fleet metadata; plan stores it in `SubscriptionSection.source_hostname` (per Task 1 contract decision — keeps provenance with the data it describes). Spec needs a text update to match the plan.
+- [ ] **Spec/plan provenance alignment:** Spec text says `source_hostname` belongs in aggregate metadata; plan stores it in `SubscriptionSection.source_hostname` (per Task 1 contract decision — keeps provenance with the data it describes). Spec needs a text update to match the plan.
 - [ ] **`--prefer-host-subscription` override flag:** On RHEL hosts, ambient pass-through wins over tarball-carried certs when the ambient bundle is valid. A user override to force tarball certs is not included in v1. File as enhancement if requested.
 - [ ] **Hardlink extraction support:** `TarballExtractor` rejects all hardlinks. inspectah tarballs don't use them today. Add within-root extraction support if a future tarball format needs them.
 
@@ -85,10 +85,10 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 ## ~~Workspace Layout~~ (DONE — 2026-06-09)
 
-## Fleet Aggregate Polish
+## Aggregate Aggregate Polish
 
-- [ ] **Stale scan dates warning fires on any timestamp difference:** `fleet/validate.rs` line 201 warns whenever `min != max` timestamps — even 13 minutes apart. Needs a reasonable threshold (e.g., 24h or 7d) before calling scans "stale."
-- [ ] **`fleet-fleet-` double prefix in output filename:** `fleet.rs` line 254 does `get_output_stamp(&format!("fleet-{label}"))`. When the default label is "fleet", the output is `fleet-fleet-timestamp.tar.gz`. Skip the prefix when label is "fleet", or use the label alone as the stamp prefix.
+- [ ] **Stale scan dates warning fires on any timestamp difference:** `aggregate/validate.rs` line 201 warns whenever `min != max` timestamps — even 13 minutes apart. Needs a reasonable threshold (e.g., 24h or 7d) before calling scans "stale."
+- [ ] **`aggregate-<label>-` double prefix in output filename:** `aggregate.rs` line 254 does `get_output_stamp(&format!("aggregate-{label}"))`. When the default label is "aggregate", the output is `aggregate-<label>-timestamp.tar.gz`. Skip the prefix when label is "aggregate", or use the label alone as the stamp prefix.
 
 ## Server Disconnected Overlay
 
@@ -121,7 +121,7 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 ## Multiarch (i686) Warning
 
-- [ ] **Populate `multiarch_packages` during single-host scans:** The `multiarch_packages: Vec<String>` field already exists on `RpmSection` (line 203 of `types/rpm.rs`) and is handled correctly in fleet merge (`merge.rs` line 881-882). It is never populated during single-host collection -- the `RpmSection` construction in `rpm/mod.rs` line 492-508 uses `..Default::default()`. Fix: after building `packages_added`, group by name, collect entries where >1 distinct arch exists, set `multiarch_packages` to those names. Emit a warning with the affected package names. ~40 lines.
+- [ ] **Populate `multiarch_packages` during single-host scans:** The `multiarch_packages: Vec<String>` field already exists on `RpmSection` (line 203 of `types/rpm.rs`) and is handled correctly in aggregate merge (`merge.rs` line 881-882). It is never populated during single-host collection -- the `RpmSection` construction in `rpm/mod.rs` line 492-508 uses `..Default::default()`. Fix: after building `packages_added`, group by name, collect entries where >1 distinct arch exists, set `multiarch_packages` to those names. Emit a warning with the affected package names. ~40 lines.
 
 ## Resource Limits (limits.conf)
 
@@ -163,7 +163,7 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 ## Completed
 
-### Fleet Triage: Non-Universal Variants (DONE — 2026-05-26)
+### Aggregate Triage: Non-Universal Variants (DONE — 2026-05-26)
 
 - [x] **Non-universal items with variants don't require review:** Divergent items with prevalence < total demoted from `Investigate` (needs_review) to `Divergent` (informational). Only universal items with variant differences get review-level triage.
 
@@ -182,21 +182,21 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [x] **Config-only `@commandline` packages (auto-exclude):** `@commandline` packages whose ALL owned files are under `/etc/` and in the config tree get auto-excluded with `PackageConfigCaptured` reason. `epel-release` correctly rejected (has `/usr/bin/crb`). `repo_tier("@commandline")` returns `None`. *(DONE — 2026-05-25)*
 - [x] **Repo-less packages (visibility):** `@commandline` source_repo now treated like empty — `NeedsReview` / `PackageNoRepoSource`. These surface as highest-risk migration items. *(DONE — 2026-05-25)*
 
-### Fleet Prevalence Bug (configs)
+### Aggregate Prevalence Bug (configs)
 
-- [x] Config prevalence undercount fixed. `FleetPrevalence` gains `aggregate_count`/`aggregate_hosts` (populated for multi-variant items). `merge_with_variants()` computes union of all variant hosts. Per-variant prevalence still tracks per-variant; aggregate tracks file-level. *(DONE — 2026-05-25)*
+- [x] Config prevalence undercount fixed. `AggregatePrevalence` gains `aggregate_count`/`aggregate_hosts` (populated for multi-variant items). `merge_with_variants()` computes union of all variant hosts. Per-variant prevalence still tracks per-variant; aggregate tracks file-level. *(DONE — 2026-05-25)*
 
-### Fleet Aggregate Output (DONE — 2026-05-25)
+### Aggregate Aggregate Output (DONE — 2026-05-25)
 
-- [x] Aggregate output surfaces divergence and agreement across the fleet through the zone-based triage system. Fleet view displays items grouped into consensus zones (universal agreement), near-consensus zones (majority agreement), and divergent zones (scattered across hosts). The UI in `FleetSection.tsx` renders these zones with filtering and gives users a clear picture of fleet consistency. Backend triage logic assigns items to zones based on prevalence thresholds. *(DONE — 2026-05-25)*
+- [x] Aggregate output surfaces divergence and agreement across the aggregate through the zone-based triage system. Aggregate view displays items grouped into consensus zones (universal agreement), near-consensus zones (majority agreement), and divergent zones (scattered across hosts). The UI in `AggregateSection.tsx` renders these zones with filtering and gives users a clear picture of aggregate consistency. Backend triage logic assigns items to zones based on prevalence thresholds. *(DONE — 2026-05-25)*
 
-### Fleet Conflict Count Bug
+### Aggregate Conflict Count Bug
 
 - [x] `repo_conflict_count` overcount fixed. Root cause: `anaconda` vs `baseos` counted as conflict despite both being distro repos. Conflict detection now normalizes through `repo_tier()` — same-tier differences are skipped. Repo tier constants moved to `inspectah-core::types::repo` to avoid circular dep. *(DONE — 2026-05-25)*
 
-### Fleet API Test Hardening
+### Aggregate API Test Hardening
 
-- [x] Make the `fleet_state_with_packages()` fixture minority-first so the end-to-end API test would independently fail if the row-level `source_repo` majority rewrite in `merge_rpm_sections()` were removed. *(DONE — 2026-05-25)*
+- [x] Make the `aggregate_state_with_packages()` fixture minority-first so the end-to-end API test would independently fail if the row-level `source_repo` majority rewrite in `merge_rpm_sections()` were removed. *(DONE — 2026-05-25)*
 
 ### Go Retirement (DONE — 2026-05-24)
 
@@ -206,9 +206,9 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 - [x] **Export failure double-error:** Prevented duplicate error output on export failure. *(DONE — 2026-05-25)*
 
-### Fleet vs Single-Machine Reference Section Density
+### Aggregate vs Single-Machine Reference Section Density
 
-- [x] Reference/context sections converged to compact rows matching fleet density. Replaced PF DataList with simple divs, subsection headers in uppercase. *(DONE — 2026-05-25)*
+- [x] Reference/context sections converged to compact rows matching aggregate density. Replaced PF DataList with simple divs, subsection headers in uppercase. *(DONE — 2026-05-25)*
 
 ### Host Info Display
 
@@ -231,12 +231,12 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 - [x] **Non-functional chevrons in Storage:** Added `item.detail.trim().length > 0` check to ContextItem. *(DONE — 2026-05-26)*
 - [x] **Storage mounts leaking into unrelated sections:** Frontend bug — missing React keys on ContextList caused cross-section state reuse, and GlobalSearch `searchTextMap` had bare-ID key collisions across sections. Fixed with section-scoped keys. *(DONE — 2026-05-26)*
 
-### Fleet Refine UI (2026-05-26 testing session)
+### Aggregate Refine UI (2026-05-26 testing session)
 
 - [x] **Warning banners too dark:** Replaced hardcoded backgrounds with `color-mix()` tints that work in both themes. *(DONE — 2026-05-26)*
-- [x] **Fleet defaults to intersection:** Applied strict intersection default to all 14 section types — items below full prevalence start excluded but visible. *(DONE — 2026-05-26)*
-- [x] **Fleet toggles broken:** Configs, services, drop-ins, and quadlets were recalculating include from raw prevalence instead of reading projected snapshot state. Fixed to use `entry.include`. *(DONE — 2026-05-26)*
-- [x] **Tuned fleet data wrong:** Three fixes — merge hardcoded `true`, view hardcoded `true`, prevalence passed as `None`. Added `is_stock_tuned_profile()` recognizing 14 stock profiles; both single-host and fleet paths suppress stock defaults. *(DONE — 2026-05-26)*
+- [x] **Aggregate defaults to intersection:** Applied strict intersection default to all 14 section types — items below full prevalence start excluded but visible. *(DONE — 2026-05-26)*
+- [x] **Aggregate toggles broken:** Configs, services, drop-ins, and quadlets were recalculating include from raw prevalence instead of reading projected snapshot state. Fixed to use `entry.include`. *(DONE — 2026-05-26)*
+- [x] **Tuned aggregate data wrong:** Three fixes — merge hardcoded `true`, view hardcoded `true`, prevalence passed as `None`. Added `is_stock_tuned_profile()` recognizing 14 stock profiles; both single-host and aggregate paths suppress stock defaults. *(DONE — 2026-05-26)*
 - [x] **Prevalence badge contrast:** Replaced yellow-on-white text with tinted pill badges (green/amber/red) all exceeding WCAG AA 4.5:1. *(DONE — 2026-05-26)*
 
 ### Build Output Streaming (DONE — 2026-05-30)

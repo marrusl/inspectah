@@ -54,12 +54,12 @@ This keeps serialized JSON minimal (omitting `null` and `false` values)
 while ensuring older JSON without these fields deserializes cleanly.
 Missing either annotation breaks one direction of the roundtrip.
 
-### Fleet Snapshots Share the Schema
+### Aggregate Snapshots Share the Schema
 
-Fleet aggregation (`inspectah fleet`) reads individual host snapshots
-and produces a merged output. The fleet metadata
-(`FleetSnapshotMeta`) is stored on the same `InspectionSnapshot`
-struct. If you bump the schema version, fleet re-aggregation also
+Aggregate aggregation (`inspectah aggregate`) reads individual host snapshots
+and produces a merged output. The aggregate metadata
+(`AggregateSnapshotMeta`) is stored on the same `InspectionSnapshot`
+struct. If you bump the schema version, aggregate re-aggregation also
 requires re-scanning all constituent hosts.
 
 ## Why This Matters
@@ -74,4 +74,4 @@ right on the first commit.
 
 - `crates/core/src/snapshot.rs` -- schema version, `load()`, all fields
 - `crates/core/src/types/` -- section types referenced by snapshot
-- `crates/core/src/types/fleet.rs` -- `FleetSnapshotMeta`
+- `crates/core/src/types/aggregate.rs` -- `AggregateSnapshotMeta`

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
-use inspectah_core::types::fleet::{FleetSnapshotMeta, PrevalenceZone, RepoSourceEntry};
+use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
@@ -249,7 +249,7 @@ pub enum TriageBucket {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FleetBucket {
+pub enum AggregateBucket {
     Investigate,
     Divergent,
     Partial,
@@ -263,8 +263,8 @@ pub struct Prevalence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FleetTriage {
-    pub bucket: FleetBucket,
+pub struct AggregateTriage {
+    pub bucket: AggregateBucket,
     pub prevalence: Prevalence,
 }
 
@@ -273,8 +273,8 @@ pub struct FleetTriage {
 pub enum Triage {
     #[serde(rename = "single_host")]
     SingleHost(TriageBucket),
-    #[serde(rename = "fleet")]
-    Fleet(FleetTriage),
+    #[serde(rename = "aggregate")]
+    Aggregate(AggregateTriage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,16 +385,16 @@ pub struct TriageTag {
 }
 
 impl TriageTag {
-    /// Returns the single-host bucket, or maps fleet buckets to the closest
+    /// Returns the single-host bucket, or maps aggregate buckets to the closest
     /// single-host equivalent for filtering/counting purposes.
     pub fn bucket(&self) -> TriageBucket {
         match &self.triage {
             Triage::SingleHost(b) => *b,
-            Triage::Fleet(ft) => match ft.bucket {
-                FleetBucket::Investigate => TriageBucket::Investigate,
-                FleetBucket::Divergent => TriageBucket::Investigate,
-                FleetBucket::Partial => TriageBucket::Site,
-                FleetBucket::Universal => TriageBucket::Baseline,
+            Triage::Aggregate(ft) => match ft.bucket {
+                AggregateBucket::Investigate => TriageBucket::Investigate,
+                AggregateBucket::Divergent => TriageBucket::Investigate,
+                AggregateBucket::Partial => TriageBucket::Site,
+                AggregateBucket::Universal => TriageBucket::Baseline,
             },
         }
     }
@@ -584,30 +584,30 @@ pub struct AnnotatedOp {
     pub active: bool,
 }
 
-/// Runtime context for fleet-mode refine sessions.
+/// Runtime context for aggregate-mode refine sessions.
 ///
 /// Not serialized — this is derived from the snapshot at session creation time.
 #[derive(Debug)]
-pub struct FleetContext {
-    pub fleet_meta: FleetSnapshotMeta,
+pub struct AggregateContext {
+    pub aggregate_meta: AggregateSnapshotMeta,
     pub zones: HashMap<ItemId, PrevalenceZone>,
     pub total_hosts: usize,
-    /// false for fleet-of-2 (zones suppressed, variant ops available),
-    /// true for fleet-of-3+ (zones active).
+    /// false for aggregate-of-2 (zones suppressed, variant ops available),
+    /// true for aggregate-of-3+ (zones active).
     pub zones_active: bool,
-    /// Repo-source conflicts from the fleet merge. Maps `name.arch` identity
+    /// Repo-source conflicts from the aggregate merge. Maps `name.arch` identity
     /// keys to the distinct repos with host counts. Only populated when the
     /// same package was installed from different repos across hosts.
     pub repo_conflicts: HashMap<String, Vec<RepoSourceEntry>>,
 }
 
 /// Operating mode of the refine session, determined at construction time
-/// from the presence/absence of `FleetSnapshotMeta` in the snapshot.
+/// from the presence/absence of `AggregateSnapshotMeta` in the snapshot.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum RefineMode {
     SingleHost,
-    Fleet(FleetContext),
+    Aggregate(AggregateContext),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -660,16 +660,16 @@ mod triage_tests {
     }
 
     #[test]
-    fn fleet_triage_serde_roundtrip() {
-        let ft = FleetTriage {
-            bucket: FleetBucket::Divergent,
+    fn aggregate_triage_serde_roundtrip() {
+        let ft = AggregateTriage {
+            bucket: AggregateBucket::Divergent,
             prevalence: Prevalence {
                 count: 42,
                 total: 50,
             },
         };
         let json = serde_json::to_string(&ft).unwrap();
-        let back: FleetTriage = serde_json::from_str(&json).unwrap();
+        let back: AggregateTriage = serde_json::from_str(&json).unwrap();
         assert_eq!(ft.bucket, back.bucket);
         assert_eq!(ft.prevalence.count, 42);
         assert_eq!(ft.prevalence.total, 50);

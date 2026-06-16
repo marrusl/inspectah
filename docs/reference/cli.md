@@ -21,7 +21,7 @@ inspectah [COMMAND]
 | `scan`    | Scan the current system and produce a migration snapshot |
 | `build`   | Build a bootc container image from an inspectah tarball |
 | `refine`  | Interactively refine scan output and re-render       |
-| `fleet`   | Aggregate and manage fleet-wide migration snapshots  |
+| `aggregate`   | Aggregate and manage aggregate-wide migration snapshots  |
 | `version` | Print version, commit, and build date                |
 | `help`    | Print help for a command                             |
 
@@ -172,29 +172,29 @@ inspectah refine --fresh /tmp/migration-snapshot.tar.gz
 
 ---
 
-## inspectah fleet
+## inspectah aggregate
 
-Aggregate and manage fleet-wide migration snapshots.
+Aggregate and manage aggregate-wide migration snapshots.
 
 ```
-inspectah fleet <COMMAND>
+inspectah aggregate <COMMAND>
 ```
 
 ### Subcommands
 
 | Command     | Description                                          |
 |-------------|------------------------------------------------------|
-| `aggregate` | Aggregate host tarballs into a fleet tarball         |
-| `init`      | Generate a fleet manifest from a directory of tarballs |
+| `aggregate` | Aggregate host tarballs into a aggregate tarball         |
+| `init`      | Generate a aggregate manifest from a directory of tarballs |
 
 ---
 
-### inspectah fleet init
+### inspectah aggregate init
 
-Generate a TOML fleet manifest from a directory of host tarballs.
+Generate a TOML aggregate manifest from a directory of host tarballs.
 
 ```
-inspectah fleet init [OPTIONS] <DIRECTORY>
+inspectah aggregate init [OPTIONS] <DIRECTORY>
 ```
 
 #### Arguments
@@ -215,29 +215,29 @@ inspectah fleet init [OPTIONS] <DIRECTORY>
 Generate a manifest from a directory of tarballs:
 
 ```bash
-inspectah fleet init /srv/snapshots/
+inspectah aggregate init /srv/snapshots/
 ```
 
 Write the manifest to a specific path:
 
 ```bash
-inspectah fleet init --output fleet.toml /srv/snapshots/
+inspectah aggregate init --output aggregate.toml /srv/snapshots/
 ```
 
 Overwrite an existing manifest:
 
 ```bash
-inspectah fleet init --overwrite --output fleet.toml /srv/snapshots/
+inspectah aggregate init --overwrite --output aggregate.toml /srv/snapshots/
 ```
 
 ---
 
-### inspectah fleet aggregate
+### inspectah aggregate
 
-Aggregate individual host tarballs into a single fleet tarball.
+Aggregate individual host tarballs into a single aggregate tarball.
 
 ```
-inspectah fleet aggregate [OPTIONS] [INPUTS]...
+inspectah aggregate [OPTIONS] [INPUTS]...
 ```
 
 #### Arguments
@@ -250,10 +250,10 @@ inspectah fleet aggregate [OPTIONS] [INPUTS]...
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--manifest <MANIFEST>` | path | — | Path to a fleet manifest (TOML) specifying sources |
+| `--manifest <MANIFEST>` | path | — | Path to a aggregate manifest (TOML) specifying sources |
 | `--target-image <IMAGE>` | string | — | Override the target image reference for baseline comparison |
-| `--output-dir <OUTPUT_DIR>` | path | — | Output directory for the fleet tarball |
-| `--output-file <OUTPUT_FILE>` | path | — | Output file path for the fleet tarball |
+| `--output-dir <OUTPUT_DIR>` | path | — | Output directory for the aggregate tarball |
+| `--output-file <OUTPUT_FILE>` | path | — | Output file path for the aggregate tarball |
 | `--json-only` | bool | `false` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`) |
 | `--strict` | bool | `false` | Treat warnings as errors |
 | `-v, --verbose` | bool | `false` | Show per-host detail in output |
@@ -264,49 +264,49 @@ inspectah fleet aggregate [OPTIONS] [INPUTS]...
 Aggregate all tarballs in a directory:
 
 ```bash
-inspectah fleet aggregate /srv/snapshots/
+inspectah aggregate /srv/snapshots/
 ```
 
 Aggregate specific tarballs:
 
 ```bash
-inspectah fleet aggregate host-a.tar.gz host-b.tar.gz host-c.tar.gz
+inspectah aggregate host-a.tar.gz host-b.tar.gz host-c.tar.gz
 ```
 
-Aggregate from a fleet manifest:
+Aggregate from a aggregate manifest:
 
 ```bash
-inspectah fleet aggregate --manifest fleet.toml
+inspectah aggregate --manifest aggregate.toml
 ```
 
 Override the target image during aggregation:
 
 ```bash
-inspectah fleet aggregate --target-image quay.io/centos-bootc/centos-bootc:stream9 /srv/snapshots/
+inspectah aggregate --target-image quay.io/centos-bootc/centos-bootc:stream9 /srv/snapshots/
 ```
 
-Write fleet JSON to stdout:
+Write aggregate JSON to stdout:
 
 ```bash
-inspectah fleet aggregate --json-only /srv/snapshots/
+inspectah aggregate --json-only /srv/snapshots/
 ```
 
-Write fleet tarball to a specific file:
+Write aggregate tarball to a specific file:
 
 ```bash
-inspectah fleet aggregate --output-file /tmp/fleet.tar.gz /srv/snapshots/
+inspectah aggregate --output-file /tmp/aggregate.tar.gz /srv/snapshots/
 ```
 
 Strict mode (fail on warnings):
 
 ```bash
-inspectah fleet aggregate --strict --manifest fleet.toml
+inspectah aggregate --strict --manifest aggregate.toml
 ```
 
 Aggregate snapshots that contain sensitive data (subscription certs, password hashes):
 
 ```bash
-inspectah fleet aggregate --ack-sensitive /srv/snapshots/
+inspectah aggregate --ack-sensitive /srv/snapshots/
 ```
 
 ---

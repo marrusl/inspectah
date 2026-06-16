@@ -79,7 +79,7 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             include: true,
             locked: false,
             owning_package: None,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         }],
         enabled_units: vec!["httpd.service".into()],

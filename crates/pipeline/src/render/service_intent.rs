@@ -329,11 +329,11 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         };
     }
 
-    // Fleet snapshots use leaf-only packages_added, so
+    // Aggregate snapshots use leaf-only packages_added, so
     // classify_service_presence would incorrectly omit services whose
     // owning package is an auto (non-leaf) dependency. Skip classification
-    // entirely for fleet — force all services to Emit.
-    let is_fleet = snap.fleet_meta.is_some();
+    // entirely for aggregate — force all services to Emit.
+    let is_aggregate = snap.aggregate_meta.is_some();
 
     let mut omissions = Vec::new();
     let mut omission_comments = Vec::new();
@@ -351,7 +351,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
 
         // Evaluate omission BEFORE config-tree deferral — a proven-absent
         // service never becomes deferred fiction.
-        let presence = if is_fleet {
+        let presence = if is_aggregate {
             PresenceDecision::Emit {
                 advisory_reasons: None,
             }

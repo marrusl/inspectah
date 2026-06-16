@@ -248,7 +248,7 @@ Then open `http://127.0.0.1:8642` in your local browser.
       Open interactive diagram
     </button>
   </div>
-  <p><em>The end-to-end user workflow: scan, refine, fleet aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+  <p><em>The end-to-end user workflow: scan, refine, aggregate aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
 {% endraw %}
 
@@ -266,7 +266,7 @@ Baseline subtraction is the core value of running inspectah against a
 known base image. Instead of migrating everything, you only carry
 forward what the base image does not already provide.
 
-For details on how classification works and the fleet-level extensions
+For details on how classification works and the aggregate-level extensions
 (Universal, Partial, Divergent), see
 [Triage Classification](reference/triage-classification.md).
 
@@ -282,8 +282,8 @@ model in action. From here:
   directly from the scan tarball, or use `podman build` manually with
   the generated Containerfile. See
   [How to Build a bootc Image](how-to/build-bootc-image.md).
-- **Aggregate a fleet** — scan multiple hosts and merge the results
+- **Aggregate an aggregate** — scan multiple hosts and merge the results
   to find common patterns across your environment. See
-  [How to Aggregate a Fleet](how-to/fleet-aggregation.md).
+  [How to Aggregate Multiple Hosts](how-to/aggregation.md).
 - **Explore the full CLI** — see all available commands and flags in
   the [CLI Reference](reference/cli.md).

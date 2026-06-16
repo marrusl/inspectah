@@ -1,5 +1,5 @@
 ---
-source: inspectah-collect/tests/services_test.rs
+source: crates/collect/tests/services_test.rs
 expression: section
 ---
 {
@@ -10,7 +10,7 @@ expression: section
       "default_state": "disable",
       "include": true,
       "owning_package": null,
-      "fleet": null
+      "aggregate": null
     },
     {
       "unit": "gdm.service",
@@ -18,7 +18,7 @@ expression: section
       "default_state": "enable",
       "include": true,
       "owning_package": null,
-      "fleet": null
+      "aggregate": null
     }
   ],
   "enabled_units": [
@@ -44,7 +44,7 @@ expression: section
       "content": "[Service]\nEnvironment=LANG=C\nLimitNOFILE=65535\n",
       "include": true,
       "variant_selection": "Only",
-      "fleet": null
+      "aggregate": null
     }
   ],
   "preset_matched_units": [

@@ -3,7 +3,7 @@ mod helpers;
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::fleet::{FleetPrevalence, FleetSnapshotMeta};
+use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
@@ -61,8 +61,8 @@ fn empty_baseline() -> BaselineData {
     }
 }
 
-fn fleet(count: i32, total: i32, hosts: &[&str]) -> FleetPrevalence {
-    FleetPrevalence {
+fn aggregate(count: i32, total: i32, hosts: &[&str]) -> AggregatePrevalence {
+    AggregatePrevalence {
         count,
         total,
         hosts: hosts.iter().map(|host| host.to_string()).collect(),
@@ -695,11 +695,11 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
 }
 
 #[test]
-fn test_fleet_snapshot_skips_leaf_only_filter() {
+fn test_aggregate_snapshot_skips_leaf_only_filter() {
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "test-aggregate".into(),
         host_count: 5,
         hostnames: vec![
             "host-a".into(),
@@ -720,7 +720,7 @@ fn test_fleet_snapshot_skips_leaf_only_filter() {
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
                 include: true,
-                fleet: Some(fleet(3, 5, &["host-a", "host-b", "host-c"])),
+                aggregate: Some(aggregate(3, 5, &["host-a", "host-b", "host-c"])),
                 ..Default::default()
             },
             PackageEntry {
@@ -729,7 +729,7 @@ fn test_fleet_snapshot_skips_leaf_only_filter() {
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
                 include: true,
-                fleet: Some(fleet(2, 5, &["host-d", "host-e"])),
+                aggregate: Some(aggregate(2, 5, &["host-d", "host-e"])),
                 ..Default::default()
             },
         ],
@@ -744,18 +744,18 @@ fn test_fleet_snapshot_skips_leaf_only_filter() {
     assert_eq!(
         view.packages.len(),
         2,
-        "fleet snapshots should keep all packages visible"
+        "aggregate snapshots should keep all packages visible"
     );
     assert!(view.packages.iter().any(|pkg| pkg.entry.name == "httpd"));
     assert!(view.packages.iter().any(|pkg| pkg.entry.name == "apr"));
 }
 
 #[test]
-fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
+fn test_aggregate_snapshot_preview_skips_leaf_only_filter() {
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test-fleet".into(),
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "test-aggregate".into(),
         host_count: 5,
         hostnames: vec![
             "host-a".into(),
@@ -776,7 +776,7 @@ fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
                 include: true,
-                fleet: Some(fleet(3, 5, &["host-a", "host-b", "host-c"])),
+                aggregate: Some(aggregate(3, 5, &["host-a", "host-b", "host-c"])),
                 ..Default::default()
             },
             PackageEntry {
@@ -785,7 +785,7 @@ fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
                 include: true,
-                fleet: Some(fleet(2, 5, &["host-d", "host-e"])),
+                aggregate: Some(aggregate(2, 5, &["host-d", "host-e"])),
                 ..Default::default()
             },
         ],
@@ -799,15 +799,15 @@ fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
 
     assert!(
         preview.contains("dnf install"),
-        "fleet preview must include a dnf install block"
+        "aggregate preview must include a dnf install block"
     );
     assert!(
         preview.contains("httpd"),
-        "fleet preview must include httpd"
+        "aggregate preview must include httpd"
     );
     assert!(
         preview.contains("apr"),
-        "fleet preview must not apply leaf-only filtering"
+        "aggregate preview must not apply leaf-only filtering"
     );
 }
 

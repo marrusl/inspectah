@@ -69,7 +69,7 @@ fn parse_module_file_content(content: &str) -> Option<EnabledModuleStream> {
             include: true,
             locked: false,
             baseline_match: false,
-            fleet: None,
+            aggregate: None,
         })
     } else {
         None
@@ -150,7 +150,7 @@ fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
         arch,
         include: true,
         locked: false,
-        fleet: None,
+        aggregate: None,
     })
 }
 

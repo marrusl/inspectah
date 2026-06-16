@@ -1,9 +1,9 @@
-//! Integration tests for subscription data across fleet merge boundaries.
+//! Integration tests for subscription data across aggregate merge boundaries.
 //!
 //! Validates typed timestamp comparison, hostname tiebreak, mixed-presence
 //! handling, and the sensitive_snapshot / preserved_subscription flags.
 
-use inspectah_core::fleet::merge_snapshots;
+use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::subscription::{SubscriptionFile, SubscriptionSection};
@@ -12,7 +12,7 @@ use inspectah_core::types::subscription::{SubscriptionFile, SubscriptionSection}
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a minimal snapshot that passes fleet validation.
+/// Build a minimal snapshot that passes aggregate validation.
 fn valid_snap(hostname: &str) -> InspectionSnapshot {
     let mut s = InspectionSnapshot::new();
     s.schema_version = SCHEMA_VERSION;
@@ -84,10 +84,10 @@ fn with_subscription(
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Fleet merge picks the subscription with the latest expiry date.
+/// Aggregate merge picks the subscription with the latest expiry date.
 /// Uses typed OffsetDateTime comparison, not string comparison.
 #[test]
-fn fleet_merge_picks_latest_expiry() {
+fn aggregate_merge_picks_latest_expiry() {
     let early_ts = 1_719_792_000; // 2024-07-01
     let late_ts = 1_735_689_600; // 2025-01-01
 
@@ -104,7 +104,7 @@ fn fleet_merge_picks_latest_expiry() {
         warnings.is_empty()
             || warnings.iter().all(|w| !matches!(
                 w,
-                inspectah_core::fleet::validate::FleetWarning::BaselineConflict { .. }
+                inspectah_core::aggregate::validate::AggregateWarning::BaselineConflict { .. }
             ))
     );
     assert!(merged.preserved_subscription);
@@ -121,7 +121,7 @@ fn fleet_merge_picks_latest_expiry() {
 /// When two snapshots have identical expiry timestamps, the merge picks
 /// the one with the lexicographically first hostname.
 #[test]
-fn fleet_merge_subscription_hostname_tiebreak_on_equal_expiry() {
+fn aggregate_merge_subscription_hostname_tiebreak_on_equal_expiry() {
     let same_ts = 1_725_148_800;
 
     let mut snap_z = valid_snap("host-zebra");
@@ -143,7 +143,7 @@ fn fleet_merge_subscription_hostname_tiebreak_on_equal_expiry() {
 /// When only some hosts have subscription data, the merge includes it
 /// from whichever host has it and ORs the boolean flags.
 #[test]
-fn fleet_merge_subscription_mixed_presence() {
+fn aggregate_merge_subscription_mixed_presence() {
     let ts = 1_725_148_800;
 
     // host-a: no subscription
@@ -169,7 +169,7 @@ fn fleet_merge_subscription_mixed_presence() {
 /// Incomplete subscription sections are excluded from winner selection.
 /// Only complete (non-incomplete) sections participate.
 #[test]
-fn fleet_merge_subscription_skips_incomplete() {
+fn aggregate_merge_subscription_skips_incomplete() {
     let early_ts = 1_719_792_000;
     let late_ts = 1_735_689_600;
 
@@ -196,13 +196,13 @@ fn fleet_merge_subscription_skips_incomplete() {
 /// Subscription data includes serial-matched entitlement pairs from the
 /// winning host's section.
 #[test]
-fn fleet_merge_subscription_carries_entitlement_pairs() {
+fn aggregate_merge_subscription_carries_entitlement_pairs() {
     let ts = 1_725_148_800;
 
     let mut snap = valid_snap("host-a");
     with_subscription(&mut snap, "host-a", "555", ts);
 
-    // Add a second host with no subscription to trigger fleet merge
+    // Add a second host with no subscription to trigger aggregate merge
     let snap_b = valid_snap("host-b");
 
     let (merged, _) = merge_snapshots(vec![snap, snap_b], None).expect("merge should succeed");
@@ -257,7 +257,7 @@ fn subscription_snapshot_roundtrip() {
 
 /// Three hosts with distinct expiry dates: merge picks the latest.
 #[test]
-fn fleet_merge_three_hosts_picks_latest() {
+fn aggregate_merge_three_hosts_picks_latest() {
     let ts1 = 1_719_792_000; // 2024-07-01
     let ts2 = 1_725_148_800; // 2024-09-01
     let ts3 = 1_735_689_600; // 2025-01-01

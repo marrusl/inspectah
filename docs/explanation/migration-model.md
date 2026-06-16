@@ -167,12 +167,12 @@ The Containerfile re-renders live as decisions are made. This is deliberately
 a human-in-the-loop process — the tool surfaces the data, the sysadmin makes
 the calls.
 
-For fleet migrations (multiple hosts moving to the same image), the **fleet**
+For aggregate migrations (multiple hosts moving to the same image), the **aggregate**
 workflow aggregates scans from many hosts and shows item prevalence — "this
 package is on 47 of 50 hosts" — so the sysadmin can make informed decisions
 about what belongs in the shared image versus what's host-specific.
 
-The core scan-refine-build-fleet workflow is available today.
+The core scan-refine-build-aggregate workflow is available today.
 
 ## Putting it together
 
@@ -180,7 +180,7 @@ A typical migration workflow looks like this:
 
 1. Run `inspectah scan` on each package-mode host
 2. Use `inspectah refine` to review and adjust findings per host
-3. Use `inspectah fleet` to aggregate across hosts and identify the common
+3. Use `inspectah aggregate` to aggregate across hosts and identify the common
    image contents
 4. Review the generated Containerfile and customize further as needed
 5. Build the image with `inspectah build` (or `podman build` manually)

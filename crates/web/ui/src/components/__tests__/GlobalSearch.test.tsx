@@ -25,7 +25,7 @@ function makePackageItem(name: string, arch = "x86_64"): DecisionItemKind {
         state: "added",
         include: true,
         source_repo: "baseos",
-        fleet: null,
+        aggregate: null,
       },
       attention: [],
       triage: DEFAULT_TRIAGE,
@@ -48,7 +48,7 @@ function makeConfigItem(path: string): DecisionItemKind {
         include: true,
         tie: false,
         tie_winner: false,
-        fleet: null,
+        aggregate: null,
       },
       attention: [],
       triage: {
@@ -108,7 +108,7 @@ describe("GlobalSearch auto-reveal", () => {
           state: "added",
           include: true,
           source_repo: "baseos",
-          fleet: null,
+          aggregate: null,
         },
         attention: [
           { level: "routine", reason: "package_baseline_match", detail: null },
@@ -160,7 +160,7 @@ describe("GlobalSearch auto-reveal", () => {
           include: true,
           tie: false,
           tie_winner: false,
-          fleet: null,
+          aggregate: null,
         },
         attention: [
           { level: "routine", reason: "config_default", detail: null },

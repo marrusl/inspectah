@@ -1,7 +1,7 @@
+use crate::types::aggregate::RepoSourceEntry;
 use crate::types::completeness::Completeness;
 use crate::types::config::ConfigSection;
 use crate::types::containers::ContainerSection;
-use crate::types::fleet::RepoSourceEntry;
 use crate::types::kernelboot::KernelBootSection;
 use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
@@ -76,13 +76,13 @@ pub struct InspectionSnapshot {
     /// True if subscription data was preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_subscription: bool,
-    /// True if redaction was skipped during scan (fleet-only, derived from Raw state during merge).
+    /// True if redaction was skipped during scan (aggregate-only, derived from Raw state during merge).
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub redaction_skipped: bool,
-    /// Fleet snapshot metadata. None for single-host snapshots.
+    /// Aggregate snapshot metadata. None for single-host snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
-    /// Repo-source conflicts detected during fleet merge. Maps `name.arch`
+    pub aggregate_meta: Option<crate::types::aggregate::AggregateSnapshotMeta>,
+    /// Repo-source conflicts detected during aggregate merge. Maps `name.arch`
     /// identity keys to the distinct repos with host counts. Empty for
     /// single-host snapshots.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -254,11 +254,11 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_with_fleet_meta_roundtrip() {
+    fn test_snapshot_with_aggregate_meta_roundtrip() {
         use std::collections::BTreeMap;
 
         let mut snap = InspectionSnapshot::new();
-        snap.fleet_meta = Some(crate::types::fleet::FleetSnapshotMeta {
+        snap.aggregate_meta = Some(crate::types::aggregate::AggregateSnapshotMeta {
             label: "web-tier".into(),
             host_count: 25,
             hostnames: vec!["web-01".into(), "web-02".into()],
@@ -268,14 +268,14 @@ mod tests {
         });
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(snap.fleet_meta, parsed.fleet_meta);
+        assert_eq!(snap.aggregate_meta, parsed.aggregate_meta);
     }
 
     #[test]
-    fn test_snapshot_without_fleet_meta_omits_field() {
+    fn test_snapshot_without_aggregate_meta_omits_field() {
         let snap = InspectionSnapshot::new();
         let json = serde_json::to_string(&snap).unwrap();
-        assert!(!json.contains("fleet_meta"));
+        assert!(!json.contains("aggregate_meta"));
     }
 
     #[test]

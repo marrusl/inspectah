@@ -80,7 +80,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             include: false,
             locked: false,
             owning_package: None,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         }],
         ..Default::default()

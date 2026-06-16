@@ -28,7 +28,7 @@ function makePkgItem(name: string, triage: TriageTag): DecisionItemKind {
       state: "added",
       include: true,
       source_repo: "baseos",
-      fleet: null,
+      aggregate: null,
     },
     triage,
   };
@@ -48,7 +48,7 @@ function makeConfigItem(path: string, triage: TriageTag): DecisionItemKind {
       include: true,
       tie: false,
       tie_winner: false,
-      fleet: null,
+      aggregate: null,
     },
     triage,
   };

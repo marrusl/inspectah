@@ -77,7 +77,7 @@ fn patch_array_includes(parent: &mut Value, array_key: &str) {
 /// The tree is a JSON object
 /// `{ "leaf.name.arch": ["dep1.name.arch", "dep2.name.arch", ...], ... }`.
 /// A top-level key means the package was identified as a leaf in its own
-/// right (with its own dependency subtree). In fleet/merged snapshots a
+/// right (with its own dependency subtree). In aggregate/merged snapshots a
 /// package can be both a leaf on one host and a dependency on another.
 /// Only identities that appear exclusively as dependencies (not as
 /// top-level keys) should be subtracted from the leaf set.
@@ -294,7 +294,7 @@ mod tests {
             include,
             locked: false,
             owning_package: None,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         }
     }
@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_leaf_also_dep_of_another_leaf_stays_included() {
+    fn aggregate_leaf_also_dep_of_another_leaf_stays_included() {
         use crate::types::{RefinedPackage, Triage, TriageBucket, TriageReason, TriageTag};
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 

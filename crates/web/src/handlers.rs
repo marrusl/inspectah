@@ -132,14 +132,14 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         Completeness::Incomplete { .. } => "incomplete",
     };
 
-    let fleet = snap.fleet_meta.as_ref().map(|meta| {
-        let variant_count = inspectah_refine::fleet::variant_summary(snap, session.fleet_context())
+    let aggregate = snap.aggregate_meta.as_ref().map(|meta| {
+        let variant_count = inspectah_refine::aggregate::variant_summary(snap, session.aggregate_context())
             .map(|s| s.paths_with_variants)
             .unwrap_or(0);
         json!({
             "host_count": meta.host_count,
             "hostnames": meta.hostnames,
-            "zones_active": session.fleet_context()
+            "zones_active": session.aggregate_context()
                 .map(|fc| fc.zones_active).unwrap_or(false),
             "variant_count": variant_count,
             "label": meta.label,
@@ -163,7 +163,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         "policy": {
             "distro_repos": DISTRO_REPOS,
         },
-        "fleet": fleet,
+        "aggregate": aggregate,
         "session_is_sensitive": session_is_sensitive,
     }))
 }

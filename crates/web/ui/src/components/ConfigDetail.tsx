@@ -98,11 +98,11 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
-        {config.entry.fleet && (
+        {config.entry.aggregate && (
           <DescriptionListGroup>
-            <DescriptionListTerm>Fleet</DescriptionListTerm>
+            <DescriptionListTerm>Aggregate</DescriptionListTerm>
             <DescriptionListDescription>
-              {config.entry.fleet.count} of {config.entry.fleet.total} hosts
+              {config.entry.aggregate.count} of {config.entry.aggregate.total} hosts
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}

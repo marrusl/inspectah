@@ -12,7 +12,7 @@ The bucket determines the item's default inclusion in the generated
 Containerfile and signals how much human attention it needs.
 
 Classification works differently depending on whether you scanned a single
-host or merged multiple hosts into a fleet snapshot.
+host or merged multiple hosts into a aggregate snapshot.
 
 {% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">
@@ -45,7 +45,7 @@ host or merged multiple hosts into a fleet snapshot.
       Open interactive diagram
     </button>
   </div>
-  <p><em>How inspectah classifies each item into Baseline, Site, or Investigate — and how fleet prevalence layers on top. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+  <p><em>How inspectah classifies each item into Baseline, Site, or Investigate — and how aggregate prevalence layers on top. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
 {% endraw %}
 
@@ -109,25 +109,25 @@ Annotations do not change the bucket. They add context for review.
 
 ---
 
-## Fleet classifications
+## Aggregate classifications
 
-When you merge multiple host snapshots into a fleet, items receive a
-**fleet bucket** instead. Fleet classification layers **prevalence** (how many
+When you merge multiple host snapshots into an aggregate, items receive a
+**aggregate bucket** instead. Aggregate classification layers **prevalence** (how many
 hosts have this item) on top of the single-host classification.
 
 | Bucket | Meaning | Prevalence | Default action |
 |---|---|---|---|
-| **Universal** | Present on all hosts. Consensus across the fleet. | count = total | Included in Containerfile (same items may also be excluded by baseline subtraction) |
+| **Universal** | Present on all hosts. Consensus across the aggregate. | count = total | Included in Containerfile (same items may also be excluded by baseline subtraction) |
 | **Partial** | Present on some hosts, absent on others. Role-specific. | count >= half of total | Excluded from Containerfile |
 | **Divergent** | Present on fewer than half the hosts. Unusual or role-specific. | count < half of total | Excluded from Containerfile |
 | **Investigate** | Divergent-zone item that appears on all hosts but with unclear provenance. Needs review. | count = total, but zone is Divergent | Included in Containerfile (flagged) |
 
 ### Prevalence zones
 
-Fleet classification is built on **prevalence zones**, which are computed
+Aggregate classification is built on **prevalence zones**, which are computed
 from the ratio of hosts that have an item to the total host count:
 
-| Zone | Condition | Maps to fleet bucket |
+| Zone | Condition | Maps to aggregate bucket |
 |---|---|---|
 | **Consensus** | count = total (present on every host) | Universal |
 | **NearConsensus** | count * 2 >= total (present on at least half) | Partial |
@@ -138,11 +138,11 @@ equals the total host count, it is promoted to **Investigate** instead of
 Divergent. This catches items that exist everywhere but were flagged as
 divergent due to configuration differences.
 
-### Fleet-to-single-host mapping
+### Aggregate-to-single-host mapping
 
-For filtering and counting, fleet buckets map back to single-host equivalents:
+For filtering and counting, aggregate buckets map back to single-host equivalents:
 
-| Fleet bucket | Single-host equivalent |
+| Aggregate bucket | Single-host equivalent |
 |---|---|
 | Universal | Baseline |
 | Partial | Site |
@@ -150,19 +150,19 @@ For filtering and counting, fleet buckets map back to single-host equivalents:
 | Investigate | Investigate |
 
 This mapping is used when the UI needs to show aggregate counts across both
-single-host and fleet views.
+single-host and aggregate views.
 
 ---
 
 ## The Partial vs. Divergent distinction
 
-This is the most important distinction in fleet classification. Both describe
+This is the most important distinction in aggregate classification. Both describe
 items that vary across hosts, but they mean different things:
 
 | | Partial | Divergent |
 |---|---|---|
 | **What varies** | **Presence** -- the item exists on some hosts but not others | **Presence** -- the item exists on fewer than half the hosts |
-| **Prevalence** | At least half the fleet has it | Fewer than half the fleet has it |
+| **Prevalence** | At least half the aggregate has it | Fewer than half the aggregate has it |
 | **Typical cause** | Role-based deployment (web servers vs. database servers) | One-off installation, test host, or legacy outlier |
 | **Default action** | Excluded from Containerfile | Excluded from Containerfile |
 
@@ -184,7 +184,7 @@ it is not part of the standard deployment.
 **Partial -- sshd_config with different AllowUsers:**
 You have 10 hosts. 7 have a modified `/etc/ssh/sshd_config` with
 site-specific `AllowUsers` lines. The config file appears on 7/10 hosts
-(NearConsensus zone), so it gets **Partial**. In fleet mode, the refine UI
+(NearConsensus zone), so it gets **Partial**. In aggregate mode, the refine UI
 lets you pick which variant of the file to include.
 
 **Divergent -- custom repo on a test host:**
@@ -217,7 +217,7 @@ Triage classification applies across all inspected sections:
 
 All 25 toggleable item types default to `include: true` at the schema level.
 This is the unified include-default model: items start included and are
-narrowed during triage classification and fleet aggregation, not expanded
+narrowed during triage classification and aggregate aggregation, not expanded
 from an excluded default. The `include` field uses a `default_true` serde
 helper so that snapshots from older schema versions deserialize correctly.
 
@@ -225,7 +225,7 @@ After classification, items are excluded in two ways:
 
 1. **Baseline subtraction** -- items matching the base image are excluded
    during the scan pipeline.
-2. **Fleet prevalence narrowing** -- in fleet mode, items below the
+2. **Aggregate prevalence narrowing** -- in aggregate mode, items below the
    consensus threshold are excluded during the aggregate merge pass.
 
 The net effect after classification:
@@ -235,7 +235,7 @@ The net effect after classification:
 | Baseline | No | Excluded by baseline subtraction |
 | Site | Yes | User customization to reproduce |
 | Investigate | Varies by section | Packages: excluded by default. Config files: included. |
-| Universal | Yes | Fleet consensus item |
+| Universal | Yes | Aggregate consensus item |
 | Partial | No | Excluded by prevalence narrowing |
 | Divergent | No | Excluded by prevalence narrowing |
 
@@ -275,7 +275,7 @@ The Containerfile action depends on the item type:
 ## Section promotion
 
 Section promotion is the mechanism by which items that would normally be
-invisible (classified as Baseline, or excluded by fleet intersection) can be
+invisible (classified as Baseline, or excluded by aggregate intersection) can be
 surfaced for review or inclusion.
 
 In the refine UI, users can:
@@ -283,7 +283,7 @@ In the refine UI, users can:
   a specific package version even though it matches the base image)
 - **Exclude** a Site or Investigate item to remove it from the Containerfile
   (e.g., dropping a debugging package you do not want in the target image)
-- **Select a variant** in fleet mode when multiple hosts have different
+- **Select a variant** in aggregate mode when multiple hosts have different
   versions of the same config file
 
 These user decisions override the automatic classification. The triage bucket

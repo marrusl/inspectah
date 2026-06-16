@@ -160,7 +160,7 @@ fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
             Ok(())
         }
         None => {
-            if snap.fleet_meta.is_some() {
+            if snap.aggregate_meta.is_some() {
                 Ok(())
             } else {
                 eprintln!(

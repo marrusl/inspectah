@@ -6,18 +6,18 @@ use std::path::PathBuf;
 
 #[test]
 fn session_file_path_strips_tar_gz() {
-    let p = session_file_path(&PathBuf::from("/data/fleet-web-2026-05-20.tar.gz"));
+    let p = session_file_path(&PathBuf::from("/data/aggregate-web-2026-05-20.tar.gz"));
     assert_eq!(
         p.file_name().unwrap(),
-        ".inspectah-session-fleet-web-2026-05-20.json"
+        ".inspectah-session-aggregate-web-2026-05-20.json"
     );
     assert_eq!(p.parent().unwrap(), std::path::Path::new("/data"));
 }
 
 #[test]
 fn session_file_path_strips_tgz() {
-    let p = session_file_path(&PathBuf::from("/tmp/fleet.tgz"));
-    assert_eq!(p.file_name().unwrap(), ".inspectah-session-fleet.json");
+    let p = session_file_path(&PathBuf::from("/tmp/aggregate.tgz"));
+    assert_eq!(p.file_name().unwrap(), ".inspectah-session-aggregate.json");
 }
 
 #[test]

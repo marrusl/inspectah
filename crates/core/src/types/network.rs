@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub struct NMConnection {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 impl Default for NMConnection {
@@ -31,7 +31,7 @@ impl Default for NMConnection {
             conn_type: Default::default(),
             locked: Default::default(),
             acknowledged: Default::default(),
-            fleet: Default::default(),
+            aggregate: Default::default(),
         }
     }
 }
@@ -54,7 +54,7 @@ pub struct FirewallZone {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

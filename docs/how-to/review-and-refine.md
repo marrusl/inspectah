@@ -173,10 +173,10 @@ export produces a tarball containing:
 The exported Containerfile is byte-identical to what the preview pane shows
 in the UI, so what you see is what you get.
 
-## Work with fleet data
+## Work with aggregate data
 
-When refining a fleet scan (multiple hosts merged into one tarball), the
-dashboard switches to fleet mode. Instead of single-host triage buckets,
+When refining a aggregate scan (multiple hosts merged into one tarball), the
+dashboard switches to aggregate mode. Instead of single-host triage buckets,
 items are grouped by prevalence zones:
 
 **Consensus** -- The item appears on all or nearly all hosts. Treat it
@@ -189,7 +189,7 @@ verify whether the partial coverage is intentional.
 **Divergent** -- The item differs significantly across hosts. These need
 investigation to decide which variant to include.
 
-The fleet summary shows the total host count and highlights items with
+The aggregate summary shows the total host count and highlights items with
 variant conflicts -- cases where the same item exists in different versions
 or configurations across hosts. Each variant shows its host count so you
 can see how widespread each version is.

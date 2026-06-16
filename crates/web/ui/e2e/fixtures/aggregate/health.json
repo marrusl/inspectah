@@ -1,0 +1,31 @@
+{
+  "status": "ok",
+  "host": {
+    "hostname": "aggregate-merged",
+    "os_name": "Red Hat Enterprise Linux",
+    "os_version": "9.4",
+    "os_id": "rhel",
+    "system_type": "package",
+    "schema_version": 3
+  },
+  "completeness": "full",
+  "policy": {
+    "distro_repos": [
+      "rhel-9-for-x86_64-baseos-rpms",
+      "rhel-9-for-x86_64-appstream-rpms"
+    ]
+  },
+  "aggregate": {
+    "host_count": 3,
+    "hostnames": [
+      "host-01.example.com",
+      "host-02.example.com",
+      "host-03.example.com"
+    ],
+    "zones_active": true,
+    "variant_count": 2,
+    "label": "web-tier",
+    "merged_at": "2025-01-15T10:30:00Z"
+  },
+  "session_is_sensitive": false
+}

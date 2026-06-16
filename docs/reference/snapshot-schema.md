@@ -99,14 +99,14 @@ Baseline data connects the host snapshot to a target container image.
 | `preserved_ssh_keys` | `bool` | `true` if SSH authorized keys were preserved by operator choice (`--preserve ssh-keys`). |
 | `preserved_subscription` | `bool` | `true` if RHEL subscription material was preserved by operator choice (`--preserve subscription`). |
 
-## Fleet fields
+## Aggregate fields
 
-Present only in fleet (multi-host) snapshots produced by `inspectah fleet aggregate`.
+Present only in aggregate (multi-host) snapshots produced by `inspectah aggregate`.
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `fleet_meta` | `FleetSnapshotMeta?` | Fleet-level metadata (hostnames, host count, label). `None` for single-host snapshots. |
-| `rpm_repo_conflicts` | `Map<String, Vec<RepoSourceEntry>>` | Repo-source conflicts detected during fleet merge. Maps `name.arch` identity keys to distinct repos with host counts. Empty for single-host snapshots. |
+| `aggregate_meta` | `AggregateSnapshotMeta?` | Aggregate-level metadata (hostnames, host count, label). `None` for single-host snapshots. |
+| `rpm_repo_conflicts` | `Map<String, Vec<RepoSourceEntry>>` | Repo-source conflicts detected during aggregate merge. Maps `name.arch` identity keys to distinct repos with host counts. Empty for single-host snapshots. |
 
 ## Serialization
 

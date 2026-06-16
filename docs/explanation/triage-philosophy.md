@@ -79,7 +79,7 @@ states.
 **Site** -- something the sysadmin explicitly added or changed. A package
 installed from EPEL, a modified `sshd_config`, a non-default service state, a
 user-deployed container workload. These are the items that define what makes
-this host (or fleet) different from a stock image. They are the migration work.
+this host (or aggregate) different from a stock image. They are the migration work.
 
 **Investigate** -- inspectah cannot determine the classification with
 confidence. Maybe a package was installed locally from an RPM file with no
@@ -106,17 +106,17 @@ available. A host scanned without a target image comparison will show many
 Investigate results. The same host scanned with a baseline typically shows very
 few, because the comparison resolves most ambiguity.
 
-## Fleet consensus: the second axis
+## Aggregate consensus: the second axis
 
 Single-host triage answers: *what matters on this host?* But many
-organizations run fleets -- 10, 50, or 200 hosts in the same role. When you
-manage a fleet of web servers, the question changes from "what is on this host"
+organizations run aggregates -- 10, 50, or 200 hosts in the same role. When you
+manage a aggregate of web servers, the question changes from "what is on this host"
 to "what is consistent across all my hosts, and where do they diverge?"
 
-Fleet analysis adds a second classification dimension: how prevalent is each
-item across the fleet?
+Aggregate analysis adds a second classification dimension: how prevalent is each
+item across the aggregate?
 
-**Universal** -- present on every host in the fleet. When all 50 web servers
+**Universal** -- present on every host in the aggregate. When all 50 web servers
 have `httpd` installed, that is a universal package. It almost certainly
 belongs in the target image.
 
@@ -128,8 +128,8 @@ rollout, or a subset of hosts serving a slightly different function.
 debugging tool installed, that is probably ad-hoc -- someone installed it to
 troubleshoot and never removed it.
 
-These fleet buckets map back to the single-host triage model for consistency:
-Universal items map to Baseline (they are the fleet's effective "base image"),
+These aggregate buckets map back to the single-host triage model for consistency:
+Universal items map to Baseline (they are the aggregate's effective "base image"),
 Partial items map to Site (they are meaningful additions worth preserving),
 and Divergent items map to Investigate (low prevalence suggests anomaly or
 one-off activity that needs a human decision).
@@ -148,7 +148,7 @@ hosts missed a rollout.
 
 ## Design choices: what counts as "the same"
 
-Fleet analysis has to decide what "the same item" means when hosts are not
+Aggregate analysis has to decide what "the same item" means when hosts are not
 perfectly identical. Two choices in particular shape the results:
 
 ### Version differences are universal, not divergent
@@ -172,7 +172,7 @@ not. Maybe one has a custom port. These differences matter for migration
 because they represent different operational decisions that cannot be collapsed
 into a single image configuration.
 
-When a config path has multiple variants across a fleet (3 hosts have version
+When a config path has multiple variants across a aggregate (3 hosts have version
 A of the file, 2 hosts have version B), the path's overall classification
 reflects the most divergent variant. The system does not hide the divergence
 by averaging -- it surfaces it, because config divergence is exactly the kind

@@ -1,5 +1,5 @@
 use super::config::ConfigFileEntry;
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +49,7 @@ pub struct NonRpmItem {
     pub files: Option<serde_json::Value>,
     #[serde(default)]
     pub content: String,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub review_status: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -91,7 +91,7 @@ mod tests {
                 git_branch: String::new(),
                 files: None,
                 content: String::new(),
-                fleet: None,
+                aggregate: None,
                 review_status: String::new(),
                 notes: String::new(),
             }],

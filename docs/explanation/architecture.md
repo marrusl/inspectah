@@ -54,7 +54,7 @@ running a real scan.
 ## inspectah-core: the shared language
 
 Core is the leaf crate. It defines the data types that every other crate
-speaks: the snapshot schema, fleet models, baseline definitions, and the trait
+speaks: the snapshot schema, aggregate models, baseline definitions, and the trait
 interfaces that collectors and renderers implement.
 
 **Why it exists separately.** If type definitions lived alongside the code that
@@ -67,7 +67,7 @@ Core contains several important modules:
 
 - **types/** -- One module per domain: `rpm`, `config`, `services`, `network`,
   `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
-  `nonrpm`, `fleet`, `subscription`, `repo`, `os`, `system`, and supporting
+  `nonrpm`, `aggregate`, `subscription`, `repo`, `os`, `system`, and supporting
   types like `warnings`, `redaction`, `completeness`, `preflight`, and
   `progress`. Each defines the serializable structs that flow through the
   entire pipeline. All 25 toggleable item types use a unified include-default
@@ -82,8 +82,8 @@ Core contains several important modules:
   inspection results into a single serializable document.
 - **baseline.rs** -- Baseline resolution logic: given a target image, determine
   which packages, services, and configs are defaults versus operator-added.
-- **fleet/** -- Fleet merge, manifest, and validation logic for combining
-  multiple host snapshots into aggregate fleet data.
+- **aggregate/** -- Aggregate merge, manifest, and validation logic for combining
+  multiple host snapshots into aggregate aggregate data.
 - **pipeline.rs** -- Pipeline configuration types shared between the
   orchestrator and its consumers.
 
@@ -223,14 +223,14 @@ Refine's modules:
   (`decisions.rs`) to the snapshot, computes reference data
   (`reference.rs`), and produces the projected types (`types.rs`) consumed
   by renderers and the export path.
-- **fleet/** -- Fleet-specific refine logic: triage classification across
+- **aggregate/** -- Aggregate-specific refine logic: triage classification across
   hosts (`classify.rs`), variant diffing (`diff.rs`), and variant operations
-  (`variant_ops.rs`) for the fleet refine UI.
+  (`variant_ops.rs`) for the aggregate refine UI.
 
 ## inspectah-web: serving the interface
 
 Web is the HTTP layer. It embeds the HTML/CSS/JavaScript assets, defines the
-API routes, and serves the interactive UIs for refine and fleet workflows.
+API routes, and serves the interactive UIs for refine and aggregate workflows.
 
 **Why web is separate from refine.** Refine is the engine -- it manages state
 and orchestrates re-rendering. Web is the transport -- it maps HTTP requests
@@ -242,8 +242,8 @@ Web's modules:
 
 - **handlers.rs** -- Route handlers for the single-host refine UI: serving
   reports, processing toggle changes, and triggering re-renders.
-- **fleet_handlers.rs** -- Route handlers for fleet-specific operations:
-  fleet report serving and fleet refine interactions.
+- **aggregate_handlers.rs** -- Route handlers for aggregate-specific operations:
+  aggregate report serving and aggregate refine interactions.
 - **adapter.rs** -- Bridges refine session state to web response types.
 - **web_types.rs** -- Web-specific request and response types.
 - **assets.rs** -- Embedded static assets (HTML templates, CSS, JavaScript)
@@ -289,7 +289,7 @@ every other crate and wires them together. Argument parsing, subcommand
 dispatch, and progress display -- the user-facing surface area lives here.
 
 **Why CLI is a thin shell.** The binary itself should do as little as possible.
-It parses arguments, selects the right workflow (scan, build, refine, fleet,
+It parses arguments, selects the right workflow (scan, build, refine, aggregate,
 or version), and hands off to the appropriate crate. This keeps the logic testable
 at the library level rather than requiring end-to-end CLI invocations to
 exercise it.
@@ -299,7 +299,7 @@ CLI's modules:
 - **main.rs** -- Entry point, clap argument definitions, and subcommand
   routing.
 - **commands/** -- One module per subcommand: `scan.rs`, `build.rs`,
-  `refine.rs`, `fleet.rs`, `version.rs`, and `pull_progress.rs` (image pull
+  `refine.rs`, `aggregate.rs`, `version.rs`, and `pull_progress.rs` (image pull
   progress tracking for baseline resolution).
 - **progress/** -- Terminal progress display with multiple backends: `pretty.rs`
   (append-only receipt with Unicode symbols), `flat.rs` (numbered sequential
@@ -361,13 +361,13 @@ strategies, and excluding config files. Each change flows through the refine
 session, which mutates the snapshot and triggers a re-render through
 pipeline. The updated HTML replaces the page.
 
-### The fleet path
+### The aggregate path
 
-Fleet analysis aggregates multiple host snapshots. The merge logic in core
-combines them into a fleet-aggregate snapshot with prevalence counts. Fleet
+Aggregate analysis aggregates multiple host snapshots. The merge logic in core
+combines them into an aggregate snapshot with prevalence counts. Aggregate
 classification in refine assigns each item to a prevalence zone (Consensus,
-NearConsensus, Divergent). The fleet-specific renderers and handlers in
-pipeline and web produce the fleet report and fleet refine UI.
+NearConsensus, Divergent). The aggregate-specific renderers and handlers in
+pipeline and web produce the aggregate report and aggregate refine UI.
 
 ## Design principles
 

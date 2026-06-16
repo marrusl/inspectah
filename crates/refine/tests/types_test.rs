@@ -71,7 +71,7 @@ fn annotated_op_json_flattens() {
 #[test]
 fn triage_reason_custom_variant() {
     use inspectah_refine::types::TriageReason;
-    let reason = TriageReason::Custom("fleet-uncommon".into());
+    let reason = TriageReason::Custom("aggregate-uncommon".into());
     let json = serde_json::to_string(&reason).unwrap();
     let parsed: TriageReason = serde_json::from_str(&json).unwrap();
     assert_eq!(reason, parsed);

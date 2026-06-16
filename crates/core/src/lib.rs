@@ -1,5 +1,5 @@
+pub mod aggregate;
 pub mod baseline;
-pub mod fleet;
 pub mod pipeline;
 pub mod snapshot;
 pub mod traits;

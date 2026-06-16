@@ -1,7 +1,7 @@
 /**
  * App-level router proof test (#2).
  *
- * Proves that when health returns a `fleet` field, App renders FleetApp
+ * Proves that when health returns an `aggregate` field, App renders AggregateApp
  * without ever mounting SingleHostApp or triggering /api/view fetch.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -11,7 +11,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 const mockFetchView = vi.fn();
 const mockFetchHealth = vi.fn();
 const mockFetchSections = vi.fn();
-const mockFetchFleetView = vi.fn();
+const mockFetchAggregateView = vi.fn();
 
 vi.mock("../api/client", () => ({
   fetchHealth: (...args: unknown[]) => mockFetchHealth(...(args as [])),
@@ -24,9 +24,9 @@ vi.mock("../api/client", () => ({
   redo: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock("../api/fleet-client", () => ({
-  fetchFleetView: (...args: unknown[]) => mockFetchFleetView(...(args as [])),
-  fetchFleetDiff: vi.fn().mockResolvedValue({}),
+vi.mock("../api/aggregate-client", () => ({
+  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateDiff: vi.fn().mockResolvedValue({}),
 }));
 
 // Stub fetch globally (for ExportDialog internals, etc.)
@@ -35,19 +35,19 @@ beforeEach(() => {
   mockFetchView.mockReset();
   mockFetchHealth.mockReset();
   mockFetchSections.mockReset();
-  mockFetchFleetView.mockReset();
+  mockFetchAggregateView.mockReset();
 });
 
 // Import App AFTER mocks are set up
 import App from "../App";
 
 describe("App router", () => {
-  it("renders FleetApp when health reports fleet, never calls fetchView", async () => {
-    // Health returns fleet metadata
+  it("renders AggregateApp when health reports aggregate, never calls fetchView", async () => {
+    // Health returns aggregate metadata
     mockFetchHealth.mockResolvedValue({
       status: "ok",
       host: {
-        hostname: "fleet-host",
+        hostname: "aggregate-host",
         os_name: "RHEL",
         os_version: "9.4",
         os_id: "rhel",
@@ -56,19 +56,19 @@ describe("App router", () => {
       },
       completeness: "full",
       policy: { distro_repos: [] },
-      fleet: {
+      aggregate: {
         host_count: 3,
         hostnames: ["host1", "host2", "host3"],
         zones_active: true,
         variant_count: 5,
-        label: "test-fleet",
+        label: "test-aggregate",
         merged_at: "2025-01-01T00:00:00Z",
       },
       session_is_sensitive: false,
     });
 
-    // Fleet view for FleetApp to render
-    mockFetchFleetView.mockResolvedValue({
+    // Aggregate view for AggregateApp to render
+    mockFetchAggregateView.mockResolvedValue({
       generation: 1,
       can_undo: false,
       can_redo: false,
@@ -93,9 +93,9 @@ describe("App router", () => {
 
     render(<App />);
 
-    // Wait for FleetApp to render
+    // Wait for AggregateApp to render
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-app")).toBeInTheDocument();
+      expect(screen.getByTestId("aggregate-app")).toBeInTheDocument();
     });
 
     // fetchView must NEVER have been called — SingleHostApp was never mounted
@@ -104,13 +104,13 @@ describe("App router", () => {
     // fetchSections must NEVER have been called either
     expect(mockFetchSections).not.toHaveBeenCalled();
 
-    // FleetApp's own fetch was called (fires in a useEffect after mount)
+    // AggregateApp's own fetch was called (fires in a useEffect after mount)
     await waitFor(() => {
-      expect(mockFetchFleetView).toHaveBeenCalled();
+      expect(mockFetchAggregateView).toHaveBeenCalled();
     });
   });
 
-  it("renders SingleHostApp when health has no fleet field", async () => {
+  it("renders SingleHostApp when health has no aggregate field", async () => {
     mockFetchHealth.mockResolvedValue({
       status: "ok",
       host: {
@@ -123,7 +123,7 @@ describe("App router", () => {
       },
       completeness: "full",
       policy: { distro_repos: [] },
-      fleet: null,
+      aggregate: null,
       session_is_sensitive: false,
     });
 
@@ -168,7 +168,7 @@ describe("App router", () => {
     // fetchView WAS called — SingleHostApp mounted
     expect(mockFetchView).toHaveBeenCalled();
 
-    // FleetApp was NOT rendered
-    expect(screen.queryByTestId("fleet-app")).not.toBeInTheDocument();
+    // AggregateApp was NOT rendered
+    expect(screen.queryByTestId("aggregate-app")).not.toBeInTheDocument();
   });
 });

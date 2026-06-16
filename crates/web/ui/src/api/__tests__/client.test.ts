@@ -38,7 +38,7 @@ const mockHealth: HealthResponse = {
   },
   completeness: "full",
   policy: { distro_repos: ["baseos", "appstream", "crb"] },
-  fleet: null,
+  aggregate: null,
   session_is_sensitive: false,
 };
 
@@ -54,7 +54,7 @@ const mockView: ViewResponse = {
         state: "added",
         include: true,
         source_repo: "appstream",
-        fleet: null,
+        aggregate: null,
       },
       attention: [
         {
@@ -83,7 +83,7 @@ const mockView: ViewResponse = {
         include: true,
         tie: false,
         tie_winner: false,
-        fleet: null,
+        aggregate: null,
       },
       attention: [
         {

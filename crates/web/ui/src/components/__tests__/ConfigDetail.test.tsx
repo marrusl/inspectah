@@ -17,7 +17,7 @@ describe("ConfigDetail", () => {
         include: true,
         tie: false,
         tie_winner: false,
-        fleet: null,
+        aggregate: null,
       },
       triage: {
         triage: { mode: "single_host", baseline: null },
@@ -63,7 +63,7 @@ describe("ConfigDetail", () => {
         include: true,
         tie: false,
         tie_winner: false,
-        fleet: null,
+        aggregate: null,
       },
       triage: {
         triage: { mode: "single_host", baseline: null },

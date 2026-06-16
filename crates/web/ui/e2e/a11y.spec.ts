@@ -25,11 +25,11 @@ test.describe("Accessibility", () => {
     await expectNoAxeViolations(page, undefined, AXE_EXCLUDE_RULES);
   });
 
-  test("fleet axe scan has no critical or serious violations", async ({
+  test("aggregate axe scan has no critical or serious violations", async ({
     page,
   }) => {
     await clearMocks(page);
-    await applyMockApi(page, "fleet-3");
+    await applyMockApi(page, "aggregate-3");
     await page.goto("/");
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
     await expectNoAxeViolations(page, undefined, AXE_EXCLUDE_RULES);

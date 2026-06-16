@@ -11,7 +11,7 @@ use inspectah_refine::types::{Triage, TriageAnnotation, TriageBucket, TriageReas
 fn assert_bucket(tag: &inspectah_refine::types::TriageTag, expected: TriageBucket) {
     match &tag.triage {
         Triage::SingleHost(b) => assert_eq!(*b, expected),
-        Triage::Fleet(_) => panic!("expected SingleHost"),
+        Triage::Aggregate(_) => panic!("expected SingleHost"),
     }
 }
 

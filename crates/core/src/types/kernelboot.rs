@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::fleet::FleetPrevalence;
+use super::aggregate::AggregatePrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigSnippet {
@@ -24,7 +24,7 @@ pub struct SysctlOverride {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct KernelModule {
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub fleet: Option<FleetPrevalence>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +123,7 @@ mod tests {
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
                 locked: false,
-                fleet: None,
+                aggregate: None,
             }],
             modules_load_d: vec![],
             modprobe_d: vec![],
