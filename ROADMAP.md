@@ -240,7 +240,7 @@ Render group-installed packages as `dnf group install` in the Containerfile inst
 
 ### Classification Logic Developer Docs (MEDIUM — after anaconda classifier)
 
-Developer-facing explanation doc covering the full classification pipeline: baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, fleet consensus. Audience: developers working on inspectah. Location: `docs/explanation/classification-logic.md`.
+Developer-facing explanation doc covering the full classification pipeline: baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, aggregate consensus. Audience: developers working on inspectah. Location: `docs/explanation/classification-logic.md`.
 
 ### Driftify E2E Fixture Coverage Audit (MEDIUM — after testing expansion)
 
@@ -252,15 +252,15 @@ Add `webServer` config to `playwright.config.ts` to auto-start the refine server
 
 ### Playwright E2E: Visual Regression (MEDIUM — after CI automation)
 
-Playwright screenshot comparison for key views (single-host refine, fleet zones, containerfile panel, responsive breakpoints). Catches CSS regressions and theme rendering bugs that functional tests miss.
+Playwright screenshot comparison for key views (single-host refine, aggregate zones, containerfile panel, responsive breakpoints). Catches CSS regressions and theme rendering bugs that functional tests miss.
 
 ### Playwright E2E: Multi-Browser (MEDIUM — after CI automation)
 
 Add Firefox project to `playwright.config.ts`. Firefox's Gecko engine handles CSS grid/flexbox and keyboard events differently from Chromium, especially relevant for PatternFly 6.
 
-### Fleet Spec 3: Architect
+### Aggregate Spec 3: Architect
 
-Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
+Takes refined aggregate tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
 
 ### ~~CLI UX: Scan Progress Reporting~~ (DONE)
 
