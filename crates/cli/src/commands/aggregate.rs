@@ -267,8 +267,8 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
         .with_context(|| format!("failed to create tarball at {}", tarball_path.display()))?;
 
     // --- Step 8: Output summary ---
-    let fleet_meta = merged.fleet_meta.as_ref();
-    let host_count = fleet_meta.map_or(0, |m| m.host_count);
+    let aggregate_meta = merged.aggregate_meta.as_ref();
+    let host_count = aggregate_meta.map_or(0, |m| m.host_count);
     let pkg_count = merged.rpm.as_ref().map_or(0, |r| r.packages_added.len());
     let config_count = merged.config.as_ref().map_or(0, |c| c.files.len());
     let svc_count = merged
@@ -280,7 +280,7 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
 
     // Report baseline provenance
     if let Some(target_image) = &merged.target_image {
-        let provenance = if let Some(meta) = fleet_meta
+        let provenance = if let Some(meta) = aggregate_meta
             && meta.baseline_provisional
         {
             "provisional"
@@ -293,7 +293,7 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     eprintln!("Merged: {pkg_count} packages, {config_count} config files, {svc_count} services");
 
     if args.verbose
-        && let Some(meta) = fleet_meta
+        && let Some(meta) = aggregate_meta
     {
         eprintln!("Hosts:");
         for hostname in &meta.hostnames {
@@ -681,8 +681,8 @@ fn prepend_containerfile_header(
     header.push_str("# DRAFT — Aggregate Containerfile\n");
     header.push_str("# Requires human review before use\n");
 
-    if let Some(fleet_meta) = &merged.fleet_meta {
-        header.push_str(&format!("# Merged from {} hosts\n", fleet_meta.host_count));
+    if let Some(aggregate_meta) = &merged.aggregate_meta {
+        header.push_str(&format!("# Merged from {} hosts\n", aggregate_meta.host_count));
     }
 
     // Baseline image reference
@@ -691,8 +691,8 @@ fn prepend_containerfile_header(
     }
 
     // Provisionality note
-    if let Some(fleet_meta) = &merged.fleet_meta
-        && fleet_meta.baseline_provisional
+    if let Some(aggregate_meta) = &merged.aggregate_meta
+        && aggregate_meta.baseline_provisional
     {
         header
             .push_str("# NOTE: Baseline selection is provisional — multiple target images were\n");

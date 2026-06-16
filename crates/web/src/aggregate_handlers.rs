@@ -3,13 +3,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Json;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone, VariantSelection};
+use inspectah_core::types::aggregate::{AggregatePrevalence, PrevalenceZone, VariantSelection};
 use inspectah_refine::classify::{
     classify_containers, classify_services, classify_sysctls, classify_tuned,
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    ContentHash, FleetContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
+    ContentHash, AggregateContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,24 +18,24 @@ use std::sync::Arc;
 use crate::handlers::AppState;
 
 // ---------------------------------------------------------------------------
-// DTOs — presentation-layer types for the fleet view JSON response
+// DTOs — presentation-layer types for the aggregate view JSON response
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
-pub struct FleetViewResponse {
+pub struct AggregateViewResponse {
     pub generation: u64,
     pub can_undo: bool,
     pub can_redo: bool,
     pub containerfile_preview: String,
     pub session_is_sensitive: bool,
-    pub summary: FleetSummary,
-    pub sections: Vec<FleetSection>,
+    pub summary: AggregateSummary,
+    pub sections: Vec<AggregateSection>,
     pub repo_groups: Vec<crate::handlers::RepoGroupInfo>,
     pub repo_conflict_count: usize,
 }
 
 #[derive(Serialize)]
-pub struct FleetSummary {
+pub struct AggregateSummary {
     pub host_count: usize,
     pub actionable_variant_items: Vec<ActionableVariantItem>,
     pub informational_variant_count: usize,
@@ -52,26 +52,26 @@ pub struct ActionableVariantItem {
 }
 
 #[derive(Serialize)]
-pub struct FleetSection {
+pub struct AggregateSection {
     pub id: String,
     pub display_name: String,
     pub is_decision_section: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub zones: Option<FleetZones>,
+    pub zones: Option<AggregateZones>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<FleetItem>>,
+    pub items: Option<Vec<AggregateItem>>,
 }
 
 #[derive(Serialize)]
-pub struct FleetZones {
-    pub consensus: FleetZoneGroup,
-    pub near_consensus: FleetZoneGroup,
-    pub divergent: FleetZoneGroup,
+pub struct AggregateZones {
+    pub consensus: AggregateZoneGroup,
+    pub near_consensus: AggregateZoneGroup,
+    pub divergent: AggregateZoneGroup,
 }
 
 #[derive(Serialize)]
-pub struct FleetZoneGroup {
-    pub items: Vec<FleetItem>,
+pub struct AggregateZoneGroup {
+    pub items: Vec<AggregateItem>,
     pub count: usize,
 }
 
@@ -82,23 +82,23 @@ pub struct RepoSourceEntryDto {
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetItem {
+pub struct AggregateItem {
     pub item_id: ItemId,
     pub include: bool,
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
-    pub triage: FleetTriageDto,
-    pub prevalence: FleetPrevalenceDto,
+    pub triage: AggregateTriageDto,
+    pub prevalence: AggregatePrevalenceDto,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub variants: Option<FleetVariants>,
+    pub variants: Option<AggregateVariants>,
     pub source_repo: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo_conflict: Option<Vec<RepoSourceEntryDto>>,
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetTriageDto {
+pub struct AggregateTriageDto {
     pub bucket: String,
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,20 +107,20 @@ pub struct FleetTriageDto {
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetPrevalenceDto {
+pub struct AggregatePrevalenceDto {
     pub count: u32,
     pub total: u32,
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetVariants {
+pub struct AggregateVariants {
     pub count: usize,
     pub selected: String,
-    pub options: Vec<FleetVariantOption>,
+    pub options: Vec<AggregateVariantOption>,
 }
 
 #[derive(Clone, Serialize)]
-pub struct FleetVariantOption {
+pub struct AggregateVariantOption {
     pub hash: String,
     pub hosts: Vec<String>,
     pub host_count: usize,
@@ -128,47 +128,47 @@ pub struct FleetVariantOption {
 }
 
 // ---------------------------------------------------------------------------
-// DTOs — fleet diff endpoint
+// DTOs — aggregate diff endpoint
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-pub struct FleetDiffRequest {
+pub struct AggregateDiffRequest {
     pub item_id: ItemId,
     pub base: String,
     pub target: String,
 }
 
 #[derive(Serialize)]
-pub struct FleetDiffResponse {
+pub struct AggregateDiffResponse {
     pub base_hash: String,
     pub target_hash: String,
     pub base_hosts: Vec<String>,
     pub target_hosts: Vec<String>,
-    pub hunks: Vec<FleetDiffHunk>,
-    pub stats: FleetDiffStats,
+    pub hunks: Vec<AggregateDiffHunk>,
+    pub stats: AggregateDiffStats,
 }
 
 #[derive(Serialize)]
-pub struct FleetDiffHunk {
-    pub base_range: FleetLineRange,
-    pub target_range: FleetLineRange,
-    pub changes: Vec<FleetDiffChange>,
+pub struct AggregateDiffHunk {
+    pub base_range: AggregateLineRange,
+    pub target_range: AggregateLineRange,
+    pub changes: Vec<AggregateDiffChange>,
 }
 
 #[derive(Serialize)]
-pub struct FleetLineRange {
+pub struct AggregateLineRange {
     pub start: usize,
     pub count: usize,
 }
 
 #[derive(Serialize)]
-pub struct FleetDiffChange {
+pub struct AggregateDiffChange {
     pub kind: String,
     pub content: String,
 }
 
 #[derive(Serialize)]
-pub struct FleetDiffStats {
+pub struct AggregateDiffStats {
     pub total_changes: usize,
     pub insertions: usize,
     pub deletions: usize,
@@ -178,22 +178,22 @@ pub struct FleetDiffStats {
 // Handlers
 // ---------------------------------------------------------------------------
 
-pub async fn fleet_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn aggregate_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
-    match session.fleet_context() {
+    match session.aggregate_context() {
         Some(ctx) => {
-            let response = build_fleet_view_response(&session, ctx);
+            let response = build_aggregate_view_response(&session, ctx);
             Json(serde_json::to_value(&response).unwrap()).into_response()
         }
-        None => Json(json!({"error": "not a fleet session"})).into_response(),
+        None => Json(json!({"error": "not an aggregate session"})).into_response(),
     }
 }
 
-pub async fn fleet_diff(
+pub async fn aggregate_diff(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let req: FleetDiffRequest = match serde_json::from_slice(&body) {
+    let req: AggregateDiffRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -268,33 +268,33 @@ pub async fn fleet_diff(
         }
     };
 
-    // Extract host lists from fleet prevalence.
+    // Extract host lists from aggregate prevalence.
     let base_hosts = base_entry
-        .fleet
+        .aggregate
         .as_ref()
         .map(|f| f.hosts.clone())
         .unwrap_or_default();
     let target_hosts = target_entry
-        .fleet
+        .aggregate
         .as_ref()
         .map(|f| f.hosts.clone())
         .unwrap_or_default();
 
     // Compute the diff.
-    let diff_result = match inspectah_refine::fleet::diff::compute_diff(
+    let diff_result = match inspectah_refine::aggregate::diff::compute_diff(
         &base_entry.content,
         &target_entry.content,
         3,
     ) {
         Ok(r) => r,
-        Err(inspectah_refine::fleet::diff::DiffError::BinaryContent) => {
+        Err(inspectah_refine::aggregate::diff::DiffError::BinaryContent) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"error": "binary content cannot be diffed"})),
             )
                 .into_response();
         }
-        Err(inspectah_refine::fleet::diff::DiffError::InputTooLarge) => {
+        Err(inspectah_refine::aggregate::diff::DiffError::InputTooLarge) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"error": "content exceeds size limit for diffing"})),
@@ -304,15 +304,15 @@ pub async fn fleet_diff(
     };
 
     // Map DiffResult to response DTOs.
-    let hunks: Vec<FleetDiffHunk> = diff_result
+    let hunks: Vec<AggregateDiffHunk> = diff_result
         .hunks
         .into_iter()
-        .map(|h| FleetDiffHunk {
-            base_range: FleetLineRange {
+        .map(|h| AggregateDiffHunk {
+            base_range: AggregateLineRange {
                 start: h.base_range.start,
                 count: h.base_range.count,
             },
-            target_range: FleetLineRange {
+            target_range: AggregateLineRange {
                 start: h.target_range.start,
                 count: h.target_range.count,
             },
@@ -320,8 +320,8 @@ pub async fn fleet_diff(
                 .changes
                 .into_iter()
                 .map(|c| {
-                    use inspectah_refine::fleet::diff::ChangeKind;
-                    FleetDiffChange {
+                    use inspectah_refine::aggregate::diff::ChangeKind;
+                    AggregateDiffChange {
                         kind: match c.kind {
                             ChangeKind::Equal => "equal".to_string(),
                             ChangeKind::Delete => "delete".to_string(),
@@ -334,13 +334,13 @@ pub async fn fleet_diff(
         })
         .collect();
 
-    let response = FleetDiffResponse {
+    let response = AggregateDiffResponse {
         base_hash: req.base,
         target_hash: req.target,
         base_hosts,
         target_hosts,
         hunks,
-        stats: FleetDiffStats {
+        stats: AggregateDiffStats {
             total_changes: diff_result.stats.total_changes,
             insertions: diff_result.stats.insertions,
             deletions: diff_result.stats.deletions,
@@ -354,15 +354,15 @@ pub async fn fleet_diff(
 // Response builder
 // ---------------------------------------------------------------------------
 
-fn build_fleet_view_response(session: &RefineSession, ctx: &FleetContext) -> FleetViewResponse {
+fn build_aggregate_view_response(session: &RefineSession, ctx: &AggregateContext) -> AggregateViewResponse {
     let view = session.view();
     let snap = session.snapshot_projected();
-    let sections = build_fleet_sections(session, &snap, ctx);
-    let summary = build_fleet_summary(&snap, ctx, &sections);
+    let sections = build_aggregate_sections(session, &snap, ctx);
+    let summary = build_aggregate_summary(&snap, ctx, &sections);
     let repo_groups = crate::handlers::build_repo_groups(session);
     let repo_conflict_count = ctx.repo_conflicts.len();
 
-    FleetViewResponse {
+    AggregateViewResponse {
         generation: session.generation(),
         can_undo: session.can_undo(),
         can_redo: session.can_redo(),
@@ -379,12 +379,12 @@ fn build_fleet_view_response(session: &RefineSession, ctx: &FleetContext) -> Fle
 // Summary builder
 // ---------------------------------------------------------------------------
 
-fn build_fleet_summary(
+fn build_aggregate_summary(
     snap: &InspectionSnapshot,
-    ctx: &FleetContext,
-    sections: &[FleetSection],
-) -> FleetSummary {
-    let variant_summary = inspectah_refine::fleet::variant_summary(snap, Some(ctx));
+    ctx: &AggregateContext,
+    sections: &[AggregateSection],
+) -> AggregateSummary {
+    let variant_summary = inspectah_refine::aggregate::variant_summary(snap, Some(ctx));
 
     let mut actionable_variant_items = Vec::new();
 
@@ -417,7 +417,7 @@ fn build_fleet_summary(
         .map(|r| (r.leaf_authority_hosts, r.leaf_total_hosts))
         .unwrap_or((None, None));
 
-    FleetSummary {
+    AggregateSummary {
         host_count: ctx.total_hosts,
         actionable_variant_items,
         informational_variant_count,
@@ -427,7 +427,7 @@ fn build_fleet_summary(
 }
 
 /// Iterate over all items in a section regardless of zone/flat layout.
-fn section_items(section: &FleetSection) -> impl Iterator<Item = &FleetItem> {
+fn section_items(section: &AggregateSection) -> impl Iterator<Item = &AggregateItem> {
     let zone_items = section.zones.iter().flat_map(|z| {
         z.consensus
             .items
@@ -443,18 +443,18 @@ fn section_items(section: &FleetSection) -> impl Iterator<Item = &FleetItem> {
 // Section builders
 // ---------------------------------------------------------------------------
 
-fn build_fleet_sections(
+fn build_aggregate_sections(
     session: &RefineSession,
     snap: &InspectionSnapshot,
-    ctx: &FleetContext,
-) -> Vec<FleetSection> {
+    ctx: &AggregateContext,
+) -> Vec<AggregateSection> {
     let view = session.view();
     let mut sections = Vec::new();
 
     // --- Decision sections: packages, configs ---
     // Packages
     if snap.rpm.is_some() {
-        let items: Vec<FleetItem> = view
+        let items: Vec<AggregateItem> = view
             .packages
             .iter()
             .map(|pkg| {
@@ -462,7 +462,7 @@ fn build_fleet_sections(
                     name: pkg.entry.name.clone(),
                     arch: pkg.entry.arch.clone(),
                 };
-                let fp = pkg.entry.fleet.as_ref();
+                let fp = pkg.entry.aggregate.as_ref();
                 let name_arch_key = format!("{}.{}", pkg.entry.name, pkg.entry.arch);
                 let repo_conflict = ctx.repo_conflicts.get(&name_arch_key).map(|entries| {
                     entries
@@ -473,13 +473,13 @@ fn build_fleet_sections(
                         })
                         .collect()
                 });
-                FleetItem {
+                AggregateItem {
                     item_id,
                     include: pkg.entry.include,
                     locked: pkg.entry.locked,
                     attention_reason: None,
                     triage: build_triage_dto(&pkg.triage, fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: pkg.entry.source_repo.clone(),
                     repo_conflict,
@@ -504,13 +504,13 @@ fn build_fleet_sections(
                 .push(entry);
         }
 
-        let items: Vec<FleetItem> = view
+        let items: Vec<AggregateItem> = view
             .config_files
             .iter()
             .filter(|cfg| {
-                // In fleet mode, only emit the Selected variant (or Only) for
+                // In aggregate mode, only emit the Selected variant (or Only) for
                 // each path. Alternative variants are folded into `variants`.
-                use inspectah_core::types::fleet::VariantSelection;
+                use inspectah_core::types::aggregate::VariantSelection;
                 matches!(
                     cfg.entry.variant_selection,
                     VariantSelection::Selected | VariantSelection::Only
@@ -539,7 +539,7 @@ fn build_fleet_sections(
                 let item_id = ItemId::Config {
                     path: cfg.entry.path.clone(),
                 };
-                let fp = cfg.entry.fleet.as_ref();
+                let fp = cfg.entry.aggregate.as_ref();
 
                 // Build variant info if this path has multiple entries.
                 let path_entries = entries_by_path.get(cfg.entry.path.as_str());
@@ -547,13 +547,13 @@ fn build_fleet_sections(
                     .filter(|entries| entries.len() >= 2)
                     .map(|entries| build_variants(entries, cfg));
 
-                FleetItem {
+                AggregateItem {
                     item_id,
                     include: cfg.entry.include,
                     locked: cfg.entry.locked,
                     attention_reason: cfg.entry.attention_reason.clone(),
                     triage: build_triage_dto(&cfg.triage, fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -574,20 +574,20 @@ fn build_fleet_sections(
     {
         let (states, dropins) = classify_services(snap);
 
-        let mut items: Vec<FleetItem> = states
+        let mut items: Vec<AggregateItem> = states
             .iter()
             .map(|s| {
                 let item_id = ItemId::Service {
                     unit: s.entry.unit.clone(),
                 };
-                let fp = s.entry.fleet.as_ref();
-                FleetItem {
+                let fp = s.entry.aggregate.as_ref();
+                AggregateItem {
                     item_id,
                     include: s.entry.include,
                     locked: s.entry.locked,
                     attention_reason: s.entry.attention_reason.clone(),
                     triage: build_triage_dto(&s.triage, fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -621,7 +621,7 @@ fn build_fleet_sections(
                 let item_id = ItemId::DropIn {
                     path: path.to_string(),
                 };
-                let fp = d.entry.fleet.as_ref();
+                let fp = d.entry.aggregate.as_ref();
                 let variants = if group.len() >= 2 {
                     Some(build_content_variants(
                         &group
@@ -630,7 +630,7 @@ fn build_fleet_sections(
                                 (
                                     &d.entry.content,
                                     d.entry.variant_selection,
-                                    d.entry.fleet.as_ref(),
+                                    d.entry.aggregate.as_ref(),
                                 )
                             })
                             .collect::<Vec<_>>(),
@@ -638,13 +638,13 @@ fn build_fleet_sections(
                 } else {
                     None
                 };
-                items.push(FleetItem {
+                items.push(AggregateItem {
                     item_id,
                     include: d.entry.include,
                     locked: d.entry.locked,
                     attention_reason: d.entry.attention_reason.clone(),
                     triage: build_triage_dto(&d.triage, fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -661,7 +661,7 @@ fn build_fleet_sections(
     {
         let (quadlets, flatpaks) = classify_containers(snap);
 
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
 
         // Quadlets: group by path for variant detection (same pattern as drop-ins)
         let mut quadlet_groups: std::collections::BTreeMap<
@@ -689,7 +689,7 @@ fn build_fleet_sections(
                 let item_id = ItemId::Quadlet {
                     path: path.to_string(),
                 };
-                let fp = q.entry.fleet.as_ref();
+                let fp = q.entry.aggregate.as_ref();
                 let variants = if group.len() >= 2 {
                     Some(build_content_variants(
                         &group
@@ -698,7 +698,7 @@ fn build_fleet_sections(
                                 (
                                     &q.entry.content,
                                     q.entry.variant_selection,
-                                    q.entry.fleet.as_ref(),
+                                    q.entry.aggregate.as_ref(),
                                 )
                             })
                             .collect::<Vec<_>>(),
@@ -706,13 +706,13 @@ fn build_fleet_sections(
                 } else {
                     None
                 };
-                items.push(FleetItem {
+                items.push(AggregateItem {
                     item_id,
                     include: q.entry.include,
                     locked: q.entry.locked,
                     attention_reason: None,
                     triage: build_triage_dto(&q.triage, fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -720,21 +720,21 @@ fn build_fleet_sections(
             }
         }
 
-        // Flatpaks: standalone decision items with fleet prevalence from
-        // the merge layer's per-entry FleetPrevalence.
+        // Flatpaks: standalone decision items with aggregate prevalence from
+        // the merge layer's per-entry AggregatePrevalence.
         for f in &flatpaks {
             let item_id = ItemId::Flatpak {
                 app_id: f.entry.app_id.clone(),
                 remote: f.entry.remote.clone(),
                 branch: f.entry.branch.clone(),
             };
-            items.push(FleetItem {
+            items.push(AggregateItem {
                 item_id,
                 include: f.entry.include,
                 locked: f.entry.locked,
                 attention_reason: None,
                 triage: build_triage_dto(&f.triage, None, ctx),
-                prevalence: fleet_prevalence_dto(f.entry.fleet.as_ref(), ctx),
+                prevalence: aggregate_prevalence_dto(f.entry.aggregate.as_ref(), ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -749,9 +749,9 @@ fn build_fleet_sections(
     // Sysctls — classified as decision items with triage tags
     {
         let sysctls = classify_sysctls(snap);
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
 
-        // Group sysctl overrides by key to detect fleet variants.
+        // Group sysctl overrides by key to detect aggregate variants.
         // Each key may have different runtime values across hosts.
         let mut sysctl_groups: std::collections::BTreeMap<
             &str,
@@ -765,17 +765,17 @@ fn build_fleet_sections(
         }
 
         for (key, group) in &sysctl_groups {
-            // Pick the representative: prefer the entry with fleet data
+            // Pick the representative: prefer the entry with aggregate data
             // showing the highest count (majority value), else first.
             let representative = group
                 .iter()
-                .max_by_key(|s| s.entry.fleet.as_ref().map(|f| f.count).unwrap_or(0))
+                .max_by_key(|s| s.entry.aggregate.as_ref().map(|f| f.count).unwrap_or(0))
                 .unwrap_or(&group[0]);
 
             let item_id = ItemId::Sysctl {
                 key: key.to_string(),
             };
-            let fp = representative.entry.fleet.as_ref();
+            let fp = representative.entry.aggregate.as_ref();
 
             // Build variant info using human-readable values (not content hashes).
             let variants = if group.len() >= 2 {
@@ -784,13 +784,13 @@ fn build_fleet_sections(
                 None
             };
 
-            items.push(FleetItem {
+            items.push(AggregateItem {
                 item_id,
                 include: representative.entry.include,
                 locked: representative.entry.locked,
                 attention_reason: None,
                 triage: build_triage_dto(&representative.triage, fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -818,7 +818,7 @@ fn build_fleet_sections(
             .map(|kb| kb.tuned_include)
             .unwrap_or(false);
         // Tuned is a scalar merged via most_prevalent_scalar; no per-item
-        // FleetPrevalence exists. Derive prevalence from tuned_include:
+        // AggregatePrevalence exists. Derive prevalence from tuned_include:
         // - tuned_include=true means the merge layer proved universality
         //   (is_scalar_universal), so count == total_hosts.
         // - tuned_include=false means the profile is NOT universal (or is
@@ -826,19 +826,19 @@ fn build_fleet_sections(
         //   layer, so show 0 to avoid the false "N/N hosts" display.
         let total = ctx.total_hosts as u32;
         let tuned_prevalence_count = if tuned_include { total } else { 0 };
-        let items: Vec<FleetItem> = tuned_selections
+        let items: Vec<AggregateItem> = tuned_selections
             .iter()
             .map(|t| {
                 let item_id = ItemId::TunedSelection {
                     profile: t.active_profile.clone(),
                 };
-                FleetItem {
+                AggregateItem {
                     item_id,
                     include: tuned_include,
                     locked: false,
                     attention_reason: None,
                     triage: build_triage_dto(&t.triage, None, ctx),
-                    prevalence: FleetPrevalenceDto {
+                    prevalence: AggregatePrevalenceDto {
                         count: tuned_prevalence_count,
                         total,
                     },
@@ -856,20 +856,20 @@ fn build_fleet_sections(
 
     // --- Reference sections (read-only, no toggles) ---
     // These sections come from the snapshot, not from RefinedView.
-    // Items have fleet prevalence but no include/exclude toggle.
+    // Items have aggregate prevalence but no include/exclude toggle.
     build_reference_sections(&mut sections, snap, ctx);
 
     sections
 }
 
-/// Build a `FleetSection` from items, zone-grouping when `zones_active`.
+/// Build a `AggregateSection` from items, zone-grouping when `zones_active`.
 fn build_section(
     id: &str,
     display_name: &str,
     is_decision_section: bool,
-    items: &[FleetItem],
-    ctx: &FleetContext,
-) -> FleetSection {
+    items: &[AggregateItem],
+    ctx: &AggregateContext,
+) -> AggregateSection {
     if ctx.zones_active {
         // Group items by zone
         let mut consensus = Vec::new();
@@ -885,20 +885,20 @@ fn build_section(
             }
         }
 
-        FleetSection {
+        AggregateSection {
             id: id.to_string(),
             display_name: display_name.to_string(),
             is_decision_section,
-            zones: Some(FleetZones {
-                consensus: FleetZoneGroup {
+            zones: Some(AggregateZones {
+                consensus: AggregateZoneGroup {
                     count: consensus.len(),
                     items: consensus.into_iter().cloned().collect(),
                 },
-                near_consensus: FleetZoneGroup {
+                near_consensus: AggregateZoneGroup {
                     count: near_consensus.len(),
                     items: near_consensus.into_iter().cloned().collect(),
                 },
-                divergent: FleetZoneGroup {
+                divergent: AggregateZoneGroup {
                     count: divergent.len(),
                     items: divergent.into_iter().cloned().collect(),
                 },
@@ -906,8 +906,8 @@ fn build_section(
             items: None,
         }
     } else {
-        // Fleet-of-2: flat list, no zone grouping
-        FleetSection {
+        // Aggregate-of-2: flat list, no zone grouping
+        AggregateSection {
             id: id.to_string(),
             display_name: display_name.to_string(),
             is_decision_section,
@@ -922,16 +922,16 @@ fn build_section(
 // ---------------------------------------------------------------------------
 
 fn build_reference_sections(
-    sections: &mut Vec<FleetSection>,
+    sections: &mut Vec<AggregateSection>,
     snap: &InspectionSnapshot,
-    ctx: &FleetContext,
+    ctx: &AggregateContext,
 ) {
     // NOTE: Services and containers (quadlets + flatpaks) moved to
-    // build_fleet_sections() as decision items.
+    // build_aggregate_sections() as decision items.
 
     // Compose files — remain as context items (read-only, no toggles).
     if let Some(ref containers) = snap.containers {
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
 
         // Group compose files by path to detect variants.
         let mut compose_groups: std::collections::BTreeMap<
@@ -955,7 +955,7 @@ fn build_reference_sections(
                 let item_id = ItemId::Compose {
                     path: path.to_string(),
                 };
-                let fp = c.fleet.as_ref();
+                let fp = c.aggregate.as_ref();
                 // Compose files don't have a single `content` field; hash
                 // the path + serialized images to produce a stable key.
                 let variants = if group.len() >= 2 {
@@ -963,13 +963,13 @@ fn build_reference_sections(
                 } else {
                     None
                 };
-                items.push(FleetItem {
+                items.push(AggregateItem {
                     item_id,
                     include: c.include,
                     locked: c.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -990,19 +990,19 @@ fn build_reference_sections(
 
     // Network
     if let Some(ref net) = snap.network {
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
         for conn in &net.connections {
             let item_id = ItemId::NMConnection {
                 path: conn.path.clone(),
             };
-            let fp = conn.fleet.as_ref();
-            items.push(FleetItem {
+            let fp = conn.aggregate.as_ref();
+            items.push(AggregateItem {
                 item_id,
                 include: conn.include,
                 locked: conn.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -1012,14 +1012,14 @@ fn build_reference_sections(
             let item_id = ItemId::FirewallZone {
                 path: zone.path.clone(),
             };
-            let fp = zone.fleet.as_ref();
-            items.push(FleetItem {
+            let fp = zone.aggregate.as_ref();
+            items.push(AggregateItem {
                 item_id,
                 include: zone.include,
                 locked: zone.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -1032,21 +1032,21 @@ fn build_reference_sections(
 
     // Storage
     if let Some(ref storage) = snap.storage {
-        let items: Vec<FleetItem> = storage
+        let items: Vec<AggregateItem> = storage
             .fstab_entries
             .iter()
             .map(|entry| {
                 let item_id = ItemId::Fstab {
                     mount_point: entry.mount_point.clone(),
                 };
-                let fp = entry.fleet.as_ref();
-                FleetItem {
+                let fp = entry.aggregate.as_ref();
+                AggregateItem {
                     item_id,
                     include: entry.include,
                     locked: entry.locked,
                     attention_reason: entry.attention_reason.clone(),
                     triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -1060,19 +1060,19 @@ fn build_reference_sections(
 
     // Scheduled tasks
     if let Some(ref sched) = snap.scheduled_tasks {
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
         for cron in &sched.cron_jobs {
             let item_id = ItemId::CronJob {
                 path: cron.path.clone(),
             };
-            let fp = cron.fleet.as_ref();
-            items.push(FleetItem {
+            let fp = cron.aggregate.as_ref();
+            items.push(AggregateItem {
                 item_id,
                 include: cron.include,
                 locked: cron.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -1082,14 +1082,14 @@ fn build_reference_sections(
             let item_id = ItemId::SystemdTimer {
                 name: timer.name.clone(),
             };
-            let fp = timer.fleet.as_ref();
-            items.push(FleetItem {
+            let fp = timer.aggregate.as_ref();
+            items.push(AggregateItem {
                 item_id,
                 include: timer.include,
                 locked: timer.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -1108,21 +1108,21 @@ fn build_reference_sections(
 
     // SELinux
     if let Some(ref selinux) = snap.selinux {
-        let items: Vec<FleetItem> = selinux
+        let items: Vec<AggregateItem> = selinux
             .port_labels
             .iter()
             .map(|port| {
                 let item_id = ItemId::SelinuxPort {
                     protocol_port: format!("{}:{}", port.protocol, port.port),
                 };
-                let fp = port.fleet.as_ref();
-                FleetItem {
+                let fp = port.aggregate.as_ref();
+                AggregateItem {
                     item_id,
                     include: port.include,
                     locked: port.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -1135,21 +1135,21 @@ fn build_reference_sections(
     }
 
     // Kernel & Boot
-    // NOTE: Sysctls moved to build_fleet_sections() as decision items.
+    // NOTE: Sysctls moved to build_aggregate_sections() as decision items.
     if let Some(ref kb) = snap.kernel_boot {
-        let mut items: Vec<FleetItem> = Vec::new();
+        let mut items: Vec<AggregateItem> = Vec::new();
         for module in &kb.loaded_modules {
             let item_id = ItemId::KernelModule {
                 name: module.name.clone(),
             };
-            let fp = module.fleet.as_ref();
-            items.push(FleetItem {
+            let fp = module.aggregate.as_ref();
+            items.push(AggregateItem {
                 item_id,
                 include: module.include,
                 locked: module.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
-                prevalence: fleet_prevalence_dto(fp, ctx),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
@@ -1168,21 +1168,21 @@ fn build_reference_sections(
 
     // Non-RPM Software
     if let Some(ref nonrpm) = snap.non_rpm_software {
-        let items: Vec<FleetItem> = nonrpm
+        let items: Vec<AggregateItem> = nonrpm
             .items
             .iter()
             .map(|entry| {
                 let item_id = ItemId::NonRpm {
                     name: entry.name.clone(),
                 };
-                let fp = entry.fleet.as_ref();
-                FleetItem {
+                let fp = entry.aggregate.as_ref();
+                AggregateItem {
                     item_id,
                     include: entry.include,
                     locked: entry.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
-                    prevalence: fleet_prevalence_dto(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
@@ -1200,7 +1200,7 @@ fn build_reference_sections(
         }
     }
 
-    // NOTE: users_groups is DEFERRED — not included in fleet view
+    // NOTE: users_groups is DEFERRED — not included in aggregate view
     // NOTE: version_changes comes from rpm section diffs, not a standalone section
 }
 
@@ -1210,29 +1210,29 @@ fn build_reference_sections(
 
 fn build_triage_dto(
     tag: &TriageTag,
-    fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
-    ctx: &FleetContext,
-) -> FleetTriageDto {
+    fp: Option<&inspectah_core::types::aggregate::AggregatePrevalence>,
+    ctx: &AggregateContext,
+) -> AggregateTriageDto {
     let bucket = triage_bucket_to_string(tag.bucket());
     let reason = triage_reason_to_string(&tag.primary_reason);
     let zone = match &tag.triage {
-        Triage::Fleet(ft) => {
-            // Derive zone from fleet bucket for wire compat
+        Triage::Aggregate(ft) => {
+            // Derive zone from aggregate bucket for wire compat
             Some(match ft.bucket {
-                inspectah_refine::types::FleetBucket::Investigate => PrevalenceZone::Divergent,
-                inspectah_refine::types::FleetBucket::Divergent => PrevalenceZone::Divergent,
-                inspectah_refine::types::FleetBucket::Partial => PrevalenceZone::NearConsensus,
-                inspectah_refine::types::FleetBucket::Universal => PrevalenceZone::Consensus,
+                inspectah_refine::types::AggregateBucket::Investigate => PrevalenceZone::Divergent,
+                inspectah_refine::types::AggregateBucket::Divergent => PrevalenceZone::Divergent,
+                inspectah_refine::types::AggregateBucket::Partial => PrevalenceZone::NearConsensus,
+                inspectah_refine::types::AggregateBucket::Universal => PrevalenceZone::Consensus,
             })
         }
         Triage::SingleHost(_) => {
-            // Fall back to zone classification from fleet prevalence
-            let z = fp.map(inspectah_core::fleet::classify_zone);
+            // Fall back to zone classification from aggregate prevalence
+            let z = fp.map(inspectah_core::aggregate::classify_zone);
             if ctx.zones_active { z } else { None }
         }
     };
     let prevalence = fp.map(|f| f.count.max(0) as u32).unwrap_or(0);
-    FleetTriageDto {
+    AggregateTriageDto {
         bucket,
         reason,
         zone,
@@ -1241,12 +1241,12 @@ fn build_triage_dto(
 }
 
 fn default_context_triage(
-    fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
-    ctx: &FleetContext,
-) -> FleetTriageDto {
-    let zone = fp.map(inspectah_core::fleet::classify_zone);
+    fp: Option<&inspectah_core::types::aggregate::AggregatePrevalence>,
+    ctx: &AggregateContext,
+) -> AggregateTriageDto {
+    let zone = fp.map(inspectah_core::aggregate::classify_zone);
     let zone = if ctx.zones_active { zone } else { None };
-    FleetTriageDto {
+    AggregateTriageDto {
         bucket: "site".to_string(),
         reason: "context_item".to_string(),
         zone,
@@ -1254,11 +1254,11 @@ fn default_context_triage(
     }
 }
 
-fn fleet_prevalence_dto(
-    fp: Option<&inspectah_core::types::fleet::FleetPrevalence>,
-    ctx: &FleetContext,
-) -> FleetPrevalenceDto {
-    FleetPrevalenceDto {
+fn aggregate_prevalence_dto(
+    fp: Option<&inspectah_core::types::aggregate::AggregatePrevalence>,
+    ctx: &AggregateContext,
+) -> AggregatePrevalenceDto {
+    AggregatePrevalenceDto {
         count: fp.map(|f| f.count.max(0) as u32).unwrap_or(0),
         total: fp
             .map(|f| f.total.max(0) as u32)
@@ -1310,27 +1310,27 @@ fn triage_reason_to_string(reason: &TriageReason) -> String {
 fn build_variants(
     entries: &[&inspectah_core::types::config::ConfigFileEntry],
     selected_cfg: &inspectah_refine::types::RefinedConfig,
-) -> FleetVariants {
-    use inspectah_core::types::fleet::VariantSelection;
+) -> AggregateVariants {
+    use inspectah_core::types::aggregate::VariantSelection;
     use inspectah_refine::types::ContentHash;
 
     let selected_hash = ContentHash::from_content(selected_cfg.entry.content.as_bytes());
 
-    let options: Vec<FleetVariantOption> = entries
+    let options: Vec<AggregateVariantOption> = entries
         .iter()
         .map(|e| {
             let hash = ContentHash::from_content(e.content.as_bytes());
             let is_selected = matches!(e.variant_selection, VariantSelection::Selected)
                 || (matches!(e.variant_selection, VariantSelection::Only) && hash == selected_hash);
-            FleetVariantOption {
+            AggregateVariantOption {
                 hash: hash.as_str().to_string(),
                 hosts: e
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.hosts.clone())
                     .unwrap_or_default(),
                 host_count: e
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as usize)
                     .unwrap_or(0),
@@ -1339,18 +1339,18 @@ fn build_variants(
         })
         .collect();
 
-    FleetVariants {
+    AggregateVariants {
         count: entries.len(),
         selected: selected_hash.as_str().to_string(),
         options,
     }
 }
 
-/// Build read-only `FleetVariants` for context items that have content
-/// (quadlet units, service drop-ins). Each tuple is (content, variant_selection, fleet).
+/// Build read-only `AggregateVariants` for context items that have content
+/// (quadlet units, service drop-ins). Each tuple is (content, variant_selection, aggregate).
 fn build_content_variants(
-    entries: &[(&String, VariantSelection, Option<&FleetPrevalence>)],
-) -> FleetVariants {
+    entries: &[(&String, VariantSelection, Option<&AggregatePrevalence>)],
+) -> AggregateVariants {
     let selected_entry = entries
         .iter()
         .find(|(_, vs, _)| matches!(vs, VariantSelection::Selected | VariantSelection::Only));
@@ -1358,13 +1358,13 @@ fn build_content_variants(
         .map(|(content, _, _)| ContentHash::from_content(content.as_bytes()))
         .unwrap_or_else(|| ContentHash::from_content(entries[0].0.as_bytes()));
 
-    let options: Vec<FleetVariantOption> = entries
+    let options: Vec<AggregateVariantOption> = entries
         .iter()
         .map(|(content, vs, fp)| {
             let hash = ContentHash::from_content(content.as_bytes());
             let is_selected = matches!(vs, VariantSelection::Selected)
                 || (matches!(vs, VariantSelection::Only) && hash == selected_hash);
-            FleetVariantOption {
+            AggregateVariantOption {
                 hash: hash.as_str().to_string(),
                 hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
@@ -1373,19 +1373,19 @@ fn build_content_variants(
         })
         .collect();
 
-    FleetVariants {
+    AggregateVariants {
         count: entries.len(),
         selected: selected_hash.as_str().to_string(),
         options,
     }
 }
 
-/// Build read-only `FleetVariants` for compose files. Compose files lack a
+/// Build read-only `AggregateVariants` for compose files. Compose files lack a
 /// single `content` field, so we hash `path + serialized images` to produce
 /// a stable content identity.
 fn build_compose_variants(
     entries: &[&inspectah_core::types::containers::ComposeFile],
-) -> FleetVariants {
+) -> AggregateVariants {
     fn compose_hash(c: &inspectah_core::types::containers::ComposeFile) -> ContentHash {
         let mut key = c.path.clone();
         for svc in &c.images {
@@ -1407,21 +1407,21 @@ fn build_compose_variants(
         .map(|c| compose_hash(c))
         .unwrap_or_else(|| compose_hash(entries[0]));
 
-    let options: Vec<FleetVariantOption> = entries
+    let options: Vec<AggregateVariantOption> = entries
         .iter()
         .map(|c| {
             let hash = compose_hash(c);
             let is_selected = matches!(c.variant_selection, VariantSelection::Selected)
                 || (matches!(c.variant_selection, VariantSelection::Only) && hash == selected_hash);
-            FleetVariantOption {
+            AggregateVariantOption {
                 hash: hash.as_str().to_string(),
                 hosts: c
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.hosts.clone())
                     .unwrap_or_default(),
                 host_count: c
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as usize)
                     .unwrap_or(0),
@@ -1430,42 +1430,42 @@ fn build_compose_variants(
         })
         .collect();
 
-    FleetVariants {
+    AggregateVariants {
         count: entries.len(),
         selected: selected_hash.as_str().to_string(),
         options,
     }
 }
 
-/// Build `FleetVariants` for sysctl overrides using human-readable runtime
+/// Build `AggregateVariants` for sysctl overrides using human-readable runtime
 /// values as the variant identifier instead of content hashes. Sysctl values
 /// are short scalars (e.g. "10", "4096"), so displaying the actual value is
 /// more useful than an opaque hash.
-fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) -> FleetVariants {
+fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) -> AggregateVariants {
     // Use runtime value as the "hash" key so the frontend shows
     // "10 (45 hosts)" vs "60 (5 hosts)" instead of content hashes.
     let selected_entry = entries
         .iter()
-        .max_by_key(|s| s.entry.fleet.as_ref().map(|f| f.count).unwrap_or(0));
+        .max_by_key(|s| s.entry.aggregate.as_ref().map(|f| f.count).unwrap_or(0));
     let selected_key = selected_entry
         .map(|s| s.entry.runtime.clone())
         .unwrap_or_else(|| entries[0].entry.runtime.clone());
 
-    let options: Vec<FleetVariantOption> = entries
+    let options: Vec<AggregateVariantOption> = entries
         .iter()
         .map(|s| {
             let is_selected = s.entry.runtime == selected_key;
-            FleetVariantOption {
+            AggregateVariantOption {
                 hash: s.entry.runtime.clone(),
                 hosts: s
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.hosts.clone())
                     .unwrap_or_default(),
                 host_count: s
                     .entry
-                    .fleet
+                    .aggregate
                     .as_ref()
                     .map(|f| f.count.max(0) as usize)
                     .unwrap_or(0),
@@ -1474,7 +1474,7 @@ fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) ->
         })
         .collect();
 
-    FleetVariants {
+    AggregateVariants {
         count: entries.len(),
         selected: selected_key,
         options,
@@ -1486,21 +1486,21 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, HashMap};
 
-    /// Fleet handlers must read the stored `include` value from snapshot entries,
+    /// Aggregate handlers must read the stored `include` value from snapshot entries,
     /// NOT recompute it from prevalence.  This test builds an NMConnection with
     /// `include: true` but non-universal prevalence (2 of 5 hosts).  The deleted
-    /// `fleet_include_default` function would have returned `false` for this
+    /// `aggregate_include_default` function would have returned `false` for this
     /// prevalence — if the handler still recomputes, this test catches it.
     #[test]
-    fn fleet_handlers_use_stored_include_not_recomputed() {
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+    fn aggregate_handlers_use_stored_include_not_recomputed() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use inspectah_core::types::network::{NMConnection, NetworkSection};
 
         // Build a snapshot with one NMConnection: include=true, prevalence=2/5.
         let conn = NMConnection {
             path: "/etc/NetworkManager/test.nmconnection".to_string(),
             include: true, // stored value — should pass through
-            fleet: Some(FleetPrevalence {
+            aggregate: Some(AggregatePrevalence {
                 count: 2,
                 total: 5,
                 hosts: vec!["host-a".into(), "host-b".into()],
@@ -1519,9 +1519,9 @@ mod tests {
             ..Default::default()
         };
 
-        let ctx = FleetContext {
-            fleet_meta: FleetSnapshotMeta {
-                label: "test-fleet".to_string(),
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test-aggregate".to_string(),
                 host_count: 5,
                 hostnames: vec![
                     "host-a".into(),
@@ -1557,18 +1557,18 @@ mod tests {
         assert_eq!(items.len(), 1);
 
         // The critical assertion: include must be true (stored value),
-        // not false (which fleet_include_default would have returned for 2/5).
+        // not false (which aggregate_include_default would have returned for 2/5).
         assert!(
             items[0].include,
-            "fleet handler must use stored include value (true), \
+            "aggregate handler must use stored include value (true), \
              not recompute from prevalence (which would be false for 2/5 hosts)"
         );
     }
 
     #[test]
-    fn fleet_flatpak_prevalence_plumbed() {
+    fn aggregate_flatpak_prevalence_plumbed() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use inspectah_refine::session::RefineSession;
 
         let app = FlatpakApp {
@@ -1577,7 +1577,7 @@ mod tests {
             branch: "stable".into(),
             include: true,
             remote: "flathub".into(),
-            fleet: Some(FleetPrevalence {
+            aggregate: Some(AggregatePrevalence {
                 count: 2,
                 total: 3,
                 hosts: vec!["host-a".into(), "host-b".into()],
@@ -1597,9 +1597,9 @@ mod tests {
 
         let session = RefineSession::new(snap.clone());
 
-        let ctx = FleetContext {
-            fleet_meta: FleetSnapshotMeta {
-                label: "test-fleet".to_string(),
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test-aggregate".to_string(),
                 host_count: 3,
                 hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
                 merged_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1612,7 +1612,7 @@ mod tests {
             repo_conflicts: HashMap::new(),
         };
 
-        let sections = build_fleet_sections(&session, &snap, &ctx);
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
 
         let container_section = sections
             .iter()
@@ -1631,14 +1631,14 @@ mod tests {
 
         assert_eq!(
             flatpak_item.prevalence.count, 2,
-            "flatpak prevalence count must come from fleet data, not be zero"
+            "flatpak prevalence count must come from aggregate data, not be zero"
         );
         assert_eq!(flatpak_item.prevalence.total, 3);
     }
 
     #[test]
-    fn fleet_tuned_prevalence_reflects_universality() {
-        use inspectah_core::types::fleet::FleetSnapshotMeta;
+    fn aggregate_tuned_prevalence_reflects_universality() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use inspectah_core::types::kernelboot::KernelBootSection;
         use inspectah_refine::session::RefineSession;
 
@@ -1655,9 +1655,9 @@ mod tests {
 
         let session = RefineSession::new(snap.clone());
 
-        let ctx = FleetContext {
-            fleet_meta: FleetSnapshotMeta {
-                label: "test-fleet".to_string(),
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test-aggregate".to_string(),
                 host_count: 3,
                 hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
                 merged_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1670,7 +1670,7 @@ mod tests {
             repo_conflicts: HashMap::new(),
         };
 
-        let sections = build_fleet_sections(&session, &snap, &ctx);
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
 
         let tuned_section = sections
             .iter()
@@ -1702,7 +1702,7 @@ mod tests {
 
         let session_partial = RefineSession::new(snap_partial.clone());
 
-        let sections_partial = build_fleet_sections(&session_partial, &snap_partial, &ctx);
+        let sections_partial = build_aggregate_sections(&session_partial, &snap_partial, &ctx);
 
         let tuned_section_partial = sections_partial
             .iter()
