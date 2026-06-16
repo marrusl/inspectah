@@ -1,11 +1,11 @@
 use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
-use inspectah_core::fleet::manifest::FleetManifest;
-use inspectah_core::fleet::merge_snapshots;
-use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning};
+use inspectah_core::aggregate::manifest::AggregateManifest;
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use std::collections::HashMap;
@@ -50,10 +50,10 @@ fn test_merge_two_minimal_snapshots() {
     let (merged, warnings) = merge_snapshots(vec![s1, s2], None).unwrap();
 
     assert_eq!(merged.schema_version, SCHEMA_VERSION);
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.host_count, 2);
     assert_eq!(meta.hostnames, vec!["host-a", "host-b"]);
-    assert_eq!(meta.label, "fleet");
+    assert_eq!(meta.label, "aggregate");
     assert!(!meta.merged_at.is_empty());
     assert!(warnings.is_empty());
 }
@@ -66,7 +66,7 @@ fn test_merge_sorts_by_hostname() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
 
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.hostnames, vec!["alpha", "middle", "zebra"]);
 }
 
@@ -74,7 +74,7 @@ fn test_merge_sorts_by_hostname() {
 fn test_merge_with_manifest_label() {
     let s1 = make_snap("host-a");
     let s2 = make_snap("host-b");
-    let manifest = FleetManifest {
+    let manifest = AggregateManifest {
         label: Some("web-tier".into()),
         target_image: None,
         sources: vec![],
@@ -82,7 +82,7 @@ fn test_merge_with_manifest_label() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2], Some(&manifest)).unwrap();
 
-    assert_eq!(merged.fleet_meta.as_ref().unwrap().label, "web-tier");
+    assert_eq!(merged.aggregate_meta.as_ref().unwrap().label, "web-tier");
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ fn test_merge_rejects_single_snapshot() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { .. }))
+            .any(|e| matches!(e, AggregateValidationError::TooFewSnapshots { .. }))
     );
 }
 
@@ -115,7 +115,7 @@ fn test_merge_rejects_schema_mismatch() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. }))
+            .any(|e| matches!(e, AggregateValidationError::SchemaVersionMismatch { .. }))
     );
 }
 
@@ -139,18 +139,18 @@ fn test_merge_selects_most_common_target_image() {
     assert!(
         warnings
             .iter()
-            .any(|w| matches!(w, FleetWarning::BaselineConflict { .. }))
+            .any(|w| matches!(w, AggregateWarning::BaselineConflict { .. }))
     );
 
     // baseline_provisional should be true since there were conflicts
-    assert!(merged.fleet_meta.as_ref().unwrap().baseline_provisional);
+    assert!(merged.aggregate_meta.as_ref().unwrap().baseline_provisional);
 }
 
 #[test]
 fn test_merge_manifest_target_image_override() {
     let s1 = make_snap_with_target("host-a", "quay.io/rhel:9.3");
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
-    let manifest = FleetManifest {
+    let manifest = AggregateManifest {
         label: None,
         target_image: Some("registry.redhat.io/rhel9/rhel-bootc:9.6".into()),
         sources: vec![],
@@ -161,7 +161,7 @@ fn test_merge_manifest_target_image_override() {
     let ti = merged.target_image.unwrap();
     assert_eq!(ti.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     assert_eq!(ti.strategy, ResolutionStrategy::CliOverride);
-    assert!(!merged.fleet_meta.as_ref().unwrap().baseline_provisional);
+    assert!(!merged.aggregate_meta.as_ref().unwrap().baseline_provisional);
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn test_merge_unanimous_target_not_provisional() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
 
-    assert!(!merged.fleet_meta.as_ref().unwrap().baseline_provisional);
+    assert!(!merged.aggregate_meta.as_ref().unwrap().baseline_provisional);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ fn test_merge_section_host_counts() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
 
-    let counts = &merged.fleet_meta.as_ref().unwrap().section_host_counts;
+    let counts = &merged.aggregate_meta.as_ref().unwrap().section_host_counts;
     assert_eq!(counts.get("rpm"), Some(&2));
     assert_eq!(counts.get("config"), Some(&1));
 }
@@ -390,7 +390,7 @@ fn test_merge_rpm_section_flows_through() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
+    assert_eq!(httpd.aggregate.as_ref().unwrap().count, 2);
 }
 
 #[test]
@@ -446,6 +446,6 @@ fn test_merged_snapshot_serializes_and_deserializes() {
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
 
     assert_eq!(parsed.schema_version, SCHEMA_VERSION);
-    assert!(parsed.fleet_meta.is_some());
-    assert_eq!(parsed.fleet_meta.as_ref().unwrap().host_count, 2);
+    assert!(parsed.aggregate_meta.is_some());
+    assert_eq!(parsed.aggregate_meta.as_ref().unwrap().host_count, 2);
 }

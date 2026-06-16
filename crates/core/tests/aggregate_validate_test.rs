@@ -1,4 +1,4 @@
-use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning, validate_snapshots};
+use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning, validate_snapshots};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::os::{OsRelease, SystemType};
 
@@ -50,7 +50,7 @@ fn test_too_few_snapshots_zero() {
         result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 0 }))
+            .any(|e| matches!(e, AggregateValidationError::TooFewSnapshots { count: 0 }))
     );
 }
 
@@ -62,7 +62,7 @@ fn test_too_few_snapshots_one() {
         result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 1 }))
+            .any(|e| matches!(e, AggregateValidationError::TooFewSnapshots { count: 1 }))
     );
 }
 
@@ -75,7 +75,7 @@ fn test_two_snapshots_is_enough() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { .. })),
+            .any(|e| matches!(e, AggregateValidationError::TooFewSnapshots { .. })),
         "2 snapshots should not trigger TooFewSnapshots"
     );
 }
@@ -89,7 +89,7 @@ fn test_schema_version_mismatch() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::SchemaVersionMismatch { versions }
+        AggregateValidationError::SchemaVersionMismatch { versions }
         if *versions == vec![14, 15]
     )));
 }
@@ -104,7 +104,7 @@ fn test_schema_version_match_ok() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. })),
+            .any(|e| matches!(e, AggregateValidationError::SchemaVersionMismatch { .. })),
         "matching schema versions should not trigger error"
     );
 }
@@ -116,7 +116,7 @@ fn test_duplicate_hostname() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::DuplicateHostname { hostname }
+        AggregateValidationError::DuplicateHostname { hostname }
         if hostname == "web-01"
     )));
 }
@@ -130,7 +130,7 @@ fn test_unique_hostnames_ok() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::DuplicateHostname { .. })),
+            .any(|e| matches!(e, AggregateValidationError::DuplicateHostname { .. })),
         "unique hostnames should not trigger error"
     );
 }
@@ -142,7 +142,7 @@ fn test_architecture_mismatch() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::ArchitectureMismatch { architectures }
+        AggregateValidationError::ArchitectureMismatch { architectures }
         if architectures.len() == 2
     )));
 }
@@ -156,7 +156,7 @@ fn test_architecture_match_ok() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. })),
+            .any(|e| matches!(e, AggregateValidationError::ArchitectureMismatch { .. })),
         "matching architectures should not trigger error"
     );
 }
@@ -168,7 +168,7 @@ fn test_os_major_version_mismatch() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::OsMajorVersionMismatch { versions }
+        AggregateValidationError::OsMajorVersionMismatch { versions }
         if *versions == vec!["8".to_string(), "9".to_string()]
     )));
 }
@@ -182,7 +182,7 @@ fn test_os_major_version_match_ok() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::OsMajorVersionMismatch { .. })),
+            .any(|e| matches!(e, AggregateValidationError::OsMajorVersionMismatch { .. })),
         "same major version should not trigger error"
     );
 }
@@ -197,7 +197,7 @@ fn test_empty_snapshot_detected() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::EmptySnapshot { hostname }
+        AggregateValidationError::EmptySnapshot { hostname }
         if hostname == "host-1"
     )));
 }
@@ -211,7 +211,7 @@ fn test_non_empty_snapshot_ok() {
         !result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::EmptySnapshot { .. })),
+            .any(|e| matches!(e, AggregateValidationError::EmptySnapshot { .. })),
         "snapshot with rpm section should not be empty"
     );
 }
@@ -227,7 +227,7 @@ fn test_minor_version_spread_warning() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.warnings.iter().any(|w| matches!(
         w,
-        FleetWarning::MinorVersionSpread { versions }
+        AggregateWarning::MinorVersionSpread { versions }
         if versions.len() == 2
     )));
 }
@@ -241,7 +241,7 @@ fn test_no_minor_version_spread_when_same() {
         !result
             .warnings
             .iter()
-            .any(|w| matches!(w, FleetWarning::MinorVersionSpread { .. })),
+            .any(|w| matches!(w, AggregateWarning::MinorVersionSpread { .. })),
         "same version should not trigger minor version spread"
     );
 }
@@ -255,7 +255,7 @@ fn test_system_type_mismatch_warning() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.warnings.iter().any(|w| matches!(
         w,
-        FleetWarning::SystemTypeMismatch { types }
+        AggregateWarning::SystemTypeMismatch { types }
         if types.len() == 2
     )));
 }
@@ -271,7 +271,7 @@ fn test_no_system_type_mismatch_when_same() {
         !result
             .warnings
             .iter()
-            .any(|w| matches!(w, FleetWarning::SystemTypeMismatch { .. })),
+            .any(|w| matches!(w, AggregateWarning::SystemTypeMismatch { .. })),
         "same system type should not trigger warning"
     );
 }
@@ -297,7 +297,7 @@ fn test_baseline_conflict_warning() {
     });
     let result = validate_snapshots(&[a, b, c]);
     assert!(result.warnings.iter().any(|w| match w {
-        FleetWarning::BaselineConflict {
+        AggregateWarning::BaselineConflict {
             distribution,
             selected,
         } => {
@@ -325,7 +325,7 @@ fn test_no_baseline_conflict_when_same() {
         !result
             .warnings
             .iter()
-            .any(|w| matches!(w, FleetWarning::BaselineConflict { .. })),
+            .any(|w| matches!(w, AggregateWarning::BaselineConflict { .. })),
         "same target image should not trigger baseline conflict"
     );
 }
@@ -345,7 +345,7 @@ fn test_stale_scan_dates_warning() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.warnings.iter().any(|w| matches!(
         w,
-        FleetWarning::StaleScanDates { spread_description }
+        AggregateWarning::StaleScanDates { spread_description }
         if spread_description.contains("2026-01-01") && spread_description.contains("2026-03-15")
     )));
 }
@@ -368,7 +368,7 @@ fn test_no_stale_scan_dates_when_same() {
         !result
             .warnings
             .iter()
-            .any(|w| matches!(w, FleetWarning::StaleScanDates { .. })),
+            .any(|w| matches!(w, AggregateWarning::StaleScanDates { .. })),
         "same timestamps should not trigger stale scan warning"
     );
 }
@@ -378,15 +378,15 @@ fn test_no_stale_scan_dates_when_same() {
 // ===========================================================================
 
 #[test]
-fn test_valid_fleet_passes_cleanly() {
+fn test_valid_aggregate_passes_cleanly() {
     let a = make_snap("host-1", "9.4");
     let b = make_snap("host-2", "9.4");
     let result = validate_snapshots(&[a, b]);
-    assert!(result.is_ok(), "valid fleet should have no errors");
+    assert!(result.is_ok(), "valid aggregate should have no errors");
     // MinorVersionSpread should not fire since both are 9.4
     assert!(
         result.warnings.is_empty(),
-        "valid fleet should have no warnings"
+        "valid aggregate should have no warnings"
     );
 }
 
@@ -426,19 +426,19 @@ fn test_multiple_errors_reported() {
         result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. }))
+            .any(|e| matches!(e, AggregateValidationError::SchemaVersionMismatch { .. }))
     );
     assert!(
         result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::DuplicateHostname { .. }))
+            .any(|e| matches!(e, AggregateValidationError::DuplicateHostname { .. }))
     );
     assert!(
         result
             .errors
             .iter()
-            .any(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. }))
+            .any(|e| matches!(e, AggregateValidationError::ArchitectureMismatch { .. }))
     );
 }
 
@@ -464,7 +464,7 @@ fn test_missing_hostname_defaults_to_unknown() {
     // Both have "<unknown>" hostname, so duplicate should fire
     assert!(result.errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::DuplicateHostname { hostname }
+        AggregateValidationError::DuplicateHostname { hostname }
         if hostname == "<unknown>"
     )));
 }

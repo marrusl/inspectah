@@ -1,9 +1,9 @@
-use inspectah_core::fleet::classify_zone;
-use inspectah_core::types::fleet::{FleetPrevalence, PrevalenceZone};
+use inspectah_core::aggregate::classify_zone;
+use inspectah_core::types::aggregate::{AggregatePrevalence, PrevalenceZone};
 
 #[test]
 fn consensus_when_all_hosts() {
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 5,
         total: 5,
         hosts: vec![],
@@ -14,7 +14,7 @@ fn consensus_when_all_hosts() {
 
 #[test]
 fn near_consensus_at_exactly_half() {
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 5,
         total: 10,
         hosts: vec![],
@@ -26,7 +26,7 @@ fn near_consensus_at_exactly_half() {
 #[test]
 fn near_consensus_above_half_odd() {
     // 3/5 = 60%, count*2=6 >= total=5 → NearConsensus
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 3,
         total: 5,
         hosts: vec![],
@@ -38,7 +38,7 @@ fn near_consensus_above_half_odd() {
 #[test]
 fn divergent_below_half() {
     // 2/5 = 40%, count*2=4 < total=5 → Divergent
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 2,
         total: 5,
         hosts: vec![],
@@ -49,7 +49,7 @@ fn divergent_below_half() {
 
 #[test]
 fn divergent_single_host_of_twenty() {
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 1,
         total: 20,
         hosts: vec![],
@@ -60,7 +60,7 @@ fn divergent_single_host_of_twenty() {
 
 #[test]
 fn consensus_when_count_equals_total_min_case() {
-    let fp = FleetPrevalence {
+    let fp = AggregatePrevalence {
         count: 1,
         total: 1,
         hosts: vec![],

@@ -2122,17 +2122,17 @@ mod tests {
         assert_eq!(chrony_entries.len(), 2, "should have 2 content variants");
 
         for entry in &chrony_entries {
-            let fleet = entry.fleet.as_ref().expect("should have fleet prevalence");
+            let agg = entry.aggregate.as_ref().expect("should have aggregate prevalence");
             // Per-variant: each has 1 host
-            assert_eq!(fleet.count, 1, "per-variant count should be 1");
-            assert_eq!(fleet.total, 3, "total should be 3");
+            assert_eq!(agg.count, 1, "per-variant count should be 1");
+            assert_eq!(agg.total, 3, "total should be 3");
             // Aggregate: union of both variants = 2 hosts
             assert_eq!(
-                fleet.aggregate_count,
+                agg.aggregate_count,
                 Some(2),
                 "aggregate count should be 2"
             );
-            let agg_hosts = fleet
+            let agg_hosts = agg
                 .aggregate_hosts
                 .as_ref()
                 .expect("should have aggregate hosts");
@@ -2272,9 +2272,9 @@ mod tests {
 
         // Each distinct identity appears on exactly 1 of 2 hosts
         for app in &merged.flatpak_apps {
-            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
-            assert_eq!(fleet.count, 1);
-            assert_eq!(fleet.total, 2);
+            let agg = app.aggregate.as_ref().expect("flatpak should have aggregate data");
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
         }
     }
 
@@ -2318,14 +2318,14 @@ mod tests {
             "same (app_id, remote, branch) must collapse despite different remote_url"
         );
 
-        let fleet = merged.flatpak_apps[0]
-            .fleet
+        let agg = merged.flatpak_apps[0]
+            .aggregate
             .as_ref()
-            .expect("merged flatpak should have fleet data");
-        assert_eq!(fleet.count, 2, "present on both hosts");
-        assert_eq!(fleet.total, 2);
-        assert!(fleet.hosts.contains(&"host-a".to_string()));
-        assert!(fleet.hosts.contains(&"host-b".to_string()));
+            .expect("merged flatpak should have aggregate data");
+        assert_eq!(agg.count, 2, "present on both hosts");
+        assert_eq!(agg.total, 2);
+        assert!(agg.hosts.contains(&"host-a".to_string()));
+        assert!(agg.hosts.contains(&"host-b".to_string()));
     }
 
     #[test]
@@ -2367,18 +2367,18 @@ mod tests {
 
         // Each branch variant appears on exactly 1 of 2 hosts
         for app in &merged.flatpak_apps {
-            let fleet = app.fleet.as_ref().expect("flatpak should have fleet data");
-            assert_eq!(fleet.count, 1);
-            assert_eq!(fleet.total, 2);
+            let agg = app.aggregate.as_ref().expect("flatpak should have aggregate data");
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
         }
     }
 
     // -----------------------------------------------------------------------
-    // Fleet aggregate narrowing tests (Task 11)
+    // Aggregate narrowing tests (Task 11)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn fleet_merge_non_universal_quadlet_excluded() {
+    fn aggregate_merge_non_universal_quadlet_excluded() {
         use crate::types::containers::{ContainerSection, QuadletUnit};
 
         // Quadlet appears on 2 of 3 hosts
@@ -2409,14 +2409,14 @@ mod tests {
 
         assert_eq!(merged.quadlet_units.len(), 1);
         let q = &merged.quadlet_units[0];
-        let fleet = q.fleet.as_ref().expect("should have fleet data");
-        assert_eq!(fleet.count, 2);
-        assert_eq!(fleet.total, 3);
+        let agg = q.aggregate.as_ref().expect("should have aggregate data");
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 3);
         assert!(!q.include, "non-universal quadlet must have include=false");
     }
 
     #[test]
-    fn fleet_merge_universal_quadlet_included() {
+    fn aggregate_merge_universal_quadlet_included() {
         use crate::types::containers::{ContainerSection, QuadletUnit};
 
         // Quadlet appears on all 3 hosts
@@ -2437,14 +2437,14 @@ mod tests {
 
         assert_eq!(merged.quadlet_units.len(), 1);
         let q = &merged.quadlet_units[0];
-        let fleet = q.fleet.as_ref().expect("should have fleet data");
-        assert_eq!(fleet.count, 3);
-        assert_eq!(fleet.total, 3);
+        let agg = q.aggregate.as_ref().expect("should have aggregate data");
+        assert_eq!(agg.count, 3);
+        assert_eq!(agg.total, 3);
         assert!(q.include, "universal quadlet must have include=true");
     }
 
     #[test]
-    fn fleet_merge_tuned_universal_stock_excluded() {
+    fn aggregate_merge_tuned_universal_stock_excluded() {
         use crate::types::kernelboot::KernelBootSection;
 
         // All 3 hosts have virtual-guest (stock profile)
@@ -2467,7 +2467,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_merge_tuned_universal_custom_included() {
+    fn aggregate_merge_tuned_universal_custom_included() {
         use crate::types::kernelboot::KernelBootSection;
 
         // All 3 hosts have my-custom-profile
@@ -2490,7 +2490,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_merge_tuned_non_universal_custom_excluded() {
+    fn aggregate_merge_tuned_non_universal_custom_excluded() {
         use crate::types::kernelboot::KernelBootSection;
 
         // 2 of 3 hosts have my-custom-profile, 1 has something else
@@ -2521,7 +2521,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_merge_narrowing_applies_to_all_item_types() {
+    fn aggregate_merge_narrowing_applies_to_all_item_types() {
         // Verify narrowing works generically through merge_items
         // by testing with PackageEntry (non-variant type)
         let items: Vec<(usize, PackageEntry)> = vec![
@@ -2559,7 +2559,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_merge_narrowing_universal_item_stays_included() {
+    fn aggregate_merge_narrowing_universal_item_stays_included() {
         // All 3 hosts have the same package
         let items: Vec<(usize, PackageEntry)> = vec![
             (
@@ -2657,7 +2657,7 @@ mod tests {
             .find(|p| p.name == "vim")
             .expect("vim should survive leaf filter");
         assert!(vim.include, "universal leaf vim must have include=true");
-        assert_eq!(vim.fleet.as_ref().unwrap().count, 3);
+        assert_eq!(vim.aggregate.as_ref().unwrap().count, 3);
 
         // htop: partial leaf (2/3 hosts) → present with include=false
         let htop = merged
@@ -2669,7 +2669,7 @@ mod tests {
             !htop.include,
             "partial leaf htop must have include=false (narrow_non_universal)"
         );
-        assert_eq!(htop.fleet.as_ref().unwrap().count, 2);
+        assert_eq!(htop.aggregate.as_ref().unwrap().count, 2);
 
         // glibc: transitive on all hosts (not a leaf anywhere) → filtered out
         let glibc = merged.packages_added.iter().find(|p| p.name == "glibc");

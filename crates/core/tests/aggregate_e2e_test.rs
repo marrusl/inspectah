@@ -1,18 +1,18 @@
-//! End-to-end integration tests for fleet aggregate.
+//! End-to-end integration tests for aggregate merge.
 //!
 //! Exercises the full merge_snapshots() pipeline with rich, multi-section
-//! snapshots. Builds on the unit-level tests in fleet_merge_test.rs,
-//! fleet_validate_test.rs, and fleet_orchestrator_test.rs by combining
+//! snapshots. Builds on the unit-level tests in aggregate_merge_test.rs,
+//! aggregate_validate_test.rs, and aggregate_orchestrator_test.rs by combining
 //! multiple populated sections per host and verifying cross-cutting
-//! invariants (prevalence totals, variant selection, fleet_meta, baseline
+//! invariants (prevalence totals, variant selection, aggregate_meta, baseline
 //! provisionality, deterministic output, validation errors).
 
 use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
-use inspectah_core::fleet::merge_snapshots;
-use inspectah_core::fleet::validate::FleetValidationError;
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::aggregate::validate::AggregateValidationError;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::services::{
@@ -89,7 +89,7 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
             include: true,
             locked: false,
             owning_package: None,
-            fleet: None,
+            aggregate: None,
             attention_reason: None,
         })
         .collect();
@@ -109,7 +109,7 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
 #[test]
 fn test_e2e_three_hosts_shared_packages_config_variants() {
     // Setup: 3 hosts, all share httpd, two share nginx, one has unique postgres.
-    // Config /etc/app.conf has two variants across the fleet.
+    // Config /etc/app.conf has two variants across the aggregate.
     let mut s1 = make_rich_snap("web-01", "9.4");
     with_rpms(&mut s1, &["httpd", "nginx"]);
     with_configs(&mut s1, &[("/etc/app.conf", "version=1")]);
@@ -127,15 +127,15 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
 
     let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
 
-    // fleet_meta populated correctly
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    // aggregate_meta populated correctly
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.host_count, 3);
     assert_eq!(
         meta.hostnames,
         vec!["web-01", "web-02", "web-03"],
         "hostnames should be sorted"
     );
-    assert_eq!(meta.label, "fleet");
+    assert_eq!(meta.label, "aggregate");
 
     // section_host_counts reflects which hosts had each section
     assert_eq!(meta.section_host_counts.get("rpm"), Some(&3));
@@ -149,27 +149,27 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
         .iter()
         .find(|p| p.name == "httpd")
         .expect("httpd should be in merged RPMs");
-    let httpd_fleet = httpd.fleet.as_ref().unwrap();
-    assert_eq!(httpd_fleet.count, 3);
-    assert_eq!(httpd_fleet.total, 3);
+    let httpd_agg = httpd.aggregate.as_ref().unwrap();
+    assert_eq!(httpd_agg.count, 3);
+    assert_eq!(httpd_agg.total, 3);
 
     let nginx = rpm
         .packages_added
         .iter()
         .find(|p| p.name == "nginx")
         .expect("nginx should be in merged RPMs");
-    let nginx_fleet = nginx.fleet.as_ref().unwrap();
-    assert_eq!(nginx_fleet.count, 2);
-    assert_eq!(nginx_fleet.total, 3);
+    let nginx_agg = nginx.aggregate.as_ref().unwrap();
+    assert_eq!(nginx_agg.count, 2);
+    assert_eq!(nginx_agg.total, 3);
 
     let postgres = rpm
         .packages_added
         .iter()
         .find(|p| p.name == "postgres")
         .expect("postgres should be in merged RPMs");
-    let postgres_fleet = postgres.fleet.as_ref().unwrap();
-    assert_eq!(postgres_fleet.count, 1);
-    assert_eq!(postgres_fleet.total, 3);
+    let postgres_agg = postgres.aggregate.as_ref().unwrap();
+    assert_eq!(postgres_agg.count, 1);
+    assert_eq!(postgres_agg.total, 3);
 
     // Config variant selection: /etc/app.conf has 2 variants.
     // "version=1" on 2 hosts => Selected, "version=2" on 1 host => Alternative.
@@ -189,9 +189,9 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
         VariantSelection::Selected,
         "majority variant should be Selected"
     );
-    let v1_fleet = v1_entries[0].fleet.as_ref().unwrap();
-    assert_eq!(v1_fleet.count, 2);
-    assert_eq!(v1_fleet.total, 3);
+    let v1_agg = v1_entries[0].aggregate.as_ref().unwrap();
+    assert_eq!(v1_agg.count, 2);
+    assert_eq!(v1_agg.total, 3);
 
     let v2_entries: Vec<_> = config
         .files
@@ -212,27 +212,27 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
         .iter()
         .find(|s| s.unit == "httpd.service")
         .expect("httpd.service should be in merged services");
-    let httpd_svc_fleet = httpd_svc.fleet.as_ref().unwrap();
-    assert_eq!(httpd_svc_fleet.count, 3);
-    assert_eq!(httpd_svc_fleet.total, 3);
+    let httpd_svc_agg = httpd_svc.aggregate.as_ref().unwrap();
+    assert_eq!(httpd_svc_agg.count, 3);
+    assert_eq!(httpd_svc_agg.total, 3);
 
     let pg_svc = services
         .state_changes
         .iter()
         .find(|s| s.unit == "postgresql.service")
         .expect("postgresql.service should be in merged services");
-    let pg_svc_fleet = pg_svc.fleet.as_ref().unwrap();
-    assert_eq!(pg_svc_fleet.count, 1);
-    assert_eq!(pg_svc_fleet.total, 3);
+    let pg_svc_agg = pg_svc.aggregate.as_ref().unwrap();
+    assert_eq!(pg_svc_agg.count, 1);
+    assert_eq!(pg_svc_agg.total, 3);
 
     // baseline_provisional should be false (all same target image)
     assert!(!meta.baseline_provisional);
 
-    // No hard warnings expected for same-version, same-arch fleet
+    // No hard warnings expected for same-version, same-arch aggregate
     let has_arch_warning = warnings.iter().any(|w| {
         matches!(
             w,
-            inspectah_core::fleet::validate::FleetWarning::SystemTypeMismatch { .. }
+            inspectah_core::aggregate::validate::AggregateWarning::SystemTypeMismatch { .. }
         )
     });
     assert!(!has_arch_warning);
@@ -260,7 +260,7 @@ fn test_e2e_validation_mixed_architecture() {
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::ArchitectureMismatch { architectures }
+        AggregateValidationError::ArchitectureMismatch { architectures }
         if architectures.len() == 2
     )));
 }
@@ -280,7 +280,7 @@ fn test_e2e_validation_duplicate_hostname() {
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::DuplicateHostname { hostname }
+        AggregateValidationError::DuplicateHostname { hostname }
         if hostname == "web-01"
     )));
 }
@@ -300,7 +300,7 @@ fn test_e2e_validation_os_major_mismatch() {
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::OsMajorVersionMismatch { versions }
+        AggregateValidationError::OsMajorVersionMismatch { versions }
         if versions.len() == 2
     )));
 }
@@ -312,7 +312,7 @@ fn test_e2e_validation_os_major_mismatch() {
 #[test]
 fn test_e2e_missing_section_uses_global_denominator() {
     // host-a has RPM + config, host-b has only config, host-c has RPM + config.
-    // RPM total denominator should still be 3 (the fleet size), not 2.
+    // RPM total denominator should still be 3 (the aggregate size), not 2.
     let mut s1 = make_rich_snap("host-a", "9.4");
     with_rpms(&mut s1, &["httpd"]);
     with_configs(&mut s1, &[("/etc/app.conf", "v1")]);
@@ -329,24 +329,24 @@ fn test_e2e_missing_section_uses_global_denominator() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
 
-    // fleet_meta should show rpm present on 2 hosts
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    // aggregate_meta should show rpm present on 2 hosts
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.section_host_counts.get("rpm"), Some(&2));
     assert_eq!(meta.section_host_counts.get("config"), Some(&3));
     assert_eq!(meta.host_count, 3);
 
-    // RPM prevalence uses total=3 (global fleet size), not 2 (hosts with RPMs)
+    // RPM prevalence uses total=3 (global aggregate size), not 2 (hosts with RPMs)
     let rpm = merged.rpm.unwrap();
     let httpd = rpm
         .packages_added
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    let fleet = httpd.fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 2, "httpd present on 2 hosts");
+    let agg = httpd.aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 2, "httpd present on 2 hosts");
     assert_eq!(
-        fleet.total, 3,
-        "total should be global fleet size, not section count"
+        agg.total, 3,
+        "total should be global aggregate size, not section count"
     );
 
     // Config prevalence also uses total=3
@@ -356,14 +356,14 @@ fn test_e2e_missing_section_uses_global_denominator() {
         .iter()
         .find(|f| f.path == "/etc/app.conf")
         .unwrap();
-    let conf_fleet = app_conf.fleet.as_ref().unwrap();
-    assert_eq!(conf_fleet.count, 3);
-    assert_eq!(conf_fleet.total, 3);
+    let conf_agg = app_conf.aggregate.as_ref().unwrap();
+    assert_eq!(conf_agg.count, 3);
+    assert_eq!(conf_agg.total, 3);
 }
 
 #[test]
-fn test_e2e_host_missing_services_still_counted_in_fleet() {
-    // host-a has services, host-b doesn't. Fleet size = 2.
+fn test_e2e_host_missing_services_still_counted_in_aggregate() {
+    // host-a has services, host-b doesn't. Aggregate size = 2.
     let mut s1 = make_rich_snap("host-a", "9.4");
     with_rpms(&mut s1, &["httpd"]);
     with_services(&mut s1, &["httpd.service"]);
@@ -374,7 +374,7 @@ fn test_e2e_host_missing_services_still_counted_in_fleet() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
 
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.section_host_counts.get("services"), Some(&1));
     assert_eq!(meta.host_count, 2);
 
@@ -384,9 +384,9 @@ fn test_e2e_host_missing_services_still_counted_in_fleet() {
         .iter()
         .find(|s| s.unit == "httpd.service")
         .unwrap();
-    let fleet = httpd.fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 1);
-    assert_eq!(fleet.total, 2, "services total should be global fleet size");
+    let agg = httpd.aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 1);
+    assert_eq!(agg.total, 2, "services total should be global aggregate size");
 }
 
 // ===========================================================================
@@ -419,7 +419,7 @@ fn test_e2e_baseline_provisional_when_multiple_target_images() {
 
     let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
 
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert!(
         meta.baseline_provisional,
         "baseline should be provisional when target images differ"
@@ -436,7 +436,7 @@ fn test_e2e_baseline_provisional_when_multiple_target_images() {
     assert!(
         warnings.iter().any(|w| matches!(
             w,
-            inspectah_core::fleet::validate::FleetWarning::BaselineConflict { .. }
+            inspectah_core::aggregate::validate::AggregateWarning::BaselineConflict { .. }
         )),
         "conflicting baselines should produce a warning"
     );
@@ -452,7 +452,7 @@ fn test_e2e_baseline_not_provisional_when_unanimous() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
 
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert!(
         !meta.baseline_provisional,
         "unanimous target image should not be provisional"
@@ -466,7 +466,7 @@ fn test_e2e_baseline_not_provisional_when_unanimous() {
 #[test]
 fn test_e2e_deterministic_output_regardless_of_input_order() {
     // Build snapshots with distinct data per host
-    let build_fleet = || {
+    let build_aggregate = || {
         let mut s1 = make_rich_snap("alpha", "9.4");
         with_rpms(&mut s1, &["httpd", "nginx"]);
         with_configs(&mut s1, &[("/etc/app.conf", "alpha-v1")]);
@@ -492,16 +492,16 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
     };
 
     // Forward order
-    let (s1a, s2a, s3a) = build_fleet();
+    let (s1a, s2a, s3a) = build_aggregate();
     let (merged_fwd, warnings_fwd) = merge_snapshots(vec![s1a, s2a, s3a], None).unwrap();
 
     // Reversed order
-    let (s1b, s2b, s3b) = build_fleet();
+    let (s1b, s2b, s3b) = build_aggregate();
     let (merged_rev, warnings_rev) = merge_snapshots(vec![s3b, s2b, s1b], None).unwrap();
 
-    // Compare fleet_meta (except merged_at timestamp)
-    let meta_fwd = merged_fwd.fleet_meta.as_ref().unwrap();
-    let meta_rev = merged_rev.fleet_meta.as_ref().unwrap();
+    // Compare aggregate_meta (except merged_at timestamp)
+    let meta_fwd = merged_fwd.aggregate_meta.as_ref().unwrap();
+    let meta_rev = merged_rev.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta_fwd.host_count, meta_rev.host_count);
     assert_eq!(meta_fwd.hostnames, meta_rev.hostnames);
     assert_eq!(meta_fwd.label, meta_rev.label);
@@ -523,7 +523,7 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
             .find(|p| p.name == pkg_fwd.name)
             .unwrap_or_else(|| panic!("package {} missing in reversed merge", pkg_fwd.name));
         assert_eq!(
-            pkg_fwd.fleet, pkg_rev.fleet,
+            pkg_fwd.aggregate, pkg_rev.aggregate,
             "prevalence for {} should match",
             pkg_fwd.name
         );
@@ -549,7 +549,7 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
                 )
             });
         assert_eq!(
-            file_fwd.fleet, file_rev.fleet,
+            file_fwd.aggregate, file_rev.aggregate,
             "prevalence for {}:{} should match",
             file_fwd.path, file_fwd.content
         );
@@ -575,7 +575,7 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
             .find(|s| s.unit == sc_fwd.unit)
             .unwrap_or_else(|| panic!("service {} missing in reversed merge", sc_fwd.unit));
         assert_eq!(
-            sc_fwd.fleet, sc_rev.fleet,
+            sc_fwd.aggregate, sc_rev.aggregate,
             "prevalence for {} should match",
             sc_fwd.unit
         );
@@ -612,8 +612,8 @@ fn test_e2e_merged_snapshot_serialization_roundtrip() {
     let json = serde_json::to_string_pretty(&merged).unwrap();
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
 
-    // fleet_meta survives roundtrip
-    assert_eq!(merged.fleet_meta, parsed.fleet_meta);
+    // aggregate_meta survives roundtrip
+    assert_eq!(merged.aggregate_meta, parsed.aggregate_meta);
 
     // RPM prevalence survives roundtrip
     let orig_rpm = merged.rpm.as_ref().unwrap();
@@ -628,7 +628,7 @@ fn test_e2e_merged_snapshot_serialization_roundtrip() {
             .iter()
             .find(|p| p.name == pkg.name)
             .unwrap();
-        assert_eq!(pkg.fleet, found.fleet);
+        assert_eq!(pkg.aggregate, found.aggregate);
     }
 
     // Config variant_selection survives roundtrip
@@ -641,7 +641,7 @@ fn test_e2e_merged_snapshot_serialization_roundtrip() {
             .find(|f| f.path == file.path && f.content == file.content)
             .unwrap();
         assert_eq!(file.variant_selection, found.variant_selection);
-        assert_eq!(file.fleet, found.fleet);
+        assert_eq!(file.aggregate, found.aggregate);
     }
 }
 
@@ -675,7 +675,7 @@ fn test_e2e_heterogeneous_section_coverage() {
 
     let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
 
-    let meta = merged.fleet_meta.as_ref().unwrap();
+    let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.host_count, 3);
     assert_eq!(meta.section_host_counts.get("rpm"), Some(&2));
     assert_eq!(meta.section_host_counts.get("config"), Some(&2));
@@ -688,16 +688,16 @@ fn test_e2e_heterogeneous_section_coverage() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
-    assert_eq!(httpd.fleet.as_ref().unwrap().total, 3);
+    assert_eq!(httpd.aggregate.as_ref().unwrap().count, 2);
+    assert_eq!(httpd.aggregate.as_ref().unwrap().total, 3);
 
     let curl = rpm
         .packages_added
         .iter()
         .find(|p| p.name == "curl")
         .unwrap();
-    assert_eq!(curl.fleet.as_ref().unwrap().count, 1);
-    assert_eq!(curl.fleet.as_ref().unwrap().total, 3);
+    assert_eq!(curl.aggregate.as_ref().unwrap().count, 1);
+    assert_eq!(curl.aggregate.as_ref().unwrap().total, 3);
 
     // Config: /etc/sysctl.conf identical on 2 hosts => Only variant
     let config = merged.config.unwrap();
@@ -711,7 +711,7 @@ fn test_e2e_heterogeneous_section_coverage() {
         1,
         "identical configs should merge to one entry"
     );
-    assert_eq!(sysctl[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(sysctl[0].aggregate.as_ref().unwrap().count, 2);
 
     // Services: httpd on 2 hosts, crond on 1
     let services = merged.services.unwrap();
@@ -720,16 +720,16 @@ fn test_e2e_heterogeneous_section_coverage() {
         .iter()
         .find(|s| s.unit == "httpd.service")
         .unwrap();
-    assert_eq!(httpd_svc.fleet.as_ref().unwrap().count, 2);
-    assert_eq!(httpd_svc.fleet.as_ref().unwrap().total, 3);
+    assert_eq!(httpd_svc.aggregate.as_ref().unwrap().count, 2);
+    assert_eq!(httpd_svc.aggregate.as_ref().unwrap().total, 3);
 
     let crond = services
         .state_changes
         .iter()
         .find(|s| s.unit == "crond.service")
         .unwrap();
-    assert_eq!(crond.fleet.as_ref().unwrap().count, 1);
-    assert_eq!(crond.fleet.as_ref().unwrap().total, 3);
+    assert_eq!(crond.aggregate.as_ref().unwrap().count, 1);
+    assert_eq!(crond.aggregate.as_ref().unwrap().total, 3);
 }
 
 // ===========================================================================
@@ -762,7 +762,7 @@ fn test_e2e_validation_empty_snapshot_rejected() {
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
         e,
-        FleetValidationError::EmptySnapshot { hostname }
+        AggregateValidationError::EmptySnapshot { hostname }
         if hostname == "host-a"
     )));
 }

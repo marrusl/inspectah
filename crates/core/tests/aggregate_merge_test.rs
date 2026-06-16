@@ -1,12 +1,12 @@
-use inspectah_core::fleet::merge::{
-    FleetMergeable, dedup_json_values, dedup_strings, merge_config_sections,
+use inspectah_core::aggregate::merge::{
+    AggregateMergeable, dedup_json_values, dedup_strings, merge_config_sections,
     merge_container_sections, merge_items, merge_kernelboot_sections, merge_network_sections,
     merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
 };
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
-use inspectah_core::types::fleet::VariantSelection;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::kernelboot::{
     AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
 };
@@ -45,9 +45,9 @@ fn test_package_entry_has_no_variant_key() {
 }
 
 #[test]
-fn test_package_entry_fleet_mut() {
+fn test_package_entry_aggregate_mut() {
     let mut pkg = PackageEntry::default();
-    assert!(pkg.fleet_mut().is_none());
+    assert!(pkg.aggregate_mut().is_none());
 }
 
 #[test]
@@ -335,10 +335,10 @@ fn test_merge_items_two_hosts_same_package() {
     let hostnames = vec!["host-a".to_string(), "host-b".to_string()];
     let merged = merge_items(items, 2, &hostnames);
     assert_eq!(merged.len(), 1);
-    let fleet = merged[0].fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 2);
-    assert_eq!(fleet.total, 2);
-    assert_eq!(fleet.hosts, vec!["host-a", "host-b"]);
+    let agg = merged[0].aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 2);
+    assert_eq!(agg.total, 2);
+    assert_eq!(agg.hosts, vec!["host-a", "host-b"]);
     assert!(merged[0].include);
 }
 
@@ -368,8 +368,8 @@ fn test_merge_items_different_packages_stay_separate() {
     // Sorted by identity key
     assert_eq!(merged[0].name, "httpd");
     assert_eq!(merged[1].name, "nginx");
-    assert_eq!(merged[0].fleet.as_ref().unwrap().count, 1);
-    assert_eq!(merged[1].fleet.as_ref().unwrap().count, 1);
+    assert_eq!(merged[0].aggregate.as_ref().unwrap().count, 1);
+    assert_eq!(merged[1].aggregate.as_ref().unwrap().count, 1);
 }
 
 #[test]
@@ -393,10 +393,10 @@ fn test_merge_items_single_host() {
     let hostnames = vec!["solo-host".to_string()];
     let merged = merge_items(items, 1, &hostnames);
     assert_eq!(merged.len(), 1);
-    let fleet = merged[0].fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 1);
-    assert_eq!(fleet.total, 1);
-    assert_eq!(fleet.hosts, vec!["solo-host"]);
+    let agg = merged[0].aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 1);
+    assert_eq!(agg.total, 1);
+    assert_eq!(agg.hosts, vec!["solo-host"]);
 }
 
 #[test]
@@ -423,10 +423,10 @@ fn test_merge_items_deduplicates_same_host_index() {
     let hostnames = vec!["host-a".to_string()];
     let merged = merge_items(items, 1, &hostnames);
     assert_eq!(merged.len(), 1);
-    let fleet = merged[0].fleet.as_ref().unwrap();
+    let agg = merged[0].aggregate.as_ref().unwrap();
     // Count should be 1 (one unique host), not 2
-    assert_eq!(fleet.count, 1);
-    assert_eq!(fleet.hosts, vec!["host-a"]);
+    assert_eq!(agg.count, 1);
+    assert_eq!(agg.hosts, vec!["host-a"]);
 }
 
 #[test]
@@ -500,9 +500,9 @@ fn test_merge_items_hosts_list_sorted() {
     ];
     let merged = merge_items(items, 3, &hostnames);
     assert_eq!(merged.len(), 1);
-    let fleet = merged[0].fleet.as_ref().unwrap();
+    let agg = merged[0].aggregate.as_ref().unwrap();
     // Hosts sorted alphabetically
-    assert_eq!(fleet.hosts, vec!["alpha", "bravo", "charlie"]);
+    assert_eq!(agg.hosts, vec!["alpha", "bravo", "charlie"]);
 }
 
 // ===========================================================================
@@ -549,9 +549,9 @@ fn test_merge_items_variant_selection() {
         .find(|e| e.variant_selection == VariantSelection::Alternative)
         .unwrap();
     assert_eq!(selected.content, "version_a");
-    assert_eq!(selected.fleet.as_ref().unwrap().count, 2);
+    assert_eq!(selected.aggregate.as_ref().unwrap().count, 2);
     assert_eq!(alt.content, "version_b");
-    assert_eq!(alt.fleet.as_ref().unwrap().count, 1);
+    assert_eq!(alt.aggregate.as_ref().unwrap().count, 1);
 }
 
 #[test]
@@ -694,7 +694,7 @@ fn test_merge_items_three_variants() {
         .find(|e| e.variant_selection == VariantSelection::Selected)
         .unwrap();
     assert_eq!(selected.content, "v1");
-    assert_eq!(selected.fleet.as_ref().unwrap().count, 3);
+    assert_eq!(selected.aggregate.as_ref().unwrap().count, 3);
 
     let alternatives: Vec<&ConfigFileEntry> = merged
         .iter()
@@ -702,7 +702,7 @@ fn test_merge_items_three_variants() {
         .collect();
     assert_eq!(alternatives.len(), 2);
     for alt in &alternatives {
-        assert_eq!(alt.fleet.as_ref().unwrap().count, 1);
+        assert_eq!(alt.aggregate.as_ref().unwrap().count, 1);
     }
 }
 
@@ -771,7 +771,7 @@ fn test_merge_items_mixed_paths_with_variants() {
 
 #[test]
 fn test_merge_items_all_variants_included() {
-    // With fleet narrowing, per-variant prevalence determines include.
+    // With aggregate narrowing, per-variant prevalence determines include.
     // Each variant appears on 1/2 hosts (non-universal), so include=false.
     let items: Vec<(usize, ConfigFileEntry)> = vec![
         (
@@ -802,7 +802,7 @@ fn test_merge_items_all_variants_included() {
 }
 
 #[test]
-fn test_merge_items_variant_total_reflects_fleet_size() {
+fn test_merge_items_variant_total_reflects_aggregate_size() {
     let items: Vec<(usize, ConfigFileEntry)> = vec![
         (
             0,
@@ -823,14 +823,14 @@ fn test_merge_items_variant_total_reflects_fleet_size() {
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
     let merged = merge_items(items, 5, &hostnames);
-    // total should reflect the fleet size (5), not just the hosts that have this item
+    // total should reflect the aggregate size (5), not just the hosts that have this item
     for item in &merged {
-        assert_eq!(item.fleet.as_ref().unwrap().total, 5);
+        assert_eq!(item.aggregate.as_ref().unwrap().total, 5);
     }
 }
 
 // ===========================================================================
-// New FleetMergeable impls (Task 9)
+// New AggregateMergeable impls (Task 9)
 // ===========================================================================
 
 #[test]
@@ -970,13 +970,13 @@ fn test_merge_rpm_sections_packages_merged() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
+    assert_eq!(httpd.aggregate.as_ref().unwrap().count, 2);
     let nginx = result
         .packages_added
         .iter()
         .find(|p| p.name == "nginx")
         .unwrap();
-    assert_eq!(nginx.fleet.as_ref().unwrap().count, 1);
+    assert_eq!(nginx.aggregate.as_ref().unwrap().count, 1);
 }
 
 #[test]
@@ -1109,7 +1109,7 @@ fn test_merge_service_sections_dedup_units() {
         include: false,
         locked: false,
         owning_package: None,
-        fleet: None,
+        aggregate: None,
         attention_reason: None,
     };
     let s1 = ServiceSection {
@@ -1131,7 +1131,7 @@ fn test_merge_service_sections_dedup_units() {
 
     // state_changes merged: httpd present on both hosts
     assert_eq!(result.state_changes.len(), 1);
-    assert_eq!(result.state_changes[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.state_changes[0].aggregate.as_ref().unwrap().count, 2);
 
     // String lists deduped and sorted
     assert_eq!(
@@ -1189,18 +1189,18 @@ fn test_merge_container_sections_flatpak_dedup() {
         .iter()
         .find(|a| a.app_id == "org.gnome.Calculator")
         .expect("Calculator should be in merged output");
-    let calc_fleet = calc.fleet.as_ref().expect("should have fleet data");
-    assert_eq!(calc_fleet.count, 2);
-    assert_eq!(calc_fleet.total, 2);
+    let calc_agg = calc.aggregate.as_ref().expect("should have aggregate data");
+    assert_eq!(calc_agg.count, 2);
+    assert_eq!(calc_agg.total, 2);
 
     let firefox = result
         .flatpak_apps
         .iter()
         .find(|a| a.app_id == "org.mozilla.Firefox")
         .expect("Firefox should be in merged output");
-    let ff_fleet = firefox.fleet.as_ref().expect("should have fleet data");
-    assert_eq!(ff_fleet.count, 1);
-    assert_eq!(ff_fleet.total, 2);
+    let ff_agg = firefox.aggregate.as_ref().expect("should have aggregate data");
+    assert_eq!(ff_agg.count, 1);
+    assert_eq!(ff_agg.total, 2);
 }
 
 #[test]
@@ -1362,7 +1362,7 @@ fn test_merge_storage_sections_fstab_merged() {
 
     // fstab merged by mount_point identity
     assert_eq!(result.fstab_entries.len(), 1);
-    assert_eq!(result.fstab_entries[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.fstab_entries[0].aggregate.as_ref().unwrap().count, 2);
 
     // mount_points deduped by target
     assert_eq!(result.mount_points.len(), 2);
@@ -1420,7 +1420,7 @@ fn test_merge_scheduled_sections_cron_and_timers() {
     let result = merge_scheduled_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
     assert_eq!(result.cron_jobs.len(), 1);
-    assert_eq!(result.cron_jobs[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.cron_jobs[0].aggregate.as_ref().unwrap().count, 2);
     assert_eq!(result.systemd_timers.len(), 2);
     assert_eq!(result.at_jobs.len(), 1);
     assert_eq!(result.generated_timer_units.len(), 1);
@@ -1477,7 +1477,7 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // Port labels merged via merge_items
     assert_eq!(result.port_labels.len(), 1);
-    assert_eq!(result.port_labels[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.port_labels[0].aggregate.as_ref().unwrap().count, 2);
 
     // String lists deduped
     assert_eq!(result.custom_modules, vec!["mymodule", "othermodule"]);
@@ -1625,7 +1625,7 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
 
     // sysctl merged
     assert_eq!(result.sysctl_overrides.len(), 1);
-    assert_eq!(result.sysctl_overrides[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.sysctl_overrides[0].aggregate.as_ref().unwrap().count, 2);
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);
@@ -1742,7 +1742,7 @@ fn test_merge_nonrpm_sections_items_and_env_files() {
 
     // Items merged by name
     assert_eq!(result.items.len(), 1);
-    assert_eq!(result.items[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.items[0].aggregate.as_ref().unwrap().count, 2);
 
     // env_files: same path, different content = 2 variants
     assert_eq!(result.env_files.len(), 2);
@@ -1943,10 +1943,10 @@ fn test_merge_items_representative_is_most_prevalent_payload() {
     // Majority version wins — NOT first host
     assert_eq!(merged[0].version, "2.0");
     // All 3 hosts contributed this identity key
-    let fleet = merged[0].fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 3);
-    assert_eq!(fleet.total, 3);
-    assert_eq!(fleet.hosts, vec!["host-a", "host-b", "host-c"]);
+    let agg = merged[0].aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 3);
+    assert_eq!(agg.total, 3);
+    assert_eq!(agg.hosts, vec!["host-a", "host-b", "host-c"]);
     assert!(merged[0].include);
 }
 
@@ -2003,9 +2003,9 @@ fn test_merge_items_representative_tie_break_first_seen() {
     assert_eq!(merged.len(), 1);
     // Tie: 2x "1.0" vs 2x "2.0". First-seen (host-a, index 0) has "1.0".
     assert_eq!(merged[0].version, "1.0");
-    let fleet = merged[0].fleet.as_ref().unwrap();
-    assert_eq!(fleet.count, 4);
-    assert_eq!(fleet.total, 4);
+    let agg = merged[0].aggregate.as_ref().unwrap();
+    assert_eq!(agg.count, 4);
+    assert_eq!(agg.total, 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,7 +2013,7 @@ fn test_merge_items_representative_tie_break_first_seen() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_fleet_leaf_intersection_filters_packages_added() {
+fn test_aggregate_leaf_intersection_filters_packages_added() {
     let host_a = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -2066,7 +2066,7 @@ fn test_fleet_leaf_intersection_filters_packages_added() {
     // leaf_packages should be the intersection
     assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
 
-    // auto_packages should be None for fleet
+    // auto_packages should be None for aggregate
     assert_eq!(merged.auto_packages, None);
 
     // leaf_dep_tree should only contain entries for intersection packages
@@ -2084,7 +2084,7 @@ fn test_fleet_leaf_intersection_filters_packages_added() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_fleet_leaf_intersection_excludes_partial_leaf() {
+fn test_aggregate_leaf_intersection_excludes_partial_leaf() {
     // host_a: git + htop both leaf
     // host_b: git leaf, htop auto (not in leaf_packages)
     // Result: only git survives intersection, htop filtered from packages_added
@@ -2141,7 +2141,7 @@ fn test_fleet_leaf_intersection_excludes_partial_leaf() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_skips_degraded_hosts() {
+fn test_aggregate_leaf_intersection_skips_degraded_hosts() {
     // host_a: vim leaf (authoritative)
     // host_b: vim present but leaf_packages: None (degraded)
     // Result: vim in intersection, leaf_authority_hosts=1, leaf_total_hosts=2
@@ -2184,7 +2184,7 @@ fn test_fleet_leaf_intersection_skips_degraded_hosts() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_all_degraded() {
+fn test_aggregate_leaf_intersection_all_degraded() {
     // Both hosts: leaf_packages: None
     // Result: leaf_packages=None, auto_packages=None, leaf_dep_tree={},
     //         packages_added kept (no filtering), authority=0, total=2
@@ -2231,7 +2231,7 @@ fn test_fleet_leaf_intersection_all_degraded() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_authoritative_empty() {
+fn test_aggregate_leaf_intersection_authoritative_empty() {
     // host_a: git leaf
     // host_b: leaf_packages = Some(vec![]) — authoritative but empty
     // Result: intersection = Some(vec![]) NOT None, packages_added = 0
@@ -2275,7 +2275,7 @@ fn test_fleet_leaf_intersection_authoritative_empty() {
 }
 
 #[test]
-fn test_fleet_leaf_dep_tree_donor_from_authoritative_host() {
+fn test_aggregate_leaf_dep_tree_donor_from_authoritative_host() {
     // "alpha" sorts first but is degraded (leaf_packages: None, leaf_dep_tree: {})
     // "beta" sorts second but is authoritative (leaf_packages: Some, leaf_dep_tree: real data)
     // Result: dep tree comes from beta, not alpha
@@ -2347,7 +2347,7 @@ fn test_fleet_leaf_dep_tree_donor_from_authoritative_host() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_order_independent() {
+fn test_aggregate_leaf_intersection_order_independent() {
     // Same data, different hostname ordering
     // Result: identical leaf_packages in both cases, sorted by canonical identity
     let make_section = || RpmSection {
@@ -2409,7 +2409,7 @@ fn test_fleet_leaf_intersection_order_independent() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_multiarch_identity() {
+fn test_aggregate_leaf_intersection_multiarch_identity() {
     // glibc.x86_64 is leaf, glibc.i686 is auto (on both hosts)
     // Result: only glibc.x86_64 in packages_added, glibc.i686 filtered
     let make_host = || RpmSection {
@@ -2451,7 +2451,7 @@ fn test_fleet_leaf_intersection_multiarch_identity() {
 }
 
 #[test]
-fn test_fleet_leaf_intersection_host_absent_package() {
+fn test_aggregate_leaf_intersection_host_absent_package() {
     // host_a: git + vim both leaf
     // host_b: only vim leaf (git not present at all)
     // Result: git falls out of intersection (not leaf on host_b)
@@ -2511,7 +2511,7 @@ fn test_fleet_leaf_intersection_host_absent_package() {
 }
 
 #[test]
-fn test_fleet_leaf_filtered_packages_absent_from_repo_conflicts() {
+fn test_aggregate_leaf_filtered_packages_absent_from_repo_conflicts() {
     // git: baseos on both hosts (no conflict, leaf)
     // perl-libs: epel on host_a, appstream on host_b (conflict, but auto)
     // Result: perl-libs NOT in repo_conflicts, NOT in packages_added
@@ -2580,7 +2580,7 @@ fn test_fleet_leaf_filtered_packages_absent_from_repo_conflicts() {
 }
 
 #[test]
-fn test_fleet_leaf_triplet_coherence() {
+fn test_aggregate_leaf_triplet_coherence() {
     // 3 packages, 2 hosts with different leaf sets
     // host_a: git + vim leaf, curl auto
     // host_b: git + curl leaf, vim auto
@@ -2653,7 +2653,7 @@ fn test_fleet_leaf_triplet_coherence() {
     // leaf_packages: intersection = {git.x86_64}
     assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
 
-    // auto_packages: None for fleet
+    // auto_packages: None for aggregate
     assert_eq!(merged.auto_packages, None);
 
     // leaf_dep_tree: only contains entries for intersection packages
@@ -2692,7 +2692,7 @@ fn test_fleet_leaf_triplet_coherence() {
 }
 
 #[test]
-fn test_fleet_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
+fn test_aggregate_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
     // host_a (authoritative): vim is leaf, present
     // host_b (degraded): vim absent, leaf_packages: None
     // narrow_non_universal sets include=false (count=1, total=2)
@@ -2726,8 +2726,8 @@ fn test_fleet_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
 }
 
 #[test]
-fn test_fleet_degraded_state_json_contract() {
-    // All degraded fleet merge
+fn test_aggregate_degraded_state_json_contract() {
+    // All degraded aggregate merge
     let host_a = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
@@ -2772,6 +2772,6 @@ fn test_fleet_degraded_state_json_contract() {
     );
     assert_eq!(
         json["leaf_total_hosts"], 2,
-        "total hosts must reflect fleet size"
+        "total hosts must reflect aggregate size"
     );
 }
