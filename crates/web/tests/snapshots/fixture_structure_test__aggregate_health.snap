@@ -1,6 +1,5 @@
 ---
 source: crates/web/tests/fixture_structure_test.rs
-assertion_line: 22
 expression: value
 ---
 {

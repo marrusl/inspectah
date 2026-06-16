@@ -58,9 +58,9 @@ expression: json
   "packages": [
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "",
-        "fleet": null,
         "include": false,
         "name": "httpd",
         "release": "11.el9",
@@ -78,9 +78,9 @@ expression: json
     },
     {
       "entry": {
+        "aggregate": null,
         "arch": "x86_64",
         "epoch": "",
-        "fleet": null,
         "include": false,
         "name": "mod_ssl",
         "release": "11.el9",
