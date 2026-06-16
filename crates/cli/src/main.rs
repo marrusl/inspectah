@@ -31,8 +31,8 @@ enum Commands {
     Scan(commands::scan::ScanArgs),
     /// Interactively refine scan output and re-render
     Refine(commands::refine::RefineArgs),
-    /// Aggregate and manage fleet-wide migration snapshots
-    Fleet(commands::fleet::FleetArgs),
+    /// Combine multiple host scan tarballs into an aggregate snapshot
+    Aggregate(commands::aggregate::AggregateArgs),
     /// Build a bootc container image from an inspectah tarball snapshot
     Build(commands::build::BuildArgs),
     /// Print version, commit, and build date
@@ -77,8 +77,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Fleet(args) => {
-            if let Err(e) = commands::fleet::run_fleet(&args) {
+        Commands::Aggregate(args) => {
+            if let Err(e) = commands::aggregate::run_aggregate_command(&args) {
                 eprintln!("error: {e:#}");
                 std::process::exit(1);
             }

@@ -1,16 +1,16 @@
-//! `inspectah fleet` subcommand tree.
+//! `inspectah aggregate` top-level command.
 //!
-//! Provides two subcommands:
-//! - `fleet aggregate` — merge host tarballs into a fleet-aggregate snapshot
-//! - `fleet init` — generate a fleet manifest from a directory of tarballs
+//! Combines multiple host scan tarballs into a single aggregate snapshot.
+//! Subcommand:
+//! - `aggregate init` — generate an aggregate manifest from a directory of tarballs
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 
-use inspectah_core::fleet::manifest::FleetManifest;
-use inspectah_core::fleet::merge_snapshots;
-use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning};
+use inspectah_core::aggregate::manifest::AggregateManifest;
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::redaction::RedactionState;
@@ -18,25 +18,11 @@ use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 
 #[derive(Debug, Args)]
-pub struct FleetArgs {
-    #[command(subcommand)]
-    pub command: FleetSubcommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum FleetSubcommand {
-    /// Aggregate host tarballs into a fleet tarball
-    Aggregate(FleetAggregateArgs),
-    /// Generate a fleet manifest from a directory of tarballs
-    Init(FleetInitArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct FleetAggregateArgs {
+pub struct AggregateArgs {
     /// Input tarballs or directory containing tarballs
     pub inputs: Vec<PathBuf>,
 
-    /// Path to a fleet manifest (TOML) specifying sources
+    /// Path to an aggregate manifest (TOML) specifying sources
     #[arg(long)]
     pub manifest: Option<PathBuf>,
 
@@ -44,11 +30,11 @@ pub struct FleetAggregateArgs {
     #[arg(long)]
     pub target_image: Option<String>,
 
-    /// Output directory for the fleet tarball
+    /// Output directory for the aggregate tarball
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
 
-    /// Output file path for the fleet tarball
+    /// Output file path for the aggregate tarball
     #[arg(long)]
     pub output_file: Option<PathBuf>,
 
@@ -67,10 +53,19 @@ pub struct FleetAggregateArgs {
     /// Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)
     #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
     pub ack_sensitive: bool,
+
+    #[command(subcommand)]
+    pub subcommand: Option<AggregateSubcommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AggregateSubcommand {
+    /// Generate an aggregate manifest from a directory of tarballs
+    Init(AggregateInitArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct FleetInitArgs {
+pub struct AggregateInitArgs {
     /// Directory containing host tarballs
     pub directory: PathBuf,
 
@@ -83,11 +78,11 @@ pub struct FleetInitArgs {
     pub overwrite: bool,
 }
 
-/// Entry point for `inspectah fleet`.
-pub fn run_fleet(args: &FleetArgs) -> Result<()> {
-    match &args.command {
-        FleetSubcommand::Aggregate(agg) => run_aggregate(agg),
-        FleetSubcommand::Init(init) => run_init(init),
+/// Entry point for `inspectah aggregate`.
+pub fn run_aggregate_command(args: &AggregateArgs) -> Result<()> {
+    match &args.subcommand {
+        Some(AggregateSubcommand::Init(init)) => run_init(init),
+        None => run_aggregate(args),
     }
 }
 
@@ -106,7 +101,7 @@ struct UnparseableFile {
     reason: String,
 }
 
-fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
+fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     // --- Flag validation ---
     if args.output_file.is_some() && args.output_dir.is_some() {
         bail!("--output-file and --output-dir are mutually exclusive");
@@ -173,7 +168,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         let type_list_str = type_list.join(", ");
 
         bail!(
-            "Fleet contains snapshots with sensitive data ({}).\n\
+            "Aggregate contains snapshots with sensitive data ({}).\n\
              To export, re-run with --ack-sensitive",
             type_list_str
         );
@@ -251,7 +246,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     prepend_containerfile_header(&merged, render_dir.path(), &label)?;
 
     // --- Step 7: Create tarball ---
-    let stamp = get_output_stamp(&format!("fleet-{label}"));
+    let stamp = get_output_stamp(&format!("aggregate-{label}"));
     let tarball_name = format!("{stamp}.tar.gz");
 
     let tarball_path = if let Some(path) = &args.output_file {
@@ -281,7 +276,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         .as_ref()
         .map_or(0, |s| s.state_changes.len());
 
-    eprintln!("Fleet: {label} ({host_count} hosts)");
+    eprintln!("Aggregate: {label} ({host_count} hosts)");
 
     // Report baseline provenance
     if let Some(target_image) = &merged.target_image {
@@ -327,7 +322,7 @@ struct TarballMetadata {
     target_image: Option<String>,
 }
 
-fn run_init(args: &FleetInitArgs) -> Result<()> {
+fn run_init(args: &AggregateInitArgs) -> Result<()> {
     // --- Step 1: Verify directory exists ---
     if !args.directory.is_dir() {
         bail!("{} is not a directory", args.directory.display());
@@ -365,7 +360,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
     let output_path = args
         .output
         .clone()
-        .unwrap_or_else(|| PathBuf::from("fleet.toml"));
+        .unwrap_or_else(|| PathBuf::from("aggregate.toml"));
 
     // --- Step 5: Check for existing file ---
     if output_path.exists() && !args.overwrite {
@@ -438,7 +433,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         .directory
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("fleet");
+        .unwrap_or("aggregate");
 
     let toml = generate_manifest_toml(label, target_image.as_deref(), &sources);
 
@@ -511,7 +506,7 @@ fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
 fn generate_manifest_toml(label: &str, target_image: Option<&str>, sources: &[PathBuf]) -> String {
     let mut toml = String::new();
 
-    toml.push_str("# inspectah fleet manifest\n");
+    toml.push_str("# inspectah aggregate manifest\n");
     toml.push_str("# Edit label and target_image as needed. Sources are relative to this file.\n\n");
 
     toml.push_str(&format!("label = \"{label}\"\n"));
@@ -539,8 +534,8 @@ fn generate_manifest_toml(label: &str, target_image: Option<&str>, sources: &[Pa
 /// Resolve CLI arguments into a list of tarball paths, a label, and an
 /// optional manifest.
 fn resolve_inputs(
-    args: &FleetAggregateArgs,
-) -> Result<(Vec<PathBuf>, String, Option<FleetManifest>)> {
+    args: &AggregateArgs,
+) -> Result<(Vec<PathBuf>, String, Option<AggregateManifest>)> {
     // Mutual exclusion: --manifest and positional inputs
     if args.manifest.is_some() && !args.inputs.is_empty() {
         bail!("cannot specify both --manifest and positional input paths");
@@ -548,7 +543,7 @@ fn resolve_inputs(
 
     // Mode 1: Manifest-driven
     if let Some(manifest_path) = &args.manifest {
-        let mut manifest = FleetManifest::load(manifest_path).map_err(|e| {
+        let mut manifest = AggregateManifest::load(manifest_path).map_err(|e| {
             anyhow::anyhow!(
                 "failed to load manifest from {}: {e}",
                 manifest_path.display()
@@ -560,7 +555,7 @@ fn resolve_inputs(
             manifest.target_image = Some(target_image.clone());
         }
 
-        let label = manifest.label.clone().unwrap_or_else(|| "fleet".into());
+        let label = manifest.label.clone().unwrap_or_else(|| "aggregate".into());
         let paths = manifest.sources.clone();
 
         return Ok((paths, label, Some(manifest)));
@@ -572,7 +567,7 @@ fn resolve_inputs(
         let label = dir
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("fleet")
+            .unwrap_or("aggregate")
             .to_string();
 
         let mut paths = list_tarballs_in_dir(dir)?;
@@ -584,7 +579,7 @@ fn resolve_inputs(
 
     // Mode 3: Multiple explicit tarball paths
     if !args.inputs.is_empty() {
-        let label = "fleet".to_string();
+        let label = "aggregate".to_string();
         let paths = args.inputs.clone();
 
         let manifest = build_manifest_from_args(&label, &paths, args);
@@ -594,13 +589,13 @@ fn resolve_inputs(
     bail!("no inputs specified — provide tarball paths, a directory, or --manifest");
 }
 
-/// Build a FleetManifest from CLI arguments (for non-manifest modes).
+/// Build an AggregateManifest from CLI arguments (for non-manifest modes).
 fn build_manifest_from_args(
     label: &str,
     paths: &[PathBuf],
-    args: &FleetAggregateArgs,
-) -> FleetManifest {
-    FleetManifest {
+    args: &AggregateArgs,
+) -> AggregateManifest {
+    AggregateManifest {
         label: Some(label.to_string()),
         target_image: args.target_image.clone(),
         sources: paths.to_vec(),
@@ -683,7 +678,7 @@ fn prepend_containerfile_header(
 
     // Build header
     let mut header = String::new();
-    header.push_str("# DRAFT — Fleet Aggregate Containerfile\n");
+    header.push_str("# DRAFT — Aggregate Containerfile\n");
     header.push_str("# Requires human review before use\n");
 
     if let Some(fleet_meta) = &merged.fleet_meta {
@@ -719,12 +714,12 @@ fn prepend_containerfile_header(
 // Warning / error formatting
 // ---------------------------------------------------------------------------
 
-fn format_warning(w: &FleetWarning) -> String {
+fn format_warning(w: &AggregateWarning) -> String {
     match w {
-        FleetWarning::StaleScanDates { spread_description } => {
+        AggregateWarning::StaleScanDates { spread_description } => {
             format!("stale scan dates: {spread_description}")
         }
-        FleetWarning::BaselineConflict {
+        AggregateWarning::BaselineConflict {
             distribution,
             selected,
         } => {
@@ -737,41 +732,41 @@ fn format_warning(w: &FleetWarning) -> String {
                 dist.join(", ")
             )
         }
-        FleetWarning::MinorVersionSpread { versions } => {
+        AggregateWarning::MinorVersionSpread { versions } => {
             format!("minor version spread: {}", versions.join(", "))
         }
-        FleetWarning::SystemTypeMismatch { types } => {
+        AggregateWarning::SystemTypeMismatch { types } => {
             format!("system type mismatch: {}", types.join(", "))
         }
     }
 }
 
-fn format_validation_errors(errors: &[FleetValidationError]) -> anyhow::Error {
+fn format_validation_errors(errors: &[AggregateValidationError]) -> anyhow::Error {
     let msgs: Vec<String> = errors
         .iter()
         .map(|e| match e {
-            FleetValidationError::TooFewSnapshots { count } => {
+            AggregateValidationError::TooFewSnapshots { count } => {
                 format!("too few snapshots: {count} (need at least 2)")
             }
-            FleetValidationError::SchemaVersionMismatch { versions } => {
+            AggregateValidationError::SchemaVersionMismatch { versions } => {
                 format!("schema version mismatch: {:?}", versions)
             }
-            FleetValidationError::DuplicateHostname { hostname } => {
+            AggregateValidationError::DuplicateHostname { hostname } => {
                 format!("duplicate hostname: {hostname}")
             }
-            FleetValidationError::ArchitectureMismatch { architectures } => {
+            AggregateValidationError::ArchitectureMismatch { architectures } => {
                 format!("architecture mismatch: {}", architectures.join(", "))
             }
-            FleetValidationError::EmptySnapshot { hostname } => {
+            AggregateValidationError::EmptySnapshot { hostname } => {
                 format!("empty snapshot: {hostname}")
             }
-            FleetValidationError::OsMajorVersionMismatch { versions } => {
+            AggregateValidationError::OsMajorVersionMismatch { versions } => {
                 format!("OS major version mismatch: {}", versions.join(", "))
             }
         })
         .collect();
 
-    anyhow::anyhow!("fleet validation failed:\n  {}", msgs.join("\n  "))
+    anyhow::anyhow!("aggregate validation failed:\n  {}", msgs.join("\n  "))
 }
 
 #[cfg(test)]
@@ -779,7 +774,7 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Fleet init metadata extraction regression tests
+    // Aggregate init metadata extraction regression tests
     // -----------------------------------------------------------------------
 
     /// Build a .tar.gz containing a single `inspection-snapshot.json` with
@@ -915,9 +910,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fleet_init_target_image_tie_break_is_deterministic() {
+    fn test_aggregate_init_target_image_tie_break_is_deterministic() {
         // Command-boundary regression test: when two images have equal
-        // prevalence (1 host each), the generated fleet.toml must contain
+        // prevalence (1 host each), the generated aggregate.toml must contain
         // the lexicographically earlier image ref as the target_image.
         let dir = tempfile::tempdir().unwrap();
         let tarballs_dir = dir.path().join("tarballs");
@@ -943,18 +938,18 @@ mod tests {
         make_test_tarball(&tarballs_dir, "host-beta.tar.gz", &json_beta);
 
         // Run the full init flow via run_init
-        let output_path = dir.path().join("fleet.toml");
-        let args = FleetInitArgs {
+        let output_path = dir.path().join("aggregate.toml");
+        let args = AggregateInitArgs {
             directory: tarballs_dir,
             output: Some(output_path.clone()),
             overwrite: false,
         };
 
-        run_init(&args).expect("fleet init should succeed");
+        run_init(&args).expect("aggregate init should succeed");
 
         // Read and verify the generated manifest
         let toml_content =
-            std::fs::read_to_string(&output_path).expect("fleet.toml should exist after init");
+            std::fs::read_to_string(&output_path).expect("aggregate.toml should exist after init");
 
         assert!(
             toml_content.contains(&format!("target_image = \"{alpha_image}\"")),
@@ -967,13 +962,13 @@ mod tests {
     // --json-only output matrix regression tests
     // -----------------------------------------------------------------------
 
-    /// Helper: build FleetAggregateArgs with specific output flags.
+    /// Helper: build AggregateArgs with specific output flags.
     fn make_aggregate_args(
         output_file: Option<PathBuf>,
         output_dir: Option<PathBuf>,
         json_only: bool,
-    ) -> FleetAggregateArgs {
-        FleetAggregateArgs {
+    ) -> AggregateArgs {
+        AggregateArgs {
             inputs: vec![],
             manifest: None,
             target_image: None,
@@ -983,6 +978,7 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
+            subcommand: None,
         }
     }
 
@@ -1002,10 +998,10 @@ mod tests {
         );
     }
 
-    /// Build two valid fleet-ready tarballs in `dir`. Each snapshot has
+    /// Build two valid aggregate-ready tarballs in `dir`. Each snapshot has
     /// an `os_release` section so it passes the non-empty check, and uses
     /// distinct hostnames to avoid the duplicate-hostname error.
-    fn make_fleet_pair(dir: &Path) -> (PathBuf, PathBuf) {
+    fn make_aggregate_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
             "schema_version": 19,
             "meta": {"hostname": "host-a.example.com"},
@@ -1026,10 +1022,10 @@ mod tests {
     #[test]
     fn test_json_only_with_output_dir_writes_to_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let (t1, t2) = make_fleet_pair(dir.path());
+        let (t1, t2) = make_aggregate_pair(dir.path());
 
         let out_dir = dir.path().join("json-output");
-        let args = FleetAggregateArgs {
+        let args = AggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
             target_image: None,
@@ -1039,6 +1035,7 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
+            subcommand: None,
         };
 
         run_aggregate(&args).expect("--json-only --output-dir should succeed");
@@ -1059,10 +1056,10 @@ mod tests {
     #[test]
     fn test_json_only_with_output_file_writes_to_file() {
         let dir = tempfile::tempdir().unwrap();
-        let (t1, t2) = make_fleet_pair(dir.path());
+        let (t1, t2) = make_aggregate_pair(dir.path());
 
         let out_file = dir.path().join("custom-output.json");
-        let args = FleetAggregateArgs {
+        let args = AggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
             target_image: None,
@@ -1072,6 +1069,7 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
+            subcommand: None,
         };
 
         run_aggregate(&args).expect("--json-only --output-file should succeed");
@@ -1092,7 +1090,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_fleet_aggregate_refuses_sensitive_snapshot_without_ack() {
+    fn test_aggregate_refuses_sensitive_snapshot_without_ack() {
         let dir = tempfile::tempdir().unwrap();
 
         // Create one normal snapshot and one sensitive snapshot
@@ -1118,7 +1116,7 @@ mod tests {
         let t1 = make_test_tarball(dir.path(), "host-normal.tar.gz", &json_normal);
         let t2 = make_test_tarball(dir.path(), "host-sensitive.tar.gz", &json_sensitive);
 
-        let args = FleetAggregateArgs {
+        let args = AggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
             target_image: None,
@@ -1128,6 +1126,7 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
+            subcommand: None,
         };
 
         let result = run_aggregate(&args);
@@ -1151,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fleet_aggregate_allows_sensitive_snapshot_with_ack() {
+    fn test_aggregate_allows_sensitive_snapshot_with_ack() {
         let dir = tempfile::tempdir().unwrap();
 
         let json_sensitive = serde_json::json!({
@@ -1177,7 +1176,7 @@ mod tests {
         let t2 = make_test_tarball(dir.path(), "host-b.tar.gz", &json_b);
 
         let out_dir = dir.path().join("output");
-        let args = FleetAggregateArgs {
+        let args = AggregateArgs {
             inputs: vec![t1, t2],
             manifest: None,
             target_image: None,
@@ -1187,6 +1186,7 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: true,
+            subcommand: None,
         };
 
         let result = run_aggregate(&args);
