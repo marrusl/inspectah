@@ -60,26 +60,12 @@ _arguments "${_arguments_options[@]}" : \
 ':tarball -- Path to scan output tarball (.tar.gz):_files' \
 && ret=0
 ;;
-(fleet)
+(aggregate)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_inspectah__subcmd__fleet_commands" \
-"*::: :->fleet" \
-&& ret=0
-
-    case $state in
-    (fleet)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:inspectah-fleet-command-$line[1]:"
-        case $line[1] in
-            (aggregate)
-_arguments "${_arguments_options[@]}" : \
-'--manifest=[Path to a fleet manifest (TOML) specifying sources]:MANIFEST:_files' \
-'--baseline=[Override the baseline image reference]:BASELINE:_default' \
-'--output-dir=[Output directory for the fleet tarball]:OUTPUT_DIR:_files' \
-'--output-file=[Output file path for the fleet tarball]:OUTPUT_FILE:_files' \
+'--manifest=[Path to an aggregate manifest (TOML) specifying sources]:MANIFEST:_files' \
+'--target-image=[Override the target image reference for baseline comparison]:TARGET_IMAGE:_default' \
+'--output-dir=[Output directory for the aggregate tarball]:OUTPUT_DIR:_files' \
+'--output-file=[Output file path for the aggregate tarball]:OUTPUT_FILE:_files' \
 '--json-only[Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)]' \
 '--strict[Treat warnings as errors]' \
 '-v[Show per-host detail in output]' \
@@ -88,10 +74,18 @@ _arguments "${_arguments_options[@]}" : \
 '--acknowledge-sensitive[Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-'*::inputs -- Input tarballs or directory containing tarballs:_files' \
+'::inputs -- Input tarballs or directory containing tarballs:_files' \
+":: :_inspectah__subcmd__aggregate_commands" \
+"*::: :->aggregate" \
 && ret=0
-;;
-(init)
+
+    case $state in
+    (aggregate)
+        words=($line[2] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:inspectah-aggregate-command-$line[2]:"
+        case $line[2] in
+            (init)
 _arguments "${_arguments_options[@]}" : \
 '--output=[Output path for the generated manifest]:OUTPUT:_files' \
 '--overwrite[Overwrite an existing manifest file]' \
@@ -102,7 +96,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_inspectah__subcmd__fleet__subcmd__help_commands" \
+":: :_inspectah__subcmd__aggregate__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -110,13 +104,9 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:inspectah-fleet-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:inspectah-aggregate-help-command-$line[1]:"
         case $line[1] in
-            (aggregate)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(init)
+            (init)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -177,23 +167,19 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(fleet)
+(aggregate)
 _arguments "${_arguments_options[@]}" : \
-":: :_inspectah__subcmd__help__subcmd__fleet_commands" \
-"*::: :->fleet" \
+":: :_inspectah__subcmd__help__subcmd__aggregate_commands" \
+"*::: :->aggregate" \
 && ret=0
 
     case $state in
-    (fleet)
+    (aggregate)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:inspectah-help-fleet-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:inspectah-help-aggregate-command-$line[1]:"
         case $line[1] in
-            (aggregate)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(init)
+            (init)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -231,13 +217,44 @@ _inspectah_commands() {
     local commands; commands=(
 'scan:Scan the current system and produce a migration snapshot' \
 'refine:Interactively refine scan output and re-render' \
-'fleet:Aggregate and manage fleet-wide migration snapshots' \
+'aggregate:Combine multiple host scan tarballs into an aggregate snapshot' \
 'build:Build a bootc container image from an inspectah tarball snapshot' \
 'version:Print version, commit, and build date' \
 'completions:Generate shell completions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'inspectah commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__aggregate_commands] )) ||
+_inspectah__subcmd__aggregate_commands() {
+    local commands; commands=(
+'init:Generate an aggregate manifest from a directory of tarballs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'inspectah aggregate commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__aggregate__subcmd__help_commands] )) ||
+_inspectah__subcmd__aggregate__subcmd__help_commands() {
+    local commands; commands=(
+'init:Generate an aggregate manifest from a directory of tarballs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'inspectah aggregate help commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__aggregate__subcmd__help__subcmd__help_commands] )) ||
+_inspectah__subcmd__aggregate__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'inspectah aggregate help help commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__aggregate__subcmd__help__subcmd__init_commands] )) ||
+_inspectah__subcmd__aggregate__subcmd__help__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'inspectah aggregate help init commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__aggregate__subcmd__init_commands] )) ||
+_inspectah__subcmd__aggregate__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'inspectah aggregate init commands' commands "$@"
 }
 (( $+functions[_inspectah__subcmd__build_commands] )) ||
 _inspectah__subcmd__build_commands() {
@@ -249,61 +266,30 @@ _inspectah__subcmd__completions_commands() {
     local commands; commands=()
     _describe -t commands 'inspectah completions commands' commands "$@"
 }
-(( $+functions[_inspectah__subcmd__fleet_commands] )) ||
-_inspectah__subcmd__fleet_commands() {
-    local commands; commands=(
-'aggregate:Aggregate host tarballs into a fleet tarball' \
-'init:Generate a fleet manifest from a directory of tarballs' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'inspectah fleet commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__aggregate_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__aggregate_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah fleet aggregate commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__help_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__help_commands() {
-    local commands; commands=(
-'aggregate:Aggregate host tarballs into a fleet tarball' \
-'init:Generate a fleet manifest from a directory of tarballs' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'inspectah fleet help commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__help__subcmd__aggregate_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__help__subcmd__aggregate_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah fleet help aggregate commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__help__subcmd__help_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah fleet help help commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__help__subcmd__init_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__help__subcmd__init_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah fleet help init commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__fleet__subcmd__init_commands] )) ||
-_inspectah__subcmd__fleet__subcmd__init_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah fleet init commands' commands "$@"
-}
 (( $+functions[_inspectah__subcmd__help_commands] )) ||
 _inspectah__subcmd__help_commands() {
     local commands; commands=(
 'scan:Scan the current system and produce a migration snapshot' \
 'refine:Interactively refine scan output and re-render' \
-'fleet:Aggregate and manage fleet-wide migration snapshots' \
+'aggregate:Combine multiple host scan tarballs into an aggregate snapshot' \
 'build:Build a bootc container image from an inspectah tarball snapshot' \
 'version:Print version, commit, and build date' \
 'completions:Generate shell completions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'inspectah help commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__help__subcmd__aggregate_commands] )) ||
+_inspectah__subcmd__help__subcmd__aggregate_commands() {
+    local commands; commands=(
+'init:Generate an aggregate manifest from a directory of tarballs' \
+    )
+    _describe -t commands 'inspectah help aggregate commands' commands "$@"
+}
+(( $+functions[_inspectah__subcmd__help__subcmd__aggregate__subcmd__init_commands] )) ||
+_inspectah__subcmd__help__subcmd__aggregate__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'inspectah help aggregate init commands' commands "$@"
 }
 (( $+functions[_inspectah__subcmd__help__subcmd__build_commands] )) ||
 _inspectah__subcmd__help__subcmd__build_commands() {
@@ -314,24 +300,6 @@ _inspectah__subcmd__help__subcmd__build_commands() {
 _inspectah__subcmd__help__subcmd__completions_commands() {
     local commands; commands=()
     _describe -t commands 'inspectah help completions commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__help__subcmd__fleet_commands] )) ||
-_inspectah__subcmd__help__subcmd__fleet_commands() {
-    local commands; commands=(
-'aggregate:Aggregate host tarballs into a fleet tarball' \
-'init:Generate a fleet manifest from a directory of tarballs' \
-    )
-    _describe -t commands 'inspectah help fleet commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__help__subcmd__fleet__subcmd__aggregate_commands] )) ||
-_inspectah__subcmd__help__subcmd__fleet__subcmd__aggregate_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah help fleet aggregate commands' commands "$@"
-}
-(( $+functions[_inspectah__subcmd__help__subcmd__fleet__subcmd__init_commands] )) ||
-_inspectah__subcmd__help__subcmd__fleet__subcmd__init_commands() {
-    local commands; commands=()
-    _describe -t commands 'inspectah help fleet init commands' commands "$@"
 }
 (( $+functions[_inspectah__subcmd__help__subcmd__help_commands] )) ||
 _inspectah__subcmd__help__subcmd__help_commands() {
