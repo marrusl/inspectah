@@ -10,10 +10,14 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
 # 1. Install inspectah
 sudo dnf copr enable mrussell/inspectah
 sudo dnf install inspectah
+```
 
+```bash
 # 2. Scan your system (run on the host you want to migrate)
 inspectah scan
+```
 
+```bash
 # 3. Review the output
 ls -lh *.tar.gz
 tar tzf hostname-*.tar.gz | head -20
@@ -63,16 +67,19 @@ Requires Rust toolchain (1.70+).
 
 ## What It Does
 
-inspectah follows a four-step workflow:
+`inspectah scan` does three things in one pass:
 
-1. **Scan** — Extract the delta between the base OS and your running system (packages, configs, services, users, containers)
-2. **Inspect** — Classify findings as baseline (already in base image), user-added, or modified
-3. **Triage** — Generate migration artifacts: Containerfile, config tree, audit report, secrets review
-4. **Refine** (optional) — Edit findings in an interactive browser dashboard and re-render artifacts
+1. **Scan** — Snapshot everything on the running system: packages, configs, services, users, containers
+2. **Classify** — Compare against the target base image and classify each finding as baseline (already in the image), user-added, or modified
+3. **Render** — Generate migration artifacts from the classified findings: Containerfile, config tree, audit report, secrets review
 
-inspectah can orchestrate the build via `inspectah build <tarball> <tag>` (runs `podman build` under the hood) or you can extract the tarball and build manually.
+The baseline comparison is critical: inspectah pulls the target base image to determine what's already there, so it only includes the delta in your migration artifacts.
 
-The baseline comparison is critical: inspectah extracts the target base image to determine what's already there, so it only includes the delta in your migration artifacts.
+After scanning, you can optionally **refine** the output:
+
+4. **Refine** (optional) — Open an interactive browser dashboard to toggle items on/off, override classifications, and re-render artifacts with your changes
+
+Build with `inspectah build <tarball> <tag>` (runs `podman build` under the hood) or extract the tarball and build manually.
 
 ## Output
 
