@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::aggregate::{
+    AggregatePrevalence, AggregateSnapshotMeta, VariantSelection,
+};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, VariantSelection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
@@ -267,7 +269,10 @@ fn aggregate_variant_file_uses_hash_prefix() {
     let files = tarball_file_set(&tarball_path);
 
     // Every variant file must end with .content and have a 12-char hex prefix
-    for file in files.iter().filter(|f| f.starts_with("aggregate/variants/")) {
+    for file in files
+        .iter()
+        .filter(|f| f.starts_with("aggregate/variants/"))
+    {
         let filename = file.rsplit('/').next().unwrap();
         assert!(
             filename.ends_with(".content"),
@@ -560,10 +565,8 @@ fn export_dropin_variant_paths_use_directory_hierarchy() {
         .collect();
 
     assert!(
-        variant_files
-            .iter()
-            .any(|f| f
-                .starts_with("aggregate/variants/etc/systemd/system/httpd.service.d/override.conf/")),
+        variant_files.iter().any(|f| f
+            .starts_with("aggregate/variants/etc/systemd/system/httpd.service.d/override.conf/")),
         "expected directory hierarchy for drop-in, got: {variant_files:?}"
     );
 }

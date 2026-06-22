@@ -1832,7 +1832,10 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
     assert_eq!(status, StatusCode::OK);
 
     let entries = json.as_array().expect("ops should be an array");
-    assert!(!entries.is_empty(), "timeline should have at least one entry");
+    assert!(
+        !entries.is_empty(),
+        "timeline should have at least one entry"
+    );
 
     // Verify the View directive entry has correct structure
     let view_entry = entries.iter().find(|e| e["kind"] == "View");

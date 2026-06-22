@@ -107,16 +107,6 @@ rendered artifacts.
 
 ---
 
-## `inspectah aggregate init`
-
-Produces a aggregate manifest file, not a tarball.
-
-| File | Description |
-|------|-------------|
-| `aggregate.toml` (default) or `--output` path | TOML manifest listing tarball sources, baseline image, and aggregate label. |
-
----
-
 ## `inspectah refine` export
 
 The refine UI export produces a **narrower** artifact set than scan. It

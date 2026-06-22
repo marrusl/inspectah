@@ -241,9 +241,7 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
         PullFailureKind::AuthRequired => {
             msg.push_str("  Cause:  authentication required\n\n");
             msg.push_str("  Verify the image reference is correct (a wrong registry can look like an auth error):\n");
-            msg.push_str(
-                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
-            );
+            msg.push_str("    inspectah scan --base-image <correct-registry>/<image>:<tag>\n");
             msg.push_str("  If the reference is correct, log in to the registry:\n");
             msg.push_str(&format!("    podman login {registry}\n"));
             msg.push_str(
@@ -255,20 +253,14 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
             msg.push_str("  Cause:  image or tag not found\n\n");
             msg.push_str("  Verify the image reference is correct:\n");
             msg.push_str(&format!("    podman search {repo}\n"));
-            msg.push_str(&format!(
-                "    skopeo list-tags docker://{repo}\n"
-            ));
+            msg.push_str(&format!("    skopeo list-tags docker://{repo}\n"));
             msg.push_str("  If your image is at a different registry or tag, use:\n");
-            msg.push_str(
-                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
-            );
+            msg.push_str("    inspectah scan --base-image <correct-registry>/<image>:<tag>\n");
         }
         PullFailureKind::TlsCertError => {
             msg.push_str("  Cause:  TLS certificate error\n\n");
             msg.push_str("  Verify the image reference is correct (a wrong registry can cause TLS errors):\n");
-            msg.push_str(
-                "    inspectah scan --base-image <correct-registry>/<image>:<tag>\n",
-            );
+            msg.push_str("    inspectah scan --base-image <correct-registry>/<image>:<tag>\n");
             msg.push_str("  If using a private registry with self-signed certificates:\n");
             msg.push_str(
                 "    sudo cp ca.crt /etc/pki/ca-trust/source/anchors/ && sudo update-ca-trust\n",
@@ -482,19 +474,19 @@ mod tests {
         );
         assert!(msg.contains("Cause:  image or tag not found"));
         assert!(msg.contains("skopeo list-tags docker://quay.io/centos-bootc/centos-bootc"));
-        assert!(!msg.contains("skopeo list-tags docker://quay.io/centos-bootc/centos-bootc:nonexistent"),
-            "skopeo list-tags must use repo-only ref, not tagged ref");
+        assert!(
+            !msg.contains(
+                "skopeo list-tags docker://quay.io/centos-bootc/centos-bootc:nonexistent"
+            ),
+            "skopeo list-tags must use repo-only ref, not tagged ref"
+        );
         assert!(msg.contains("podman search quay.io/centos-bootc/centos-bootc"));
     }
 
     #[test]
     fn format_unknown_shows_stderr_excerpt() {
         let stderr = "line one\nline two\nline three\nline four\nline five";
-        let msg = format_pull_error(
-            &PullFailureKind::Unknown,
-            "example.com/image:v1",
-            stderr,
-        );
+        let msg = format_pull_error(&PullFailureKind::Unknown, "example.com/image:v1", stderr);
         assert!(msg.contains("Cause:  pull failed"));
         assert!(msg.contains("line one"));
         assert!(msg.contains("line three"));
@@ -509,7 +501,10 @@ mod tests {
             "quay.io/test:latest",
             "unauthorized: some verbose podman output here",
         );
-        assert!(!msg.contains("podman reported:"), "only Unknown shows stderr excerpt");
+        assert!(
+            !msg.contains("podman reported:"),
+            "only Unknown shows stderr excerpt"
+        );
     }
 
     #[test]
@@ -519,7 +514,9 @@ mod tests {
             "quay.io/centos-bootc/centos-bootc:stream10",
             "no such host",
         );
-        assert!(msg.contains("podman save -o baseline.tar quay.io/centos-bootc/centos-bootc:stream10"));
+        assert!(
+            msg.contains("podman save -o baseline.tar quay.io/centos-bootc/centos-bootc:stream10")
+        );
         assert!(msg.contains("podman load"));
     }
 
@@ -578,7 +575,10 @@ mod tests {
         assert!(msg.contains("--base-image"));
         assert!(msg.contains("quay.io/centos-bootc/centos-bootc:stream10"));
         assert!(msg.contains("registry.redhat.io/rhel10/rhel-bootc:10.2"));
-        assert!(!msg.contains("--no-baseline"), "must not reference removed flag");
+        assert!(
+            !msg.contains("--no-baseline"),
+            "must not reference removed flag"
+        );
         assert!(msg.contains("os-release missing IMAGE_REF"));
     }
 
@@ -641,5 +641,4 @@ mod tests {
             Some("myhost:5000")
         );
     }
-
 }

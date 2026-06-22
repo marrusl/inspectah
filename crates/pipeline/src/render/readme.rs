@@ -145,8 +145,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         {
             let format = time::format_description::parse("[year]-[month]-[day]")
                 .expect("static format description");
-            let date_str =
-                expiry.format(&format).unwrap_or_else(|_| "unknown".into());
+            let date_str = expiry.format(&format).unwrap_or_else(|_| "unknown".into());
             let now = time::OffsetDateTime::now_utc();
             let days = (expiry - now).whole_days();
 
@@ -448,10 +447,7 @@ mod tests {
             md.contains("Subscription certs expire:"),
             "must show expiry date"
         );
-        assert!(
-            md.contains("days remaining"),
-            "must show days remaining"
-        );
+        assert!(md.contains("days remaining"), "must show days remaining");
     }
 
     #[test]
@@ -469,10 +465,7 @@ mod tests {
             md.contains("WARNING"),
             "must show warning for imminent expiry"
         );
-        assert!(
-            md.contains("Rebuild soon"),
-            "must advise rebuild"
-        );
+        assert!(md.contains("Rebuild soon"), "must advise rebuild");
     }
 
     #[test]
@@ -486,14 +479,8 @@ mod tests {
             ..Default::default()
         });
         let md = render_readme(&snap);
-        assert!(
-            md.contains("EXPIRED"),
-            "must show EXPIRED for past certs"
-        );
-        assert!(
-            md.contains("Re-scan"),
-            "must advise re-scanning"
-        );
+        assert!(md.contains("EXPIRED"), "must show EXPIRED for past certs");
+        assert!(md.contains("Re-scan"), "must advise re-scanning");
     }
 
     #[test]

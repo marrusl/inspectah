@@ -415,11 +415,12 @@ impl Inspector for RpmInspector {
 
         // 8a. Filter group members to only installed packages
         if let Some(ref mut groups) = installed_groups {
-            let installed_names: HashSet<&str> = host_packages.iter()
-                .map(|p| p.name.as_str())
-                .collect();
+            let installed_names: HashSet<&str> =
+                host_packages.iter().map(|p| p.name.as_str()).collect();
             for group in groups.iter_mut() {
-                group.members.retain(|name| installed_names.contains(name.as_str()));
+                group
+                    .members
+                    .retain(|name| installed_names.contains(name.as_str()));
             }
         }
 
@@ -761,8 +762,14 @@ fn classify_deps_rpm(
     };
 
     // Build cap→provider_ids map from batched resolution.
-    let cap_providers =
-        resolve_all_providers(exec, &all_caps, &added_names, added_ids, &name_re, batch_size);
+    let cap_providers = resolve_all_providers(
+        exec,
+        &all_caps,
+        &added_names,
+        added_ids,
+        &name_re,
+        batch_size,
+    );
 
     // Distribute resolved providers to each package by its own cap list.
     for (pkg_name, caps) in &per_pkg_caps {
@@ -1251,7 +1258,6 @@ mod tests {
         } else {
             panic!("expected SectionData::Rpm");
         }
-
     }
 
     #[test]
@@ -2715,10 +2721,7 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
 ";
         let exec = MockExecutor::new()
             .with_command(
-                &format!(
-                    "rpm -q --queryformat {} glibc vim",
-                    RPM_REQUIRES_FORMAT
-                ),
+                &format!("rpm -q --queryformat {} glibc vim", RPM_REQUIRES_FORMAT),
                 ExecResult {
                     exit_code: 0,
                     stdout: sentinel_output.into(),
@@ -2760,10 +2763,7 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
     #[test]
     fn classify_deps_rpm_returns_none_when_rpm_unavailable() {
         let exec = MockExecutor::new().with_command(
-            &format!(
-                "rpm -q --queryformat {} glibc",
-                RPM_REQUIRES_FORMAT
-            ),
+            &format!("rpm -q --queryformat {} glibc", RPM_REQUIRES_FORMAT),
             ExecResult {
                 exit_code: 1,
                 stdout: String::new(),
@@ -3034,10 +3034,7 @@ Group: Development Tools
             // Group metadata lists: gcc, make, bash, vim-enhanced, httpd, gdb, strace
             // But only bash, vim-enhanced, httpd are actually installed
             // Expected members after filtering: bash, httpd, vim-enhanced (sorted)
-            assert_eq!(
-                groups[0].members,
-                vec!["bash", "httpd", "vim-enhanced"]
-            );
+            assert_eq!(groups[0].members, vec!["bash", "httpd", "vim-enhanced"]);
         } else {
             panic!("expected SectionData::Rpm");
         }

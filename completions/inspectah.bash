@@ -37,18 +37,6 @@ _inspectah() {
             inspectah,version)
                 cmd="inspectah__subcmd__version"
                 ;;
-            inspectah__subcmd__aggregate,help)
-                cmd="inspectah__subcmd__aggregate__subcmd__help"
-                ;;
-            inspectah__subcmd__aggregate,init)
-                cmd="inspectah__subcmd__aggregate__subcmd__init"
-                ;;
-            inspectah__subcmd__aggregate__subcmd__help,help)
-                cmd="inspectah__subcmd__aggregate__subcmd__help__subcmd__help"
-                ;;
-            inspectah__subcmd__aggregate__subcmd__help,init)
-                cmd="inspectah__subcmd__aggregate__subcmd__help__subcmd__init"
-                ;;
             inspectah__subcmd__help,aggregate)
                 cmd="inspectah__subcmd__help__subcmd__aggregate"
                 ;;
@@ -69,9 +57,6 @@ _inspectah() {
                 ;;
             inspectah__subcmd__help,version)
                 cmd="inspectah__subcmd__help__subcmd__version"
-                ;;
-            inspectah__subcmd__help__subcmd__aggregate,init)
-                cmd="inspectah__subcmd__help__subcmd__aggregate__subcmd__init"
                 ;;
             *)
                 ;;
@@ -94,16 +79,12 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__aggregate)
-            opts="-v -h --manifest --target-image --output-dir --output-file --json-only --strict --verbose --acknowledge-sensitive --ack-sensitive --help [INPUTS]... init help"
+            opts="-v -h --target-image --output-dir --output-file --json-only --strict --verbose --acknowledge-sensitive --ack-sensitive --help [INPUTS]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --manifest)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 --target-image)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -113,66 +94,6 @@ _inspectah() {
                     return 0
                     ;;
                 --output-file)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        inspectah__subcmd__aggregate__subcmd__help)
-            opts="init help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        inspectah__subcmd__aggregate__subcmd__help__subcmd__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        inspectah__subcmd__aggregate__subcmd__help__subcmd__init)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        inspectah__subcmd__aggregate__subcmd__init)
-            opts="-h --output --overwrite --help <DIRECTORY>"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --output)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -234,22 +155,8 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__help__subcmd__aggregate)
-            opts="init"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        inspectah__subcmd__help__subcmd__aggregate__subcmd__init)
             opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

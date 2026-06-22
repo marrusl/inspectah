@@ -9,7 +9,7 @@ use inspectah_refine::classify::{
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    ContentHash, AggregateContext, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
+    AggregateContext, ContentHash, ItemId, Triage, TriageBucket, TriageReason, TriageTag,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -354,7 +354,10 @@ pub async fn aggregate_diff(
 // Response builder
 // ---------------------------------------------------------------------------
 
-fn build_aggregate_view_response(session: &RefineSession, ctx: &AggregateContext) -> AggregateViewResponse {
+fn build_aggregate_view_response(
+    session: &RefineSession,
+    ctx: &AggregateContext,
+) -> AggregateViewResponse {
     let view = session.view();
     let snap = session.snapshot_projected();
     let sections = build_aggregate_sections(session, &snap, ctx);
@@ -1567,8 +1570,8 @@ mod tests {
 
     #[test]
     fn aggregate_flatpak_prevalence_plumbed() {
-        use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
         use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
         use inspectah_refine::session::RefineSession;
 
         let app = FlatpakApp {

@@ -1,7 +1,7 @@
 pub mod adapter;
+pub mod aggregate_handlers;
 pub mod assets;
 pub mod error;
-pub mod aggregate_handlers;
 pub mod handlers;
 pub mod web_types;
 
@@ -80,8 +80,14 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/user-strategy", post(handlers::user_strategy))
         .route("/api/user-password", post(handlers::user_password))
         .route("/api/user-preview", get(handlers::user_preview))
-        .route("/api/aggregate/view", get(aggregate_handlers::aggregate_view))
-        .route("/api/aggregate/diff", post(aggregate_handlers::aggregate_diff))
+        .route(
+            "/api/aggregate/view",
+            get(aggregate_handlers::aggregate_view),
+        )
+        .route(
+            "/api/aggregate/diff",
+            post(aggregate_handlers::aggregate_diff),
+        )
         .route("/api/snapshot/sections", get(handlers::get_sections))
         .route(
             "/api/viewed",

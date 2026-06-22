@@ -1219,7 +1219,6 @@ dependencies = [
  "insta",
  "libc",
  "open",
- "pathdiff",
  "predicates",
  "reqwest",
  "serde_json",

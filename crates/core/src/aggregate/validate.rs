@@ -62,9 +62,11 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
 
     // --- Hard error: too few snapshots ---
     if snapshots.len() < 2 {
-        result.errors.push(AggregateValidationError::TooFewSnapshots {
-            count: snapshots.len(),
-        });
+        result
+            .errors
+            .push(AggregateValidationError::TooFewSnapshots {
+                count: snapshots.len(),
+            });
         // With fewer than 2 snapshots, most other checks are meaningless,
         // but we continue to report as many problems as possible.
     }
@@ -90,9 +92,11 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
         }
         for (hostname, count) in &seen {
             if *count > 1 {
-                result.errors.push(AggregateValidationError::DuplicateHostname {
-                    hostname: hostname.clone(),
-                });
+                result
+                    .errors
+                    .push(AggregateValidationError::DuplicateHostname {
+                        hostname: hostname.clone(),
+                    });
             }
         }
     }

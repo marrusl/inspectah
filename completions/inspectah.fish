@@ -54,22 +54,14 @@ false\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l fresh -d 'Start a fresh session, discarding any saved progress'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l tui -d 'Use terminal UI instead of web browser'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -s h -l help -d 'Print help'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l manifest -d 'Path to an aggregate manifest (TOML) specifying sources' -r -F
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l target-image -d 'Override the target image reference for baseline comparison' -r
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l output-dir -d 'Output directory for the aggregate tarball' -r -F
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l output-file -d 'Output file path for the aggregate tarball' -r -F
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l json-only -d 'Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l strict -d 'Treat warnings as errors'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -s v -l verbose -d 'Show per-host detail in output'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -s h -l help -d 'Print help'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -a "init" -d 'Generate an aggregate manifest from a directory of tarballs'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and not __fish_seen_subcommand_from init help" -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and __fish_seen_subcommand_from init" -l output -d 'Output path for the generated manifest' -r -F
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and __fish_seen_subcommand_from init" -l overwrite -d 'Overwrite an existing manifest file'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and __fish_seen_subcommand_from init" -s h -l help -d 'Print help'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and __fish_seen_subcommand_from help" -f -a "init" -d 'Generate an aggregate manifest from a directory of tarballs'
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l target-image -d 'Override the target image reference for baseline comparison' -r
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l output-dir -d 'Output directory for the aggregate tarball' -r -F
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l output-file -d 'Output file path for the aggregate tarball' -r -F
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l json-only -d 'Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l strict -d 'Treat warnings as errors'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s v -l verbose -d 'Show per-host detail in output'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -s t -l tag -d 'Image tag (must include version, e.g., \'myimage:v1\')' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -l dry-run -d 'Show the build command without executing it'
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -l keep-context -d 'Keep the extracted build context after build completes'
@@ -83,4 +75,3 @@ complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "version" -d 'Print version, commit, and build date'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "completions" -d 'Generate shell completions'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c inspectah -n "__fish_inspectah_using_subcommand help; and __fish_seen_subcommand_from aggregate" -f -a "init" -d 'Generate an aggregate manifest from a directory of tarballs'

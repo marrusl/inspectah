@@ -21,7 +21,7 @@ inspectah [COMMAND]
 | `scan`    | Scan the current system and produce a migration snapshot |
 | `build`   | Build a bootc container image from an inspectah tarball |
 | `refine`  | Interactively refine scan output and re-render       |
-| `aggregate`   | Aggregate and manage aggregate-wide migration snapshots  |
+| `aggregate`   | Combine multiple host scan tarballs into an aggregate snapshot |
 | `version` | Print version, commit, and build date                |
 | `help`    | Print help for a command                             |
 
@@ -174,83 +174,22 @@ inspectah refine --fresh /tmp/migration-snapshot.tar.gz
 
 ## inspectah aggregate
 
-Aggregate and manage aggregate-wide migration snapshots.
-
-```
-inspectah aggregate <COMMAND>
-```
-
-### Subcommands
-
-| Command     | Description                                          |
-|-------------|------------------------------------------------------|
-| `aggregate` | Aggregate host tarballs into a aggregate tarball         |
-| `init`      | Generate a aggregate manifest from a directory of tarballs |
-
----
-
-### inspectah aggregate init
-
-Generate a TOML aggregate manifest from a directory of host tarballs.
-
-```
-inspectah aggregate init [OPTIONS] <DIRECTORY>
-```
-
-#### Arguments
-
-| Argument      | Required | Description                        |
-|---------------|----------|------------------------------------|
-| `<DIRECTORY>` | yes      | Directory containing host tarballs |
-
-#### Options
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--output <OUTPUT>` | path | — | Output path for the generated manifest |
-| `--overwrite` | bool | `false` | Overwrite an existing manifest file |
-
-#### Examples
-
-Generate a manifest from a directory of tarballs:
-
-```bash
-inspectah aggregate init /srv/snapshots/
-```
-
-Write the manifest to a specific path:
-
-```bash
-inspectah aggregate init --output aggregate.toml /srv/snapshots/
-```
-
-Overwrite an existing manifest:
-
-```bash
-inspectah aggregate init --overwrite --output aggregate.toml /srv/snapshots/
-```
-
----
-
-### inspectah aggregate
-
-Aggregate individual host tarballs into a single aggregate tarball.
+Combine multiple host scan tarballs into a single aggregate snapshot.
 
 ```
 inspectah aggregate [OPTIONS] [INPUTS]...
 ```
 
-#### Arguments
+### Arguments
 
 | Argument      | Required | Description                                    |
 |---------------|----------|------------------------------------------------|
-| `[INPUTS]...` | no       | Input tarballs or directory containing tarballs |
+| `[INPUTS]...` | yes      | Input tarballs or directory containing tarballs |
 
-#### Options
+### Options
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--manifest <MANIFEST>` | path | — | Path to a aggregate manifest (TOML) specifying sources |
 | `--target-image <IMAGE>` | string | — | Override the target image reference for baseline comparison |
 | `--output-dir <OUTPUT_DIR>` | path | — | Output directory for the aggregate tarball |
 | `--output-file <OUTPUT_FILE>` | path | — | Output file path for the aggregate tarball |
@@ -259,7 +198,7 @@ inspectah aggregate [OPTIONS] [INPUTS]...
 | `-v, --verbose` | bool | `false` | Show per-host detail in output |
 | `--ack-sensitive` | bool | `false` | Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys). Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive` |
 
-#### Examples
+### Examples
 
 Aggregate all tarballs in a directory:
 
@@ -271,12 +210,6 @@ Aggregate specific tarballs:
 
 ```bash
 inspectah aggregate host-a.tar.gz host-b.tar.gz host-c.tar.gz
-```
-
-Aggregate from a aggregate manifest:
-
-```bash
-inspectah aggregate --manifest aggregate.toml
 ```
 
 Override the target image during aggregation:
@@ -300,7 +233,7 @@ inspectah aggregate --output-file /tmp/aggregate.tar.gz /srv/snapshots/
 Strict mode (fail on warnings):
 
 ```bash
-inspectah aggregate --strict --manifest aggregate.toml
+inspectah aggregate --strict /srv/snapshots/
 ```
 
 Aggregate snapshots that contain sensitive data (subscription certs, password hashes):

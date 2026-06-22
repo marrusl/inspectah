@@ -69,21 +69,13 @@ for the full command reference.
 
 | Flag | Description |
 |:-----|:------------|
-| `--manifest <PATH>` | Path to a aggregate manifest (TOML). Cannot be combined with positional inputs. |
-| `--target-image <IMAGE>` | Override the target image reference from the manifest. |
+| `--target-image <IMAGE>` | Override the target image reference for baseline comparison. |
 | `--output-dir <DIR>` | Output directory for the aggregate tarball. |
 | `--output-file <FILE>` | Output file path for the aggregate tarball. |
 | `--json-only` | Write JSON snapshot to stdout (or file) instead of tarball. |
 | `--strict` | Treat aggregation warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |
 | `--ack-sensitive` | Acknowledge that the merged output may contain sensitive data. Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive`. |
-
-## CLI flags (init)
-
-| Flag | Description |
-|:-----|:------------|
-| `--output <PATH>` | Output path for the generated manifest. Defaults to `aggregate.toml`. |
-| `--overwrite` | Overwrite an existing manifest file. |
 
 ## Exit codes
 

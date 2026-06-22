@@ -98,7 +98,7 @@ fn aggregate_merge_picks_latest_expiry() {
     with_subscription(&mut snap_b, "host-b", "222", late_ts);
 
     let (merged, warnings) =
-        merge_snapshots(vec![snap_a, snap_b], None).expect("merge should succeed");
+        merge_snapshots(vec![snap_a, snap_b], None, None).expect("merge should succeed");
 
     assert!(
         warnings.is_empty()
@@ -130,7 +130,8 @@ fn aggregate_merge_subscription_hostname_tiebreak_on_equal_expiry() {
     let mut snap_a = valid_snap("host-alpha");
     with_subscription(&mut snap_a, "host-alpha", "888", same_ts);
 
-    let (merged, _) = merge_snapshots(vec![snap_z, snap_a], None).expect("merge should succeed");
+    let (merged, _) =
+        merge_snapshots(vec![snap_z, snap_a], None, None).expect("merge should succeed");
 
     let sub = merged.subscription.expect("should have subscription");
     assert_eq!(
@@ -157,7 +158,7 @@ fn aggregate_merge_subscription_mixed_presence() {
     let snap_c = valid_snap("host-c");
 
     let (merged, _) =
-        merge_snapshots(vec![snap_a, snap_b, snap_c], None).expect("merge should succeed");
+        merge_snapshots(vec![snap_a, snap_b, snap_c], None, None).expect("merge should succeed");
 
     assert!(merged.preserved_subscription, "OR across hosts");
     assert!(merged.sensitive_snapshot, "OR across hosts");
@@ -182,7 +183,8 @@ fn aggregate_merge_subscription_skips_incomplete() {
     let mut snap_b = valid_snap("host-b");
     with_subscription(&mut snap_b, "host-b", "222", early_ts);
 
-    let (merged, _) = merge_snapshots(vec![snap_a, snap_b], None).expect("merge should succeed");
+    let (merged, _) =
+        merge_snapshots(vec![snap_a, snap_b], None, None).expect("merge should succeed");
 
     let sub = merged.subscription.expect("should have subscription");
     // host-b wins because host-a is incomplete
@@ -205,7 +207,8 @@ fn aggregate_merge_subscription_carries_entitlement_pairs() {
     // Add a second host with no subscription to trigger aggregate merge
     let snap_b = valid_snap("host-b");
 
-    let (merged, _) = merge_snapshots(vec![snap, snap_b], None).expect("merge should succeed");
+    let (merged, _) =
+        merge_snapshots(vec![snap, snap_b], None, None).expect("merge should succeed");
 
     let sub = merged.subscription.expect("should have subscription");
     assert_eq!(sub.entitlement_certs.len(), 2, "cert + key");
@@ -272,7 +275,7 @@ fn aggregate_merge_three_hosts_picks_latest() {
     with_subscription(&mut snap_c, "host-c", "333", ts3);
 
     let (merged, _) =
-        merge_snapshots(vec![snap_a, snap_b, snap_c], None).expect("merge should succeed");
+        merge_snapshots(vec![snap_a, snap_b, snap_c], None, None).expect("merge should succeed");
 
     let sub = merged.subscription.expect("should have subscription");
     assert_eq!(sub.source_hostname.as_deref(), Some("host-c"));

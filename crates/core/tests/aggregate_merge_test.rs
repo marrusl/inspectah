@@ -4,9 +4,9 @@ use inspectah_core::aggregate::merge::{
     merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
 };
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
-use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::kernelboot::{
     AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
 };
@@ -1198,7 +1198,10 @@ fn test_merge_container_sections_flatpak_dedup() {
         .iter()
         .find(|a| a.app_id == "org.mozilla.Firefox")
         .expect("Firefox should be in merged output");
-    let ff_agg = firefox.aggregate.as_ref().expect("should have aggregate data");
+    let ff_agg = firefox
+        .aggregate
+        .as_ref()
+        .expect("should have aggregate data");
     assert_eq!(ff_agg.count, 1);
     assert_eq!(ff_agg.total, 2);
 }
@@ -1625,7 +1628,10 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
 
     // sysctl merged
     assert_eq!(result.sysctl_overrides.len(), 1);
-    assert_eq!(result.sysctl_overrides[0].aggregate.as_ref().unwrap().count, 2);
+    assert_eq!(
+        result.sysctl_overrides[0].aggregate.as_ref().unwrap().count,
+        2
+    );
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);

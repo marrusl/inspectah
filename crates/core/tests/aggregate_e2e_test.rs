@@ -7,12 +7,12 @@
 //! invariants (prevalence totals, variant selection, aggregate_meta, baseline
 //! provisionality, deterministic output, validation errors).
 
-use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::aggregate::validate::AggregateValidationError;
+use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::aggregate::VariantSelection;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::services::{
@@ -125,7 +125,7 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
     with_configs(&mut s3, &[("/etc/app.conf", "version=2")]);
     with_services(&mut s3, &["httpd.service", "postgresql.service"]);
 
-    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     // aggregate_meta populated correctly
     let meta = merged.aggregate_meta.as_ref().unwrap();
@@ -255,7 +255,7 @@ fn test_e2e_validation_mixed_architecture() {
         pkg.arch = "aarch64".into();
     }
 
-    let result = merge_snapshots(vec![s1, s2], None);
+    let result = merge_snapshots(vec![s1, s2], None, None);
     assert!(result.is_err(), "mixed architectures should fail");
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
@@ -275,7 +275,7 @@ fn test_e2e_validation_duplicate_hostname() {
     with_rpms(&mut s2, &["nginx"]);
     with_configs(&mut s2, &[("/etc/app.conf", "b")]);
 
-    let result = merge_snapshots(vec![s1, s2], None);
+    let result = merge_snapshots(vec![s1, s2], None, None);
     assert!(result.is_err(), "duplicate hostnames should fail");
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
@@ -295,7 +295,7 @@ fn test_e2e_validation_os_major_mismatch() {
     with_rpms(&mut s2, &["httpd"]);
     with_services(&mut s2, &["httpd.service"]);
 
-    let result = merge_snapshots(vec![s1, s2], None);
+    let result = merge_snapshots(vec![s1, s2], None, None);
     assert!(result.is_err(), "OS major version mismatch should fail");
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
@@ -327,7 +327,7 @@ fn test_e2e_missing_section_uses_global_denominator() {
     with_rpms(&mut s3, &["httpd"]);
     with_configs(&mut s3, &[("/etc/app.conf", "v1")]);
 
-    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     // aggregate_meta should show rpm present on 2 hosts
     let meta = merged.aggregate_meta.as_ref().unwrap();
@@ -372,7 +372,7 @@ fn test_e2e_host_missing_services_still_counted_in_aggregate() {
     with_rpms(&mut s2, &["httpd"]);
     // No services section
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.section_host_counts.get("services"), Some(&1));
@@ -386,7 +386,10 @@ fn test_e2e_host_missing_services_still_counted_in_aggregate() {
         .unwrap();
     let agg = httpd.aggregate.as_ref().unwrap();
     assert_eq!(agg.count, 1);
-    assert_eq!(agg.total, 2, "services total should be global aggregate size");
+    assert_eq!(
+        agg.total, 2,
+        "services total should be global aggregate size"
+    );
 }
 
 // ===========================================================================
@@ -417,7 +420,7 @@ fn test_e2e_baseline_provisional_when_multiple_target_images() {
     });
     with_rpms(&mut s3, &["httpd"]);
 
-    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     let meta = merged.aggregate_meta.as_ref().unwrap();
     assert!(
@@ -450,7 +453,7 @@ fn test_e2e_baseline_not_provisional_when_unanimous() {
     let mut s2 = make_rich_snap("host-b", "9.4");
     with_rpms(&mut s2, &["httpd"]);
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let meta = merged.aggregate_meta.as_ref().unwrap();
     assert!(
@@ -493,11 +496,11 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
 
     // Forward order
     let (s1a, s2a, s3a) = build_aggregate();
-    let (merged_fwd, warnings_fwd) = merge_snapshots(vec![s1a, s2a, s3a], None).unwrap();
+    let (merged_fwd, warnings_fwd) = merge_snapshots(vec![s1a, s2a, s3a], None, None).unwrap();
 
     // Reversed order
     let (s1b, s2b, s3b) = build_aggregate();
-    let (merged_rev, warnings_rev) = merge_snapshots(vec![s3b, s2b, s1b], None).unwrap();
+    let (merged_rev, warnings_rev) = merge_snapshots(vec![s3b, s2b, s1b], None, None).unwrap();
 
     // Compare aggregate_meta (except merged_at timestamp)
     let meta_fwd = merged_fwd.aggregate_meta.as_ref().unwrap();
@@ -607,7 +610,7 @@ fn test_e2e_merged_snapshot_serialization_roundtrip() {
     with_configs(&mut s2, &[("/etc/httpd.conf", "ServerName host-b")]);
     with_services(&mut s2, &["httpd.service", "nginx.service"]);
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let json = serde_json::to_string_pretty(&merged).unwrap();
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
@@ -673,7 +676,7 @@ fn test_e2e_heterogeneous_section_coverage() {
     with_configs(&mut s3, &[("/etc/sysctl.conf", "net.ipv4.ip_forward=1")]);
     // Need at least one section, config provides it
 
-    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.host_count, 3);
@@ -754,7 +757,7 @@ fn test_e2e_validation_empty_snapshot_rejected() {
     let mut s2 = make_rich_snap("host-b", "9.4");
     with_rpms(&mut s2, &["httpd"]);
 
-    let result = merge_snapshots(vec![s1, s2], None);
+    let result = merge_snapshots(vec![s1, s2], None, None);
     assert!(
         result.is_err(),
         "empty snapshot should cause validation error"

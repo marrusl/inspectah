@@ -712,7 +712,7 @@ mod tests {
         let s2 = valid_snap("host-b");
 
         let (merged, _warnings) =
-            merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+            merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         assert_eq!(
             merged.meta.get("fleet_source"),
             Some(&serde_json::json!("aggregate")),
@@ -727,7 +727,7 @@ mod tests {
         let mut s2 = valid_snap("host-b");
         s2.meta.insert("env".into(), serde_json::json!("staging"));
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // First-writer-wins for hostname: host-a sorts before host-b
         assert_eq!(
             merged.meta.get("hostname"),
@@ -749,7 +749,7 @@ mod tests {
         let mut s2 = valid_snap("host-b");
         s2.system_type = SystemType::PackageMode;
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         assert_eq!(merged.system_type, SystemType::PackageMode);
     }
 
@@ -787,7 +787,7 @@ mod tests {
             },
         ];
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // 2 from s1 + 1 unique from s2 = 3 (the duplicate is dropped)
         assert_eq!(merged.warnings.len(), 3);
         assert!(
@@ -867,7 +867,7 @@ mod tests {
             },
         ];
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // Redactions: 1 from s1 + 1 unique from s2 = 2
         assert_eq!(merged.redactions.len(), 2);
         assert!(
@@ -923,7 +923,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _warnings) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _warnings) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.preserved_subscription);
         assert!(merged.sensitive_snapshot);
         let sub = merged.subscription.unwrap();
@@ -968,7 +968,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         let sub = merged.subscription.unwrap();
         // Alphabetical tiebreak — host-alpha wins
         assert_eq!(sub.source_hostname.as_deref(), Some("host-alpha"));
@@ -994,7 +994,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.preserved_subscription);
         assert!(merged.subscription.is_some());
     }
@@ -1009,7 +1009,7 @@ mod tests {
 
         let snap2 = valid_snap("host-b");
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.redaction_skipped);
         assert!(merged.sensitive_snapshot);
         // redaction_state is dropped for merged snapshots
@@ -1021,7 +1021,7 @@ mod tests {
         let snap1 = valid_snap("host-a");
         let snap2 = valid_snap("host-b");
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(!merged.redaction_skipped);
     }
 }

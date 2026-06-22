@@ -626,7 +626,10 @@ fn merge_with_variants<T: AggregateMergeable>(
 /// both `merge_items` and `merge_with_variants` produce their results.
 fn narrow_non_universal<T: AggregateMergeable>(items: &mut [T]) {
     for item in items.iter_mut() {
-        let dominated = item.aggregate_mut().as_ref().is_some_and(|f| f.count < f.total);
+        let dominated = item
+            .aggregate_mut()
+            .as_ref()
+            .is_some_and(|f| f.count < f.total);
         if dominated {
             item.set_include(false);
         }
@@ -808,7 +811,6 @@ where
         .and_then(|s| s.as_ref())
         .and_then(|s| extractor(s).clone())
 }
-
 
 /// Merge RPM sections from multiple hosts.
 ///
@@ -1017,22 +1019,18 @@ pub fn merge_rpm_sections(
     // Baseline-bearing fields: source from the winning baseline host (not first-sorted).
     // This ensures RPM section baseline data is consistent with the top-level
     // baseline selection in the orchestrator.
-    let (
-        baseline_package_names,
-        baseline_module_streams,
-        base_image,
-        baseline_suppressed,
-    ) = if let Some(idx) = baseline_host_idx {
-        (
-            baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
-            baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
-            baseline_host_option(&sections, idx, |s| &s.base_image),
-            baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
-        )
-    } else {
-        // No baseline selected — use defaults
-        (None, None, None, None)
-    };
+    let (baseline_package_names, baseline_module_streams, base_image, baseline_suppressed) =
+        if let Some(idx) = baseline_host_idx {
+            (
+                baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
+                baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
+                baseline_host_option(&sections, idx, |s| &s.base_image),
+                baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
+            )
+        } else {
+            // No baseline selected — use defaults
+            (None, None, None, None)
+        };
     // file_ownership: dedup by package_name
     let file_ownership = {
         let mut seen = HashSet::new();
@@ -2122,16 +2120,15 @@ mod tests {
         assert_eq!(chrony_entries.len(), 2, "should have 2 content variants");
 
         for entry in &chrony_entries {
-            let agg = entry.aggregate.as_ref().expect("should have aggregate prevalence");
+            let agg = entry
+                .aggregate
+                .as_ref()
+                .expect("should have aggregate prevalence");
             // Per-variant: each has 1 host
             assert_eq!(agg.count, 1, "per-variant count should be 1");
             assert_eq!(agg.total, 3, "total should be 3");
             // Aggregate: union of both variants = 2 hosts
-            assert_eq!(
-                agg.aggregate_count,
-                Some(2),
-                "aggregate count should be 2"
-            );
+            assert_eq!(agg.aggregate_count, Some(2), "aggregate count should be 2");
             let agg_hosts = agg
                 .aggregate_hosts
                 .as_ref()
@@ -2272,7 +2269,10 @@ mod tests {
 
         // Each distinct identity appears on exactly 1 of 2 hosts
         for app in &merged.flatpak_apps {
-            let agg = app.aggregate.as_ref().expect("flatpak should have aggregate data");
+            let agg = app
+                .aggregate
+                .as_ref()
+                .expect("flatpak should have aggregate data");
             assert_eq!(agg.count, 1);
             assert_eq!(agg.total, 2);
         }
@@ -2367,7 +2367,10 @@ mod tests {
 
         // Each branch variant appears on exactly 1 of 2 hosts
         for app in &merged.flatpak_apps {
-            let agg = app.aggregate.as_ref().expect("flatpak should have aggregate data");
+            let agg = app
+                .aggregate
+                .as_ref()
+                .expect("flatpak should have aggregate data");
             assert_eq!(agg.count, 1);
             assert_eq!(agg.total, 2);
         }

@@ -218,9 +218,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                     let locked = projected_pkgs
                         .iter()
                         .any(|p| p.name == *member_name && p.locked);
-                    let in_base_image = !projected_pkgs
-                        .iter()
-                        .any(|p| p.name == *member_name);
+                    let in_base_image = !projected_pkgs.iter().any(|p| p.name == *member_name);
                     let overlap_groups: Vec<String> = installed_groups
                         .iter()
                         .filter(|other| other.name != group.name)
@@ -237,7 +235,11 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .collect();
 
             // Sort members: new (in_base_image=false) first, then base-image, alphabetical within each
-            members.sort_by(|a, b| a.in_base_image.cmp(&b.in_base_image).then(a.name.cmp(&b.name)));
+            members.sort_by(|a, b| {
+                a.in_base_image
+                    .cmp(&b.in_base_image)
+                    .then(a.name.cmp(&b.name))
+            });
 
             // Compute added_count
             let added_count = members.iter().filter(|m| !m.in_base_image).count();
@@ -809,10 +811,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
     custom_items.extend(snippet_items(&data.modules_load_d, "modules-load.d"));
     custom_items.extend(snippet_items(&data.modprobe_d, "modprobe.d"));
     custom_items.extend(snippet_items(&data.dracut_conf, "dracut.conf.d"));
-    custom_items.extend(snippet_items(
-        &data.custom_tuned_profiles,
-        "tuned profile",
-    ));
+    custom_items.extend(snippet_items(&data.custom_tuned_profiles, "tuned profile"));
 
     if !custom_items.is_empty() {
         subsections.push(ContextSubsection {
@@ -1224,7 +1223,9 @@ mod tests {
         assert!(json.get("service_states").is_some());
         assert!(json.get("repo_groups").is_some());
         // package_groups present even with no groups
-        let groups = json["package_groups"].as_array().expect("package_groups array");
+        let groups = json["package_groups"]
+            .as_array()
+            .expect("package_groups array");
         assert!(groups.is_empty(), "empty snapshot has no groups");
     }
 
@@ -1406,7 +1407,12 @@ mod tests {
             ],
             installed_groups: Some(vec![InstalledGroup {
                 name: "Web Server".into(),
-                members: vec!["httpd".into(), "mod_ssl".into(), "apr".into(), "apr-util".into()],
+                members: vec![
+                    "httpd".into(),
+                    "mod_ssl".into(),
+                    "apr".into(),
+                    "apr-util".into(),
+                ],
                 optional_installed: vec![],
             }]),
             ..Default::default()
@@ -1430,43 +1436,71 @@ mod tests {
 
         // Assert: members sorted new first (httpd, mod_ssl), then base (apr, apr-util)
         assert_eq!(members[0]["name"], "httpd");
-        assert_eq!(members[0]["in_base_image"], false, "httpd should not be in_base_image");
+        assert_eq!(
+            members[0]["in_base_image"], false,
+            "httpd should not be in_base_image"
+        );
 
         assert_eq!(members[1]["name"], "mod_ssl");
-        assert_eq!(members[1]["in_base_image"], false, "mod_ssl should not be in_base_image");
+        assert_eq!(
+            members[1]["in_base_image"], false,
+            "mod_ssl should not be in_base_image"
+        );
 
         assert_eq!(members[2]["name"], "apr");
-        assert_eq!(members[2]["in_base_image"], true, "apr should be in_base_image");
+        assert_eq!(
+            members[2]["in_base_image"], true,
+            "apr should be in_base_image"
+        );
 
         assert_eq!(members[3]["name"], "apr-util");
-        assert_eq!(members[3]["in_base_image"], true, "apr-util should be in_base_image");
+        assert_eq!(
+            members[3]["in_base_image"], true,
+            "apr-util should be in_base_image"
+        );
     }
 
     #[test]
     fn web_network_section_groups_into_subsections() {
-        use inspectah_refine::projection::{RefNetwork, RefNMConnection, RefFirewallZone, RefFirewallDirectRule, RefStaticRoute, RefProxyEnv};
+        use inspectah_refine::projection::{
+            RefFirewallDirectRule, RefFirewallZone, RefNMConnection, RefNetwork, RefProxyEnv,
+            RefStaticRoute,
+        };
 
         let data = RefNetwork {
             connections: vec![RefNMConnection {
-                name: "eth0".into(), conn_type: "ethernet".into(),
-                method: "auto".into(), path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+                name: "eth0".into(),
+                conn_type: "ethernet".into(),
+                method: "auto".into(),
+                path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
             }],
             firewall_zones: vec![RefFirewallZone {
-                name: "public".into(), path: "/etc/firewalld/zones/public.xml".into(),
+                name: "public".into(),
+                path: "/etc/firewalld/zones/public.xml".into(),
                 content: "<zone>...</zone>".into(),
-                services: vec!["ssh".into()], ports: vec!["8080/tcp".into()],
+                services: vec!["ssh".into()],
+                ports: vec!["8080/tcp".into()],
                 rich_rules: vec![],
             }],
             firewall_direct_rules: vec![RefFirewallDirectRule {
-                ipv: "ipv4".into(), table: "filter".into(), chain: "INPUT".into(),
-                priority: "0".into(), args: "-p tcp --dport 443 -j ACCEPT".into(),
+                ipv: "ipv4".into(),
+                table: "filter".into(),
+                chain: "INPUT".into(),
+                priority: "0".into(),
+                args: "-p tcp --dport 443 -j ACCEPT".into(),
             }],
-            static_routes: vec![RefStaticRoute { path: "/etc/sysconfig/network-scripts/route-eth0".into(), name: "route-eth0".into() }],
+            static_routes: vec![RefStaticRoute {
+                path: "/etc/sysconfig/network-scripts/route-eth0".into(),
+                name: "route-eth0".into(),
+            }],
             ip_routes: vec!["10.0.0.0/8 via 10.0.0.1".into()],
             ip_rules: vec!["from 10.0.0.0/8 lookup 100".into()],
             resolv_provenance: "NetworkManager".into(),
             hosts_additions: vec!["10.0.0.5 db.local".into()],
-            proxy_env: vec![RefProxyEnv { source: "/etc/environment".into(), line: "http_proxy=http://proxy:3128".into() }],
+            proxy_env: vec![RefProxyEnv {
+                source: "/etc/environment".into(),
+                line: "http_proxy=http://proxy:3128".into(),
+            }],
         };
         let section = web_network_section(&data);
         assert!(section.items.is_empty(), "top-level items must be empty");
@@ -1476,7 +1510,13 @@ mod tests {
         assert_eq!(section.subsections[0].display_name, "Connections");
         assert_eq!(section.subsections[0].items.len(), 1);
         assert_eq!(section.subsections[0].items[0].title, "eth0");
-        assert!(section.subsections[0].items[0].subtitle.as_deref().unwrap().contains("ethernet"));
+        assert!(
+            section.subsections[0].items[0]
+                .subtitle
+                .as_deref()
+                .unwrap()
+                .contains("ethernet")
+        );
 
         assert_eq!(section.subsections[1].id, "firewall");
         assert_eq!(section.subsections[1].items.len(), 2);
@@ -1485,7 +1525,12 @@ mod tests {
         assert_eq!(section.subsections[2].id, "routes_rules");
         assert_eq!(section.subsections[2].display_name, "Routes & Rules");
         assert_eq!(section.subsections[2].items.len(), 3);
-        assert!(section.subsections[2].items.iter().any(|i| i.subtitle.as_deref() == Some("ip route")));
+        assert!(
+            section.subsections[2]
+                .items
+                .iter()
+                .any(|i| i.subtitle.as_deref() == Some("ip route"))
+        );
 
         assert_eq!(section.subsections[3].id, "dns_hosts");
         assert_eq!(section.subsections[3].items.len(), 2);
@@ -1496,12 +1541,14 @@ mod tests {
 
     #[test]
     fn web_network_section_omits_empty_subsections() {
-        use inspectah_refine::projection::{RefNetwork, RefNMConnection};
+        use inspectah_refine::projection::{RefNMConnection, RefNetwork};
 
         let data = RefNetwork {
             connections: vec![RefNMConnection {
-                name: "eth0".into(), conn_type: "ethernet".into(),
-                method: "auto".into(), path: "/path".into(),
+                name: "eth0".into(),
+                conn_type: "ethernet".into(),
+                method: "auto".into(),
+                path: "/path".into(),
             }],
             firewall_zones: vec![],
             firewall_direct_rules: vec![],
@@ -1535,32 +1582,37 @@ mod tests {
         };
         let section = web_kernel_boot_section(&data);
 
-        assert!(
-            section.items.is_empty(),
-            "top-level items must be empty"
-        );
+        assert!(section.items.is_empty(), "top-level items must be empty");
         assert_eq!(section.subsections.len(), 2);
         assert_eq!(section.subsections[0].id, "customizations");
         assert_eq!(section.subsections[0].display_name, "Customizations");
-        assert!(section.subsections[0]
-            .items
-            .iter()
-            .any(|i| i.title == "Active tuned profile"));
-        assert!(section.subsections[0]
-            .items
-            .iter()
-            .any(|i| i.title == "vm.swappiness"));
+        assert!(
+            section.subsections[0]
+                .items
+                .iter()
+                .any(|i| i.title == "Active tuned profile")
+        );
+        assert!(
+            section.subsections[0]
+                .items
+                .iter()
+                .any(|i| i.title == "vm.swappiness")
+        );
 
         assert_eq!(section.subsections[1].id, "defaults_context");
         assert_eq!(section.subsections[1].display_name, "Defaults / Context");
-        assert!(section.subsections[1]
-            .items
-            .iter()
-            .any(|i| i.title == "Kernel cmdline"));
-        assert!(section.subsections[1]
-            .items
-            .iter()
-            .any(|i| i.title == "Locale"));
+        assert!(
+            section.subsections[1]
+                .items
+                .iter()
+                .any(|i| i.title == "Kernel cmdline")
+        );
+        assert!(
+            section.subsections[1]
+                .items
+                .iter()
+                .any(|i| i.title == "Locale")
+        );
     }
 
     #[test]
@@ -1573,11 +1625,7 @@ mod tests {
             ..Default::default()
         };
         let section = web_kernel_boot_section(&data);
-        assert_eq!(
-            section.subsections.len(),
-            1,
-            "only non-empty subsections"
-        );
+        assert_eq!(section.subsections.len(), 1, "only non-empty subsections");
         assert_eq!(section.subsections[0].id, "defaults_context");
     }
 }

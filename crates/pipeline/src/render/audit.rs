@@ -2,9 +2,9 @@
 //! risks, and recommendations.
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
-use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
@@ -880,7 +880,8 @@ mod tests {
         assert!(report.contains("**Label:** web-servers"));
         assert!(report.contains("**Host count:** 3"));
         assert!(
-            report.contains("**Aggregate baseline:** Provisional (multiple target images detected)")
+            report
+                .contains("**Aggregate baseline:** Provisional (multiple target images detected)")
         );
         assert!(report.contains("### Hosts"));
         assert!(report.contains("- host1"));
@@ -894,8 +895,8 @@ mod tests {
 
     #[test]
     fn test_audit_aggregate_variant_conflicts() {
-        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
         use inspectah_core::types::aggregate::{AggregateSnapshotMeta, VariantSelection};
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use std::collections::BTreeMap;
 
@@ -1099,7 +1100,9 @@ mod tests {
             "must annotate httpd overlap"
         );
         assert!(
-            md.contains("'Base'") && md.contains("'Development Tools'") && md.contains("'Web Server'"),
+            md.contains("'Base'")
+                && md.contains("'Development Tools'")
+                && md.contains("'Web Server'"),
             "must list all groups containing httpd"
         );
         assert!(

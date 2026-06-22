@@ -121,7 +121,6 @@ override.
 
 ## Aggregate baseline
 
-When aggregating aggregate scans, you can override the baseline for the entire
-aggregate using the `baseline` field in `aggregate.toml` or the `--target-image` flag
-on `inspectah aggregate`. See the
-[Aggregate Aggregation](aggregation.md) guide for details.
+When aggregating scans, you can override the baseline for the entire
+aggregate using the `--target-image` flag on `inspectah aggregate`. See the
+[Aggregation](aggregation.md) guide for details.

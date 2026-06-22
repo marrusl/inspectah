@@ -70,65 +70,9 @@ scp host-c:/tmp/scan-output.tar.gz scans/host-c.tar.gz
 Tarball filenames do not affect analysis. Use whatever naming convention
 helps you identify hosts.
 
-## Initialize an aggregate manifest
-
-The manifest is a TOML file that lists which tarballs to aggregate.
-Generate one from a directory of tarballs:
-
-```bash
-inspectah aggregate init scans/
-```
-
-This creates `aggregate.toml` in your current directory. To write it elsewhere:
-
-```bash
-inspectah aggregate init --output aggregate-prod.toml scans/
-```
-
-The generated manifest looks like this:
-
-```toml
-label = "web-servers"
-target_image = "quay.io/centos-bootc/centos-bootc:stream9"
-sources = [
-  "scans/host-a.tar.gz",
-  "scans/host-b.tar.gz",
-  "scans/host-c.tar.gz",
-]
-```
-
-The `target_image` is auto-detected from the scan metadata and will reflect
-whatever distro your hosts are running (Fedora, CentOS Stream, or RHEL).
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `sources` | Yes | List of tarball paths (relative to the manifest file or absolute) |
-| `label` | No | A human-readable name for this group |
-| `target_image` | No | Target base image reference; auto-detected from scan data when omitted |
-
-When hosts target different images, `aggregate init` selects the most common
-image. You can edit the manifest to change this or any other field.
-
-To regenerate a manifest after adding new tarballs:
-
-```bash
-inspectah aggregate init --overwrite ./scans/
-```
-
 ## Aggregate the snapshots
 
-Combine the tarballs into a single aggregate snapshot:
-
-```bash
-inspectah aggregate --manifest aggregate.toml
-```
-
-This produces an aggregate tarball in the current directory (named with a
-timestamp, e.g., `aggregate-20250527-143022.tar.gz`).
-
-### Direct aggregation (no manifest)
-
-You can skip the manifest and pass tarballs directly:
+Combine the tarballs into a single aggregate snapshot. Pass tarballs directly:
 
 ```bash
 inspectah aggregate scans/host-a.tar.gz scans/host-b.tar.gz
@@ -140,24 +84,27 @@ Or point at a directory:
 inspectah aggregate scans/
 ```
 
+This produces an aggregate tarball in the current directory (named with a
+timestamp, e.g., `aggregate-20250527-143022.tar.gz`).
+
 ### Output options
 
 Write the aggregate tarball to a specific location:
 
 ```bash
-inspectah aggregate --manifest aggregate.toml --output-file aggregate-prod.tar.gz
+inspectah aggregate --output-file aggregate-prod.tar.gz scans/
 ```
 
 Or specify an output directory:
 
 ```bash
-inspectah aggregate --manifest aggregate.toml --output-dir output/
+inspectah aggregate --output-dir output/ scans/
 ```
 
 To get JSON output instead of a tarball (useful for scripting):
 
 ```bash
-inspectah aggregate --manifest aggregate.toml --json-only
+inspectah aggregate --json-only scans/
 ```
 
 ### Override the baseline
@@ -167,10 +114,10 @@ were scanned with:
 
 ```bash
 # Example with CentOS Stream target image
-inspectah aggregate --manifest aggregate.toml --target-image quay.io/centos-bootc/centos-bootc:stream9
+inspectah aggregate --target-image quay.io/centos-bootc/centos-bootc:stream9 scans/
 
 # Example with RHEL target image
-inspectah aggregate --manifest aggregate.toml --target-image registry.redhat.io/rhel9/rhel-bootc:9.6
+inspectah aggregate --target-image registry.redhat.io/rhel9/rhel-bootc:9.6 scans/
 ```
 
 ### Sensitive data acknowledgment
@@ -180,7 +127,7 @@ the merged output contains sensitive material. The aggregate command refuses to
 produce output unless you acknowledge this with `--ack-sensitive`:
 
 ```bash
-inspectah aggregate --ack-sensitive --manifest aggregate.toml
+inspectah aggregate --ack-sensitive scans/
 ```
 
 Without the flag, the aggregate command exits with an error listing which
@@ -201,13 +148,13 @@ came from.
 Show per-host detail during aggregation:
 
 ```bash
-inspectah aggregate --manifest aggregate.toml --verbose
+inspectah aggregate --verbose scans/
 ```
 
 Treat warnings (e.g., mismatched image references across hosts) as errors:
 
 ```bash
-inspectah aggregate --manifest aggregate.toml --strict
+inspectah aggregate --strict scans/
 ```
 
 ## Refine aggregate data

@@ -187,7 +187,7 @@ inspectah refine aggregate-*.tar.gz
 
 This finds the intersection of packages and configs across hosts and identifies per-host exceptions. The aggregated tarball works with `refine` and `build` the same way a single-host tarball does.
 
-For more control over which scans to include, generate a manifest first with `inspectah aggregate init ./scans/`, edit the resulting `aggregate.toml`, then run `inspectah aggregate --manifest aggregate.toml`.
+You can also list specific tarballs instead of a directory: `inspectah aggregate host-a.tar.gz host-b.tar.gz`.
 
 ## Workflows
 

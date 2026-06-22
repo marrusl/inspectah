@@ -328,8 +328,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                                 pull_progress::viewport_cleanup(viewport_lines);
                             }
                             let stderr_combined = collected_lines.join("\n");
-                            let kind =
-                                super::pull_failure::classify_pull_failure(&stderr_combined);
+                            let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
                             let msg = super::pull_failure::format_pull_error(
                                 &kind,
                                 norm.as_str(),
@@ -355,8 +354,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                         Ok(data) => data,
                         Err(_e) => {
                             let stderr_combined = collected_lines.join("\n");
-                            let kind =
-                                super::pull_failure::classify_pull_failure(&stderr_combined);
+                            let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
                             let msg = super::pull_failure::format_pull_error(
                                 &kind,
                                 norm.as_str(),
@@ -373,11 +371,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
                     let mut stderr_out = std::io::stderr().lock();
                     let mut callback =
                         pull_progress::non_tty_callback(&mut collected_lines, &mut stderr_out);
-                    inspectah_collect::baseline::extract_baseline(
-                        &executor,
-                        norm,
-                        &mut callback,
-                    )
+                    inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
                 };
                 match result {
                     Ok(data) => data,
@@ -709,8 +703,8 @@ fn format_cert_expiry_line(
     let diff = expiry - now;
     let days = diff.whole_days();
 
-    let format = time::format_description::parse("[year]-[month]-[day]")
-        .expect("static format description");
+    let format =
+        time::format_description::parse("[year]-[month]-[day]").expect("static format description");
     let date_str = expiry.format(&format).unwrap_or_else(|_| "unknown".into());
 
     if days < 0 {
@@ -1023,7 +1017,9 @@ VARIANT_ID="workstation"
 
     // --- cert expiry line formatting ---
 
-    fn snapshot_with_expiry(expiry: time::OffsetDateTime) -> inspectah_core::snapshot::InspectionSnapshot {
+    fn snapshot_with_expiry(
+        expiry: time::OffsetDateTime,
+    ) -> inspectah_core::snapshot::InspectionSnapshot {
         let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
         snap.preserved_subscription = true;
         snap.subscription = Some(inspectah_core::types::subscription::SubscriptionSection {
@@ -1067,7 +1063,8 @@ VARIANT_ID="workstation"
     fn cert_expiry_none_returns_none() {
         let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
         snap.preserved_subscription = true;
-        snap.subscription = Some(inspectah_core::types::subscription::SubscriptionSection::default());
+        snap.subscription =
+            Some(inspectah_core::types::subscription::SubscriptionSection::default());
         assert!(format_cert_expiry_line(&snap).is_none());
     }
 

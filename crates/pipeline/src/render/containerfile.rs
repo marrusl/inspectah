@@ -75,7 +75,12 @@ pub fn render_containerfile_with_originals(
     original_includes: &std::collections::HashMap<String, bool>,
     render_ctx: Option<&RenderContext>,
 ) -> String {
-    render_containerfile_inner(snap, materialized_roots, Some(original_includes), render_ctx)
+    render_containerfile_inner(
+        snap,
+        materialized_roots,
+        Some(original_includes),
+        render_ctx,
+    )
 }
 
 fn render_containerfile_inner(
@@ -528,8 +533,7 @@ fn packages_section_lines(
             }
             // Optional spillover — always emitted regardless of group state
             if !g.optional_installed.is_empty() {
-                provenance_lines
-                    .push(format!("# Optional members from \"{}\"", g.name));
+                provenance_lines.push(format!("# Optional members from \"{}\"", g.name));
             }
         }
 
@@ -3261,7 +3265,11 @@ mod tests {
         // Container Management must not appear in the dnf group install block
         let group_install_block = output
             .find("dnf group install")
-            .map(|pos| &output[pos..output[pos..].find("dnf clean all").map_or(output.len(), |end| pos + end)])
+            .map(|pos| {
+                &output[pos..output[pos..]
+                    .find("dnf clean all")
+                    .map_or(output.len(), |end| pos + end)]
+            })
             .unwrap_or("");
         assert!(
             !group_install_block.contains("Container Management"),
@@ -3353,7 +3361,9 @@ mod tests {
 
         // Degraded comment must appear
         assert!(
-            output.contains("# \"Dev Tools\" degraded (member excluded): members rendered individually"),
+            output.contains(
+                "# \"Dev Tools\" degraded (member excluded): members rendered individually"
+            ),
             "must contain degraded provenance comment, got:\n{output}"
         );
         // Members render individually
@@ -3498,7 +3508,9 @@ mod tests {
 
         let output = render_containerfile(&snap, None, Some(&ctx));
         assert!(
-            output.contains("# \"Dev Tools\" degraded (member overridden): members rendered individually"),
+            output.contains(
+                "# \"Dev Tools\" degraded (member overridden): members rendered individually"
+            ),
             "must show member_overridden reason, got:\n{output}"
         );
     }
@@ -3526,7 +3538,9 @@ mod tests {
 
         let output = render_containerfile(&snap, None, Some(&ctx));
         assert!(
-            output.contains("# \"Dev Tools\" degraded (multilib conflict): members rendered individually"),
+            output.contains(
+                "# \"Dev Tools\" degraded (multilib conflict): members rendered individually"
+            ),
             "must show multilib_conflict reason, got:\n{output}"
         );
     }

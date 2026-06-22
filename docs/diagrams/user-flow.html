@@ -155,15 +155,14 @@ const singleHostStages = [
 
 const aggregateStages = [
   {
-    id: 'aggregate-init',
-    label: 'Aggregate Init',
-    sublabel: 'inspectah aggregate init',
+    id: 'aggregate-input',
+    label: 'Collect Scans',
+    sublabel: 'Gather host tarballs',
     color: 'teal',
-    tooltip: 'Initialize a aggregate workspace from multiple host scan tarballs.',
+    tooltip: 'Collect scan tarballs from multiple hosts into a single directory.',
     children: [
-      { text: 'inspectah aggregate init', detail: 'Create aggregate workspace from scan outputs' },
       { text: 'Multiple tarballs', detail: 'One per host in the aggregate' },
-      { text: 'Aggregate manifest', detail: 'Tracks hosts, base images, shared state' },
+      { text: 'Common directory', detail: 'All tarballs in one location for aggregation' },
     ],
     docLink: '../aggregate-workflow.html',
   },

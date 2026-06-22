@@ -1,5 +1,5 @@
-use super::config::ConfigFileEntry;
 use super::aggregate::AggregatePrevalence;
+use super::config::ConfigFileEntry;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -710,7 +710,10 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
     let plan = render_service_intent(&snap);
 
     // Aggregate: no omissions, no advisories, service must be emitted
-    assert!(plan.omissions.is_empty(), "aggregate must not omit services");
+    assert!(
+        plan.omissions.is_empty(),
+        "aggregate must not omit services"
+    );
     assert!(
         plan.advisories.is_empty(),
         "aggregate must not emit package-derived advisories"

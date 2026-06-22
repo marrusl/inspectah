@@ -14,9 +14,9 @@
 use std::collections::{HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::QuadletUnit;
-use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::services::SystemdDropIn;
 
 use crate::types::{ContentHash, ItemId, RefineError};

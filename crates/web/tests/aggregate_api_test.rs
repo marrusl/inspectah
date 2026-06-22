@@ -2,9 +2,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::aggregate::{
+    AggregatePrevalence, AggregateSnapshotMeta, VariantSelection,
+};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, VariantSelection};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
@@ -121,7 +123,9 @@ async fn single_host_health_returns_null_aggregate() {
 
     assert_eq!(status, StatusCode::OK);
 
-    let agg = json.get("aggregate").expect("aggregate field should be present");
+    let agg = json
+        .get("aggregate")
+        .expect("aggregate field should be present");
     assert!(
         agg.is_null(),
         "aggregate should be null for single-host snapshots"
@@ -854,7 +858,7 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
     let s3 = make_host("web-03", "epel", "1.25.0");
 
     let (mut merged, _warnings) =
-        merge_snapshots(vec![s1, s2, s3], None).expect("merge should succeed");
+        merge_snapshots(vec![s1, s2, s3], None, None).expect("merge should succeed");
 
     // Provide an empty baseline so classify_package treats Added
     // packages as Site (user-added) rather than Investigate
@@ -873,7 +877,10 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
 }
 
 /// Collect all aggregate items matching a given source_repo from all sections.
-fn aggregate_items_by_repo<'a>(json: &'a serde_json::Value, repo: &str) -> Vec<&'a serde_json::Value> {
+fn aggregate_items_by_repo<'a>(
+    json: &'a serde_json::Value,
+    repo: &str,
+) -> Vec<&'a serde_json::Value> {
     json["sections"]
         .as_array()
         .unwrap()

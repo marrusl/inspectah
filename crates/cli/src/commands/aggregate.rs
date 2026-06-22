@@ -1,14 +1,11 @@
 //! `inspectah aggregate` top-level command.
 //!
 //! Combines multiple host scan tarballs into a single aggregate snapshot.
-//! Subcommand:
-//! - `aggregate init` — generate an aggregate manifest from a directory of tarballs
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
+use clap::Args;
 use std::path::{Path, PathBuf};
 
-use inspectah_core::aggregate::manifest::AggregateManifest;
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning};
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -21,10 +18,6 @@ use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 pub struct AggregateArgs {
     /// Input tarballs or directory containing tarballs
     pub inputs: Vec<PathBuf>,
-
-    /// Path to an aggregate manifest (TOML) specifying sources
-    #[arg(long)]
-    pub manifest: Option<PathBuf>,
 
     /// Override the target image reference for baseline comparison
     #[arg(long)]
@@ -53,37 +46,11 @@ pub struct AggregateArgs {
     /// Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)
     #[arg(long = "ack-sensitive", visible_alias = "acknowledge-sensitive")]
     pub ack_sensitive: bool,
-
-    #[command(subcommand)]
-    pub subcommand: Option<AggregateSubcommand>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum AggregateSubcommand {
-    /// Generate an aggregate manifest from a directory of tarballs
-    Init(AggregateInitArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct AggregateInitArgs {
-    /// Directory containing host tarballs
-    pub directory: PathBuf,
-
-    /// Output path for the generated manifest
-    #[arg(long)]
-    pub output: Option<PathBuf>,
-
-    /// Overwrite an existing manifest file
-    #[arg(long)]
-    pub overwrite: bool,
 }
 
 /// Entry point for `inspectah aggregate`.
 pub fn run_aggregate_command(args: &AggregateArgs) -> Result<()> {
-    match &args.subcommand {
-        Some(AggregateSubcommand::Init(init)) => run_init(init),
-        None => run_aggregate(args),
-    }
+    run_aggregate(args)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +75,7 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     }
 
     // --- Step 1: Resolve inputs ---
-    let (tarball_paths, label, manifest) = resolve_inputs(args)?;
+    let (tarball_paths, label) = resolve_inputs(args)?;
 
     if tarball_paths.is_empty() {
         bail!("no tarball files found");
@@ -174,7 +141,7 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
         );
     }
 
-    let (merged, warnings) = merge_snapshots(snapshots, manifest.as_ref())
+    let (merged, warnings) = merge_snapshots(snapshots, Some(&label), args.target_image.as_deref())
         .map_err(|errors| format_validation_errors(&errors))?;
 
     // --- Step 4: Collect all warnings (core + CLI-layer) ---
@@ -313,255 +280,12 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Init implementation
-// ---------------------------------------------------------------------------
-
-/// Metadata extracted from a tarball for manifest generation.
-struct TarballMetadata {
-    path: PathBuf,
-    target_image: Option<String>,
-}
-
-fn run_init(args: &AggregateInitArgs) -> Result<()> {
-    // --- Step 1: Verify directory exists ---
-    if !args.directory.is_dir() {
-        bail!("{} is not a directory", args.directory.display());
-    }
-
-    // --- Step 2: Scan directory for tarballs ---
-    let tarball_paths = list_tarballs_in_dir(&args.directory)?;
-
-    if tarball_paths.is_empty() {
-        bail!("no .tar.gz files found in {}", args.directory.display());
-    }
-
-    // --- Step 3: Extract metadata from each tarball ---
-    let mut metadata_list: Vec<TarballMetadata> = Vec::new();
-    let mut failed: Vec<(PathBuf, String)> = Vec::new();
-
-    for path in &tarball_paths {
-        match extract_tarball_metadata(path) {
-            Ok(meta) => metadata_list.push(meta),
-            Err(e) => {
-                failed.push((path.clone(), format!("{e:#}")));
-                eprintln!("warning: skipping {}: {e:#}", path.display());
-            }
-        }
-    }
-
-    if metadata_list.is_empty() {
-        bail!(
-            "no valid snapshots found ({} file(s) could not be parsed)",
-            failed.len()
-        );
-    }
-
-    // --- Step 4: Determine output path ---
-    let output_path = args
-        .output
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("aggregate.toml"));
-
-    // --- Step 5: Check for existing file ---
-    if output_path.exists() && !args.overwrite {
-        bail!(
-            "{} already exists (use --overwrite to replace)",
-            output_path.display()
-        );
-    }
-
-    // --- Step 6: Detect target image conflicts ---
-    let mut image_counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    for meta in &metadata_list {
-        if let Some(img) = &meta.target_image {
-            *image_counts.entry(img.clone()).or_insert(0) += 1;
-        }
-    }
-
-    let target_image = if image_counts.is_empty() {
-        None
-    } else {
-        // Pick the most common image. For deterministic tie-breaking when
-        // multiple images have equal prevalence, sort by count (descending)
-        // then by image ref (lexicographically ascending).
-        let mut sorted_images: Vec<(String, usize)> = image_counts.into_iter().collect();
-        sorted_images.sort_by(|(ref_a, count_a), (ref_b, count_b)| {
-            count_b.cmp(count_a).then_with(|| ref_a.cmp(ref_b))
-        });
-        let (most_common, _count) = &sorted_images[0];
-
-        // Warn if there are conflicts
-        if sorted_images.len() > 1 {
-            let dist: Vec<String> = sorted_images
-                .iter()
-                .map(|(img, count)| format!("{img} ({count})"))
-                .collect();
-            eprintln!(
-                "warning: target image conflict: selected {} from [{}]",
-                most_common,
-                dist.join(", ")
-            );
-        }
-
-        Some(most_common.clone())
-    };
-
-    // --- Step 7: Generate relative paths for manifest ---
-    let manifest_parent = output_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .canonicalize()
-        .context("failed to resolve manifest parent directory")?;
-
-    let mut sources: Vec<PathBuf> = Vec::new();
-    for meta in &metadata_list {
-        let abs_path = meta
-            .path
-            .canonicalize()
-            .with_context(|| format!("failed to resolve {}", meta.path.display()))?;
-
-        // Use pathdiff to create a relative path from manifest dir to tarball
-        let rel_path =
-            pathdiff::diff_paths(&abs_path, &manifest_parent).unwrap_or_else(|| abs_path.clone());
-
-        sources.push(rel_path);
-    }
-
-    // --- Step 8: Generate TOML manifest ---
-    let label = args
-        .directory
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("aggregate");
-
-    let toml = generate_manifest_toml(label, target_image.as_deref(), &sources);
-
-    // --- Step 9: Write manifest file ---
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).context("failed to create output directory")?;
-    }
-
-    std::fs::write(&output_path, &toml)
-        .with_context(|| format!("failed to write {}", output_path.display()))?;
-
-    // --- Step 10: Output summary ---
-    eprintln!(
-        "Wrote {} ({} sources{})",
-        output_path.display(),
-        sources.len(),
-        target_image
-            .as_ref()
-            .map_or(String::new(), |b| format!(", target_image: {b}"))
-    );
-
-    Ok(())
-}
-
-/// Extract minimal metadata (hostname, target_image) from a tarball.
-fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
-    let file = std::fs::File::open(tarball_path)
-        .with_context(|| format!("failed to open {}", tarball_path.display()))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-
-    for entry_result in archive
-        .entries()
-        .context("failed to read tarball entries")?
-    {
-        let mut entry = entry_result.context("failed to read tarball entry")?;
-        let path = entry.path().context("invalid entry path")?;
-
-        if path.file_name().and_then(|n| n.to_str()) == Some("inspection-snapshot.json") {
-            let mut json = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut json)
-                .context("failed to read inspection-snapshot.json")?;
-
-            // Parse just the fields we need
-            let v: serde_json::Value =
-                serde_json::from_str(&json).context("failed to parse JSON")?;
-
-            let target_image = v
-                .get("target_image")
-                .and_then(|t| t.get("image_ref"))
-                .and_then(|r| r.as_str())
-                .map(|s| s.to_string());
-
-            return Ok(TarballMetadata {
-                path: tarball_path.to_path_buf(),
-                target_image,
-            });
-        }
-    }
-
-    bail!(
-        "no inspection-snapshot.json found in {}",
-        tarball_path.display()
-    )
-}
-
-/// Generate a TOML manifest string with comments.
-fn generate_manifest_toml(label: &str, target_image: Option<&str>, sources: &[PathBuf]) -> String {
-    let mut toml = String::new();
-
-    toml.push_str("# inspectah aggregate manifest\n");
-    toml.push_str("# Edit label and target_image as needed. Sources are relative to this file.\n\n");
-
-    toml.push_str(&format!("label = \"{label}\"\n"));
-
-    if let Some(b) = target_image {
-        toml.push_str(&format!("target_image = \"{b}\"\n"));
-    } else {
-        toml.push_str("# target_image = \"registry.redhat.io/rhel9/rhel-bootc:9.6\"\n");
-    }
-
-    toml.push_str("\nsources = [\n");
-    for source in sources {
-        let path_str = source.display().to_string();
-        toml.push_str(&format!("  \"{path_str}\",\n"));
-    }
-    toml.push_str("]\n");
-
-    toml
-}
-
-// ---------------------------------------------------------------------------
 // Input resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve CLI arguments into a list of tarball paths, a label, and an
-/// optional manifest.
-fn resolve_inputs(
-    args: &AggregateArgs,
-) -> Result<(Vec<PathBuf>, String, Option<AggregateManifest>)> {
-    // Mutual exclusion: --manifest and positional inputs
-    if args.manifest.is_some() && !args.inputs.is_empty() {
-        bail!("cannot specify both --manifest and positional input paths");
-    }
-
-    // Mode 1: Manifest-driven
-    if let Some(manifest_path) = &args.manifest {
-        let mut manifest = AggregateManifest::load(manifest_path).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to load manifest from {}: {e}",
-                manifest_path.display()
-            )
-        })?;
-
-        // CLI --target-image overrides manifest target_image
-        if let Some(target_image) = &args.target_image {
-            manifest.target_image = Some(target_image.clone());
-        }
-
-        let label = manifest.label.clone().unwrap_or_else(|| "aggregate".into());
-        let paths = manifest.sources.clone();
-
-        return Ok((paths, label, Some(manifest)));
-    }
-
-    // Mode 2: Single directory input
+/// Resolve CLI arguments into a list of tarball paths and a label.
+fn resolve_inputs(args: &AggregateArgs) -> Result<(Vec<PathBuf>, String)> {
+    // Mode 1: Single directory input
     if args.inputs.len() == 1 && args.inputs[0].is_dir() {
         let dir = &args.inputs[0];
         let label = dir
@@ -573,33 +297,18 @@ fn resolve_inputs(
         let mut paths = list_tarballs_in_dir(dir)?;
         paths.sort();
 
-        let manifest = build_manifest_from_args(&label, &paths, args);
-        return Ok((paths, label, Some(manifest)));
+        return Ok((paths, label));
     }
 
-    // Mode 3: Multiple explicit tarball paths
+    // Mode 2: Multiple explicit tarball paths
     if !args.inputs.is_empty() {
         let label = "aggregate".to_string();
         let paths = args.inputs.clone();
 
-        let manifest = build_manifest_from_args(&label, &paths, args);
-        return Ok((paths, label, Some(manifest)));
+        return Ok((paths, label));
     }
 
-    bail!("no inputs specified — provide tarball paths, a directory, or --manifest");
-}
-
-/// Build an AggregateManifest from CLI arguments (for non-manifest modes).
-fn build_manifest_from_args(
-    label: &str,
-    paths: &[PathBuf],
-    args: &AggregateArgs,
-) -> AggregateManifest {
-    AggregateManifest {
-        label: Some(label.to_string()),
-        target_image: args.target_image.clone(),
-        sources: paths.to_vec(),
-    }
+    bail!("no inputs specified — provide tarball paths or a directory");
 }
 
 /// List `.tar.gz` files in a directory (non-recursive).
@@ -682,7 +391,10 @@ fn prepend_containerfile_header(
     header.push_str("# Requires human review before use\n");
 
     if let Some(aggregate_meta) = &merged.aggregate_meta {
-        header.push_str(&format!("# Merged from {} hosts\n", aggregate_meta.host_count));
+        header.push_str(&format!(
+            "# Merged from {} hosts\n",
+            aggregate_meta.host_count
+        ));
     }
 
     // Baseline image reference
@@ -803,161 +515,6 @@ mod tests {
         tarball_path
     }
 
-    #[test]
-    fn test_extract_metadata_reads_top_level_target_image() {
-        // Build a snapshot JSON that mirrors real InspectionSnapshot
-        // serialization: target_image is a top-level struct with image_ref,
-        // NOT inside the meta HashMap.
-        let snapshot_json = serde_json::json!({
-            "schema_version": 19,
-            "meta": {
-                "hostname": "host-a.example.com"
-            },
-            "target_image": {
-                "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.6",
-                "strategy": "BootcStatus"
-            }
-        });
-
-        let dir = tempfile::tempdir().unwrap();
-        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &snapshot_json);
-
-        let meta = extract_tarball_metadata(&tarball).unwrap();
-
-        assert_eq!(
-            meta.target_image.as_deref(),
-            Some("registry.redhat.io/rhel9/rhel-bootc:9.6"),
-            "should read target_image.image_ref from top-level, not meta"
-        );
-    }
-
-    #[test]
-    fn test_extract_metadata_ignores_meta_target_image() {
-        // If target_image only exists inside meta (old/wrong shape),
-        // extraction should return None — not silently read the wrong path.
-        let snapshot_json = serde_json::json!({
-            "schema_version": 19,
-            "meta": {
-                "hostname": "host-b.example.com",
-                "target_image": "registry.redhat.io/rhel9/rhel-bootc:9.4"
-            }
-        });
-
-        let dir = tempfile::tempdir().unwrap();
-        let tarball = make_test_tarball(dir.path(), "host-b.tar.gz", &snapshot_json);
-
-        let meta = extract_tarball_metadata(&tarball).unwrap();
-
-        assert_eq!(
-            meta.target_image, None,
-            "should NOT read target_image from meta HashMap"
-        );
-    }
-
-    #[test]
-    fn test_target_image_conflict_selects_most_common() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let common_image = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-        let outlier_image = "registry.redhat.io/rhel9/rhel-bootc:9.4";
-
-        // Two tarballs with the same target image
-        let json_common = serde_json::json!({
-            "schema_version": 19,
-            "meta": {"hostname": "host-1"},
-            "target_image": {"image_ref": common_image, "strategy": "BootcStatus"}
-        });
-        // One tarball with a different target image
-        let json_outlier = serde_json::json!({
-            "schema_version": 19,
-            "meta": {"hostname": "host-3"},
-            "target_image": {"image_ref": outlier_image, "strategy": "BootcStatus"}
-        });
-
-        let t1 = make_test_tarball(dir.path(), "host-1.tar.gz", &json_common);
-        let t2 = make_test_tarball(dir.path(), "host-2.tar.gz", &json_common);
-        let t3 = make_test_tarball(dir.path(), "host-3.tar.gz", &json_outlier);
-
-        // Extract metadata from all three
-        let meta_list: Vec<TarballMetadata> = [t1, t2, t3]
-            .iter()
-            .map(|p| extract_tarball_metadata(p).unwrap())
-            .collect();
-
-        // Replicate the conflict-resolution logic from run_init
-        let mut image_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for meta in &meta_list {
-            if let Some(img) = &meta.target_image {
-                *image_counts.entry(img.clone()).or_insert(0) += 1;
-            }
-        }
-
-        assert_eq!(
-            image_counts.len(),
-            2,
-            "should detect two distinct target images"
-        );
-        assert_eq!(image_counts[common_image], 2);
-        assert_eq!(image_counts[outlier_image], 1);
-
-        // Most-common wins
-        let (winner, _) = image_counts.iter().max_by_key(|(_, c)| *c).unwrap();
-        assert_eq!(
-            winner, common_image,
-            "conflict resolution should pick the most common target image"
-        );
-    }
-
-    #[test]
-    fn test_aggregate_init_target_image_tie_break_is_deterministic() {
-        // Command-boundary regression test: when two images have equal
-        // prevalence (1 host each), the generated aggregate.toml must contain
-        // the lexicographically earlier image ref as the target_image.
-        let dir = tempfile::tempdir().unwrap();
-        let tarballs_dir = dir.path().join("tarballs");
-        std::fs::create_dir_all(&tarballs_dir).unwrap();
-
-        // Two images, each appearing exactly once (tie).
-        // Lexicographically: "alpha:1.0" < "beta:1.0"
-        let alpha_image = "registry.example.com/alpha:1.0";
-        let beta_image = "registry.example.com/beta:1.0";
-
-        let json_alpha = serde_json::json!({
-            "schema_version": 19,
-            "meta": {"hostname": "host-alpha"},
-            "target_image": {"image_ref": alpha_image, "strategy": "BootcStatus"}
-        });
-        let json_beta = serde_json::json!({
-            "schema_version": 19,
-            "meta": {"hostname": "host-beta"},
-            "target_image": {"image_ref": beta_image, "strategy": "BootcStatus"}
-        });
-
-        make_test_tarball(&tarballs_dir, "host-alpha.tar.gz", &json_alpha);
-        make_test_tarball(&tarballs_dir, "host-beta.tar.gz", &json_beta);
-
-        // Run the full init flow via run_init
-        let output_path = dir.path().join("aggregate.toml");
-        let args = AggregateInitArgs {
-            directory: tarballs_dir,
-            output: Some(output_path.clone()),
-            overwrite: false,
-        };
-
-        run_init(&args).expect("aggregate init should succeed");
-
-        // Read and verify the generated manifest
-        let toml_content =
-            std::fs::read_to_string(&output_path).expect("aggregate.toml should exist after init");
-
-        assert!(
-            toml_content.contains(&format!("target_image = \"{alpha_image}\"")),
-            "tie-break should select lexicographically earlier image ref (alpha < beta), got:\n{}",
-            toml_content
-        );
-    }
-
     // -----------------------------------------------------------------------
     // --json-only output matrix regression tests
     // -----------------------------------------------------------------------
@@ -970,7 +527,6 @@ mod tests {
     ) -> AggregateArgs {
         AggregateArgs {
             inputs: vec![],
-            manifest: None,
             target_image: None,
             output_dir,
             output_file,
@@ -978,7 +534,6 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
-            subcommand: None,
         }
     }
 
@@ -1027,7 +582,7 @@ mod tests {
         let out_dir = dir.path().join("json-output");
         let args = AggregateArgs {
             inputs: vec![t1, t2],
-            manifest: None,
+
             target_image: None,
             output_dir: Some(out_dir.clone()),
             output_file: None,
@@ -1035,7 +590,6 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
-            subcommand: None,
         };
 
         run_aggregate(&args).expect("--json-only --output-dir should succeed");
@@ -1061,7 +615,7 @@ mod tests {
         let out_file = dir.path().join("custom-output.json");
         let args = AggregateArgs {
             inputs: vec![t1, t2],
-            manifest: None,
+
             target_image: None,
             output_dir: None,
             output_file: Some(out_file.clone()),
@@ -1069,7 +623,6 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
-            subcommand: None,
         };
 
         run_aggregate(&args).expect("--json-only --output-file should succeed");
@@ -1118,7 +671,7 @@ mod tests {
 
         let args = AggregateArgs {
             inputs: vec![t1, t2],
-            manifest: None,
+
             target_image: None,
             output_dir: None,
             output_file: None,
@@ -1126,7 +679,6 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: false,
-            subcommand: None,
         };
 
         let result = run_aggregate(&args);
@@ -1178,7 +730,7 @@ mod tests {
         let out_dir = dir.path().join("output");
         let args = AggregateArgs {
             inputs: vec![t1, t2],
-            manifest: None,
+
             target_image: None,
             output_dir: Some(out_dir.clone()),
             output_file: None,
@@ -1186,7 +738,6 @@ mod tests {
             strict: false,
             verbose: false,
             ack_sensitive: true,
-            subcommand: None,
         };
 
         let result = run_aggregate(&args);

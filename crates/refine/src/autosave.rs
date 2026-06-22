@@ -103,10 +103,9 @@ pub fn load_session(tarball: &Path) -> Result<Option<SessionState>, Box<dyn std:
             let state: SessionState = serde_json::from_str(&contents)?;
             Ok(Some(state))
         }
-        other => Err(format!(
-            "unsupported session schema version: {other} (expected 2 or 3)"
-        )
-        .into()),
+        other => {
+            Err(format!("unsupported session schema version: {other} (expected 2 or 3)").into())
+        }
     }
 }
 
@@ -353,7 +352,10 @@ mod tests {
             TimelineEntry::View(ViewDirective::UngroupGroup { group_name }) => {
                 assert_eq!(group_name, "web-server");
             }
-            other => panic!("expected TimelineEntry::View(UngroupGroup), got {:?}", other),
+            other => panic!(
+                "expected TimelineEntry::View(UngroupGroup), got {:?}",
+                other
+            ),
         }
     }
 

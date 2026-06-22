@@ -17,7 +17,9 @@ use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, Sysctl
 use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection, VersionChange};
+use inspectah_core::types::rpm::{
+    InstalledGroup, PackageEntry, PackageState, RpmSection, VersionChange,
+};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
 use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
 use inspectah_core::types::services::{

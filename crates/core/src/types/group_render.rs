@@ -97,10 +97,8 @@ mod tests {
         let mut ctx = RenderContext::default();
         ctx.group_states
             .insert("Dev Tools".into(), GroupRenderState::Renderable);
-        ctx.group_states.insert(
-            "Container Management".into(),
-            GroupRenderState::Excluded,
-        );
+        ctx.group_states
+            .insert("Container Management".into(), GroupRenderState::Excluded);
         assert!(ctx.is_renderable("Dev Tools"));
         assert!(!ctx.is_renderable("Container Management"));
         assert!(!ctx.is_renderable("Nonexistent"));

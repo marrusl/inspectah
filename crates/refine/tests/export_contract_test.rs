@@ -567,7 +567,9 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
 
     // Verify render context reflects the UngroupGroup directive.
     assert!(
-        session.render_context().is_ungrouped("Container Management"),
+        session
+            .render_context()
+            .is_ungrouped("Container Management"),
         "render_context must show Ungrouped after UngroupGroup directive"
     );
 
@@ -580,14 +582,8 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
     let preview = session.view().containerfile_preview.clone();
 
     // Sanity: packages must render (include=true survived normalization)
-    assert!(
-        preview.contains("podman"),
-        "preview must contain podman"
-    );
-    assert!(
-        preview.contains("buildah"),
-        "preview must contain buildah"
-    );
+    assert!(preview.contains("podman"), "preview must contain podman");
+    assert!(preview.contains("buildah"), "preview must contain buildah");
 
     // Export and extract the Containerfile
     let tempdir = tempfile::tempdir().unwrap();

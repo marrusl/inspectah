@@ -815,7 +815,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .as_ref()
         .map(|f| f.label.clone())
         .unwrap_or_default();
-    let aggregate_host_count = snap.aggregate_meta.as_ref().map(|f| f.host_count).unwrap_or(0);
+    let aggregate_host_count = snap
+        .aggregate_meta
+        .as_ref()
+        .map(|f| f.host_count)
+        .unwrap_or(0);
     let aggregate_hostnames: Vec<Value> = snap
         .aggregate_meta
         .as_ref()
@@ -841,8 +845,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .as_ref()
         .and_then(|r| r.leaf_total_hosts)
         .unwrap_or(0);
-    let aggregate_leaf_partial =
-        aggregate_leaf_total_hosts > 0 && aggregate_leaf_authority_hosts < aggregate_leaf_total_hosts;
+    let aggregate_leaf_partial = aggregate_leaf_total_hosts > 0
+        && aggregate_leaf_authority_hosts < aggregate_leaf_total_hosts;
 
     let aggregate_variant_conflict_count = snap.rpm_repo_conflicts.len();
     let aggregate_section_coverage: Vec<Value> = snap

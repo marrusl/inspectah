@@ -559,7 +559,6 @@ mod tests {
         assert!(pipeline.state.snapshot.rpm.is_some());
         let rpm = pipeline.state.snapshot.rpm.unwrap();
         assert_eq!(rpm.packages_added.len(), 2);
-
     }
 
     #[test]

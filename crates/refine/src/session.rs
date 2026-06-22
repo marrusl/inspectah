@@ -9,14 +9,14 @@ use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
 
+use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
-use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::group_state::{GroupEvalContext, derive_group_state};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, AggregateContext, ItemId,
+    AggregateContext, AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, ItemId,
     RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
     SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
     UserPasswordOp, ViewDirective,
@@ -5449,7 +5449,11 @@ mod tests {
 
         // harfbuzz starts as Tier 4 ambiguous: include=true, locked=false
         let view = session.view();
-        let pkg = view.packages.iter().find(|p| p.entry.name == "harfbuzz").unwrap();
+        let pkg = view
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "harfbuzz")
+            .unwrap();
         assert!(pkg.entry.include, "harfbuzz should start included");
         assert!(!pkg.entry.locked, "harfbuzz should not be locked");
 
@@ -5467,11 +5471,14 @@ mod tests {
         // After toggle, harfbuzz must be excluded — classifier must not
         // override the user's op
         let view = session.view();
-        let pkg = view.packages.iter().find(|p| p.entry.name == "harfbuzz").unwrap();
+        let pkg = view
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "harfbuzz")
+            .unwrap();
         assert!(
             !pkg.entry.include,
             "harfbuzz must be excluded after user toggle"
         );
     }
-
 }

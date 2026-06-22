@@ -7,16 +7,16 @@
 use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::aggregate::{
     AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone, VariantSelection,
 };
+use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_refine::aggregate::classify::classify_aggregate_bucket;
 use inspectah_refine::aggregate::diff::compute_diff;
 use inspectah_refine::aggregate::variant_summary;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
-    ContentHash, AggregateBucket, ItemId, RefinementOp, Triage, TriageBucket, TriageReason,
+    AggregateBucket, ContentHash, ItemId, RefinementOp, Triage, TriageBucket, TriageReason,
 };
 
 // ---------------------------------------------------------------------------
@@ -192,7 +192,8 @@ fn summary_counts_paths_with_variants() {
 fn summary_reports_variant_count_per_path() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
+    let summary =
+        variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
 
     assert_eq!(
         summary.variant_distribution["/etc/app/main.conf"].variant_count,
@@ -208,7 +209,8 @@ fn summary_reports_variant_count_per_path() {
 fn summary_reports_host_split_sorted_descending() {
     let snap = make_e2e_snapshot();
     let session = RefineSession::new(snap);
-    let summary = variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
+    let summary =
+        variant_summary(&session.snapshot_projected(), session.aggregate_context()).unwrap();
 
     // main.conf: 3 hosts, 1 host, 1 host → [3, 1, 1]
     assert_eq!(
@@ -429,7 +431,9 @@ fn aggregate_refine_full_lifecycle() {
 
     // Aggregate snapshot with alternatives should produce aggregate/variants/ entries
     assert!(
-        entry_paths.iter().any(|p| p.starts_with("aggregate/variants/")),
+        entry_paths
+            .iter()
+            .any(|p| p.starts_with("aggregate/variants/")),
         "export must contain aggregate/variants/ directory for alternative variants; entries: {entry_paths:?}",
     );
 

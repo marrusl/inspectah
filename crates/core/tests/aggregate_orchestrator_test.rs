@@ -1,11 +1,10 @@
-use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
-use inspectah_core::aggregate::manifest::AggregateManifest;
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning};
+use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
+use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use std::collections::HashMap;
@@ -47,7 +46,7 @@ fn test_merge_two_minimal_snapshots() {
     let s1 = make_snap("host-a");
     let s2 = make_snap("host-b");
 
-    let (merged, warnings) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, warnings) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     assert_eq!(merged.schema_version, SCHEMA_VERSION);
     let meta = merged.aggregate_meta.as_ref().unwrap();
@@ -64,23 +63,18 @@ fn test_merge_sorts_by_hostname() {
     let s2 = make_snap("alpha");
     let s3 = make_snap("middle");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     let meta = merged.aggregate_meta.as_ref().unwrap();
     assert_eq!(meta.hostnames, vec!["alpha", "middle", "zebra"]);
 }
 
 #[test]
-fn test_merge_with_manifest_label() {
+fn test_merge_with_explicit_label() {
     let s1 = make_snap("host-a");
     let s2 = make_snap("host-b");
-    let manifest = AggregateManifest {
-        label: Some("web-tier".into()),
-        target_image: None,
-        sources: vec![],
-    };
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], Some(&manifest)).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], Some("web-tier"), None).unwrap();
 
     assert_eq!(merged.aggregate_meta.as_ref().unwrap().label, "web-tier");
 }
@@ -92,7 +86,7 @@ fn test_merge_with_manifest_label() {
 #[test]
 fn test_merge_rejects_single_snapshot() {
     let s1 = make_snap("lonely");
-    let result = merge_snapshots(vec![s1], None);
+    let result = merge_snapshots(vec![s1], None, None);
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert!(
@@ -109,7 +103,7 @@ fn test_merge_rejects_schema_mismatch() {
     s1.schema_version = 15;
     s2.schema_version = 16;
 
-    let result = merge_snapshots(vec![s1, s2], None);
+    let result = merge_snapshots(vec![s1, s2], None, None);
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert!(
@@ -129,7 +123,7 @@ fn test_merge_selects_most_common_target_image() {
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
     let s3 = make_snap_with_target("host-c", "quay.io/rhel:9.3");
 
-    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
+    let (merged, warnings) = merge_snapshots(vec![s1, s2, s3], None, None).unwrap();
 
     let ti = merged.target_image.unwrap();
     assert_eq!(ti.image_ref, "quay.io/rhel:9.4");
@@ -147,16 +141,16 @@ fn test_merge_selects_most_common_target_image() {
 }
 
 #[test]
-fn test_merge_manifest_target_image_override() {
+fn test_merge_target_image_override() {
     let s1 = make_snap_with_target("host-a", "quay.io/rhel:9.3");
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
-    let manifest = AggregateManifest {
-        label: None,
-        target_image: Some("registry.redhat.io/rhel9/rhel-bootc:9.6".into()),
-        sources: vec![],
-    };
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], Some(&manifest)).unwrap();
+    let (merged, _) = merge_snapshots(
+        vec![s1, s2],
+        None,
+        Some("registry.redhat.io/rhel9/rhel-bootc:9.6"),
+    )
+    .unwrap();
 
     let ti = merged.target_image.unwrap();
     assert_eq!(ti.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
@@ -169,7 +163,7 @@ fn test_merge_unanimous_target_not_provisional() {
     let s1 = make_snap_with_target("host-a", "quay.io/rhel:9.4");
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     assert!(!merged.aggregate_meta.as_ref().unwrap().baseline_provisional);
 }
@@ -188,7 +182,7 @@ fn test_merge_selects_baseline_from_matching_host() {
     });
     let s2 = make_snap_with_target("host-b", "quay.io/rhel:9.4");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     assert!(merged.baseline.is_some());
     assert_eq!(merged.baseline.unwrap().image_digest, "sha256:abc");
@@ -203,7 +197,7 @@ fn test_merge_completeness_all_complete() {
     let s1 = make_snap("host-a");
     let s2 = make_snap("host-b");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
     assert_eq!(merged.completeness, Completeness::Complete);
 }
 
@@ -216,7 +210,7 @@ fn test_merge_completeness_partial_propagates() {
     };
     let s2 = make_snap("host-b");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     match &merged.completeness {
         Completeness::Partial {
@@ -244,7 +238,7 @@ fn test_merge_completeness_incomplete_overrides_partial() {
         reason: "rpm failed".into(),
     };
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     match &merged.completeness {
         Completeness::Incomplete {
@@ -275,7 +269,7 @@ fn test_merge_sensitive_flags_or_semantics() {
     s2.preserved_credentials = true;
     s2.preserved_ssh_keys = true;
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     assert!(merged.sensitive_snapshot);
     assert!(merged.preserved_credentials);
@@ -293,7 +287,7 @@ fn test_merge_clears_redaction_state() {
     );
     let s2 = make_snap("host-b");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
     assert!(merged.redaction_state.is_none());
 }
 
@@ -316,7 +310,7 @@ fn test_merge_os_release_from_first_sorted_host() {
         ..Default::default()
     });
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     // host-a sorts first, so its os_release should be used
     let os = merged.os_release.unwrap();
@@ -341,7 +335,7 @@ fn test_merge_section_host_counts() {
     let s2 = make_snap("host-b");
     // s2 has rpm (from make_snap) but no config
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let counts = &merged.aggregate_meta.as_ref().unwrap().section_host_counts;
     assert_eq!(counts.get("rpm"), Some(&2));
@@ -381,7 +375,7 @@ fn test_merge_rpm_section_flows_through() {
         ..Default::default()
     });
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let rpm = merged.rpm.unwrap();
     assert_eq!(rpm.packages_added.len(), 2);
@@ -413,7 +407,7 @@ fn test_merge_config_variants_flow_through() {
         }],
     });
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let config = merged.config.unwrap();
     assert_eq!(config.files.len(), 2);
@@ -440,7 +434,7 @@ fn test_merged_snapshot_serializes_and_deserializes() {
     let s1 = make_snap("host-a");
     let s2 = make_snap("host-b");
 
-    let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
+    let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();
 
     let json = serde_json::to_string(&merged).unwrap();
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();

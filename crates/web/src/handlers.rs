@@ -133,9 +133,10 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     };
 
     let aggregate = snap.aggregate_meta.as_ref().map(|meta| {
-        let variant_count = inspectah_refine::aggregate::variant_summary(snap, session.aggregate_context())
-            .map(|s| s.paths_with_variants)
-            .unwrap_or(0);
+        let variant_count =
+            inspectah_refine::aggregate::variant_summary(snap, session.aggregate_context())
+                .map(|s| s.paths_with_variants)
+                .unwrap_or(0);
         json!({
             "host_count": meta.host_count,
             "hostnames": meta.hostnames,

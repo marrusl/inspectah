@@ -1,4 +1,3 @@
-pub mod manifest;
 pub mod merge;
 pub mod validate;
 
@@ -6,11 +5,10 @@ use std::collections::BTreeMap;
 
 use crate::baseline::{ResolutionStrategy, TargetImageIdentity};
 use crate::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
-use crate::types::completeness::{Completeness, InspectorId};
 use crate::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone};
+use crate::types::completeness::{Completeness, InspectorId};
 use crate::types::redaction::RedactionState;
 
-use self::manifest::AggregateManifest;
 use self::merge::{
     merge_config_sections, merge_container_sections, merge_kernelboot_sections,
     merge_network_sections, merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections,
@@ -38,9 +36,13 @@ pub fn classify_zone(prevalence: &AggregatePrevalence) -> PrevalenceZone {
 ///
 /// Validates inputs first — returns hard errors if validation fails.
 /// On success, returns the merged snapshot and any non-fatal warnings.
+///
+/// - `label`: Optional label for the aggregate (defaults to `"aggregate"`).
+/// - `target_image_override`: If provided, overrides auto-detected target image with `CliOverride` strategy.
 pub fn merge_snapshots(
     snapshots: Vec<InspectionSnapshot>,
-    manifest: Option<&AggregateManifest>,
+    label: Option<&str>,
+    target_image_override: Option<&str>,
 ) -> Result<(InspectionSnapshot, Vec<AggregateWarning>), Vec<AggregateValidationError>> {
     let validation = validate::validate_snapshots(&snapshots);
     if !validation.errors.is_empty() {
@@ -64,15 +66,14 @@ pub fn merge_snapshots(
     let section_host_counts = compute_section_host_counts(&sorted_snapshots);
 
     // Snapshot-level field merging
-    let (target_image, baseline_provisional) = select_target_image(&sorted_snapshots, manifest);
+    let (target_image, baseline_provisional) =
+        select_target_image(&sorted_snapshots, target_image_override);
     let baseline = select_baseline(&sorted_snapshots, &target_image);
     let baseline_host_idx = find_baseline_host_idx(&sorted_snapshots, &target_image);
     let completeness = merge_completeness(&sorted_snapshots);
 
     let aggregate_meta = AggregateSnapshotMeta {
-        label: manifest
-            .and_then(|m| m.label.clone())
-            .unwrap_or_else(|| "aggregate".into()),
+        label: label.unwrap_or("aggregate").to_string(),
         host_count: total,
         hostnames: hostnames.clone(),
         merged_at: chrono::Utc::now().to_rfc3339(),
@@ -283,24 +284,22 @@ fn compute_section_host_counts(snapshots: &[InspectionSnapshot]) -> BTreeMap<Str
 
 /// Select the target image for the merged snapshot.
 ///
-/// If the manifest provides a target_image override, use it with `CliOverride` strategy.
+/// If `target_image_override` is provided, use it with `CliOverride` strategy.
 /// Otherwise, find the most-common `target_image` across inputs.
 /// Ties broken by lexicographic `image_ref`.
 ///
 /// Returns `(selected_target_image, baseline_provisional)`.
 /// `baseline_provisional` is true when the baseline was auto-selected
-/// from conflicting inputs (i.e., not all hosts agreed and no manifest override).
+/// from conflicting inputs (i.e., not all hosts agreed and no override).
 fn select_target_image(
     snapshots: &[InspectionSnapshot],
-    manifest: Option<&AggregateManifest>,
+    target_image_override: Option<&str>,
 ) -> (Option<TargetImageIdentity>, bool) {
-    // Manifest override takes precedence
-    if let Some(m) = manifest
-        && let Some(ref override_ref) = m.target_image
-    {
+    // Explicit override takes precedence
+    if let Some(override_ref) = target_image_override {
         return (
             Some(TargetImageIdentity {
-                image_ref: override_ref.clone(),
+                image_ref: override_ref.to_string(),
                 strategy: ResolutionStrategy::CliOverride,
             }),
             false, // explicit override is not provisional
@@ -493,14 +492,9 @@ mod tests {
     }
 
     #[test]
-    fn test_select_target_image_manifest_override() {
+    fn test_select_target_image_cli_override() {
         let snaps = vec![InspectionSnapshot::new()];
-        let manifest = AggregateManifest {
-            label: None,
-            target_image: Some("registry.example.com/rhel:9.4".into()),
-            sources: vec![],
-        };
-        let (ti, provisional) = select_target_image(&snaps, Some(&manifest));
+        let (ti, provisional) = select_target_image(&snaps, Some("registry.example.com/rhel:9.4"));
         assert!(!provisional);
         let ti = ti.unwrap();
         assert_eq!(ti.image_ref, "registry.example.com/rhel:9.4");
@@ -712,7 +706,7 @@ mod tests {
         let s2 = valid_snap("host-b");
 
         let (merged, _warnings) =
-            merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+            merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         assert_eq!(
             merged.meta.get("aggregate_source"),
             Some(&serde_json::json!("aggregate")),
@@ -727,7 +721,7 @@ mod tests {
         let mut s2 = valid_snap("host-b");
         s2.meta.insert("env".into(), serde_json::json!("staging"));
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // First-writer-wins for hostname: host-a sorts before host-b
         assert_eq!(
             merged.meta.get("hostname"),
@@ -749,7 +743,7 @@ mod tests {
         let mut s2 = valid_snap("host-b");
         s2.system_type = SystemType::PackageMode;
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         assert_eq!(merged.system_type, SystemType::PackageMode);
     }
 
@@ -787,7 +781,7 @@ mod tests {
             },
         ];
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // 2 from s1 + 1 unique from s2 = 3 (the duplicate is dropped)
         assert_eq!(merged.warnings.len(), 3);
         assert!(
@@ -867,7 +861,7 @@ mod tests {
             },
         ];
 
-        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        let (merged, _) = merge_snapshots(vec![s1, s2], None, None).expect("merge should succeed");
         // Redactions: 1 from s1 + 1 unique from s2 = 2
         assert_eq!(merged.redactions.len(), 2);
         assert!(
@@ -923,7 +917,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _warnings) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _warnings) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.preserved_subscription);
         assert!(merged.sensitive_snapshot);
         let sub = merged.subscription.unwrap();
@@ -968,7 +962,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         let sub = merged.subscription.unwrap();
         // Alphabetical tiebreak — host-alpha wins
         assert_eq!(sub.source_hostname.as_deref(), Some("host-alpha"));
@@ -994,7 +988,7 @@ mod tests {
             ..Default::default()
         });
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.preserved_subscription);
         assert!(merged.subscription.is_some());
     }
@@ -1009,7 +1003,7 @@ mod tests {
 
         let snap2 = valid_snap("host-b");
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(merged.redaction_skipped);
         assert!(merged.sensitive_snapshot);
         // redaction_state is dropped for merged snapshots
@@ -1021,7 +1015,7 @@ mod tests {
         let snap1 = valid_snap("host-a");
         let snap2 = valid_snap("host-b");
 
-        let (merged, _) = merge_snapshots(vec![snap1, snap2], None).unwrap();
+        let (merged, _) = merge_snapshots(vec![snap1, snap2], None, None).unwrap();
         assert!(!merged.redaction_skipped);
     }
 }

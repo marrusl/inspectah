@@ -1,10 +1,10 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::aggregate::{
+    AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone, VariantSelection,
+};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, QuadletUnit,
-};
-use inspectah_core::types::aggregate::{
-    AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone, VariantSelection,
 };
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_refine::session::RefineSession;

@@ -1,4 +1,6 @@
-use inspectah_core::aggregate::validate::{AggregateValidationError, AggregateWarning, validate_snapshots};
+use inspectah_core::aggregate::validate::{
+    AggregateValidationError, AggregateWarning, validate_snapshots,
+};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::os::{OsRelease, SystemType};
 
