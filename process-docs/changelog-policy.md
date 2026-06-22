@@ -2,8 +2,10 @@
 
 ## Rule
 
-Every commit that changes user-facing behavior gets a CHANGELOG.md entry
-under `## [Unreleased]` before the work is considered done.
+Every change merged to main that affects user-visible behavior gets a
+CHANGELOG.md entry under `## [Unreleased]` before the work is considered
+done. For feature branches, the entry is written at merge time (not on
+every individual commit).
 
 At release time, rename `[Unreleased]` to `[version] - YYYY-MM-DD` and
 add a fresh empty `## [Unreleased]` section above it.
