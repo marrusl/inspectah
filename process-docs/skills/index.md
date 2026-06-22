@@ -14,3 +14,5 @@ development or review.
 | [package-identity-is-name-dot-arch](package-identity-is-name-dot-arch.md) | Package identity is `name.arch` everywhere; bare names cause multiarch collisions |
 | [aggregate-vs-single-host-behavioral-split](aggregate-vs-single-host-behavioral-split.md) | Aggregate and single-host modes diverge on leaf filtering, redaction state, and rendering |
 | [subscription-preserve-flow](subscription-preserve-flow.md) | Subscription PEM collection pipeline, X.509 cert expiry parsing with `x509-parser`, display thresholds, symlink safety |
+| [anaconda-classifier-flow](anaconda-classifier-flow.md) | Anaconda gap classifier pipeline: four tiers, locked plumbing, promoted-via-service/config, user-op preservation after reclassification |
+| [release-build-configuration](release-build-configuration.md) | Workspace Cargo.toml layout, zigbuild cross-compile, musl static binaries, missing `[profile.release]` tuning |

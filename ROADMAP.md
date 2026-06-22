@@ -3,9 +3,7 @@
 **Current version:** v0.8.6-beta.3 (Rust rewrite, Go retired)
 
 ```
-Anaconda Gap Classifier (in progress)
-    |
-    +-- Group-Aware Rendering (blocked on classifier)
+Group Rendering: Refine UI (spec'd)
     |
     +-- Classification Logic Developer Docs
     |
@@ -13,19 +11,8 @@ Aggregate Spec 3: Architect
     |
 CLI Cutover: Rust binary becomes primary `inspectah` command
     |
-Post-cutover: Architect v2, `inspectah build`
+Post-cutover: Architect v2 (multi-artifact decomposition)
 ```
-
-## In Progress
-
-### Anaconda Gap Classifier
-
-Four-tier classification for packages Anaconda installs beyond the base container image: platform plumbing (locked exclude), promoted (user-intent via service+config signals), installer noise (soft exclude), ambiguous (Investigate, included by default). Group data collected via `dnf group list --installed`.
-
-- **Priority:** In Progress
-- **Branch:** `feature/anaconda-gap-classifier`
-- **Spec:** `process-docs/specs/proposed/2026-06-11-anaconda-gap-classifier.md`
-- **Plan:** `process-docs/plans/2026-06-11-anaconda-gap-classifier.md`
 
 ## High
 
@@ -39,41 +26,17 @@ Parse `pam.d` module load lists, diff against the base image's module set, flag 
 
 ## Ready (Spec'd / Planned)
 
-### Group-Aware Rendering
+### Group Rendering: Refine UI
 
-Render group-installed packages as `dnf group install` in the Containerfile instead of individual `dnf install` lines. Refine UI shows groups as collapsible rows with ungroup action. Depends on Anaconda Gap Classifier.
+Refine UI shows package groups as collapsible rows with ungroup action. Containerfile rendering (`dnf group install`) already ships; this covers the interactive review experience.
 
-- **Pre-spec:** `process-docs/specs/proposed/2026-06-11-group-rendering-pre-spec.md`
-
-### Unified Include-Default Model
-
-Unifies include/default behavior across single-host and fleet modes. Consistent toggle semantics for all section types.
-
-- **Status:** Spec + plan approved, ready for implementation
-
-### Mandatory Baseline Requirement
-
-Removes `--no-baseline`, adds exit code 3 for classified errors, schema v19. Baseline comparison becomes mandatory for accurate classification.
-
-- **Status:** Spec + plan approved, ready for implementation
-
-### Context Section Overhaul
-
-Redesigns the refine UX context section. 8 implementation tasks.
-
-- **Status:** Spec + plan approved, ready for implementation
+- **Spec:** `process-docs/specs/proposed/2026-06-11-group-rendering-spec.md`
 
 ### HTML Audit Report Redesign
 
 Modernizes the HTML audit report output.
 
 - **Status:** Spec approved, plan written
-
-### Scan Output Rethink
-
-Rethink `inspectah scan` CLI progress for the inspector section. Current per-inspector spinners were designed for 12-minute scans; the Rust rewrite runs in ~10 seconds. Direction: streaming append-only receipt, sub-steps behind `--verbose`.
-
-- **Pre-spec:** `process-docs/specs/proposed/2026-06-10-scan-output-rethink.md`
 
 ### Classification Logic Developer Docs
 
@@ -87,7 +50,7 @@ Preserve original sysctl source filenames instead of collapsing into a single `9
 
 ### Config Content Viewer
 
-Full-content modal or drawer for config files (currently truncated at 500 chars). Show full file with monospace formatting, RPM diff, and file metadata.
+Full-content modal or drawer for config files. Show full file with monospace formatting, RPM diff, and file metadata.
 
 ### Fleet Divergence Review UX
 
@@ -127,11 +90,7 @@ Locale-aware output for HTML audit reports and CLI. Translate user-facing string
 
 ### Release Binary Size Optimization
 
-Add `[profile.release]` settings: `lto = "thin"`, `strip = true`, `codegen-units = 1`. Expected 30-50% size reduction (current: 15-18 MB).
-
-### Pre-1.0 Compat Sweep
-
-Remove defensive backward-compatibility code from the Rust rewrite era. Before 1.0, old tarballs are not sacred — users re-scan.
+Add `[profile.release]` settings: `lto = "thin"`, `strip = true`, `codegen-units = 1`. Expected 30-50% size reduction.
 
 ## Milestones
 
@@ -146,4 +105,3 @@ Rust binary becomes the primary `inspectah` command.
 ### Post-Cutover
 
 - Architect v2 (multi-artifact decomposition)
-- `inspectah build` command
