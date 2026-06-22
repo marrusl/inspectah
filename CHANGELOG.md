@@ -7,15 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6-beta.4] - 2026-06-22
+
 ### Added
 - **Subscription cert expiry display** — scan output now shows entitlement certificate expiration date when `--preserve subscription` is used. Warns at <7 days remaining, errors if already expired. Also included in the generated README.
-
-### Changed
-- **CLI command rename** — `fleet` subcommand renamed to `aggregate` — all CLI commands, types, modules, and documentation updated
-
-## [0.8.6-beta.3] - 2026-06-15
-
-### Added
 - **Anaconda gap classifier** — packages installed by the RHEL installer (Anaconda) are now classified as platform plumbing and auto-excluded from migration scope. Dramatically reduces migration noise by hiding installer-default packages.
 - **Package group dependency visibility** — group members now show whether they're already in the base image. Summary labels distinguish "new" members from base-image members. Progressive disclosure replaces fixed truncation for long group member lists.
 - **Version changes table** — context section now renders version changes as a grouped table (upgrades/downgrades with EVR formatting) instead of simple list.
@@ -26,8 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sidebar subsection counts** — sidebar section counts correctly sum subsection items for subsection-only sections.
 - **Accessibility improvements** — ContextList subsections use semantic headings and ARIA region landmarks.
 - **Pull failure classification** — five error categories (registry unreachable, auth required, image not found, TLS/cert error, unknown) with tailored remediation guidance including disconnected-environment workarounds.
+- Build metadata in version output — `inspectah version` and `--version` now show commit hash and build date
+- Compile-time build script (`build.rs`) captures git revision and date
 
 ### Changed
+- **CLI command rename** — `fleet` subcommand renamed to `aggregate` — all CLI commands, types, modules, and documentation updated
 - **Mandatory baseline** — `--no-baseline` flag removed; baseline extraction is now required. Scans that cannot pull the target image exit with code 3 with remediation guidance. Use `--base-image` to override auto-resolution.
 - **CLI flag rename** — `--baseline` flag renamed to `--target-image` (old flag still accepted as alias for compatibility).
 - **Exit codes** — pull failures now exit with code 3 (previously the scan would continue with degraded output).
@@ -50,12 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **`--no-baseline` flag** — baseline is now mandatory.
 - **`--progress rich` and `--progress plain` modes** (use `--progress pretty`).
-
-## [0.8.6-beta.1] - 2026-06-09
-
-### Added
-- Build metadata in version output — `inspectah version` and `--version` now show commit hash and build date
-- Compile-time build script (`build.rs`) captures git revision and date
 
 ### Known Issues
 - RHEL-subscribed builds (`--preserve-subscription`) do not work when inspectah runs on non-RHEL hosts. The subscription material is host-specific and cannot be transferred across distributions.
@@ -278,9 +270,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.3...HEAD
-[0.8.6-beta.3]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.2...v0.8.6-beta.3
-[0.8.6-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.2...v0.8.6-beta.1
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.4...HEAD
+[0.8.6-beta.4]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.2...v0.8.6-beta.4
 [0.8.5-beta.2]: https://github.com/marrusl/inspectah/compare/v0.8.5-beta.1...v0.8.5-beta.2
 [0.8.5-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.5-alpha.1...v0.8.5-beta.1
 [0.8.5-alpha.1]: https://github.com/marrusl/inspectah/compare/v0.8.4-alpha.1...v0.8.5-alpha.1
