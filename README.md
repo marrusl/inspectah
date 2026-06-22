@@ -175,20 +175,19 @@ The TUI provides keyboard-driven navigation and inline item toggling without lea
 
 ### Aggregation
 
-For managing multiple hosts, use `inspectah aggregate`:
+For managing multiple hosts, point `inspectah aggregate` at a directory of scan tarballs:
 
 ```bash
-# Generate a aggregate manifest from a directory of tarballs
-inspectah aggregate init ./scans/
+inspectah aggregate ./scans/
+```
 
-# Aggregate the aggregate into a single aggregate tarball
-inspectah aggregate --manifest aggregate.toml
-
-# Refine the aggregated output
+```bash
 inspectah refine aggregate-*.tar.gz
 ```
 
-Aggregate mode finds the intersection of packages/configs across hosts and identifies per-host exceptions.
+This finds the intersection of packages and configs across hosts and identifies per-host exceptions. The aggregated tarball works with `refine` and `build` the same way a single-host tarball does.
+
+For more control over which scans to include, generate a manifest first with `inspectah aggregate init ./scans/`, edit the resulting `aggregate.toml`, then run `inspectah aggregate --manifest aggregate.toml`.
 
 ## Workflows
 
