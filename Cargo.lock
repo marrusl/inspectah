@@ -1226,6 +1226,7 @@ dependencies = [
  "tar",
  "tempfile",
  "terminal_size",
+ "time",
  "tokio",
 ]
 

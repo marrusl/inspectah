@@ -695,6 +695,44 @@ fn build_version_change_summary(
     })
 }
 
+/// Format a cert expiry line for the scan summary.
+///
+/// Returns `None` when the snapshot has no subscription section or no expiry date.
+/// Uses `time::OffsetDateTime::now_utc()` to compute days remaining.
+fn format_cert_expiry_line(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Option<String> {
+    let sub = snapshot.subscription.as_ref()?;
+    let expiry = sub.earliest_expiry?;
+
+    let now = time::OffsetDateTime::now_utc();
+    let diff = expiry - now;
+    let days = diff.whole_days();
+
+    let format = time::format_description::parse("[year]-[month]-[day]")
+        .expect("static format description");
+    let date_str = expiry.format(&format).unwrap_or_else(|_| "unknown".into());
+
+    if days < 0 {
+        let abs_days = days.unsigned_abs();
+        let day_word = if abs_days == 1 { "day" } else { "days" };
+        Some(format!(
+            "   \u{26a0} Subscription certs EXPIRED: {date_str} ({abs_days} {day_word} ago) \
+             \u{2014} will not work on unregistered systems"
+        ))
+    } else if days < 7 {
+        let day_word = if days == 1 { "day" } else { "days" };
+        Some(format!(
+            "   \u{26a0} Subscription certs expire: {date_str} ({days} {day_word}) \
+             \u{2014} rebuild soon"
+        ))
+    } else {
+        Some(format!(
+            "   Subscription certs expire: {date_str} ({days} days)"
+        ))
+    }
+}
+
 /// Build the sensitivity notice string for the `Completed` footer.
 ///
 /// Returns `None` when the snapshot has no sensitive data.
@@ -723,6 +761,14 @@ fn build_sensitivity_notice(
     if !preserved_items.is_empty() {
         lines.push(format!("   Preserved: {}", preserved_items.join(", ")));
     }
+
+    // Show cert expiry warning when subscription material is preserved
+    if snapshot.preserved_subscription
+        && let Some(expiry_line) = format_cert_expiry_line(snapshot)
+    {
+        lines.push(expiry_line);
+    }
+
     if is_raw {
         lines.push("   Redaction: skipped (raw secrets retained)".to_string());
     } else {
@@ -973,5 +1019,82 @@ VARIANT_ID="workstation"
         let expanded = PreserveItem::expand(&items);
         assert_eq!(expanded.len(), 1);
         assert_eq!(expanded[0], PreserveItem::Subscription);
+    }
+
+    // --- cert expiry line formatting ---
+
+    fn snapshot_with_expiry(expiry: time::OffsetDateTime) -> inspectah_core::snapshot::InspectionSnapshot {
+        let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        snap.subscription = Some(inspectah_core::types::subscription::SubscriptionSection {
+            earliest_expiry: Some(expiry),
+            ..Default::default()
+        });
+        snap
+    }
+
+    #[test]
+    fn cert_expiry_far_future_shows_days() {
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::days(30);
+        let snap = snapshot_with_expiry(expiry);
+        let line = format_cert_expiry_line(&snap).expect("should produce line");
+        assert!(line.contains("Subscription certs expire:"));
+        assert!(line.contains("days)"));
+        // No warning symbol in normal case
+        assert!(!line.contains("\u{26a0}"));
+    }
+
+    #[test]
+    fn cert_expiry_within_7_days_warns() {
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::days(3);
+        let snap = snapshot_with_expiry(expiry);
+        let line = format_cert_expiry_line(&snap).expect("should produce line");
+        assert!(line.contains("\u{26a0}"));
+        assert!(line.contains("rebuild soon"));
+    }
+
+    #[test]
+    fn cert_expiry_already_expired_shows_error() {
+        let expiry = time::OffsetDateTime::now_utc() - time::Duration::days(2);
+        let snap = snapshot_with_expiry(expiry);
+        let line = format_cert_expiry_line(&snap).expect("should produce line");
+        assert!(line.contains("EXPIRED"));
+        assert!(line.contains("ago)"));
+        assert!(line.contains("will not work"));
+    }
+
+    #[test]
+    fn cert_expiry_none_returns_none() {
+        let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        snap.subscription = Some(inspectah_core::types::subscription::SubscriptionSection::default());
+        assert!(format_cert_expiry_line(&snap).is_none());
+    }
+
+    #[test]
+    fn cert_expiry_no_subscription_returns_none() {
+        let snap = inspectah_core::snapshot::InspectionSnapshot::new();
+        assert!(format_cert_expiry_line(&snap).is_none());
+    }
+
+    #[test]
+    fn sensitivity_notice_includes_cert_expiry() {
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::days(5);
+        let mut snap = snapshot_with_expiry(expiry);
+        snap.sensitive_snapshot = true;
+        let notice = build_sensitivity_notice(&snap).expect("should produce notice");
+        assert!(notice.contains("Preserved: subscription"));
+        assert!(notice.contains("Subscription certs expire:"));
+        assert!(notice.contains("rebuild soon"));
+    }
+
+    #[test]
+    fn sensitivity_notice_no_subscription_no_expiry() {
+        let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
+        snap.sensitive_snapshot = true;
+        snap.preserved_ssh_keys = true;
+        let notice = build_sensitivity_notice(&snap).expect("should produce notice");
+        assert!(notice.contains("ssh-keys"));
+        assert!(!notice.contains("Subscription certs"));
     }
 }

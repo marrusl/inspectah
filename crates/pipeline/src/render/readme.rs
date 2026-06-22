@@ -138,6 +138,39 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
         lines.push("This image requires RHEL subscription material at build time.".into());
         lines.push(String::new());
+
+        // Include cert expiry warning in README
+        if let Some(sub) = &snap.subscription
+            && let Some(expiry) = sub.earliest_expiry
+        {
+            let format = time::format_description::parse("[year]-[month]-[day]")
+                .expect("static format description");
+            let date_str =
+                expiry.format(&format).unwrap_or_else(|_| "unknown".into());
+            let now = time::OffsetDateTime::now_utc();
+            let days = (expiry - now).whole_days();
+
+            if days < 0 {
+                let abs_days = days.unsigned_abs();
+                let day_word = if abs_days == 1 { "day" } else { "days" };
+                lines.push(format!(
+                    "> **WARNING:** Subscription certs EXPIRED on {date_str} \
+                     ({abs_days} {day_word} ago). Builds will fail on unregistered systems. \
+                     Re-scan with fresh certs."
+                ));
+            } else if days < 7 {
+                let day_word = if days == 1 { "day" } else { "days" };
+                lines.push(format!(
+                    "> **WARNING:** Subscription certs expire {date_str} \
+                     ({days} {day_word} remaining). Rebuild soon."
+                ));
+            } else {
+                lines.push(format!(
+                    "> Subscription certs expire: {date_str} ({days} days remaining)."
+                ));
+            }
+            lines.push(String::new());
+        }
         lines.push(
             "**Recommended:** Use the build helper (handles subscription mounts automatically):"
                 .into(),
@@ -397,6 +430,86 @@ mod tests {
         assert!(
             md.contains("-v ./subscription/entitlement:/run/secrets/etc-pki-entitlement:z"),
             "must include subscription mount instructions"
+        );
+    }
+
+    #[test]
+    fn test_readme_subscription_expiry_far_future() {
+        use inspectah_core::types::subscription::SubscriptionSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::days(30);
+        snap.subscription = Some(SubscriptionSection {
+            earliest_expiry: Some(expiry),
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("Subscription certs expire:"),
+            "must show expiry date"
+        );
+        assert!(
+            md.contains("days remaining"),
+            "must show days remaining"
+        );
+    }
+
+    #[test]
+    fn test_readme_subscription_expiry_imminent() {
+        use inspectah_core::types::subscription::SubscriptionSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::days(3);
+        snap.subscription = Some(SubscriptionSection {
+            earliest_expiry: Some(expiry),
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("WARNING"),
+            "must show warning for imminent expiry"
+        );
+        assert!(
+            md.contains("Rebuild soon"),
+            "must advise rebuild"
+        );
+    }
+
+    #[test]
+    fn test_readme_subscription_expired() {
+        use inspectah_core::types::subscription::SubscriptionSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        let expiry = time::OffsetDateTime::now_utc() - time::Duration::days(5);
+        snap.subscription = Some(SubscriptionSection {
+            earliest_expiry: Some(expiry),
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("EXPIRED"),
+            "must show EXPIRED for past certs"
+        );
+        assert!(
+            md.contains("Re-scan"),
+            "must advise re-scanning"
+        );
+    }
+
+    #[test]
+    fn test_readme_subscription_no_expiry_no_warning() {
+        use inspectah_core::types::subscription::SubscriptionSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.preserved_subscription = true;
+        snap.subscription = Some(SubscriptionSection::default());
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("## Building with Subscription"),
+            "must still show build section"
+        );
+        assert!(
+            !md.contains("Subscription certs"),
+            "must not show expiry when none available"
         );
     }
 }

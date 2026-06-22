@@ -26,6 +26,7 @@ flate2 = "1"
 pathdiff = "0.2"
 ctrlc = "3"
 clap-markdown = "0.1.5"
+time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
