@@ -6,6 +6,7 @@ development or review.
 
 | Skill | Summary |
 |-------|---------|
+| [codebase-layout](codebase-layout.md) | Workspace structure, crate organization, where to find commands/types/inspectors/renderers/tests/docs |
 | [two-wave-collection](two-wave-collection.md) | Inspector dispatch ordering, RPM runs first in Wave 1, Wave 2 gets `RpmState`; None vs Some(empty) contract |
 | [mock-executor-key-format](mock-executor-key-format.md) | Test infrastructure: command key is `cmd + " " + args.join(" ")`; mismatches silently return exit 127 |
 | [snapshot-schema-versioning](snapshot-schema-versioning.md) | Snapshot JSON schema version gating, serde annotation requirements, no backward compat |
