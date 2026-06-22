@@ -60,10 +60,6 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
 
         // Exclude inspectah's own COPR repo
         if is_inspectah_repo(&entry, &content) {
-            eprintln!(
-                "inspectah: excluding self-repo '{}' from scan output",
-                entry
-            );
             continue;
         }
 

@@ -173,10 +173,6 @@ pub fn parse_rpm_qa(output: &str) -> Vec<PackageEntry> {
                 return None;
             }
             if SELF_EXCLUDE_PACKAGES.contains(&entry.name.as_str()) {
-                eprintln!(
-                    "inspectah: excluding self-package '{}' from scan output",
-                    entry.name
-                );
                 return None;
             }
             Some(entry)
