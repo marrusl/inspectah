@@ -155,24 +155,13 @@ const singleHostStages = [
 
 const aggregateStages = [
   {
-    id: 'aggregate-input',
-    label: 'Collect Scans',
-    sublabel: 'Gather host tarballs',
-    color: 'teal',
-    tooltip: 'Collect scan tarballs from multiple hosts into a single directory.',
-    children: [
-      { text: 'Multiple tarballs', detail: 'One per host in the aggregate' },
-      { text: 'Common directory', detail: 'All tarballs in one location for aggregation' },
-    ],
-    docLink: '../aggregate-workflow.html',
-  },
-  {
     id: 'aggregate-aggregate',
     label: 'Aggregate',
     sublabel: 'Cross-host analysis',
     color: 'teal',
-    tooltip: 'Compute aggregate-wide intersections, outliers, and common patterns.',
+    tooltip: 'Compute aggregate-wide intersections, outliers, and common patterns directly from host tarballs.',
     children: [
+      { text: 'inspectah aggregate <tarballs>', detail: 'Aggregate command takes tarball paths directly' },
       { text: 'Package intersection', detail: 'Packages present on all hosts' },
       { text: 'Service commonality', detail: 'Services enabled across the aggregate' },
       { text: 'Outlier detection', detail: 'Host-specific deviations from baseline' },
@@ -286,7 +275,7 @@ connectorDefs.push({
   label: 'Single Host',
 });
 
-// Branch: Refine → Aggregate Init
+// Branch: Refine → Aggregate
 connectorDefs.push({
   from: refineNode,
   to: aggregateStages[0],
