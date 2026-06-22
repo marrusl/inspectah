@@ -174,7 +174,7 @@ Bundled into RPM packages.
 
 ## Gotchas
 
-- **No team member names in commits or code** — inspectah is a public repo. Attribution uses "Assisted-by: Claude Code" only.
+- **Attribution style** — all LLM-generated commits use `Assisted-by: Claude Code (<model>)`. No other attribution styles or identifiers.
 - **Build script version:** `crates/cli/build.rs` stamps version metadata at compile time. Don't manually update version strings in code.
 - **Schema versioning:** Snapshot JSON has a `schema_version` field that MUST be bumped when types change. See `snapshot-schema-versioning.md`.
 - **Package identity is `name.arch`** — Never use bare package names. See `package-identity-is-name-dot-arch.md`.
