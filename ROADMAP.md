@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-**Current version:** v0.8.6-beta.3 (Rust rewrite, Go retired)
+**Current version:** v0.8.6-beta.3 (pure Rust, CLI cutover complete)
 
 ```
 Group Rendering: Refine UI (spec'd)
@@ -9,9 +9,7 @@ Group Rendering: Refine UI (spec'd)
     |
 Aggregate Spec 3: Architect
     |
-CLI Cutover: Rust binary becomes primary `inspectah` command
-    |
-Post-cutover: Architect v2 (multi-artifact decomposition)
+Architect v2 (multi-artifact decomposition)
 ```
 
 ## High
@@ -98,10 +96,6 @@ Add `[profile.release]` settings: `lto = "thin"`, `strip = true`, `codegen-units
 
 Takes refined aggregate tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec after current work stabilizes.
 
-### CLI Cutover
+### Architect v2
 
-Rust binary becomes the primary `inspectah` command.
-
-### Post-Cutover
-
-- Architect v2 (multi-artifact decomposition)
+Multi-artifact decomposition — decomposes a refined tarball into per-role artifacts.
