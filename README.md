@@ -78,8 +78,7 @@ The baseline comparison is critical: inspectah pulls the target base image to de
 After scanning, you can optionally **refine** the output:
 
 4. **Refine** (optional) — Open an interactive browser dashboard to toggle items on/off, override classifications, and re-render artifacts with your changes
-
-Build with `inspectah build <tarball> <tag>` (runs `podman build` under the hood) or extract the tarball and build manually.
+5. **Build** — Build a bootc container image from the artifacts with `inspectah build <tarball> <tag>` (runs `podman build` under the hood), or extract the tarball and build manually
 
 ## Output
 
