@@ -19,7 +19,7 @@ the refine UI to triage findings. Total time: about 10 minutes.
 findings. RHEL base images require registry authentication:
 
 ```bash
-podman login registry.redhat.io
+sudo podman login registry.redhat.io
 ```
 
 Fedora and CentOS Stream base images are available from public registries

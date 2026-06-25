@@ -45,7 +45,7 @@ Before you start, make sure you have:
 RHEL base images require registry authentication:
 
 ```bash
-podman login registry.redhat.io
+sudo podman login registry.redhat.io
 ```
 
 Fedora and CentOS Stream base images are on public registries and do not
