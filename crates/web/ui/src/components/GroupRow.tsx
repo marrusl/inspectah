@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from "react";
-import { Switch, Button } from "@patternfly/react-core";
+import { Button } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon, LockIcon } from "@patternfly/react-icons";
 import type { GroupInfo } from "../api/types";
 
@@ -21,10 +21,10 @@ export interface GroupRowProps {
 
 export function GroupRow({
   group,
-  onToggle,
+  onToggle: _onToggle,
   onUngroup,
   searchQuery,
-  isIncluded = true,
+  isIncluded: _isIncluded = true,
   forceExpanded = false,
   defaultExpanded = false,
   onExpandChange,
@@ -54,10 +54,6 @@ export function GroupRow({
     },
     [onUngroup, group.name],
   );
-
-  const handleToggle = useCallback(() => {
-    onToggle(group.name, !isIncluded);
-  }, [onToggle, group.name, isIncluded]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -153,18 +149,10 @@ export function GroupRow({
           </Button>
         </span>
 
-        <span
-          className="inspectah-group-row__toggle"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Switch
-            id={`group-toggle-${group.name}`}
-            isChecked={isIncluded}
-            onChange={handleToggle}
-            aria-label={`Toggle ${group.name} group`}
-            isDisabled={isDegraded}
-          />
-        </span>
+        {/* Group-level toggle removed — groups are managed via ungroup
+            (dissolves into individual packages) or per-member toggles.
+            The toggle was confusing in degraded states where it appeared
+            but did nothing. */}
       </div>
 
       {expanded && (

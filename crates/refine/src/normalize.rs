@@ -228,6 +228,23 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
         .retain(|u| !incompatible_units.contains(&u.as_str()));
 }
 
+/// Exclude inspectah's own COPR repo file from the RPM repo files list.
+///
+/// The inspectah tool's own COPR repo definition should never be carried
+/// over to the target image. This is the RPM-level counterpart to the
+/// config-level filtering in `normalize_config_defaults`.
+pub fn normalize_inspectah_repo_files(snapshot: &mut InspectionSnapshot) {
+    let rpm = match snapshot.rpm.as_mut() {
+        Some(r) => r,
+        None => return,
+    };
+    for rf in &mut rpm.repo_files {
+        if is_inspectah_repo_file(&rf.path) {
+            rf.include = false;
+        }
+    }
+}
+
 /// Materialize tier-aware include defaults for config files.
 ///
 /// Baseline subtraction: Tier 1 (Routine) configs — RpmOwnedDefault
@@ -235,6 +252,23 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 /// base image already provides them. Tier 2 (Informational) configs
 /// are included unless orphaned. Tier 3 (NeedsReview/user-modified)
 /// configs are always included.
+/// Path segment that identifies inspectah's own COPR repo file.
+/// Matches paths like `/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:...:inspectah.repo`.
+const INSPECTAH_COPR_MARKER: &str = "inspectah";
+
+/// Returns true if a config file path is inspectah's own COPR repo definition.
+/// These should never be carried over to the target image.
+fn is_inspectah_repo_file(path: &str) -> bool {
+    // Only repo files in yum.repos.d
+    if !path.starts_with("/etc/yum.repos.d/") {
+        return false;
+    }
+    let filename = path.rsplit('/').next().unwrap_or("");
+    // COPR repo files start with `_copr:` or `_copr_`
+    let is_copr = filename.starts_with("_copr");
+    is_copr && filename.contains(INSPECTAH_COPR_MARKER)
+}
+
 pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[RefinedConfig]) {
     let config = match snapshot.config.as_mut() {
         Some(c) => c,
@@ -244,6 +278,15 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
         if i >= config.files.len() {
             break;
         }
+
+        // Exclude inspectah's own COPR repo definition — the migration
+        // tool should never carry its own repo into the target image.
+        if is_inspectah_repo_file(&config.files[i].path) {
+            config.files[i].include = false;
+            config.files[i].locked = true;
+            continue;
+        }
+
         let bucket = refined.triage.bucket();
         match bucket {
             TriageBucket::Baseline => {

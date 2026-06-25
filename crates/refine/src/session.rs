@@ -13,7 +13,9 @@ use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
 use crate::group_state::{GroupEvalContext, derive_group_state};
-use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
+use crate::normalize::{
+    normalize_config_defaults, normalize_inspectah_repo_files, normalize_package_defaults,
+};
 use crate::repo_index::RepoIndex;
 use crate::types::{
     AggregateContext, AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, ItemId,
@@ -294,6 +296,7 @@ impl RefineSession {
         let configs = classify_configs(&snapshot);
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
+        normalize_inspectah_repo_files(&mut snapshot);
 
         // Detect aggregate mode from snapshot metadata.
         let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
@@ -2132,6 +2135,25 @@ impl RefineSession {
             // aggregate mode uses prevalence-based intersection instead).
             if !is_aggregate && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+
+                // Ungrouped group members must bypass the leaf filter so they
+                // appear as individual packages after ungrouping. Without this,
+                // non-leaf group members vanish when their group is dissolved.
+                let ungrouped_member_names: HashSet<&str> = self
+                    .installed_groups()
+                    .iter()
+                    .filter(|g| {
+                        self.timeline[..self.cursor].iter().any(|entry| {
+                            matches!(
+                                entry,
+                                TimelineEntry::View(ViewDirective::UngroupGroup { group_name })
+                                    if *group_name == g.name
+                            )
+                        })
+                    })
+                    .flat_map(|g| g.members.iter().map(|m| m.as_str()))
+                    .collect();
+
                 packages
                     .into_iter()
                     .filter(|pkg| {
@@ -2146,6 +2168,7 @@ impl RefineSession {
                         leaf_set.contains(package_id.as_str())
                             || pkg.triage.bucket() == TriageBucket::Investigate
                             || pkg.entry.include != original_include
+                            || ungrouped_member_names.contains(pkg.entry.name.as_str())
                     })
                     .collect()
             } else {

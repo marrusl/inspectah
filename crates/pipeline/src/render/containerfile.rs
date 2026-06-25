@@ -504,9 +504,11 @@ fn packages_section_lines(
     };
 
     // Provenance comments — explain why group members appear individually.
-    // Emitted for ALL groups with non-empty optional_installed (regardless of
-    // render state — optional members are always independent per spec), plus
-    // ungrouped and degraded groups whose members spill into individual packages.
+    // Provenance comments for groups whose members appear individually.
+    // Ungrouped groups emit NO comment — their members silently join the
+    // individual packages section (per design: ungrouping = treat as leaf).
+    // Degraded groups get an explanatory comment. Optional spillover is
+    // always noted regardless of group state.
     if let Some(ctx) = render_ctx
         && let Some(groups) = &rpm.installed_groups
     {
@@ -518,18 +520,12 @@ fn packages_section_lines(
         sorted_groups.sort_by(|a, b| a.name.cmp(&b.name));
 
         for g in &sorted_groups {
-            match ctx.group_states.get(&g.name) {
-                Some(GroupRenderState::Ungrouped) => {
-                    provenance_lines.push(format!("# Ungrouped from \"{}\"", g.name));
-                }
-                Some(GroupRenderState::Degraded { reason }) => {
-                    provenance_lines.push(format!(
-                        "# \"{}\" degraded ({}): members rendered individually",
-                        g.name,
-                        degradation_reason_label(reason),
-                    ));
-                }
-                _ => {}
+            if let Some(GroupRenderState::Degraded { reason }) = ctx.group_states.get(&g.name) {
+                provenance_lines.push(format!(
+                    "# \"{}\" degraded ({}): members rendered individually",
+                    g.name,
+                    degradation_reason_label(reason),
+                ));
             }
             // Optional spillover — always emitted regardless of group state
             if !g.optional_installed.is_empty() {
@@ -3305,7 +3301,7 @@ mod tests {
     // --- Provenance comment annotation tests (Task 15) ---
 
     #[test]
-    fn test_containerfile_ungrouped_comment() {
+    fn test_containerfile_ungrouped_no_comment() {
         let snap = snapshot_with_packages_and_groups(
             &["httpd", "gcc", "make"],
             vec![InstalledGroup {
@@ -3321,10 +3317,11 @@ mod tests {
 
         let output = render_containerfile(&snap, None, Some(&ctx));
 
-        // Ungrouped comment must appear
+        // Ungrouped groups emit NO provenance comment — members silently
+        // join the individual packages section.
         assert!(
-            output.contains("# Ungrouped from \"Dev Tools\""),
-            "must contain ungrouped provenance comment, got:\n{output}"
+            !output.contains("Ungrouped"),
+            "ungrouped group must not produce a provenance comment, got:\n{output}"
         );
         // No dnf group install for this group
         assert!(

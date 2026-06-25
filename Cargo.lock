@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-cli"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-collect"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "base64",
  "inspectah-core",
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-core"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "chrono",
  "serde",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-pipeline"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "anyhow",
  "base64",
@@ -1286,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-refine"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "flate2",
  "inspectah-core",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-tui"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "color-eyre",
  "crossterm",
@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "inspectah-web"
-version = "0.8.6-beta.3"
+version = "0.8.6-beta.4"
 dependencies = [
  "axum",
  "http-body-util",

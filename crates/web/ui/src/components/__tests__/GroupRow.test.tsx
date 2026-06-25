@@ -208,32 +208,17 @@ describe("GroupRow", () => {
     expect(onUngroup).toHaveBeenCalledWith("core");
   });
 
-  it("toggle calls onToggle", () => {
-    const onToggle = vi.fn();
-    render(
-      <GroupRow
-        group={mockGroup}
-        onToggle={onToggle}
-        onUngroup={vi.fn()}
-        isIncluded={true}
-      />,
-    );
-    const toggle = screen.getByRole("switch");
-    fireEvent.click(toggle);
-    expect(onToggle).toHaveBeenCalledWith("core", false);
-  });
-
-  it("toggle reflects isIncluded=false state", () => {
+  it("no group-level toggle switch is rendered", () => {
     render(
       <GroupRow
         group={mockGroup}
         onToggle={vi.fn()}
         onUngroup={vi.fn()}
-        isIncluded={false}
       />,
     );
-    const toggle = screen.getByRole("switch");
-    expect(toggle).not.toBeChecked();
+    // Group-level toggle was removed — groups are managed via ungroup
+    // or per-member actions, not a toggle switch.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("has left accent border via CSS class", () => {
@@ -259,9 +244,8 @@ describe("GroupRow", () => {
     const expandBtn = screen.getByRole("button", { name: /expand/i });
     fireEvent.click(expandBtn);
 
-    // Only the group-level switch should exist, no per-member switches
-    const switches = screen.getAllByRole("switch");
-    expect(switches).toHaveLength(1);
+    // No switches at all — group toggle removed, members are read-only
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   // --- Task 26: Keyboard and ARIA ---
@@ -345,7 +329,7 @@ describe("GroupRow", () => {
 
   // --- Task 27b: Degraded and excluded feedback ---
 
-  it("degraded group has disabled toggle and ungroup", () => {
+  it("degraded group has disabled ungroup button", () => {
     render(
       <GroupRow
         group={degradedGroup}
@@ -353,8 +337,8 @@ describe("GroupRow", () => {
         onUngroup={vi.fn()}
       />,
     );
-    const toggle = screen.getByRole("switch");
-    expect(toggle).toBeDisabled();
+    // No toggle switch at all (removed)
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
     const ungroupBtn = screen.getByRole("button", {
       name: /ungroup container management/i,
@@ -429,7 +413,7 @@ describe("GroupRow", () => {
     expect(liveRegion).toHaveTextContent("Group toggled");
   });
 
-  it("renderable group has enabled toggle and ungroup", () => {
+  it("renderable group has enabled ungroup button", () => {
     render(
       <GroupRow
         group={mockGroup}
@@ -437,8 +421,8 @@ describe("GroupRow", () => {
         onUngroup={vi.fn()}
       />,
     );
-    const toggle = screen.getByRole("switch");
-    expect(toggle).not.toBeDisabled();
+    // No toggle switch (removed)
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
     const ungroupBtn = screen.getByRole("button", { name: /ungroup core/i });
     expect(ungroupBtn).not.toBeDisabled();

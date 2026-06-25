@@ -127,8 +127,11 @@ impl RepoIndex {
     }
 
     /// Check whether a section ID is a well-known distro repo.
+    ///
+    /// Matches both short IDs (`baseos`) and RHEL-style long IDs
+    /// (`rhel-9-for-x86_64-baseos-rpms`) by delegating to `repo_tier`.
     pub fn is_distro_repo(section_id: &str) -> bool {
-        DISTRO_REPOS.contains(&section_id.to_lowercase().as_str())
+        matches!(repo::repo_tier(section_id), repo::RepoTier::Distro)
     }
 
     /// Classify a repo section ID into its tier.
@@ -249,6 +252,9 @@ mod tests {
         assert!(!RepoIndex::is_distro_repo("epel"));
         assert!(!RepoIndex::is_distro_repo("custom-internal"));
         assert!(!RepoIndex::is_distro_repo("crb")); // CRB is now official-optional
+        // RHEL-style long repo IDs
+        assert!(RepoIndex::is_distro_repo("rhel-9-for-x86_64-baseos-rpms"));
+        assert!(RepoIndex::is_distro_repo("rhel-9-for-x86_64-appstream-rpms"));
     }
 
     #[test]
