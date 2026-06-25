@@ -311,8 +311,8 @@ was excluded by your triage decisions.
 - **Refine further** — review the
   [How to Review and Refine](../how-to/review-and-refine.md) guide for
   advanced triage techniques.
-- **Aggregate an aggregate** — if you have multiple hosts to migrate, scan
-  them all and use aggregate aggregation to find common patterns. See
+- **Roll up multiple hosts** — if you have multiple hosts to migrate, scan
+  them all and aggregate the results to find common patterns. See
   [How to Aggregate Multiple Hosts](../how-to/aggregation.md).
 - **Subtract a baseline** — learn how baseline subtraction works and
   how to use custom base images. See

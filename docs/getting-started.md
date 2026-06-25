@@ -282,8 +282,8 @@ model in action. From here:
   directly from the scan tarball, or use `podman build` manually with
   the generated Containerfile. See
   [How to Build a bootc Image](how-to/build-bootc-image.md).
-- **Aggregate an aggregate** — scan multiple hosts and merge the results
-  to find common patterns across your environment. See
+- **Roll up multiple hosts** — migrating more than one system? Scan them
+  all and aggregate the results to find common patterns. See
   [How to Aggregate Multiple Hosts](how-to/aggregation.md).
 - **Explore the full CLI** — see all available commands and flags in
   the [CLI Reference](reference/cli.md).
