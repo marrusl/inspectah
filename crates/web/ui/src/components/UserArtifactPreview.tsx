@@ -65,6 +65,10 @@ export function UserArtifactPreview({
       ? (data?.kickstart ?? "")
       : (data?.blueprint_toml ?? "");
 
+  /** True when the current tab actually has redacted material to reveal. */
+  const hasRedactedContent =
+    revealed || content.includes("<REDACTED>");
+
   return (
     <Modal
       variant={ModalVariant.large}
@@ -119,8 +123,8 @@ export function UserArtifactPreview({
           </button>
         </div>
 
-        {/* Sensitive redaction banner */}
-        {data?.sensitive && !loading && (
+        {/* Sensitive redaction banner — only when current tab has redacted material */}
+        {data?.sensitive && hasRedactedContent && !loading && (
           <Alert
             variant={revealed ? "warning" : "info"}
             isInline

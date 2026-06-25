@@ -153,6 +153,7 @@ export function ContainerSection({
             role="row"
             aria-rowindex={idx + 1}
             aria-label={q.name}
+            aria-expanded={q.content ? expandedPaths.has(q.path) : undefined}
             tabIndex={idx === 0 ? 0 : -1}
             data-testid={`quadlet-item-${q.path}`}
             className="inspectah-decision-row"
@@ -163,9 +164,32 @@ export function ContainerSection({
                 e.preventDefault();
                 handleToggleQuadlet(q.path, q.include);
               }
+              if (e.key === "Enter" && q.content) {
+                e.preventDefault();
+                setExpandedPaths((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(q.path)) next.delete(q.path);
+                  else next.add(q.path);
+                  return next;
+                });
+              }
             }}
           >
-            <div className="inspectah-decision-row__main">
+            <div
+              className="inspectah-decision-row__main"
+              onClick={q.content ? () => {
+                setExpandedPaths((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(q.path)) {
+                    next.delete(q.path);
+                  } else {
+                    next.add(q.path);
+                  }
+                  return next;
+                });
+              } : undefined}
+              style={q.content ? { cursor: "pointer" } : undefined}
+            >
               <div role="gridcell" className="inspectah-decision-row__toggle">
                 <input
                   type="checkbox"
@@ -173,6 +197,7 @@ export function ContainerSection({
                   id={`switch-quadlet-${q.path}`}
                   checked={q.include}
                   onChange={() => handleToggleQuadlet(q.path, q.include)}
+                  onClick={(e) => e.stopPropagation()}
                   disabled={isPending}
                   aria-label={`Toggle ${q.name}`}
                   style={{ minWidth: 20, minHeight: 20 }}
@@ -211,36 +236,16 @@ export function ContainerSection({
               )}
               {q.content && (
                 <div role="gridcell" style={{ marginLeft: "auto" }}>
-                  <button
-                    type="button"
-                    aria-label={
-                      expandedPaths.has(q.path)
-                        ? "Hide unit file"
-                        : "Show unit file"
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExpandedPaths((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(q.path)) {
-                          next.delete(q.path);
-                        } else {
-                          next.add(q.path);
-                        }
-                        return next;
-                      });
-                    }}
+                  <span
+                    aria-hidden="true"
                     style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
                       fontSize: "var(--pf-t--global--font--size--xs)",
                       opacity: 0.7,
                       padding: "2px 6px",
                     }}
                   >
                     {expandedPaths.has(q.path) ? "▼ Unit" : "▶ Unit"}
-                  </button>
+                  </span>
                 </div>
               )}
             </div>

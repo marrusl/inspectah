@@ -19,6 +19,9 @@ const MAX_WIDTH_RATIO = 0.6; // 60% of viewport
 /** Regex matching crypt(3) hash patterns ($6$..., $y$..., $5$...). */
 const CRYPT_HASH_RE = /(\$(?:6|5|y)\$[^\s'"\\]+)/g;
 
+/** Non-global variant for presence checks (avoids lastIndex mutation). */
+const CRYPT_HASH_PRESENT_RE = /\$(?:6|5|y)\$[^\s'"\\]+/;
+
 export function ContainerfilePanel({
   content,
   isOpen,
@@ -425,7 +428,7 @@ export function ContainerfilePanel({
       </div>
       <div className="inspectah-cf-panel__footer">
         <Content component="small">{lineCount} lines</Content>
-        {sessionIsSensitive && (
+        {sessionIsSensitive && content && CRYPT_HASH_PRESENT_RE.test(content) && (
           <button
             onClick={() => setHashesRevealed((p) => !p)}
             style={{

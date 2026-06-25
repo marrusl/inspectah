@@ -230,11 +230,8 @@ describe("ContainerSection", () => {
     // Content should not be visible initially
     expect(screen.queryByTestId("quadlet-content")).not.toBeInTheDocument();
 
-    // Click the expand button
-    const expandBtn = screen.getByRole("button", {
-      name: /Show unit file/,
-    });
-    await userEvent.click(expandBtn);
+    // Click the row name to expand (entire row main area is clickable)
+    await userEvent.click(screen.getByText("myapp.container"));
 
     // Content should now be visible in a <pre> block
     const contentBlock = screen.getByTestId("quadlet-content");
@@ -245,7 +242,7 @@ describe("ContainerSection", () => {
     );
   });
 
-  it("does not show expand button when quadlet has no content", () => {
+  it("does not show expand indicator when quadlet has no content", () => {
     render(
       <ContainerSection
         quadlets={[makeQuadlet()]}
@@ -255,9 +252,10 @@ describe("ContainerSection", () => {
       />,
     );
 
-    expect(
-      screen.queryByRole("button", { name: /Show unit file/ }),
-    ).not.toBeInTheDocument();
+    // No chevron indicator or cursor:pointer when content is absent
+    expect(screen.queryByText(/Unit/)).not.toBeInTheDocument();
+    const row = screen.getByRole("row", { name: /myapp\.container/ });
+    expect(row).not.toHaveAttribute("aria-expanded");
   });
 
   it("collapses quadlet content on second click", async () => {
@@ -271,17 +269,11 @@ describe("ContainerSection", () => {
       />,
     );
 
-    const expandBtn = screen.getByRole("button", {
-      name: /Show unit file/,
-    });
-    await userEvent.click(expandBtn);
+    await userEvent.click(screen.getByText("myapp.container"));
     expect(screen.getByTestId("quadlet-content")).toBeInTheDocument();
 
-    // Click again to collapse
-    const collapseBtn = screen.getByRole("button", {
-      name: /Hide unit file/,
-    });
-    await userEvent.click(collapseBtn);
+    // Click row name again to collapse
+    await userEvent.click(screen.getByText("myapp.container"));
     expect(screen.queryByTestId("quadlet-content")).not.toBeInTheDocument();
   });
 });
