@@ -135,28 +135,36 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         if is_anaconda_classified(&refined.triage.primary_reason) {
             rpm.packages_added[i].include = refined.entry.include;
             rpm.packages_added[i].locked = refined.entry.locked;
-            continue;
+        } else {
+            let bucket = refined.triage.bucket();
+            match bucket {
+                TriageBucket::Baseline => {
+                    rpm.packages_added[i].include = true;
+                }
+                TriageBucket::Site => {
+                    let package_id = canonical_package_id(
+                        rpm.packages_added[i].name.as_str(),
+                        rpm.packages_added[i].arch.as_str(),
+                    );
+                    let is_leaf = match &leaf_set {
+                        Some(set) => set.contains(package_id.as_str()),
+                        None => true,
+                    };
+                    rpm.packages_added[i].include = is_leaf;
+                }
+                TriageBucket::Investigate => {
+                    rpm.packages_added[i].include = false;
+                }
+            }
         }
 
-        let bucket = refined.triage.bucket();
-        match bucket {
-            TriageBucket::Baseline => {
-                rpm.packages_added[i].include = true;
-            }
-            TriageBucket::Site => {
-                let package_id = canonical_package_id(
-                    rpm.packages_added[i].name.as_str(),
-                    rpm.packages_added[i].arch.as_str(),
-                );
-                let is_leaf = match &leaf_set {
-                    Some(set) => set.contains(package_id.as_str()),
-                    None => true,
-                };
-                rpm.packages_added[i].include = is_leaf;
-            }
-            TriageBucket::Investigate => {
-                rpm.packages_added[i].include = false;
-            }
+        // Aggregate prevalence gate: items not present on 100% of hosts
+        // default to excluded. Universal items keep their tier-based default.
+        // Applies after all classification paths, including anaconda.
+        if let Some(ref agg) = rpm.packages_added[i].aggregate
+            && agg.count < agg.total
+        {
+            rpm.packages_added[i].include = false;
         }
     }
 }
@@ -303,6 +311,14 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
                 // Investigate: user-customized, include
                 config.files[i].include = true;
             }
+        }
+
+        // Aggregate prevalence gate: configs not present on 100% of hosts
+        // default to excluded. Universal configs keep their tier-based default.
+        if let Some(ref agg) = config.files[i].aggregate
+            && agg.count < agg.total
+        {
+            config.files[i].include = false;
         }
     }
 }
