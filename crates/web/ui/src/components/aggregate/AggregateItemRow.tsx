@@ -1,6 +1,10 @@
 import { Label, Switch } from "@patternfly/react-core";
 import type { AggregateItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
+import {
+  usePrevalenceDisplay,
+  formatPrevalence,
+} from "../../hooks/usePrevalenceDisplay";
 
 export interface AggregateItemRowProps {
   item: AggregateItem;
@@ -96,6 +100,8 @@ export function AggregateItemRow({
   onExpandVariant,
   isExpanded = false,
 }: AggregateItemRowProps) {
+  const { mode: prevalenceMode, cycle: cyclePrevalence } =
+    usePrevalenceDisplay();
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
@@ -153,11 +159,17 @@ export function AggregateItemRow({
         </Label>
       )}
 
-      <span
-        className={`aggregate-item-row__prevalence aggregate-item-row__prevalence--${prevalenceLevel(count, total)}`}
+      <button
+        type="button"
+        className={`aggregate-item-row__prevalence aggregate-item-row__prevalence--${prevalenceLevel(count, total)} aggregate-item-row__prevalence--clickable`}
+        onClick={(e) => {
+          e.stopPropagation();
+          cyclePrevalence();
+        }}
+        title="Click to toggle display format"
       >
-        {count}/{total} hosts
-      </span>
+        {formatPrevalence(count, total, prevalenceMode)} hosts
+      </button>
 
       {hasVariants && isDecisionSection && (
         <button

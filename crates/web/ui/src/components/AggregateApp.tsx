@@ -24,6 +24,10 @@ import { useAggregateMutation } from "../hooks/useAggregateMutation";
 import { useVariantAck } from "../hooks/useVariantAck";
 import { useAggregateDiff } from "../hooks/useAggregateDiff";
 import { useAggregateFocusRecovery } from "../hooks/useAggregateFocusRecovery";
+import {
+  PrevalenceDisplayContext,
+  usePrevalenceDisplayState,
+} from "../hooks/usePrevalenceDisplay";
 import { AppShell } from "./AppShell";
 import { AggregateSidebar } from "./aggregate/AggregateSidebar";
 import { AggregateBanner } from "./aggregate/AggregateBanner";
@@ -123,6 +127,7 @@ function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
 }
 
 export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) {
+  const prevalenceDisplay = usePrevalenceDisplayState();
   const [view, setView] = useState<AggregateViewResponse | null>(null);
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
@@ -423,6 +428,7 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
     [...divergentKeySet].filter((key) => confirmedDivergentIds.has(key)).length;
 
   return (
+    <PrevalenceDisplayContext.Provider value={prevalenceDisplay}>
     <div data-testid="aggregate-app">
       <AppShell
         sidebar={null}
@@ -569,5 +575,6 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
         }}
       </AppShell>
     </div>
+    </PrevalenceDisplayContext.Provider>
   );
 }

@@ -76,6 +76,19 @@
   font-weight: var(--pf-t--global--font--weight--body--bold);
 }
 
+.aggregate-item-row__prevalence--clickable {
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.aggregate-item-row__prevalence--clickable:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
 .aggregate-item-row__prevalence--full {
   background-color: #e6f2e6;
   color: #1e4620;
