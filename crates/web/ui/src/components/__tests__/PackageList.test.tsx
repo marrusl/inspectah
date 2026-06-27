@@ -875,25 +875,8 @@ describe("PackageList", () => {
     expect(summary).toHaveTextContent("1 package");
   });
 
-  it("GroupRow onToggle is wired correctly", () => {
-    const onGroupToggle = vi.fn();
-    const pkgs = [makePkg("curl", "baseos")];
-    render(
-      <PackageList
-        mode="single"
-        packages={pkgs}
-        repoGroups={allRepos}
-        packageGroups={[coreGroup]}
-        onToggle={vi.fn()}
-        onRepoToggle={vi.fn()}
-        onGroupToggle={onGroupToggle}
-      />,
-    );
-    // GroupRow renders a switch for toggling
-    const toggle = screen.getByRole("switch");
-    fireEvent.click(toggle);
-    expect(onGroupToggle).toHaveBeenCalledWith("core", false);
-  });
+  // Group-level toggle switch was removed in favor of ungroup action.
+  // Groups are managed via the ungroup button or per-member toggles.
 
   it("GroupRow onUngroup is wired correctly", () => {
     const onGroupUngroup = vi.fn();
@@ -1343,7 +1326,7 @@ describe("PackageList", () => {
 
   // --- Excluded groups visible with toggle off ---
 
-  it("excluded groups render with toggle off state", () => {
+  it("excluded groups render alongside renderable groups", () => {
     const pkgs = [makePkg("curl", "baseos")];
     render(
       <PackageList
@@ -1359,10 +1342,6 @@ describe("PackageList", () => {
     // Both renderable and excluded groups appear
     expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
     expect(within(groupsZone).getByTestId("group-row-development")).toBeInTheDocument();
-    // The excluded group's toggle should be off (unchecked)
-    const devRow = within(groupsZone).getByTestId("group-row-development");
-    const toggle = within(devRow).getByRole("switch");
-    expect(toggle).not.toBeChecked();
   });
 
   // --- Degraded groups visible but dimmed ---
