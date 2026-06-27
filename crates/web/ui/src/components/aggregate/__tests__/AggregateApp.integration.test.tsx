@@ -367,54 +367,8 @@ describe("AggregateApp integration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 2. Ack state flow — sidebar labels reflect actionable variant data
   // -------------------------------------------------------------------------
-  describe("ack flow", () => {
-    it("shows ack progress labels on decision sections in sidebar", async () => {
-      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
-      renderAggregateApp();
-      await waitForContent();
-
-      const sidebar = screen.getByTestId("aggregate-sidebar");
-
-      // Decision sections (packages, config_files) should show ack labels
-      expect(
-        within(sidebar).getByTestId("ack-progress-packages"),
-      ).toBeInTheDocument();
-      expect(
-        within(sidebar).getByTestId("ack-progress-config_files"),
-      ).toBeInTheDocument();
-      // Non-decision sections (services) should not
-      expect(
-        within(sidebar).queryByTestId("ack-progress-services"),
-      ).not.toBeInTheDocument();
-    });
-
-    it("does not show ack labels when no actionable variants exist", async () => {
-      const view = mockAggregateViewResponse({
-        summary: {
-          host_count: 3,
-          actionable_variant_items: [],
-          informational_variant_count: 0,
-        },
-      });
-      mockFetchAggregateView.mockResolvedValue(view);
-      renderAggregateApp();
-      await waitForContent();
-
-      const sidebar = screen.getByTestId("aggregate-sidebar");
-      // totalCount is 0, so ackLabel returns null — no ack-progress testids
-      expect(
-        within(sidebar).queryByTestId("ack-progress-packages"),
-      ).not.toBeInTheDocument();
-      expect(
-        within(sidebar).queryByTestId("ack-progress-config_files"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // 3. Undo flow via Ctrl+Z — triggers mutation hook, refetches, updates view
+  // 2. Undo flow via Ctrl+Z — triggers mutation hook, refetches, updates view
   // -------------------------------------------------------------------------
   describe("undo/redo flow", () => {
     it("Ctrl+Z calls undo API and updates view on successful refetch", async () => {

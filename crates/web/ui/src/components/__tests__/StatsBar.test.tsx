@@ -146,33 +146,10 @@ describe("StatsBar", () => {
     expect(summary).toHaveTextContent("hosts");
     expect(summary).toHaveTextContent("2,480");
     expect(summary).toHaveTextContent("items");
-    expect(summary).toHaveTextContent("27 need review");
 
     // Single-host counters must NOT be present
     expect(screen.queryByText(/Packages:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Configs:/)).not.toBeInTheDocument();
-  });
-
-  it("shows all-reviewed label in aggregate summary when needsReviewCount is 0", () => {
-    render(
-      <StatsBar
-        stats={MOCK_STATS}
-        onUndo={vi.fn()}
-        onRedo={vi.fn()}
-        onExport={vi.fn()}
-        isPending={false}
-        aggregateSummary={{
-          hostCount: 3,
-          hostnames: ["a", "b", "c"],
-          totalItems: 100,
-          needsReviewCount: 0,
-        }}
-      />,
-    );
-
-    expect(screen.getByTestId("aggregate-stats-summary")).toHaveTextContent(
-      "All reviewed",
-    );
   });
 
   it("opens hostname popover when host count is clicked", async () => {

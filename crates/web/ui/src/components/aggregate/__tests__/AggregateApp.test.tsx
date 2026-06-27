@@ -318,28 +318,6 @@ describe("AggregateSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("services");
   });
 
-  it("shows ack progress for decision sections with variants", () => {
-    render(
-      <AggregateSidebar
-        sections={sections}
-        activeSection="packages"
-        onSelect={vi.fn()}
-        ackState={defaultAck}
-      />,
-    );
-    // Decision sections should show ack progress
-    expect(screen.getByTestId("ack-progress-packages")).toHaveTextContent(
-      "2/4 confirmed",
-    );
-    expect(screen.getByTestId("ack-progress-configs")).toHaveTextContent(
-      "2/4 confirmed",
-    );
-    // Context sections should not show ack progress
-    expect(
-      screen.queryByTestId("ack-progress-services"),
-    ).not.toBeInTheDocument();
-  });
-
   it("shows zone-based item counts for sections with zones", () => {
     render(
       <AggregateSidebar

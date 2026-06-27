@@ -21,28 +21,17 @@ function sectionItemCount(section: AggregateSection): number {
   return section.items?.length ?? 0;
 }
 
-function ackLabel(
-  section: AggregateSection,
-  ack: UseVariantAckResult,
-): string | null {
-  if (!section.is_decision_section) return null;
-  if (ack.totalCount === 0) return null;
-  const confirmed = ack.totalCount - ack.unackedCount;
-  return `${confirmed}/${ack.totalCount} confirmed`;
-}
-
 export function AggregateSidebar({
   sections,
   activeSection,
   onSelect,
-  ackState,
+  ackState: _ackState,
   searchSlot,
 }: AggregateSidebarProps) {
   const reviewSections = sections.filter((s) => s.is_decision_section);
   const referenceSections = sections.filter((s) => !s.is_decision_section);
 
   const renderItem = (section: AggregateSection) => {
-    const ack = ackLabel(section, ackState);
     return (
       <NavItem
         key={section.id}
@@ -52,14 +41,6 @@ export function AggregateSidebar({
         onClick={() => onSelect(section.id)}
       >
         {section.display_name} <Badge isRead>{sectionItemCount(section)}</Badge>
-        {ack && (
-          <span
-            className="aggregate-sidebar__ack-progress"
-            data-testid={`ack-progress-${section.id}`}
-          >
-            {ack}
-          </span>
-        )}
       </NavItem>
     );
   };

@@ -6,7 +6,6 @@ import {
   ToolbarGroup,
   Button,
   Content,
-  Label,
   Popover,
   Badge,
 } from "@patternfly/react-core";
@@ -153,14 +152,7 @@ export function StatsBar({
                 />
                 {" · "}
                 <strong>{aggregateSummary.totalItems.toLocaleString()}</strong>{" "}
-                items{" · "}
-                {aggregateSummary.needsReviewCount > 0 ? (
-                  <Label color="blue">
-                    {aggregateSummary.needsReviewCount} need review
-                  </Label>
-                ) : (
-                  <Label color="green">All reviewed</Label>
-                )}
+                items
               </Content>
             </ToolbarItem>
           ) : (
