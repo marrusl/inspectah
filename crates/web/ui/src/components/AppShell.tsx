@@ -85,6 +85,8 @@ export interface AppShellProps {
   aggregateSummary?: AggregateSummary;
   /** When true, Containerfile panel defaults to open regardless of viewport width. */
   isAggregateMode?: boolean;
+  /** Override section IDs for 1-9 keyboard navigation (aggregate mode). */
+  sectionIds?: string[];
 }
 
 /**
@@ -123,6 +125,7 @@ export function AppShell({
   hamburger,
   aggregateSummary,
   isAggregateMode = false,
+  sectionIds,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(() =>
     isAggregateMode ? readPanelPref() : initialPanelOpen(),
@@ -187,6 +190,7 @@ export function AppShell({
     onOpenSearch: handleOpenSectionSearch,
     onOpenGlobalSearch: handleOpenGlobalSearch,
     onOpenShortcuts: handleToggleShortcuts,
+    sectionIds,
   });
 
   const searchSlot = (

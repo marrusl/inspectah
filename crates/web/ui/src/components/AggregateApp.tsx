@@ -468,6 +468,7 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
           needsReviewCount: ack.unackedCount,
         }}
         isAggregateMode
+        sectionIds={aggregateView.sections.map((s) => s.id)}
       >
         {({
           sectionSearchOpen,

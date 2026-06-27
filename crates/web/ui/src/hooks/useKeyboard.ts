@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 
-/** All sidebar section IDs in display order (for 1-9 jump). */
-const SECTION_IDS = [
+/** Single-host sidebar section IDs in display order (for 1-9 jump). */
+const SINGLE_HOST_SECTION_IDS = [
   "packages", // 1
   "configs", // 2
   "users_groups", // 3
@@ -26,6 +26,10 @@ export interface UseKeyboardOptions {
   onOpenSearch: () => void;
   onOpenGlobalSearch: () => void;
   onOpenShortcuts: () => void;
+  /** Override section IDs for 1-9 keyboard navigation. When omitted,
+   *  defaults to single-host section IDs. Aggregate mode passes its
+   *  own section list since the IDs differ. */
+  sectionIds?: string[];
 }
 
 /** Returns true if the event target is a text input where single-key shortcuts should be suppressed. */
@@ -68,6 +72,7 @@ export function useKeyboard(options: UseKeyboardOptions): void {
     onOpenSearch,
     onOpenGlobalSearch,
     onOpenShortcuts,
+    sectionIds = SINGLE_HOST_SECTION_IDS,
   } = options;
 
   const handleKeyDown = useCallback(
@@ -134,9 +139,9 @@ export function useKeyboard(options: UseKeyboardOptions): void {
 
       // 1-9 jump to section by index
       const num = parseInt(e.key, 10);
-      if (num >= 1 && num <= 9 && num <= SECTION_IDS.length) {
+      if (num >= 1 && num <= 9 && num <= sectionIds.length) {
         e.preventDefault();
-        onSectionChange(SECTION_IDS[num - 1]);
+        onSectionChange(sectionIds[num - 1]);
         return;
       }
     },
@@ -149,6 +154,7 @@ export function useKeyboard(options: UseKeyboardOptions): void {
       onOpenSearch,
       onOpenGlobalSearch,
       onOpenShortcuts,
+      sectionIds,
     ],
   );
 
