@@ -105,10 +105,7 @@ mod tests {
     #[test]
     fn test_repo_tier_distro_rhel_long_ids() {
         // RHEL systems use long repo IDs like rhel-9-for-x86_64-baseos-rpms
-        assert_eq!(
-            repo_tier("rhel-9-for-x86_64-baseos-rpms"),
-            RepoTier::Distro
-        );
+        assert_eq!(repo_tier("rhel-9-for-x86_64-baseos-rpms"), RepoTier::Distro);
         assert_eq!(
             repo_tier("rhel-9-for-x86_64-appstream-rpms"),
             RepoTier::Distro
@@ -118,10 +115,7 @@ mod tests {
             RepoTier::Distro
         );
         // Case-insensitive
-        assert_eq!(
-            repo_tier("RHEL-9-for-x86_64-BaseOS-rpms"),
-            RepoTier::Distro
-        );
+        assert_eq!(repo_tier("RHEL-9-for-x86_64-BaseOS-rpms"), RepoTier::Distro);
     }
 
     #[test]

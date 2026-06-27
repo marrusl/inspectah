@@ -254,7 +254,9 @@ mod tests {
         assert!(!RepoIndex::is_distro_repo("crb")); // CRB is now official-optional
         // RHEL-style long repo IDs
         assert!(RepoIndex::is_distro_repo("rhel-9-for-x86_64-baseos-rpms"));
-        assert!(RepoIndex::is_distro_repo("rhel-9-for-x86_64-appstream-rpms"));
+        assert!(RepoIndex::is_distro_repo(
+            "rhel-9-for-x86_64-appstream-rpms"
+        ));
     }
 
     #[test]
