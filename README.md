@@ -14,7 +14,7 @@ sudo dnf install inspectah
 
 ```bash
 # 2. Scan your system (run on the host you want to migrate)
-inspectah scan
+sudo inspectah scan
 ```
 
 ```bash
