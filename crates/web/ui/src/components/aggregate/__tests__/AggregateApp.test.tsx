@@ -318,7 +318,7 @@ describe("AggregateSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("services");
   });
 
-  it("shows zone-based item counts for sections with zones", () => {
+  it("shows include/total counts for decision sections, total for reference", () => {
     render(
       <AggregateSidebar
         sections={sections}
@@ -327,11 +327,11 @@ describe("AggregateSidebar", () => {
         ackState={defaultAck}
       />,
     );
-    // Config Files has zones: 5 + 2 + 1 = 8 total
-    expect(screen.getByText("8")).toBeInTheDocument();
-    // Packages has items array: 1 item
-    expect(screen.getByText("1")).toBeInTheDocument();
-    // Services has empty items: 0
+    // Packages: 1 included / 1 total (decision section)
+    expect(screen.getByText("1 / 1")).toBeInTheDocument();
+    // Config Files: 0 included / 8 total (decision section, zone items empty in fixture)
+    expect(screen.getByText("0 / 8")).toBeInTheDocument();
+    // Services: plain count (reference section)
     expect(screen.getByText("0")).toBeInTheDocument();
   });
 });

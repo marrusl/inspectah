@@ -348,21 +348,18 @@ describe("AggregateApp integration", () => {
       expect(screen.getByTestId("aggregate-banner")).toBeInTheDocument();
     });
 
-    it("shows zone-based item counts in sidebar for sections with zones", async () => {
+    it("shows include/total counts for decision sections in sidebar", async () => {
       mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
       renderAggregateApp();
       await waitForContent();
 
       const sidebar = screen.getByTestId("aggregate-sidebar");
-      // Services has 0 items — use exact match to avoid collisions with
-      // other numeric text (ack labels like "0/2 confirmed" contain "0" too)
-      const badges = within(sidebar).getAllByText("0");
-      expect(badges.length).toBeGreaterThanOrEqual(1);
-      // Packages has 2 flat items, Config Files has 2 zone items (1+1+0)
-      // Both produce "2" badges, but ack labels also contain "2" — just
-      // verify at least two "2" elements exist in the sidebar (badges + ack)
-      const twos = within(sidebar).getAllByText("2");
-      expect(twos.length).toBeGreaterThanOrEqual(1);
+      // Packages: 2 included / 2 total (decision section)
+      // Config Files: 2 included / 2 total (decision section)
+      const decisionBadges = within(sidebar).getAllByText("2 / 2");
+      expect(decisionBadges.length).toBe(2);
+      // Services: plain count (reference section, 0 items)
+      expect(within(sidebar).getByText("0")).toBeInTheDocument();
     });
   });
 

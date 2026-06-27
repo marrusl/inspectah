@@ -1,5 +1,5 @@
 import { Nav, NavGroup, NavItem, Badge } from "@patternfly/react-core";
-import type { AggregateSection } from "../../api/types";
+import type { AggregateSection, AggregateItem } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
 export interface AggregateSidebarProps {
@@ -8,6 +8,18 @@ export interface AggregateSidebarProps {
   onSelect: (sectionId: string) => void;
   ackState: UseVariantAckResult;
   searchSlot?: React.ReactNode;
+}
+
+/** Collect all items from a section (flat or zoned). */
+function allItems(section: AggregateSection): AggregateItem[] {
+  if (section.zones) {
+    return [
+      ...section.zones.consensus.items,
+      ...section.zones.near_consensus.items,
+      ...section.zones.divergent.items,
+    ];
+  }
+  return section.items ?? [];
 }
 
 function sectionItemCount(section: AggregateSection): number {
@@ -19,6 +31,14 @@ function sectionItemCount(section: AggregateSection): number {
     );
   }
   return section.items?.length ?? 0;
+}
+
+/** Format badge text: "N included / M" for decision sections, "N" for reference. */
+function badgeText(section: AggregateSection): string {
+  const total = sectionItemCount(section);
+  if (!section.is_decision_section) return String(total);
+  const included = allItems(section).filter((item) => item.include).length;
+  return `${included} / ${total}`;
 }
 
 export function AggregateSidebar({
@@ -40,7 +60,7 @@ export function AggregateSidebar({
         aria-current={activeSection === section.id ? "page" : undefined}
         onClick={() => onSelect(section.id)}
       >
-        {section.display_name} <Badge isRead>{sectionItemCount(section)}</Badge>
+        {section.display_name} <Badge isRead>{badgeText(section)}</Badge>
       </NavItem>
     );
   };
