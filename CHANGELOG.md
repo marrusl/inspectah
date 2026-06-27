@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Prevalence badge display toggle** — clicking any N/M prevalence badge in aggregate mode cycles through three display formats: fraction (45/50), flat percentage (90%), and one-decimal percentage (90.0%). Toggle is global — one click changes all badges.
+- **Prevalence badge display toggle** — clicking any prevalence badge in aggregate mode toggles between fraction (45/50) and flat percentage (90%) display. Toggle is global — one click changes all badges.
 
 ### Changed
 - **Aggregate stats bar simplified** — removed "N need review" / "All reviewed" labels from the aggregate stats bar header. Host count and total items remain.

@@ -499,46 +499,40 @@ html, body, #root {
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
-.inspectah-package-row__prevalence--full,
-.inspectah-package-row__prevalence--partial,
-.inspectah-package-row__prevalence--low {
+/* ─── Shared prevalence badge (used by PrevalenceBadge component) ─────── */
+
+.prevalence-badge {
+  flex-shrink: 0;
   display: inline-block;
   padding: 1px 6px;
-  border-radius: var(--pf-t--global--border--radius--small);
-  font-weight: var(--pf-t--global--font--weight--body--bold);
-}
-
-.inspectah-package-row__prevalence--full {
-  background-color: #e6f2e6;
-  color: #1e4620;
-}
-
-.inspectah-package-row__prevalence--partial {
-  background-color: #fef3cd;
-  color: #664d03;
-}
-
-.inspectah-package-row__prevalence--low {
-  background-color: #fce8e6;
-  color: #842029;
-}
-
-.inspectah-package-row__prevalence-btn {
   border: none;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: inherit;
-  display: inline-block;
-  padding: 1px 6px;
   border-radius: var(--pf-t--global--border--radius--small);
+  font-size: var(--pf-t--global--font--size--body--sm);
   font-weight: var(--pf-t--global--font--weight--body--bold);
+  font-family: inherit;
+  cursor: pointer;
 }
 
-.inspectah-package-row__prevalence-btn:hover {
+.prevalence-badge:hover {
   opacity: 0.8;
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
+}
+
+.prevalence-badge--full {
+  background-color: #e6f2e6;
+  color: #1e4620;
+}
+
+.prevalence-badge--partial {
+  background-color: #fef3cd;
+  color: #664d03;
+}
+
+.prevalence-badge--low {
+  background-color: #fce8e6;
+  color: #842029;
 }
 
 .inspectah-package-row__name-container {

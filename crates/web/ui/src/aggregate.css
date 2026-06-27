@@ -67,42 +67,7 @@
   font-size: var(--pf-t--global--font--size--body--default);
 }
 
-.aggregate-item-row__prevalence {
-  flex-shrink: 0;
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: var(--pf-t--global--border--radius--small);
-  font-size: var(--pf-t--global--font--size--body--sm);
-  font-weight: var(--pf-t--global--font--weight--body--bold);
-}
-
-.aggregate-item-row__prevalence--clickable {
-  border: none;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.aggregate-item-row__prevalence--clickable:hover {
-  opacity: 0.8;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 2px;
-}
-
-.aggregate-item-row__prevalence--full {
-  background-color: #e6f2e6;
-  color: #1e4620;
-}
-
-.aggregate-item-row__prevalence--partial {
-  background-color: #fef3cd;
-  color: #664d03;
-}
-
-.aggregate-item-row__prevalence--low {
-  background-color: #fce8e6;
-  color: #842029;
-}
+/* Prevalence badge styles are in App.css (.prevalence-badge) */
 
 .aggregate-item-row__variants {
   flex-shrink: 0;
@@ -286,15 +251,6 @@
 
 .inspectah-sidebar .pf-v6-c-nav__item:has(.pf-m-current) {
   border-left: 3px solid var(--pf-t--global--color--brand--default);
-}
-
-/* ─── Aggregate sidebar ack progress ─────────────────────────────────────── */
-
-.aggregate-sidebar__ack-progress {
-  display: block;
-  font-size: var(--pf-t--global--font--size--body--sm);
-  color: var(--pf-t--global--text--color--subtle);
-  margin-top: 2px;
 }
 
 /* ─── Aggregate ack progress (toolbar indicator) ─────────────────────────── */

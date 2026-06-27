@@ -1,13 +1,9 @@
 import { createContext, useCallback, useContext, useState } from "react";
 
 /** Display modes for prevalence badges. */
-export type PrevalenceDisplayMode = "fraction" | "percent" | "percent1";
+export type PrevalenceDisplayMode = "fraction" | "percent";
 
-const CYCLE_ORDER: PrevalenceDisplayMode[] = [
-  "fraction",
-  "percent",
-  "percent1",
-];
+const CYCLE_ORDER: PrevalenceDisplayMode[] = ["fraction", "percent"];
 
 export interface PrevalenceDisplayContextValue {
   mode: PrevalenceDisplayMode;
@@ -49,7 +45,5 @@ export function formatPrevalence(
       return `${count}/${total}`;
     case "percent":
       return `${Math.round((count / total) * 100)}%`;
-    case "percent1":
-      return `${((count / total) * 100).toFixed(1)}%`;
   }
 }

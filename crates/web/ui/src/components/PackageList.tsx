@@ -3,10 +3,7 @@ import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
 import { GroupRow } from "./GroupRow";
 import { RepoConflictPopover } from "./aggregate/RepoConflictPopover";
-import {
-  usePrevalenceDisplay,
-  formatPrevalence,
-} from "../hooks/usePrevalenceDisplay";
+import { PrevalenceBadge } from "./PrevalenceBadge";
 import type {
   GroupInfo,
   PackageProvenance,
@@ -552,14 +549,6 @@ interface PackageRowProps {
   onDismiss: (key: string) => void;
 }
 
-function prevalenceClass(count: number, total: number): string {
-  if (total === 0) return "";
-  const ratio = count / total;
-  if (ratio >= 1) return "inspectah-package-row__prevalence--full";
-  if (ratio >= 0.6) return "inspectah-package-row__prevalence--partial";
-  return "inspectah-package-row__prevalence--low";
-}
-
 function PackageRow({
   pkg,
   mode,
@@ -569,8 +558,6 @@ function PackageRow({
   onToggle,
   onDismiss,
 }: PackageRowProps) {
-  const { mode: prevalenceMode, cycle: cyclePrevalence } =
-    usePrevalenceDisplay();
   const style = repoStyles[tier] ?? repoStyles.distro;
   const checkboxRef = useRef<HTMLInputElement>(null);
 
@@ -656,21 +643,10 @@ function PackageRow({
             {pkg.source_repo}
           </span>
         ) : pkg.prevalence ? (
-            <button
-              type="button"
-              className={`inspectah-package-row__prevalence-btn ${prevalenceClass(pkg.prevalence.count, pkg.prevalence.total)}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                cyclePrevalence();
-              }}
-              title="Click to toggle display format"
-            >
-              {formatPrevalence(
-                pkg.prevalence.count,
-                pkg.prevalence.total,
-                prevalenceMode,
-              )}
-            </button>
+            <PrevalenceBadge
+              count={pkg.prevalence.count}
+              total={pkg.prevalence.total}
+            />
         ) : (
             <span>—</span>
         )}

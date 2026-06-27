@@ -1,10 +1,7 @@
 import { Label, Switch } from "@patternfly/react-core";
 import type { AggregateItem, ItemId } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
-import {
-  usePrevalenceDisplay,
-  formatPrevalence,
-} from "../../hooks/usePrevalenceDisplay";
+import { PrevalenceBadge } from "../PrevalenceBadge";
 
 export interface AggregateItemRowProps {
   item: AggregateItem;
@@ -84,14 +81,6 @@ export function itemDisplayName(itemId: ItemId): string {
   }
 }
 
-function prevalenceLevel(count: number, total: number): string {
-  if (total === 0) return "full";
-  const ratio = count / total;
-  if (ratio >= 1) return "full";
-  if (ratio >= 0.6) return "partial";
-  return "low";
-}
-
 export function AggregateItemRow({
   item,
   isDecisionSection,
@@ -100,8 +89,6 @@ export function AggregateItemRow({
   onExpandVariant,
   isExpanded = false,
 }: AggregateItemRowProps) {
-  const { mode: prevalenceMode, cycle: cyclePrevalence } =
-    usePrevalenceDisplay();
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
@@ -159,17 +146,7 @@ export function AggregateItemRow({
         </Label>
       )}
 
-      <button
-        type="button"
-        className={`aggregate-item-row__prevalence aggregate-item-row__prevalence--${prevalenceLevel(count, total)} aggregate-item-row__prevalence--clickable`}
-        onClick={(e) => {
-          e.stopPropagation();
-          cyclePrevalence();
-        }}
-        title="Click to toggle display format"
-      >
-        {formatPrevalence(count, total, prevalenceMode)} hosts
-      </button>
+      <PrevalenceBadge count={count} total={total} suffix="hosts" />
 
       {hasVariants && isDecisionSection && (
         <button
