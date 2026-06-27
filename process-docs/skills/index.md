@@ -17,3 +17,4 @@ development or review.
 | [subscription-preserve-flow](subscription-preserve-flow.md) | Subscription PEM collection pipeline, X.509 cert expiry parsing with `x509-parser`, display thresholds, symlink safety |
 | [anaconda-classifier-flow](anaconda-classifier-flow.md) | Anaconda gap classifier pipeline: four tiers, locked plumbing, promoted-via-service/config, user-op preservation after reclassification |
 | [release-build-configuration](release-build-configuration.md) | Workspace Cargo.toml layout, zigbuild cross-compile, musl static binaries, missing `[profile.release]` tuning |
+| [release-process](release-process.md) | Full release checklist: version bump locations, RPM tilde convention, changelog flow, build targets, binary naming, GH release, Homebrew formula |
