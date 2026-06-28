@@ -1644,20 +1644,250 @@ For Tasks 5-9 (aggregate), tests verify:
 - Aggregate view response contains `unmanaged_files` section (T8)
 - TypeScript compiles without errors (T9)
 
+---
+
+## Track C: Aggregate UI (Tasks 10-14)
+
+These tasks implement the aggregate UI work deferred from Plan 3. Plan 3
+builds the single-host components and interaction contracts; this track
+wires them into aggregate mode with the required decision-support metadata.
+
+**Dependency:** Tasks 10-14 depend on Tasks 7-8 (aggregate backend
+sections) and Plan 3 (single-host components exist).
+
+### Task 10: AggregateItemRow — Section-Aware Metadata Rendering
+
+**Files:**
+- Modify: `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx`
+- Test: `crates/web/ui/src/components/aggregate/__tests__/AggregateItemRow.test.tsx`
+
+**Interfaces:**
+- Consumes: Aggregate view response sections from Tasks 7-8
+- Produces: Section-specific row metadata rendering
+
+Language Packages rows display: ecosystem icon/label, confidence badge
+(green=high, orange=medium), package count badge, manifest basis subtitle.
+
+Unmanaged Files rows display: file type icon/label, size badge,
+`/var` warning icon when path is under `/var`.
+
+- [ ] **Step 1: Write failing test for language package row metadata**
+
+```typescript
+test("renders ecosystem label and confidence badge for language package items", () => {
+  // Render AggregateItemRow with sectionId="language_packages"
+  // and item containing ecosystem="pip", confidence="high", package_count=12
+  // Assert: ecosystem label, green confidence badge, "12 packages" badge
+});
+```
+
+- [ ] **Step 2: Implement section-aware rendering**
+
+In `AggregateItemRow`, branch on `sectionId` to render section-specific
+metadata alongside the standard prevalence badge.
+
+- [ ] **Step 3: Write test for unmanaged file row metadata**
+
+```typescript
+test("renders file type and size for unmanaged file items", () => {
+  // item with file_type="ELF", size=2400000, var_path=true
+  // Assert: "ELF" label, "2.3 MB" badge, /var warning icon
+});
+```
+
+- [ ] **Step 4: Run tests and verify**
+
+```bash
+cd crates/web/ui && npx jest AggregateItemRow --no-coverage
+```
+
+- [ ] **Step 5: Commit**
+
+```
+feat(web): add section-aware aggregate row metadata for new sections
+```
+
+### Task 11: Aggregate Detail Pane — Language Packages & Unmanaged Files
+
+**Files:**
+- Modify: `crates/web/ui/src/components/aggregate/ItemDetailPane.tsx`
+- Test: `crates/web/ui/src/components/aggregate/__tests__/ItemDetailPane.test.tsx`
+
+**Interfaces:**
+- Consumes: Aggregate item detail data from backend
+- Produces: Detail pane content for language envs (full package list,
+  confidence level, manifest basis) and unmanaged files (full path, size,
+  type, provenance signals)
+
+- [ ] **Step 1: Write failing test for language package detail pane**
+
+```typescript
+test("renders full package list in detail pane for language_packages section", () => {
+  // Detail item with packages: [{name: "flask", version: "2.3.3"}, ...]
+  // Assert: each package name and version rendered
+  // Assert: confidence level shown
+  // Assert: manifest basis ("from requirements.txt") shown
+});
+```
+
+- [ ] **Step 2: Implement detail pane branches**
+
+Add `language_packages` and `unmanaged_files` section handlers to
+`ItemDetailPane`. Language packages show full package list table.
+Unmanaged files show provenance signals (mutability, writable mount,
+service working directory).
+
+- [ ] **Step 3: Write test for unmanaged file detail pane**
+
+- [ ] **Step 4: Run tests and commit**
+
+```
+feat(web): add aggregate detail pane for language packages and unmanaged files
+```
+
+### Task 12: Aggregate Variant Views
+
+**Files:**
+- Modify: `crates/web/ui/src/components/aggregate/VariantView.tsx` (or new component)
+- Test: matching test file
+
+**Interfaces:**
+- Consumes: Variant data from aggregate backend (package-list diffs for
+  language envs, content-hash metadata for unmanaged files)
+- Produces: Variant comparison UI per spec's aggregate decision-support contract
+
+**Language Packages variant view:** When hosts diverge on the same
+environment path, show a structured diff: added packages, removed
+packages, version differences. NOT a text diff — a package-list diff
+with columns for each variant.
+
+**Unmanaged Files variant view:** When hosts have the same path but
+different content hash, show metadata comparison: file size per variant,
+last-modified per variant, "content differs" indicator. No binary diff.
+
+- [ ] **Step 1: Write failing test for package-list variant diff**
+
+```typescript
+test("renders package-list diff between variants for language packages", () => {
+  // Two variants with overlapping but different package lists
+  // Assert: added/removed/changed packages shown
+});
+```
+
+- [ ] **Step 2: Implement variant views**
+
+- [ ] **Step 3: Write test for unmanaged file variant metadata**
+
+- [ ] **Step 4: Run tests and commit**
+
+```
+feat(web): add variant comparison views for aggregate language packages and unmanaged files
+```
+
+### Task 13: Aggregate Search — New Section Coverage
+
+**Files:**
+- Modify: `crates/web/ui/src/components/aggregate/AggregateApp.tsx` (search scope)
+- Modify: `crates/web/ui/src/components/GlobalSearch.tsx` (if aggregate search is shared)
+- Test: matching test files
+
+**Interfaces:**
+- Consumes: Aggregate section items for language_packages and unmanaged_files
+- Produces: Searchable aggregate items matching spec's searchable fields
+
+Per spec's aggregate decision-support contract:
+
+| Section | Searchable fields |
+|---------|-------------------|
+| Language Packages | ecosystem, environment path, package names, manifest basis ("lockfile", "dist-info") |
+| Unmanaged Files | file path, file type |
+
+- [ ] **Step 1: Write failing test**
+
+```typescript
+test("aggregate global search includes language package items", () => {
+  // Search for "flask" — should match a language package env containing flask
+});
+```
+
+- [ ] **Step 2: Extend search indexing for new sections**
+
+- [ ] **Step 3: Write test for unmanaged file search**
+
+- [ ] **Step 4: Run tests and commit**
+
+```
+feat(web): extend aggregate search to language packages and unmanaged files
+```
+
+### Task 14: Aggregate Sidebar — New Section Wiring
+
+**Files:**
+- Modify: `crates/web/ui/src/components/aggregate/AggregateSidebar.tsx`
+- Modify: `crates/web/ui/src/components/aggregate/AggregateApp.tsx`
+- Test: matching test files
+
+**Interfaces:**
+- Consumes: Aggregate view response with language_packages and unmanaged_files sections
+- Produces: Sidebar entries with zone-based counts (consensus/near-consensus/divergent),
+  include/total counts matching single-host pattern
+
+`AggregateSidebar` is data-driven from the sections array — new sections
+may appear automatically if the backend returns them with `is_decision_section: true`.
+Verify this works and add explicit tests. If not automatic, wire the new
+section IDs into the sidebar rendering.
+
+- [ ] **Step 1: Write test**
+
+```typescript
+test("aggregate sidebar shows language_packages and unmanaged_files sections", () => {
+  // Mock aggregate view with both sections
+  // Assert: both appear in Review group with zone-based counts
+});
+```
+
+- [ ] **Step 2: Verify or wire sidebar rendering**
+
+- [ ] **Step 3: Run tests and commit**
+
+```
+feat(web): wire language packages and unmanaged files into aggregate sidebar
+```
+
+**Thorn checkpoint: review Tasks 10-14 before marking Plan 4 complete.**
+
+---
+
+## Aggregate Parity Note
+
+These tasks implement aggregate-mode support using the same components
+Plan 3 built for single-host mode. Shared components (LanguagePackageList,
+UnmanagedFileList, RpmUploadModal) should not need aggregate-specific
+forks — they receive data through props. The aggregate-specific work is
+in the metadata rendering (AggregateItemRow), detail pane, variant views,
+search scope, and sidebar wiring.
+
+If visual or interaction drift is detected between single-host and
+aggregate during implementation, file a comms thread before proceeding.
+
+---
+
 ## Execution Notes
 
-**Parallelism:** Tracks A and B are independent. Tasks 1-4 (compose) and
-Tasks 5-6 (aggregate merge) can be implemented in parallel if two agents
-are available. Tasks 7-8 depend on Tasks 5-6, and Task 9 depends on
-Tasks 7-8.
+**Parallelism:** Tracks A, B, and C have the following dependencies:
+- Track A (compose, T1-T4): independent, can start immediately
+- Track B (aggregate backend, T5-T9): depends on Plans 1+2 landing
+- Track C (aggregate UI, T10-T14): depends on Track B AND Plan 3
 
 **Dependency ordering within tracks:**
 - Track A: T1 → T2 → T3 → T4 (strictly sequential)
 - Track B: T5 → T7, T6 → T8, T9 depends on T7+T8
+- Track C: T10-T14 are sequential (each builds on the previous)
 
 **Plan dependencies:** Tasks 5-8 depend on Plan 1 and Plan 2 landing
 first (they need the extended NonRpmItem fields, UnmanagedFile types,
-and ItemId variants). Task 1-4 can proceed independently — ComposeFile
+and ItemId variants). Tasks 10-14 depend on Plan 3 (single-host
+components exist). Tasks 1-4 can proceed independently — ComposeFile
 is in a different type module.
 
 **Cross-crate visibility:** Task 3 needs `scrub_compose_secrets` from
