@@ -94,12 +94,15 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             "/api/viewed",
             get(handlers::get_viewed).post(handlers::mark_viewed),
         )
-        .route("/api/upload-rpm", post(upload::upload_rpm))
+        .route(
+            "/api/upload-rpm",
+            post(upload::upload_rpm).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)), // 500 MiB for RPM uploads
+        )
         .layer(cors)
         .layer(axum::middleware::from_fn(move |req, next| {
             origin_guard(served.clone(), req, next)
         }))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1 MiB
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1 MiB default
         .with_state(state)
         .fallback(assets::serve_fallback)
 }
