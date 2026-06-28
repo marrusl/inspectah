@@ -71,8 +71,10 @@ Each module defines the data model for a snapshot section:
 
 Each inspector implements the `Inspector` trait (`collect()` → section data):
 - `rpm/` — RPM package inventory, modules, repos, classifier
+  - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
 - `config/` — Modified config files via `rpm -Va`
 - `services.rs`, `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
+- `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
 
 **Executor abstraction:** `crates/collect/src/executor/` — `real.rs` (live system), `mock.rs` (test doubles)
 
@@ -91,6 +93,9 @@ Artifact generators invoked after triage decisions finalized:
 - `tarball.rs` — Snapshot archive packaging
 - `users.rs` — User/group materialization (passwd/group entries)
 - `service_intent.rs` — Quadlet/systemd service migration
+- `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
+- `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`
+- `repoless.rs` — Tier 3 repo-less RPM `dnf localinstall` directives
 - `safety.rs` — Safety checks and destructive-action warnings
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
@@ -118,6 +123,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 - `e2e/` — Playwright end-to-end tests
 
 **Backend API:** `crates/web/src/` — axum handlers for REST endpoints
+  - `upload.rs` — `POST /api/upload-rpm` for repo-less RPM uploads (500 MiB route-specific limit)
 
 ## Refine logic
 
