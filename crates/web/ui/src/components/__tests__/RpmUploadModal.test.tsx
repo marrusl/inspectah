@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RpmUploadModal } from "../RpmUploadModal";
 import { RpmBatchUploadModal } from "../RpmBatchUploadModal";
 
@@ -40,12 +40,33 @@ describe("RpmUploadModal", () => {
       screen.getByRole("dialog", { name: /Upload RPM for custom-agent/ }),
     ).toBeInTheDocument();
   });
+
+  it("validates RPM filename against bare package name (not canonical key)", () => {
+    // Simulate what App.tsx does: split canonical "nginx.x86_64" into
+    // packageName="nginx" and packageArch="x86_64"
+    const onUpload = vi.fn();
+    render(
+      <RpmUploadModal
+        {...defaultProps}
+        packageName="nginx"
+        packageArch="x86_64"
+        onUpload={onUpload}
+      />,
+    );
+    // The modal should show the bare name, not the canonical key
+    expect(screen.getByText(/Upload RPM for nginx/)).toBeInTheDocument();
+    expect(screen.getByText(/nginx-\*-\*\.x86_64\.rpm/)).toBeInTheDocument();
+  });
 });
 
 describe("RpmBatchUploadModal", () => {
   const defaultBatchProps = {
     isOpen: true,
-    needsUploadPackages: ["nginx", "custom-agent", "my-tool"],
+    needsUploadPackages: [
+      "nginx.x86_64",
+      "custom-agent.x86_64",
+      "my-tool.x86_64",
+    ],
     onBatchUpload: vi.fn(),
     onClose: vi.fn(),
   };
@@ -71,5 +92,65 @@ describe("RpmBatchUploadModal", () => {
     expect(
       screen.getByRole("dialog", { name: /Upload RPMs/i }),
     ).toBeInTheDocument();
+  });
+
+  it("matches dropped RPM files against canonical name.arch keys", async () => {
+    const onBatchUpload = vi.fn();
+    render(
+      <RpmBatchUploadModal
+        isOpen={true}
+        needsUploadPackages={["nginx.x86_64", "custom-agent.x86_64"]}
+        onBatchUpload={onBatchUpload}
+        onClose={vi.fn()}
+      />,
+    );
+    // Use the file input instead of drag-drop
+    const fileInput = screen.getByLabelText(/browse/i).closest("label")?.htmlFor
+      ? document.getElementById(
+          screen.getByLabelText(/browse/i).closest("label")!.htmlFor,
+        )
+      : null;
+    const input = fileInput ?? document.querySelector('input[type="file"]')!;
+    const files = [
+      new File(["rpm1"], "nginx-1.24-1.el9.x86_64.rpm", {
+        type: "application/x-rpm",
+      }),
+      new File(["rpm2"], "custom-agent-2.0-1.el9.x86_64.rpm", {
+        type: "application/x-rpm",
+      }),
+    ];
+    fireEvent.change(input, { target: { files } });
+    // Should show 2 matched
+    await waitFor(() => {
+      expect(screen.getByText(/2 of 2 RPMs matched/)).toBeInTheDocument();
+    });
+  });
+
+  it("disambiguates multilib packages with same bare name but different arch", async () => {
+    const onBatchUpload = vi.fn();
+    render(
+      <RpmBatchUploadModal
+        isOpen={true}
+        needsUploadPackages={["glibc.x86_64", "glibc.i686"]}
+        onBatchUpload={onBatchUpload}
+        onClose={vi.fn()}
+      />,
+    );
+    const input = document.querySelector('input[type="file"]')!;
+    const files = [
+      new File(["rpm1"], "glibc-2.34-1.el9.x86_64.rpm", {
+        type: "application/x-rpm",
+      }),
+      new File(["rpm2"], "glibc-2.34-1.el9.i686.rpm", {
+        type: "application/x-rpm",
+      }),
+    ];
+    fireEvent.change(input, { target: { files } });
+    // Both should match without conflicts
+    await waitFor(() => {
+      expect(screen.getByText(/2 of 2 RPMs matched/)).toBeInTheDocument();
+    });
+    // No conflict alerts
+    expect(screen.queryByText(/Conflicting uploads/)).not.toBeInTheDocument();
   });
 });

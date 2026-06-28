@@ -404,6 +404,89 @@ describe("UnmanagedFileList", () => {
     );
   });
 
+  // --- Section search auto-expand ---
+
+  it("auto-expands a collapsed group when searchActive is true", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    // Collapse the /opt/splunk group
+    const groupHeader = screen
+      .getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    await user.click(groupHeader);
+    expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+    // Items should be hidden
+    expect(
+      screen.queryByTestId("unmanaged-item-/opt/splunk/bin/splunkd"),
+    ).not.toBeInTheDocument();
+
+    // Re-render with searchActive=true (simulating section search)
+    rerender(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+        searchActive={true}
+      />,
+    );
+    // Group should be force-expanded
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+    // Items should be visible again
+    expect(
+      screen.getByTestId("unmanaged-item-/opt/splunk/bin/splunkd"),
+    ).toBeInTheDocument();
+  });
+
+  it("re-collapses group when search is cleared", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    // Collapse the group
+    const groupHeader = screen
+      .getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    await user.click(groupHeader);
+    expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+
+    // Activate search → force-expand
+    rerender(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+        searchActive={true}
+      />,
+    );
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+
+    // Clear search → should collapse again (user's collapsed state preserved)
+    rerender(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+        searchActive={false}
+      />,
+    );
+    expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  });
+
   // --- Debounced size-rollup announcement ---
 
   it("debounces size-rollup announcement after rapid toggles", () => {

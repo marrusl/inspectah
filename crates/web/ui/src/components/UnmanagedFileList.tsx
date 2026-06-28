@@ -52,6 +52,8 @@ export interface UnmanagedFileListProps {
   onResetAll?: () => void;
   /** Item path to scroll into view (from global search). */
   revealItemId?: string;
+  /** When true, force-expand all groups (section search is active). */
+  searchActive?: boolean;
 }
 
 /**
@@ -144,6 +146,7 @@ function DirectoryGroup({
   onToggleGroup,
   isPending,
   revealItemId,
+  searchActive,
   onKeyDownHeader,
   onKeyDownItem,
   groupAnnounceText,
@@ -154,6 +157,8 @@ function DirectoryGroup({
   onToggleGroup: (directory: string, include: boolean) => void;
   isPending: boolean;
   revealItemId?: string;
+  /** When true, force-expand regardless of user collapse state. */
+  searchActive?: boolean;
   onKeyDownHeader: (e: React.KeyboardEvent) => void;
   onKeyDownItem: (e: React.KeyboardEvent) => void;
   groupAnnounceText: string;
@@ -161,7 +166,7 @@ function DirectoryGroup({
 }) {
   const hasRevealedChild = group.items.some((i) => i.path === revealItemId);
   const [isExpanded, setIsExpanded] = useState(true);
-  const shouldExpand = isExpanded || hasRevealedChild;
+  const shouldExpand = isExpanded || hasRevealedChild || !!searchActive;
 
   const allIncluded = group.items.every((i) => i.include);
   const noneIncluded = group.items.every((i) => !i.include);
@@ -288,6 +293,7 @@ export function UnmanagedFileList({
   onIncludeNone,
   onResetAll,
   revealItemId,
+  searchActive,
 }: UnmanagedFileListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -313,7 +319,12 @@ export function UnmanagedFileList({
 
   // Store latest counts in a ref so the debounced callback always
   // reads post-toggle values instead of stale closure captures.
-  const countsRef = useRef({ includedCount, totalCount, includedSize, totalSize });
+  const countsRef = useRef({
+    includedCount,
+    totalCount,
+    includedSize,
+    totalSize,
+  });
   countsRef.current = { includedCount, totalCount, includedSize, totalSize };
 
   /** Schedule a debounced rollup announcement for screen readers.
@@ -478,6 +489,7 @@ export function UnmanagedFileList({
           onToggleGroup={handleToggleGroup}
           isPending={isPending}
           revealItemId={revealItemId}
+          searchActive={searchActive}
           onKeyDownHeader={handleKeyDownHeader}
           onKeyDownItem={handleKeyDownItem}
           groupAnnounceText={groupAnnounces[group.directory] ?? ""}

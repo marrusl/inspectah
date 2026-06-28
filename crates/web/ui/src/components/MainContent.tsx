@@ -645,6 +645,7 @@ export function MainContent({
             onIncludeNone={onUnmanagedIncludeNone}
             onResetAll={onUnmanagedResetAll}
             revealItemId={revealItemId}
+            searchActive={!!filterText.trim()}
           />
         )}
       </div>

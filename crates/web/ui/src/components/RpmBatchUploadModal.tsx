@@ -24,6 +24,39 @@ function extractPackageName(filename: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Extract the canonical "name.arch" from an RPM filename.
+ * RPM filenames follow the NEVRA pattern: name-version-release.arch.rpm
+ */
+function extractCanonicalKey(filename: string): string | null {
+  const match = filename.match(/^(.+?)-\d.*\.(\w+)\.rpm$/);
+  if (!match) return null;
+  return `${match[1]}.${match[2]}`;
+}
+
+/**
+ * Extract the bare package name from a canonical "name.arch" key.
+ * Falls back to the full string when no recognised arch suffix is found.
+ */
+const KNOWN_ARCHES = new Set([
+  "x86_64",
+  "noarch",
+  "i686",
+  "aarch64",
+  "s390x",
+  "ppc64le",
+  "src",
+]);
+
+function bareNameFromCanonical(canonicalKey: string): string {
+  const dotIdx = canonicalKey.lastIndexOf(".");
+  if (dotIdx === -1) return canonicalKey;
+  const suffix = canonicalKey.slice(dotIdx + 1);
+  return KNOWN_ARCHES.has(suffix)
+    ? canonicalKey.slice(0, dotIdx)
+    : canonicalKey;
+}
+
 interface MatchResult {
   matched: Array<{ packageName: string; file: File }>;
   unmatched: File[];
@@ -45,10 +78,26 @@ export function RpmBatchUploadModal({
 }: RpmBatchUploadModalProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
-  const packageSet = useMemo(
+
+  // Build a set of canonical keys for quick lookup, plus a map from bare name
+  // to canonical keys to handle matching when canonical extraction fails.
+  const canonicalSet = useMemo(
     () => new Set(needsUploadPackages),
     [needsUploadPackages],
   );
+  const bareNameToCanonicals = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const key of needsUploadPackages) {
+      const bare = bareNameFromCanonical(key);
+      const existing = map.get(bare);
+      if (existing) {
+        existing.push(key);
+      } else {
+        map.set(bare, [key]);
+      }
+    }
+    return map;
+  }, [needsUploadPackages]);
 
   const matchResult: MatchResult = useMemo(() => {
     const matched: MatchResult["matched"] = [];
@@ -60,21 +109,39 @@ export function RpmBatchUploadModal({
         unmatched.push(file);
         continue;
       }
-      const name = extractPackageName(file.name);
-      if (!name || !packageSet.has(name)) {
+
+      // Try canonical name.arch extraction first (disambiguates multilib)
+      let key: string | null = null;
+      const canonical = extractCanonicalKey(file.name);
+      if (canonical && canonicalSet.has(canonical)) {
+        key = canonical;
+      } else {
+        // Fall back to bare name match
+        const bareName = extractPackageName(file.name);
+        if (bareName) {
+          const candidates = bareNameToCanonicals.get(bareName);
+          if (candidates && candidates.length === 1) {
+            key = candidates[0];
+          }
+          // If multiple candidates (multilib), canonical extraction should
+          // have resolved it. If it didn't, leave unmatched.
+        }
+      }
+
+      if (!key) {
         unmatched.push(file);
         continue;
       }
 
-      const existing = conflictMap.get(name);
+      const existing = conflictMap.get(key);
       if (existing) {
         existing.push(file);
-      } else if (matched.some((m) => m.packageName === name)) {
-        const prev = matched.find((m) => m.packageName === name)!;
-        conflictMap.set(name, [prev.file, file]);
+      } else if (matched.some((m) => m.packageName === key)) {
+        const prev = matched.find((m) => m.packageName === key)!;
+        conflictMap.set(key, [prev.file, file]);
         matched.splice(matched.indexOf(prev), 1);
       } else {
-        matched.push({ packageName: name, file });
+        matched.push({ packageName: key, file });
       }
     }
 
@@ -88,7 +155,7 @@ export function RpmBatchUploadModal({
         }),
       ),
     };
-  }, [files, packageSet]);
+  }, [files, canonicalSet, bareNameToCanonicals]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();

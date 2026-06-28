@@ -198,7 +198,11 @@ function SingleHostApp({
 
   // --- RPM upload ---
   const rpmUpload = useRpmUpload();
-  const [uploadTarget, setUploadTarget] = useState<string | null>(null);
+  const [uploadTarget, setUploadTarget] = useState<{
+    canonicalKey: string;
+    name: string;
+    arch: string;
+  } | null>(null);
   const [batchUploadOpen, setBatchUploadOpen] = useState(false);
   const uploadTriggerRef = useRef<HTMLElement | null>(null);
 
@@ -333,12 +337,16 @@ function SingleHostApp({
     [rpmUpload],
   );
 
-  const handleUploadClick = useCallback((name: string) => {
+  const handleUploadClick = useCallback((canonicalKey: string) => {
     const triggerEl = document.querySelector(
-      `[aria-label="Upload RPM for ${name}"]`,
+      `[aria-label="Upload RPM for ${canonicalKey}"]`,
     ) as HTMLElement | null;
     uploadTriggerRef.current = triggerEl;
-    setUploadTarget(name);
+    // Split canonical "name.arch" key into bare name and arch for modal validation
+    const dotIdx = canonicalKey.lastIndexOf(".");
+    const name = dotIdx !== -1 ? canonicalKey.slice(0, dotIdx) : canonicalKey;
+    const arch = dotIdx !== -1 ? canonicalKey.slice(dotIdx + 1) : "x86_64";
+    setUploadTarget({ canonicalKey, name, arch });
   }, []);
 
   function getItemTestIdFromEntry(
@@ -437,12 +445,8 @@ function SingleHostApp({
       const el = (document.querySelector(
         `[data-testid="decision-item-${itemId}"]`,
       ) ??
-        document.querySelector(
-          `[data-testid="context-item-${itemId}"]`,
-        ) ??
-        document.querySelector(
-          `[data-testid="lang-env-row-${itemId}"]`,
-        ) ??
+        document.querySelector(`[data-testid="context-item-${itemId}"]`) ??
+        document.querySelector(`[data-testid="lang-env-row-${itemId}"]`) ??
         document.querySelector(
           `[data-testid="unmanaged-item-${itemId}"]`,
         )) as HTMLElement | null;
@@ -666,15 +670,16 @@ function SingleHostApp({
 
       <RpmUploadModal
         isOpen={uploadTarget !== null}
-        packageName={uploadTarget ?? ""}
-        packageArch={
-          view.data?.packages?.find((p) => p.entry.name === uploadTarget)
-            ?.entry.arch ?? "x86_64"
-        }
-        onUpload={(name, file) => {
-          rpmUpload.uploadRpm(name, file).catch((err) => {
-            console.error("RPM upload failed:", err);
-          });
+        packageName={uploadTarget?.name ?? ""}
+        packageArch={uploadTarget?.arch ?? "x86_64"}
+        onUpload={(_name, file) => {
+          if (uploadTarget) {
+            rpmUpload
+              .uploadRpm(uploadTarget.canonicalKey, file)
+              .catch((err) => {
+                console.error("RPM upload failed:", err);
+              });
+          }
         }}
         onClose={() => setUploadTarget(null)}
         triggerRef={uploadTriggerRef}
