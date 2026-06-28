@@ -814,6 +814,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     hosts: vec!["host-0".into(), "host-1".into(), "host-2".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
             ComposeFile {
                 path: path.into(),
@@ -830,6 +831,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     hosts: vec!["host-3".into(), "host-4".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
         ],
         ..Default::default()

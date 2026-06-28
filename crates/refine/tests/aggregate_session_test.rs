@@ -303,6 +303,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     hosts: vec!["h1".into(), "h2".into(), "h3".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
             ComposeFile {
                 path: "/opt/app/docker-compose.yml".into(),
@@ -319,6 +320,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     hosts: vec!["h4".into(), "h5".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
         ],
         ..Default::default()
@@ -367,6 +369,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                     hosts: vec!["h1".into(), "h2".into(), "h3".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
             ComposeFile {
                 path: "/opt/app/docker-compose.yml".into(),
@@ -380,6 +383,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
                     hosts: vec!["h4".into(), "h5".into()],
                     ..Default::default()
                 }),
+                raw_content: None,
             },
         ],
         ..Default::default()

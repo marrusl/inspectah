@@ -61,6 +61,10 @@ pub struct ComposeFile {
     #[serde(default)]
     pub variant_selection: VariantSelection,
     pub aggregate: Option<AggregatePrevalence>,
+    /// Raw compose YAML content, retained for verbatim export.
+    /// Subject to redaction rules when snapshot is in redacted state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_content: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,11 +168,43 @@ mod tests {
                 include: true,
                 ..Default::default()
             }],
+            compose_files: vec![ComposeFile {
+                path: "opt/myapp/docker-compose.yml".to_string(),
+                images: vec![],
+                include: true,
+                raw_content: Some(
+                    "version: '3'\nservices:\n  web:\n    image: nginx\n".to_string(),
+                ),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ContainerSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn compose_raw_content_roundtrip() {
+        let cf = ComposeFile {
+            path: "opt/app/docker-compose.yml".to_string(),
+            raw_content: Some("services:\n  db:\n    image: postgres:16\n".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cf).unwrap();
+        assert!(json.contains("raw_content"));
+        let parsed: ComposeFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(cf.raw_content, parsed.raw_content);
+    }
+
+    #[test]
+    fn compose_raw_content_none_omitted() {
+        let cf = ComposeFile {
+            path: "opt/app/compose.yml".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cf).unwrap();
+        assert!(!json.contains("raw_content"));
     }
 
     #[test]
