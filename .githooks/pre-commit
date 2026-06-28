@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# inspectah pre-commit hook — green-suite + clippy + fmt gate
+#
+# Blocks commits unless cargo fmt, cargo clippy, and cargo test all pass.
+# Skips when no Rust/Cargo files are in the changeset.
+#
+# INSTALL (once per clone):
+#   git config core.hooksPath .githooks
+#
+# BYPASS (last resort):
+#   git commit --no-verify
+
+set -euo pipefail
+
+# --- fast-path: skip when no Rust-relevant files changed ---
+
+rust_relevant() {
+    # Staged files that could affect compilation or test outcomes.
+    # .rs sources, Cargo manifests, build scripts, lockfile.
+    git diff --cached --name-only --diff-filter=ACMR \
+        | grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$'
+}
+
+if ! rust_relevant; then
+    exit 0
+fi
+
+# --- gate 1: cargo fmt (fast, catches formatting drift) ---
+
+echo "pre-commit: running cargo fmt --check..."
+if ! cargo fmt --check 2>&1; then
+    cat <<'EOF'
+
+    !! COMMIT BLOCKED — formatting issues found !!
+
+    Run `cargo fmt` to fix, then re-stage and retry your commit.
+
+    Bypass (last resort): git commit --no-verify
+
+EOF
+    exit 1
+fi
+
+# --- gate 2: clippy (catches warnings-as-errors) ---
+
+echo "pre-commit: running cargo clippy..."
+if ! cargo clippy --workspace -- -W clippy::all 2>&1; then
+    cat <<'EOF'
+
+    !! COMMIT BLOCKED — clippy warnings found !!
+
+    Fix the warnings above, then retry your commit.
+    Clippy clean is non-negotiable (see CLAUDE.md).
+
+    Bypass (last resort): git commit --no-verify
+
+EOF
+    exit 1
+fi
+
+# --- gate 3: cargo test (full workspace) ---
+
+echo "pre-commit: running cargo test..."
+if ! cargo test --workspace 2>&1; then
+    cat <<'EOF'
+
+    !! COMMIT BLOCKED — test suite failed !!
+
+    Fix the failing tests above, then retry your commit.
+    A red suite is never acceptable to skip past (see CLAUDE.md).
+
+    If a pre-existing test is failing, fix it if trivial or quarantine
+    it with #[ignore] and a // TODO(green-suite): <reason> comment.
+
+    Bypass (last resort): git commit --no-verify
+
+EOF
+    exit 1
+fi
+
+echo "pre-commit: all checks passed."
