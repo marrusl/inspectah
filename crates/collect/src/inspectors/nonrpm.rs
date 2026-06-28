@@ -1493,6 +1493,14 @@ fn walk_for_unmanaged(
             if PRUNE_DIRS.contains(&entry.as_str()) {
                 continue;
             }
+            // Short-circuit excluded subtrees before recursion.
+            if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+                continue;
+            }
+            // Short-circuit Tier 1 language environment subtrees before recursion.
+            if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+                continue;
+            }
             walk_for_unmanaged(
                 exec,
                 &child,
