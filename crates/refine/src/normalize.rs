@@ -1,6 +1,7 @@
 use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, TriageReason};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_pipeline::render::language_packages::is_language_env;
 use serde_json::Value;
 
 fn is_anaconda_classified(reason: &TriageReason) -> bool {
@@ -249,6 +250,35 @@ pub fn normalize_inspectah_repo_files(snapshot: &mut InspectionSnapshot) {
     for rf in &mut rpm.repo_files {
         if is_inspectah_repo_file(&rf.path) {
             rf.include = false;
+        }
+    }
+}
+
+/// Materialize confidence-based include defaults for language environments.
+///
+/// High-confidence items (lockfile-backed, RPM-filtered) default to included.
+/// Medium/low-confidence items default to excluded — users must explicitly
+/// include them. Implements the spec's provenance trust gate.
+pub fn normalize_language_env_defaults(snapshot: &mut InspectionSnapshot) {
+    let nrs = match snapshot.non_rpm_software.as_mut() {
+        Some(n) => n,
+        None => return,
+    };
+    for item in &mut nrs.items {
+        if !is_language_env(item) {
+            continue;
+        }
+        match item.confidence.as_str() {
+            "high" => {
+                // Leave include: true (default from serde)
+            }
+            "medium" | "low" => {
+                item.include = false;
+            }
+            _ => {
+                // Unknown/empty confidence — treat as low
+                item.include = false;
+            }
         }
     }
 }
@@ -890,5 +920,120 @@ mod tests {
             "perl-Git.x86_64 is a top-level key and should not be in the subtraction set"
         );
         assert_eq!(deps.len(), 2);
+    }
+
+    // --- language environment confidence-based defaulting tests ---
+
+    fn snap_with_nonrpm(
+        items: Vec<inspectah_core::types::nonrpm::NonRpmItem>,
+    ) -> InspectionSnapshot {
+        use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items,
+                env_files: vec![],
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn nonrpm_item(
+        method: &str,
+        confidence: &str,
+        include: bool,
+    ) -> inspectah_core::types::nonrpm::NonRpmItem {
+        inspectah_core::types::nonrpm::NonRpmItem {
+            method: method.to_string(),
+            confidence: confidence.to_string(),
+            include,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn high_confidence_language_env_defaults_to_included() {
+        let mut snap = snap_with_nonrpm(vec![
+            nonrpm_item("npm lockfile", "high", true),
+            nonrpm_item("python venv", "high", true),
+            nonrpm_item("gem lockfile", "high", true),
+        ]);
+        normalize_language_env_defaults(&mut snap);
+        let nrs = snap.non_rpm_software.as_ref().unwrap();
+        assert!(
+            nrs.items[0].include,
+            "npm high-confidence should stay included"
+        );
+        assert!(
+            nrs.items[1].include,
+            "venv high-confidence should stay included"
+        );
+        assert!(
+            nrs.items[2].include,
+            "gem high-confidence should stay included"
+        );
+    }
+
+    #[test]
+    fn medium_confidence_language_env_defaults_to_excluded() {
+        let mut snap = snap_with_nonrpm(vec![
+            nonrpm_item("npm lockfile", "medium", true),
+            nonrpm_item("pip dist-info", "medium", true),
+        ]);
+        normalize_language_env_defaults(&mut snap);
+        let nrs = snap.non_rpm_software.as_ref().unwrap();
+        assert!(
+            !nrs.items[0].include,
+            "npm medium-confidence should default to excluded"
+        );
+        assert!(
+            !nrs.items[1].include,
+            "pip medium-confidence should default to excluded"
+        );
+    }
+
+    #[test]
+    fn low_confidence_language_env_defaults_to_excluded() {
+        let mut snap = snap_with_nonrpm(vec![nonrpm_item("python venv", "low", true)]);
+        normalize_language_env_defaults(&mut snap);
+        let nrs = snap.non_rpm_software.as_ref().unwrap();
+        assert!(
+            !nrs.items[0].include,
+            "low-confidence should default to excluded"
+        );
+    }
+
+    #[test]
+    fn non_language_env_items_untouched() {
+        let mut snap = snap_with_nonrpm(vec![
+            nonrpm_item("binary", "medium", true),
+            nonrpm_item("git repo", "low", true),
+        ]);
+        normalize_language_env_defaults(&mut snap);
+        let nrs = snap.non_rpm_software.as_ref().unwrap();
+        // Non-language items should not be modified by this normalize function
+        assert!(nrs.items[0].include, "binary item should stay included");
+        assert!(nrs.items[1].include, "git repo item should stay included");
+    }
+
+    #[test]
+    fn no_nonrpm_section_is_noop() {
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            ..Default::default()
+        };
+        normalize_language_env_defaults(&mut snap);
+        assert!(snap.non_rpm_software.is_none());
+    }
+
+    #[test]
+    fn empty_confidence_treated_as_low() {
+        let mut snap = snap_with_nonrpm(vec![nonrpm_item("npm lockfile", "", true)]);
+        normalize_language_env_defaults(&mut snap);
+        let nrs = snap.non_rpm_software.as_ref().unwrap();
+        assert!(
+            !nrs.items[0].include,
+            "empty confidence should default to excluded"
+        );
     }
 }

@@ -14,7 +14,8 @@ use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages};
 use crate::group_state::{GroupEvalContext, derive_group_state};
 use crate::normalize::{
-    normalize_config_defaults, normalize_inspectah_repo_files, normalize_package_defaults,
+    normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
+    normalize_package_defaults,
 };
 use crate::repo_index::RepoIndex;
 use crate::types::{
@@ -298,6 +299,7 @@ impl RefineSession {
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
         normalize_inspectah_repo_files(&mut snapshot);
+        normalize_language_env_defaults(&mut snapshot);
 
         // Detect aggregate mode from snapshot metadata.
         let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
