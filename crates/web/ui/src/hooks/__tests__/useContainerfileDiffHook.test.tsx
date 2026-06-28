@@ -128,8 +128,7 @@ describe("useContainerfileDiff", () => {
         initialProps: {
           content:
             "FROM quay.io/fedora/fedora-bootc:42\nRUN dnf install -y httpd\n" as
-              | string
-              | null,
+              string | null,
         },
       },
     );

@@ -70,7 +70,8 @@ if (typeof globalThis.localStorage === "undefined") {
 
 const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
 vi.mock("../../../api/aggregate-client", () => ({
-  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateView: (...args: unknown[]) =>
+    mockFetchAggregateView(...(args as [])),
   fetchAggregateDiff: vi.fn().mockResolvedValue({
     item_id: { kind: "Config", key: { path: "/etc/test" } },
     base_hash: "aaa",
@@ -438,7 +439,9 @@ describe("AggregateApp integration", () => {
       mockFetchAggregateView.mockResolvedValueOnce(initialView); // initial load
       mockUndo.mockResolvedValueOnce({}); // undo API succeeds
       // But the subsequent refetch fails
-      mockFetchAggregateView.mockRejectedValueOnce(new Error("Server unavailable"));
+      mockFetchAggregateView.mockRejectedValueOnce(
+        new Error("Server unavailable"),
+      );
 
       renderAggregateApp();
       await waitForContent();
@@ -471,7 +474,9 @@ describe("AggregateApp integration", () => {
 
       mockFetchAggregateView.mockResolvedValueOnce(initialView); // initial load
       mockUndo.mockResolvedValueOnce({});
-      mockFetchAggregateView.mockRejectedValueOnce(new Error("Transient error")); // refetch fails
+      mockFetchAggregateView.mockRejectedValueOnce(
+        new Error("Transient error"),
+      ); // refetch fails
       mockFetchAggregateView.mockResolvedValueOnce(recoveredView); // retry succeeds
 
       renderAggregateApp();
@@ -532,7 +537,9 @@ describe("AggregateApp integration", () => {
       });
 
       mockFetchAggregateView.mockResolvedValue(flatView);
-      renderAggregateApp({ aggregate: { ...MOCK_AGGREGATE, zones_active: false } });
+      renderAggregateApp({
+        aggregate: { ...MOCK_AGGREGATE, zones_active: false },
+      });
       await waitForContent();
 
       // Sidebar still renders sections
@@ -654,7 +661,9 @@ describe("AggregateApp integration", () => {
         generation: 2,
         sections: [
           mockAggregateSection("packages", { display_name: "Packages" }),
-          mockAggregateSection("config_files", { display_name: "Config Files" }),
+          mockAggregateSection("config_files", {
+            display_name: "Config Files",
+          }),
         ],
       });
 

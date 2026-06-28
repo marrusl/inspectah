@@ -263,7 +263,11 @@ export function DecisionItem({
               onChange={handleToggle}
               onClick={(e) => e.stopPropagation()}
               disabled={isPending || locked}
-              aria-label={locked ? `${name} (locked: ${reasonText ?? "cannot toggle"})` : `Toggle ${name}`}
+              aria-label={
+                locked
+                  ? `${name} (locked: ${reasonText ?? "cannot toggle"})`
+                  : `Toggle ${name}`
+              }
             />
           </div>
         )}

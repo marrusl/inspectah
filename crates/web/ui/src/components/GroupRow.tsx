@@ -1,6 +1,10 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { Button } from "@patternfly/react-core";
-import { AngleRightIcon, AngleDownIcon, LockIcon } from "@patternfly/react-icons";
+import {
+  AngleRightIcon,
+  AngleDownIcon,
+  LockIcon,
+} from "@patternfly/react-icons";
 import type { GroupInfo } from "../api/types";
 
 export interface GroupRowProps {
@@ -81,7 +85,9 @@ export function GroupRow({
       return `${group.member_count} ${group.member_count === 1 ? "package" : "packages"} (all from base)`;
     }
     if (group.added_count === group.member_count) {
-      return group.member_count === 1 ? "1 package" : `${group.member_count} packages`;
+      return group.member_count === 1
+        ? "1 package"
+        : `${group.member_count} packages`;
     }
     const baseCount = group.member_count - group.added_count;
     return `${group.added_count} new, ${baseCount} from base`;
@@ -161,35 +167,45 @@ export function GroupRow({
             const memberMatches =
               q.length > 0 && member.name.toLowerCase().includes(q);
             return (
-            <div
-              key={member.name}
-              data-testid={`group-member-${member.name}`}
-              className="inspectah-group-row__member"
-              role="listitem"
-              tabIndex={-1}
-              {...(memberMatches ? { "data-search-match": "true" } : {})}
-            >
-              <span
-                className={`inspectah-group-row__member-name${member.in_base_image ? " inspectah-group-row__member--from-base" : ""}`}
-                aria-label={member.in_base_image ? `${member.name} (from base image, no action needed)` : undefined}
+              <div
+                key={member.name}
+                data-testid={`group-member-${member.name}`}
+                className="inspectah-group-row__member"
+                role="listitem"
+                tabIndex={-1}
+                {...(memberMatches ? { "data-search-match": "true" } : {})}
               >
-                {member.name}
-                {member.in_base_image && (
-                  <span className="inspectah-group-row__from-base-label"> (from base)</span>
-                )}
-              </span>
-              {member.locked && (
-                <span className="inspectah-group-row__member-locked">
-                  <LockIcon /> locked
+                <span
+                  className={`inspectah-group-row__member-name${member.in_base_image ? " inspectah-group-row__member--from-base" : ""}`}
+                  aria-label={
+                    member.in_base_image
+                      ? `${member.name} (from base image, no action needed)`
+                      : undefined
+                  }
+                >
+                  {member.name}
+                  {member.in_base_image && (
+                    <span className="inspectah-group-row__from-base-label">
+                      {" "}
+                      (from base)
+                    </span>
+                  )}
                 </span>
-              )}
-            </div>
+                {member.locked && (
+                  <span className="inspectah-group-row__member-locked">
+                    <LockIcon /> locked
+                  </span>
+                )}
+              </div>
             );
           })}
           {hasMore && !showAll && (
             <button
               className="inspectah-group-row__show-all"
-              onClick={(e) => { e.stopPropagation(); setShowAll(true); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowAll(true);
+              }}
             >
               Show all {sortedMembers.length} members
             </button>
@@ -197,7 +213,10 @@ export function GroupRow({
           {hasMore && showAll && (
             <button
               className="inspectah-group-row__show-all"
-              onClick={(e) => { e.stopPropagation(); setShowAll(false); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowAll(false);
+              }}
             >
               Show less
             </button>

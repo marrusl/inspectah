@@ -160,7 +160,9 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
-              aria-describedby={svcLocked ? `locked-reason-service-${svc.unit}` : undefined}
+              aria-describedby={
+                svcLocked ? `locked-reason-service-${svc.unit}` : undefined
+              }
               tabIndex={idx === 0 ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
@@ -184,7 +186,11 @@ export function ServiceSection({
                     checked={svc.include}
                     onChange={() => handleToggleService(svc.unit, svc.include)}
                     disabled={isPending || svcLocked}
-                    aria-label={svcLocked ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})` : `Toggle ${svc.unit}`}
+                    aria-label={
+                      svcLocked
+                        ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
+                        : `Toggle ${svc.unit}`
+                    }
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
@@ -253,7 +259,9 @@ export function ServiceSection({
                   key={di.path}
                   role="row"
                   aria-label={di.path}
-                  aria-describedby={diLocked ? `locked-reason-dropin-${di.path}` : undefined}
+                  aria-describedby={
+                    diLocked ? `locked-reason-dropin-${di.path}` : undefined
+                  }
                   tabIndex={diLocked ? 0 : -1}
                   data-testid={`dropin-item-${di.path}`}
                   data-locked={diLocked ? "true" : undefined}
@@ -290,7 +298,11 @@ export function ServiceSection({
                         checked={di.include}
                         onChange={() => handleToggleDropin(di.path, di.include)}
                         disabled={disabled}
-                        aria-label={diLocked ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})` : `Toggle ${di.path}`}
+                        aria-label={
+                          diLocked
+                            ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})`
+                            : `Toggle ${di.path}`
+                        }
                         aria-disabled={parentExcluded}
                         style={{ minWidth: 20, minHeight: 20 }}
                       />

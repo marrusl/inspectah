@@ -45,7 +45,10 @@ function validateRpmFile(
   const validArch =
     filename.endsWith(`.${arch}.rpm`) || filename.endsWith(".noarch.rpm");
   if (!validArch) {
-    return { valid: false, error: `Expected architecture "${arch}" or "noarch"` };
+    return {
+      valid: false,
+      error: `Expected architecture "${arch}" or "noarch"`,
+    };
   }
   return { valid: true };
 }
@@ -87,7 +90,9 @@ export function RpmUploadModal({
       }
       setFile(selectedFile);
       setFilename(selectedFile.name);
-      setValidation(validateRpmFile(packageName, packageArch, selectedFile.name));
+      setValidation(
+        validateRpmFile(packageName, packageArch, selectedFile.name),
+      );
     },
     [packageName, packageArch],
   );
@@ -106,7 +111,15 @@ export function RpmUploadModal({
       // Return focus to trigger element
       triggerRef.current?.focus();
     }
-  }, [file, validation, packageName, onUpload, onClose, handleClear, triggerRef]);
+  }, [
+    file,
+    validation,
+    packageName,
+    onUpload,
+    onClose,
+    handleClear,
+    triggerRef,
+  ]);
 
   const handleClose = useCallback(() => {
     handleClear();
@@ -151,7 +164,11 @@ export function RpmUploadModal({
             <HelperTextItem
               variant={validation.valid ? "success" : "error"}
               icon={
-                validation.valid ? <CheckCircleIcon /> : <ExclamationCircleIcon />
+                validation.valid ? (
+                  <CheckCircleIcon />
+                ) : (
+                  <ExclamationCircleIcon />
+                )
               }
             >
               {validation.valid

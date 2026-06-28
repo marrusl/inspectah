@@ -102,9 +102,7 @@ describe("VersionChanges integration in MainContent", () => {
     expect(screen.getByText(/Upgrades \(1\)/)).toBeInTheDocument();
 
     // Data rows have context-item testids
-    expect(
-      screen.getByTestId("context-item-httpd.x86_64"),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("context-item-httpd.x86_64")).toBeInTheDocument();
     expect(
       screen.getByTestId("context-item-podman.x86_64"),
     ).toBeInTheDocument();
@@ -186,8 +184,6 @@ describe("VersionChanges integration in MainContent", () => {
     );
 
     // VersionChangesTable handles empty state internally
-    expect(
-      screen.getByText(/match the target baseline/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/match the target baseline/i)).toBeInTheDocument();
   });
 });

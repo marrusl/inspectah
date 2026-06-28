@@ -31,7 +31,10 @@ export interface AggregateSectionContentProps {
   diffHook?: UseAggregateDiffResult;
 }
 
-function filterItems(items: AggregateItem[], filterText: string): AggregateItem[] {
+function filterItems(
+  items: AggregateItem[],
+  filterText: string,
+): AggregateItem[] {
   if (!filterText) return items;
   const lower = filterText.toLowerCase();
   return items.filter((item) =>
@@ -142,7 +145,11 @@ export function AggregateSectionContent({
           const hasVariants = item.variants != null && item.variants.count > 1;
           return (
             <div key={key}>
-              <AggregateItemRow item={item} {...rowProps} isExpanded={expanded} />
+              <AggregateItemRow
+                item={item}
+                {...rowProps}
+                isExpanded={expanded}
+              />
               {expanded &&
                 hasVariants &&
                 isDecisionSection &&

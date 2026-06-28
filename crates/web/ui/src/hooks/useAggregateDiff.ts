@@ -33,7 +33,11 @@ export function useAggregateDiff(): UseAggregateDiffResult {
 
       setIsLoading(true);
       try {
-        const result = await fetchAggregateDiff({ item_id: itemId, base, target });
+        const result = await fetchAggregateDiff({
+          item_id: itemId,
+          base,
+          target,
+        });
         cacheRef.current.set(cacheKey, result);
         setDiff(result);
         setError(null);

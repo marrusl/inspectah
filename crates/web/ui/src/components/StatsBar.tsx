@@ -137,7 +137,6 @@ export function StatsBar({
   hamburger,
   aggregateSummary,
 }: StatsBarProps) {
-
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
       <ToolbarContent>
@@ -151,7 +150,9 @@ export function StatsBar({
                   hostnames={aggregateSummary.hostnames}
                 />
                 {" · "}
-                <strong>{aggregateSummary.totalItems.toLocaleString()}</strong>{" "}
+                <strong>
+                  {aggregateSummary.totalItems.toLocaleString()}
+                </strong>{" "}
                 items
               </Content>
             </ToolbarItem>

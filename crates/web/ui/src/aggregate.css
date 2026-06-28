@@ -172,17 +172,29 @@
 
 .aggregate-banner--success {
   /* Use transparent tint so text stays readable in both light and dark themes */
-  background-color: color-mix(in srgb, var(--pf-t--global--color--status--success--default, #3e8635) 12%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--pf-t--global--color--status--success--default, #3e8635) 12%,
+    transparent
+  );
   border-color: var(--pf-t--global--color--status--success--default, #3e8635);
 }
 
 .aggregate-banner--warning {
-  background-color: color-mix(in srgb, var(--pf-t--global--color--status--warning--default, #f0ab00) 12%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--pf-t--global--color--status--warning--default, #f0ab00) 12%,
+    transparent
+  );
   border-color: var(--pf-t--global--color--status--warning--default, #f0ab00);
 }
 
 .aggregate-banner--danger {
-  background-color: color-mix(in srgb, var(--pf-t--global--color--status--danger--default, #c9190b) 12%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--pf-t--global--color--status--danger--default, #c9190b) 12%,
+    transparent
+  );
   border-color: var(--pf-t--global--color--status--danger--default, #c9190b);
 }
 
@@ -285,7 +297,8 @@
   border-left: 3px solid var(--pf-t--global--color--brand--default);
   border-radius: var(--pf-t--global--border--radius--small);
   padding: var(--pf-t--global--spacer--md);
-  margin: var(--pf-t--global--spacer--xs) 0 var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  margin: var(--pf-t--global--spacer--xs) 0 var(--pf-t--global--spacer--xs)
+    var(--pf-t--global--spacer--md);
   background: var(--pf-t--global--background--color--secondary--default);
 }
 
@@ -400,7 +413,8 @@
   border-left: 3px solid var(--pf-t--global--color--brand--default);
   border-radius: var(--pf-t--global--border--radius--small);
   padding: var(--pf-t--global--spacer--md);
-  margin: var(--pf-t--global--spacer--xs) 0 var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  margin: var(--pf-t--global--spacer--xs) 0 var(--pf-t--global--spacer--xs)
+    var(--pf-t--global--spacer--md);
   background: var(--pf-t--global--background--color--secondary--default);
 }
 

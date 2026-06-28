@@ -164,8 +164,12 @@ describe("useVariantAck", () => {
     expect(r1.current.isAcked(ITEM_A)).toBe(true);
     expect(r2.current.isAcked(ITEM_A)).toBe(false);
 
-    expect(localStorage.getItem("aggregate-ack:aggregate-a:2026-01-01")).toBeTruthy();
-    expect(localStorage.getItem("aggregate-ack:aggregate-b:2026-01-01")).toBeNull();
+    expect(
+      localStorage.getItem("aggregate-ack:aggregate-a:2026-01-01"),
+    ).toBeTruthy();
+    expect(
+      localStorage.getItem("aggregate-ack:aggregate-b:2026-01-01"),
+    ).toBeNull();
   });
 
   it("ignores localStorage items not in actionableIds", () => {

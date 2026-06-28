@@ -255,8 +255,7 @@ export function PackageList({
 
   // All non-ungrouped groups are visible: renderable, excluded, and degraded
   const visibleGroups = useMemo(
-    () =>
-      (packageGroups ?? []).filter((g) => g.render_state !== "ungrouped"),
+    () => (packageGroups ?? []).filter((g) => g.render_state !== "ungrouped"),
     [packageGroups],
   );
 
@@ -352,15 +351,13 @@ export function PackageList({
 
   const groupSummaryLabel = useMemo(() => {
     if (newCount === 0) return "all from base";
-    if (baseCount === 0) return `${newCount} ${newCount === 1 ? "package" : "packages"}`;
+    if (baseCount === 0)
+      return `${newCount} ${newCount === 1 ? "package" : "packages"}`;
     return `${newCount} new, ${baseCount} from base`;
   }, [newCount, baseCount]);
   const optionalSpilloverCount = useMemo(
     () =>
-      renderableOnly.reduce(
-        (sum, g) => sum + g.optional_spillover_count,
-        0,
-      ),
+      renderableOnly.reduce((sum, g) => sum + g.optional_spillover_count, 0),
     [renderableOnly],
   );
 
@@ -369,15 +366,15 @@ export function PackageList({
     if (!searchLower) return visibleGroups;
     return visibleGroups.filter((g) => {
       if (g.name.toLowerCase().includes(searchLower)) return true;
-      return g.members.some((m) =>
-        m.name.toLowerCase().includes(searchLower),
-      );
+      return g.members.some((m) => m.name.toLowerCase().includes(searchLower));
     });
   }, [visibleGroups, searchLower]);
 
   // Determine which groups and packages to display
   const displayGroups = searchLower ? filteredGroups : visibleGroups;
-  const displayPackages = searchLower ? filteredIndividualPackages : individualPackages;
+  const displayPackages = searchLower
+    ? filteredIndividualPackages
+    : individualPackages;
 
   // Group toggle handler
   const handleGroupToggle = useCallback(
@@ -403,7 +400,7 @@ export function PackageList({
     for (const group of displayGroups) {
       if (group.name.toLowerCase().includes(searchLower)) {
         const groupRow = document.querySelector(
-          `[data-testid="group-row-${CSS.escape(group.name)}"]`
+          `[data-testid="group-row-${CSS.escape(group.name)}"]`,
         ) as HTMLElement;
         if (groupRow) {
           groupRow.focus();
@@ -418,11 +415,14 @@ export function PackageList({
       for (const member of group.members) {
         if (member.name.toLowerCase().includes(searchLower)) {
           const memberRow = document.querySelector(
-            `[data-testid="group-member-${CSS.escape(member.name)}"]`
+            `[data-testid="group-member-${CSS.escape(member.name)}"]`,
           ) as HTMLElement;
           if (memberRow) {
             memberRow.focus();
-            memberRow.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+            memberRow.scrollIntoView?.({
+              block: "nearest",
+              behavior: "smooth",
+            });
             return;
           }
         }
@@ -433,7 +433,7 @@ export function PackageList({
     for (const pkg of displayPackages) {
       if (pkg.name.toLowerCase().includes(searchLower)) {
         const row = document.querySelector(
-          `[data-testid="package-row-${CSS.escape(pkg.name)}"]`
+          `[data-testid="package-row-${CSS.escape(pkg.name)}"]`,
         ) as HTMLElement;
         if (row) {
           row.focus();
@@ -462,11 +462,11 @@ export function PackageList({
             {hasGroups && (
               <>
                 {displayGroups.length}{" "}
-                {displayGroups.length === 1 ? "group" : "groups"} ({groupSummaryLabel}) &middot;{" "}
+                {displayGroups.length === 1 ? "group" : "groups"} (
+                {groupSummaryLabel}) &middot;{" "}
               </>
             )}
-            {displayPackages.length}{" "}
-            {hasGroups ? "other " : ""}
+            {displayPackages.length} {hasGroups ? "other " : ""}
             {displayPackages.length === 1 ? "package" : "packages"}
           </>
         ) : (
@@ -475,17 +475,14 @@ export function PackageList({
             {hasGroups && (
               <>
                 {visibleGroups.length}{" "}
-                {visibleGroups.length === 1 ? "group" : "groups"} ({groupSummaryLabel}) &middot;{" "}
+                {visibleGroups.length === 1 ? "group" : "groups"} (
+                {groupSummaryLabel}) &middot;{" "}
               </>
             )}
-            {displayPackages.length}{" "}
-            {hasGroups ? "other " : ""}
+            {displayPackages.length} {hasGroups ? "other " : ""}
             {displayPackages.length === 1 ? "package" : "packages"}
             {hasGroups && optionalSpilloverCount > 0 && (
-              <>
-                {" "}
-                &middot; {optionalSpilloverCount} optional from groups
-              </>
+              <> &middot; {optionalSpilloverCount} optional from groups</>
             )}
           </>
         )}
@@ -744,12 +741,12 @@ function PackageRow({
             {repoText}
           </span>
         ) : pkg.prevalence ? (
-            <PrevalenceBadge
-              count={pkg.prevalence.count}
-              total={pkg.prevalence.total}
-            />
+          <PrevalenceBadge
+            count={pkg.prevalence.count}
+            total={pkg.prevalence.total}
+          />
         ) : (
-            <span>—</span>
+          <span>—</span>
         )}
       </div>
 

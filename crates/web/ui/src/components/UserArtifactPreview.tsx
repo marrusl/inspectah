@@ -66,8 +66,7 @@ export function UserArtifactPreview({
       : (data?.blueprint_toml ?? "");
 
   /** True when the current tab actually has redacted material to reveal. */
-  const hasRedactedContent =
-    revealed || content.includes("<REDACTED>");
+  const hasRedactedContent = revealed || content.includes("<REDACTED>");
 
   return (
     <Modal

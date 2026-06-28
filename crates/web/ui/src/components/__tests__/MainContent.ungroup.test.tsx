@@ -65,14 +65,15 @@ describe("MainContent ungroup focus restoration", () => {
 
   it("calls onSetUndoFocusTarget with group-row ID when ungroup button is clicked", async () => {
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "pkg2", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "pkg1", locked: false, overlap_groups: [], in_base_image: false },
+      { name: "pkg2", locked: false, overlap_groups: [], in_base_image: false },
     ];
 
     const mockGroup: GroupInfo = {
       name: "test-group",
       member_count: 2,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -112,9 +113,7 @@ describe("MainContent ungroup focus restoration", () => {
 
     // handleGroupUngroup calls onSetUndoFocusTarget synchronously
     // before invoking ungroupGroup
-    expect(onSetUndoFocusTarget).toHaveBeenCalledWith(
-      "group-row-test-group",
-    );
+    expect(onSetUndoFocusTarget).toHaveBeenCalledWith("group-row-test-group");
 
     // The API should have been called
     expect(client.ungroupGroup).toHaveBeenCalledWith("test-group");
@@ -125,14 +124,25 @@ describe("MainContent ungroup focus restoration", () => {
     // contains packages with "name.arch" ("httpd.x86_64").  The focus
     // selector must use prefix matching to find the real DOM row.
     const members: GroupMemberInfo[] = [
-      { name: "httpd", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "mod_ssl", locked: false, overlap_groups: [] , in_base_image: false},
+      {
+        name: "httpd",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      {
+        name: "mod_ssl",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
     ];
 
     const mockGroup: GroupInfo = {
       name: "web-server",
       member_count: 2,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -179,13 +189,14 @@ describe("MainContent ungroup focus restoration", () => {
 
   it("calls onViewUpdate with server response after successful ungroup", async () => {
     const members: GroupMemberInfo[] = [
-      { name: "pkg1", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "pkg1", locked: false, overlap_groups: [], in_base_image: false },
     ];
 
     const mockGroup: GroupInfo = {
       name: "my-group",
       member_count: 1,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
@@ -239,11 +250,11 @@ describe("MainContent ungroup toast", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "a", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "b", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "c", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "d", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "e", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "a", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "b", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "c", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "d", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "e", locked: false, overlap_groups: [], in_base_image: false },
       ],
     };
 
@@ -293,7 +304,14 @@ describe("MainContent ungroup toast", () => {
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
-      members: [{ name: "lonely", locked: false, overlap_groups: [] , in_base_image: false}],
+      members: [
+        {
+          name: "lonely",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+      ],
     };
 
     const mockViewData = makeViewData([mockGroup]);
@@ -335,14 +353,15 @@ describe("MainContent ungroup toast", () => {
     const mockGroup: GroupInfo = {
       name: "auto-dismiss",
       member_count: 3,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "x", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "y", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "z", locked: false, overlap_groups: [] , in_base_image: false},
+        { name: "x", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "y", locked: false, overlap_groups: [], in_base_image: false },
+        { name: "z", locked: false, overlap_groups: [], in_base_image: false },
       ],
     };
 
@@ -365,14 +384,54 @@ describe("MainContent ungroup toast", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "base1", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base2", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base3", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base4", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base5", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "new1", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "new2", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "new3", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "base1",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base2",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base3",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base4",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base5",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "new1",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "new2",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "new3",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
 
@@ -407,7 +466,9 @@ describe("MainContent ungroup toast", () => {
         screen.getByText(/ungrouped into 3 packages/i),
       ).toBeInTheDocument();
     });
-    expect(screen.queryByText(/ungrouped into 8 packages/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/ungrouped into 8 packages/i),
+    ).not.toBeInTheDocument();
   });
 
   it("all-from-base group shows special toast", async () => {
@@ -421,10 +482,30 @@ describe("MainContent ungroup toast", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "base1", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base2", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base3", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "base4", locked: false, overlap_groups: [], in_base_image: true },
+        {
+          name: "base1",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base2",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base3",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "base4",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
       ],
     };
 
@@ -455,9 +536,7 @@ describe("MainContent ungroup toast", () => {
 
     // Special toast for all-from-base case
     await waitFor(() => {
-      expect(
-        screen.getByText(/all packages from base/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/all packages from base/i)).toBeInTheDocument();
     });
   });
 });
@@ -520,9 +599,7 @@ describe("MainContent ungroup focus and error handling", () => {
 
     // Toast should show the special all-from-base message
     await waitFor(() => {
-      expect(
-        screen.getByText(/all packages from base/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/all packages from base/i)).toBeInTheDocument();
     });
   });
 });

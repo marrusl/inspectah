@@ -102,7 +102,8 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
           <DescriptionListGroup>
             <DescriptionListTerm>Aggregate</DescriptionListTerm>
             <DescriptionListDescription>
-              {config.entry.aggregate.count} of {config.entry.aggregate.total} hosts
+              {config.entry.aggregate.count} of {config.entry.aggregate.total}{" "}
+              hosts
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}

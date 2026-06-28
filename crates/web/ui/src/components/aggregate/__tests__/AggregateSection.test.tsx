@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AggregateSectionContent } from "../AggregateSection";
-import type { AggregateSection, AggregateItem, ItemId } from "../../../api/types";
+import type {
+  AggregateSection,
+  AggregateItem,
+  ItemId,
+} from "../../../api/types";
 import type { UseVariantAckResult } from "../../../hooks/useVariantAck";
 
 const defaultAck: UseVariantAckResult = {
@@ -40,7 +44,10 @@ const pkgItem = (
   });
 };
 
-const cfgItem = (path: string, overrides: Partial<AggregateItem> = {}): AggregateItem =>
+const cfgItem = (
+  path: string,
+  overrides: Partial<AggregateItem> = {},
+): AggregateItem =>
   makeItem({
     item_id: { kind: "Config", key: { path } },
     ...overrides,

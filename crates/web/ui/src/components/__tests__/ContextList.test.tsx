@@ -181,7 +181,10 @@ describe("ContextList", () => {
     });
     expect(heading).toBeInTheDocument();
     const sectionEl = heading.closest("section");
-    expect(sectionEl).toHaveAttribute("aria-labelledby", "subsection-connections");
+    expect(sectionEl).toHaveAttribute(
+      "aria-labelledby",
+      "subsection-connections",
+    );
     expect(heading).toHaveAttribute("id", "subsection-connections");
   });
 

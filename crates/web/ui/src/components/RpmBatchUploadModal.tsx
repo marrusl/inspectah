@@ -188,13 +188,19 @@ export function RpmBatchUploadModal({
 
         {files.length > 0 && (
           <>
-            <Content component="p" className="inspectah-rpm-batch__match-summary">
+            <Content
+              component="p"
+              className="inspectah-rpm-batch__match-summary"
+            >
               {matchResult.matched.length} of {files.length} RPMs matched
             </Content>
 
             {matchResult.matched.length > 0 && (
               <div className="inspectah-rpm-batch__section">
-                <Content component="h3" className="inspectah-rpm-batch__section-title">
+                <Content
+                  component="h3"
+                  className="inspectah-rpm-batch__section-title"
+                >
                   Matched RPMs
                 </Content>
                 <List isPlain>
@@ -203,7 +209,9 @@ export function RpmBatchUploadModal({
                       <Label color="green" isCompact icon={<CheckCircleIcon />}>
                         {packageName}
                       </Label>
-                      <span className="inspectah-rpm-batch__file-name">{file.name}</span>
+                      <span className="inspectah-rpm-batch__file-name">
+                        {file.name}
+                      </span>
                       <Button
                         variant="plain"
                         onClick={() => handleRemoveFile(file)}
@@ -220,16 +228,25 @@ export function RpmBatchUploadModal({
 
             {matchResult.unmatched.length > 0 && (
               <div className="inspectah-rpm-batch__section">
-                <Content component="h3" className="inspectah-rpm-batch__section-title">
+                <Content
+                  component="h3"
+                  className="inspectah-rpm-batch__section-title"
+                >
                   Unmatched Files
                 </Content>
                 <List isPlain>
                   {matchResult.unmatched.map((file, idx) => (
                     <ListItem key={`unmatched-${idx}`}>
-                      <Label color="red" isCompact icon={<ExclamationCircleIcon />}>
+                      <Label
+                        color="red"
+                        isCompact
+                        icon={<ExclamationCircleIcon />}
+                      >
                         No match
                       </Label>
-                      <span className="inspectah-rpm-batch__file-name">{file.name}</span>
+                      <span className="inspectah-rpm-batch__file-name">
+                        {file.name}
+                      </span>
                       <Button
                         variant="plain"
                         onClick={() => handleRemoveFile(file)}
@@ -253,7 +270,10 @@ export function RpmBatchUploadModal({
               >
                 <Content component="small">
                   {matchResult.conflicts.map((c) => (
-                    <div key={c.packageName} className="inspectah-rpm-batch__conflict">
+                    <div
+                      key={c.packageName}
+                      className="inspectah-rpm-batch__conflict"
+                    >
                       <ExclamationTriangleIcon />{" "}
                       <strong>{c.packageName}</strong>: {c.files.length} files
                       match. Remove duplicates to resolve:{" "}
@@ -273,7 +293,10 @@ export function RpmBatchUploadModal({
           isDisabled={!canConfirm}
           aria-label="Confirm upload"
         >
-          Upload {matchResult.matched.length > 0 ? `(${matchResult.matched.length})` : ""}
+          Upload{" "}
+          {matchResult.matched.length > 0
+            ? `(${matchResult.matched.length})`
+            : ""}
         </Button>
         <Button variant="link" onClick={handleClose}>
           Cancel

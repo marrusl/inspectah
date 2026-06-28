@@ -428,21 +428,23 @@ export function ContainerfilePanel({
       </div>
       <div className="inspectah-cf-panel__footer">
         <Content component="small">{lineCount} lines</Content>
-        {sessionIsSensitive && content && CRYPT_HASH_PRESENT_RE.test(content) && (
-          <button
-            onClick={() => setHashesRevealed((p) => !p)}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              textDecoration: "underline",
-              fontSize: "var(--pf-t--global--font--size--xs)",
-              padding: 0,
-            }}
-          >
-            {hashesRevealed ? "Redact hashes" : "Reveal hashes"}
-          </button>
-        )}
+        {sessionIsSensitive &&
+          content &&
+          CRYPT_HASH_PRESENT_RE.test(content) && (
+            <button
+              onClick={() => setHashesRevealed((p) => !p)}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                textDecoration: "underline",
+                fontSize: "var(--pf-t--global--font--size--xs)",
+                padding: 0,
+              }}
+            >
+              {hashesRevealed ? "Redact hashes" : "Reveal hashes"}
+            </button>
+          )}
         <Content component="small" className="inspectah-cf-panel__footer-note">
           Preview reflects package and config decisions. Context sections are
           included as-is.

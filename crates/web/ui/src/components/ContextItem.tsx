@@ -39,7 +39,10 @@ export function ContextItem({ item }: ContextItemProps) {
         </div>
         {hasDetail && (
           <button
-            onClick={(e) => { e.stopPropagation(); handleToggle(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggle();
+            }}
             aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
             aria-expanded={isExpanded}
             className="inspectah-decision-row__expand-btn"

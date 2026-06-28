@@ -26,10 +26,7 @@ describe("VersionChangesTable", () => {
   it("renders downgrades before upgrades", () => {
     render(<VersionChangesTable entries={[upgrade, downgrade]} />);
     const rows = screen.getAllByTestId(/^context-item-/);
-    expect(rows[0]).toHaveAttribute(
-      "data-testid",
-      "context-item-httpd.x86_64",
-    );
+    expect(rows[0]).toHaveAttribute("data-testid", "context-item-httpd.x86_64");
     expect(rows[1]).toHaveAttribute(
       "data-testid",
       "context-item-podman.x86_64",
@@ -49,9 +46,7 @@ describe("VersionChangesTable", () => {
   });
 
   it("renders data_unavailable empty state", () => {
-    render(
-      <VersionChangesTable entries={[]} emptyReason="data_unavailable" />,
-    );
+    render(<VersionChangesTable entries={[]} emptyReason="data_unavailable" />);
     expect(screen.getByText(/not available/i)).toBeInTheDocument();
   });
 

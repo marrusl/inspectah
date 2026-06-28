@@ -20,7 +20,8 @@ import type {
 
 const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
 vi.mock("../../../api/aggregate-client", () => ({
-  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateView: (...args: unknown[]) =>
+    mockFetchAggregateView(...(args as [])),
   fetchAggregateDiff: vi.fn().mockResolvedValue({}),
 }));
 

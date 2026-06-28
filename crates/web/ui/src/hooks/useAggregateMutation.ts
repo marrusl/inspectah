@@ -14,9 +14,7 @@ export interface UseAggregateMutationResult {
 }
 
 type QueueEntry =
-  | { kind: "op"; op: RefinementOp }
-  | { kind: "undo" }
-  | { kind: "redo" };
+  { kind: "op"; op: RefinementOp } | { kind: "undo" } | { kind: "redo" };
 
 export function useAggregateMutation(
   onViewUpdate: (view: AggregateViewResponse) => void,

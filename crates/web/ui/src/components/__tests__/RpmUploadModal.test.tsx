@@ -16,16 +16,12 @@ describe("RpmUploadModal", () => {
 
   it("renders modal with package name in title", () => {
     render(<RpmUploadModal {...defaultProps} />);
-    expect(
-      screen.getByText(/Upload RPM for custom-agent/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Upload RPM for custom-agent/)).toBeInTheDocument();
   });
 
   it("shows expected NEVRA pattern", () => {
     render(<RpmUploadModal {...defaultProps} />);
-    expect(
-      screen.getByText(/custom-agent.*x86_64\.rpm/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/custom-agent.*x86_64\.rpm/)).toBeInTheDocument();
   });
 
   it("confirm button is disabled when no file is selected", () => {
@@ -57,9 +53,7 @@ describe("RpmBatchUploadModal", () => {
 
   it("renders modal with package count", () => {
     render(<RpmBatchUploadModal {...defaultBatchProps} />);
-    expect(
-      screen.getByText(/Upload RPMs.*3 packages/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Upload RPMs.*3 packages/i)).toBeInTheDocument();
   });
 
   it("confirm button is disabled when no files are dropped", () => {

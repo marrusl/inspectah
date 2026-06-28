@@ -13,7 +13,8 @@ import type {
 // Mock aggregate-client
 const mockFetchAggregateView = vi.fn<() => Promise<AggregateViewResponse>>();
 vi.mock("../../../api/aggregate-client", () => ({
-  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateView: (...args: unknown[]) =>
+    mockFetchAggregateView(...(args as [])),
   fetchAggregateDiff: vi.fn(),
 }));
 
@@ -139,7 +140,9 @@ describe("AggregateApp", () => {
     mockFetchAggregateView.mockRejectedValue(new Error("Network error"));
     renderAggregateApp();
     await waitFor(() => {
-      expect(screen.getByText(/Failed to load aggregate view/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Failed to load aggregate view/),
+      ).toBeInTheDocument();
     });
     expect(screen.getByText("Network error")).toBeInTheDocument();
   });

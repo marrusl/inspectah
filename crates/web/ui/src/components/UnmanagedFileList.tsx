@@ -291,7 +291,9 @@ export function UnmanagedFileList({
 }: UnmanagedFileListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const announceTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const announceTimeoutsRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
   const [rollupAnnounceText, setRollupAnnounceText] = useState("");
   const [groupAnnounces, setGroupAnnounces] = useState<Record<string, string>>(
     {},

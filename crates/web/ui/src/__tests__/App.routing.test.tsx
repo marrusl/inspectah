@@ -25,7 +25,8 @@ vi.mock("../api/client", () => ({
 }));
 
 vi.mock("../api/aggregate-client", () => ({
-  fetchAggregateView: (...args: unknown[]) => mockFetchAggregateView(...(args as [])),
+  fetchAggregateView: (...args: unknown[]) =>
+    mockFetchAggregateView(...(args as [])),
   fetchAggregateDiff: vi.fn().mockResolvedValue({}),
 }));
 

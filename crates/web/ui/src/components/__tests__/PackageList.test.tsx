@@ -657,40 +657,73 @@ describe("PackageList", () => {
   const coreGroup: GroupInfo = {
     name: "core",
     member_count: 8,
-    added_count: 0, locked_count: 2,
+    added_count: 0,
+    locked_count: 2,
     optional_spillover_count: 0,
     render_state: "renderable",
     degradation_reason: null,
     members: [
-      { name: "bash", locked: true, overlap_groups: [] , in_base_image: false},
-      { name: "coreutils", locked: true, overlap_groups: [] , in_base_image: false},
-      { name: "filesystem", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "glibc", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "grep", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "sed", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "systemd", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "util-linux", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "bash", locked: true, overlap_groups: [], in_base_image: false },
+      {
+        name: "coreutils",
+        locked: true,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      {
+        name: "filesystem",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      {
+        name: "glibc",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
+      { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+      {
+        name: "systemd",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      {
+        name: "util-linux",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
     ],
   };
 
   const editorsGroup: GroupInfo = {
     name: "editors",
     member_count: 3,
-    added_count: 0, locked_count: 0,
+    added_count: 0,
+    locked_count: 0,
     optional_spillover_count: 2,
     render_state: "renderable",
     degradation_reason: null,
     members: [
-      { name: "nano", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "vim-minimal", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "vi", locked: false, overlap_groups: [] , in_base_image: false},
+      { name: "nano", locked: false, overlap_groups: [], in_base_image: false },
+      {
+        name: "vim-minimal",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      { name: "vi", locked: false, overlap_groups: [], in_base_image: false },
     ],
   };
 
   const excludedGroup: GroupInfo = {
     name: "development",
     member_count: 5,
-    added_count: 0, locked_count: 0,
+    added_count: 0,
+    locked_count: 0,
     optional_spillover_count: 0,
     render_state: "excluded",
     degradation_reason: null,
@@ -700,24 +733,38 @@ describe("PackageList", () => {
   const degradedGroup: GroupInfo = {
     name: "multimedia",
     member_count: 2,
-    added_count: 0, locked_count: 0,
+    added_count: 0,
+    locked_count: 0,
     optional_spillover_count: 0,
     render_state: "degraded",
     degradation_reason: "insufficient_members",
     members: [
-      { name: "ffmpeg", locked: false, overlap_groups: [] , in_base_image: false},
-      { name: "vlc", locked: false, overlap_groups: [] , in_base_image: false},
+      {
+        name: "ffmpeg",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+      { name: "vlc", locked: false, overlap_groups: [], in_base_image: false },
     ],
   };
 
   const ungroupedGroup: GroupInfo = {
     name: "leftovers",
     member_count: 1,
-    added_count: 0, locked_count: 0,
+    added_count: 0,
+    locked_count: 0,
     optional_spillover_count: 0,
     render_state: "ungrouped",
     degradation_reason: null,
-    members: [{ name: "orphan-pkg", locked: false, overlap_groups: [] , in_base_image: false}],
+    members: [
+      {
+        name: "orphan-pkg",
+        locked: false,
+        overlap_groups: [],
+        in_base_image: false,
+      },
+    ],
   };
 
   it("renders groups zone above individual packages zone", () => {
@@ -738,15 +785,23 @@ describe("PackageList", () => {
     const divider = within(list).getByTestId("zone-divider");
 
     // Groups zone exists and contains group rows
-    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
-    expect(within(groupsZone).getByTestId("group-row-editors")).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-core"),
+    ).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-editors"),
+    ).toBeInTheDocument();
 
     // Divider is present
     expect(divider).toHaveTextContent("Individual Packages");
 
     // Individual packages zone contains package rows
-    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
-    expect(within(individualZone).getByTestId("package-row-wget")).toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-curl"),
+    ).toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-wget"),
+    ).toBeInTheDocument();
 
     // DOM order: groups-zone before zone-divider before individual-packages-zone
     const allNodes = Array.from(list.children);
@@ -785,7 +840,14 @@ describe("PackageList", () => {
     const singleGroup: GroupInfo = {
       ...coreGroup,
       member_count: 1,
-      members: [{ name: "bash", locked: false, overlap_groups: [] , in_base_image: false}],
+      members: [
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+      ],
     };
     const pkgs = [makePkg("curl", "baseos")];
     render(
@@ -837,8 +899,12 @@ describe("PackageList", () => {
       />,
     );
     const groupsZone = screen.getByTestId("groups-zone");
-    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
-    expect(within(groupsZone).getByTestId("group-row-development")).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-core"),
+    ).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-development"),
+    ).toBeInTheDocument();
   });
 
   it("shows groups zone when only excluded groups exist", () => {
@@ -1002,11 +1068,14 @@ describe("PackageList", () => {
     // "bash" is a member of coreGroup — group should be auto-expanded
     const coreRow = screen.getByTestId("group-row-core");
     // Member should be visible (group expanded)
-    expect(within(coreRow).getByTestId("group-member-bash")).toBeInTheDocument();
-    // The member should have data-search-match
     expect(
       within(coreRow).getByTestId("group-member-bash"),
-    ).toHaveAttribute("data-search-match", "true");
+    ).toBeInTheDocument();
+    // The member should have data-search-match
+    expect(within(coreRow).getByTestId("group-member-bash")).toHaveAttribute(
+      "data-search-match",
+      "true",
+    );
     // editors group has no match for "bash" — it's filtered out entirely
     expect(screen.queryByTestId("group-row-editors")).not.toBeInTheDocument();
   });
@@ -1127,9 +1196,15 @@ describe("PackageList", () => {
     );
     // Only curl should appear in individual zone
     const individualZone = screen.getByTestId("individual-packages-zone");
-    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
-    expect(within(individualZone).queryByTestId("package-row-wget")).not.toBeInTheDocument();
-    expect(within(individualZone).queryByTestId("package-row-bash-completion")).not.toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-curl"),
+    ).toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-wget"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-bash-completion"),
+    ).not.toBeInTheDocument();
   });
 
   it("search hides non-matching groups from the groups zone", () => {
@@ -1147,9 +1222,13 @@ describe("PackageList", () => {
     );
     // "nano" is a member of editors — editors should be visible
     const groupsZone = screen.getByTestId("groups-zone");
-    expect(within(groupsZone).getByTestId("group-row-editors")).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-editors"),
+    ).toBeInTheDocument();
     // core has no match for "nano" — should be hidden
-    expect(within(groupsZone).queryByTestId("group-row-core")).not.toBeInTheDocument();
+    expect(
+      within(groupsZone).queryByTestId("group-row-core"),
+    ).not.toBeInTheDocument();
   });
 
   // --- Renderable member suppression from individual zone ---
@@ -1174,11 +1253,19 @@ describe("PackageList", () => {
     );
     const individualZone = screen.getByTestId("individual-packages-zone");
     // bash and coreutils are suppressed — they belong to the renderable group
-    expect(within(individualZone).queryByTestId("package-row-bash")).not.toBeInTheDocument();
-    expect(within(individualZone).queryByTestId("package-row-coreutils")).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-bash"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(individualZone).queryByTestId("package-row-coreutils"),
+    ).not.toBeInTheDocument();
     // curl and wget are not group members — they appear individually
-    expect(within(individualZone).getByTestId("package-row-curl")).toBeInTheDocument();
-    expect(within(individualZone).getByTestId("package-row-wget")).toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-curl"),
+    ).toBeInTheDocument();
+    expect(
+      within(individualZone).getByTestId("package-row-wget"),
+    ).toBeInTheDocument();
   });
 
   it("individual package count in summary reflects member suppression", () => {
@@ -1245,14 +1332,30 @@ describe("PackageList", () => {
     const archGroup: GroupInfo = {
       name: "multi-arch",
       member_count: 3,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "libfoo", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "libbar", locked: false, overlap_groups: [] , in_base_image: false},
-        { name: "libbaz", locked: false, overlap_groups: [] , in_base_image: false},
+        {
+          name: "libfoo",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "libbar",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "libbaz",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
     const pkgs = [
@@ -1294,15 +1397,23 @@ describe("PackageList", () => {
     const pyGroup: GroupInfo = {
       name: "python-core",
       member_count: 1,
-      added_count: 0, locked_count: 0,
+      added_count: 0,
+      locked_count: 0,
       optional_spillover_count: 0,
       render_state: "renderable",
       degradation_reason: null,
-      members: [{ name: "python3", locked: false, overlap_groups: [] , in_base_image: false}],
+      members: [
+        {
+          name: "python3",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+      ],
     };
     const pkgs = [
-      makePkg("python3.11", "baseos"),  // dot-separated version, not an arch
-      makePkg("python3.x86_64", "baseos"),  // actual arch suffix
+      makePkg("python3.11", "baseos"), // dot-separated version, not an arch
+      makePkg("python3.x86_64", "baseos"), // actual arch suffix
     ];
     render(
       <PackageList
@@ -1341,8 +1452,12 @@ describe("PackageList", () => {
     );
     const groupsZone = screen.getByTestId("groups-zone");
     // Both renderable and excluded groups appear
-    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
-    expect(within(groupsZone).getByTestId("group-row-development")).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-core"),
+    ).toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-development"),
+    ).toBeInTheDocument();
   });
 
   // --- Degraded groups visible but dimmed ---
@@ -1369,7 +1484,9 @@ describe("PackageList", () => {
     // Degraded group has the degraded CSS class
     expect(mmRow).toHaveClass("inspectah-group-row--degraded");
     // Degraded group shows "rendered individually" subtitle
-    expect(within(mmRow).getByText("rendered individually")).toBeInTheDocument();
+    expect(
+      within(mmRow).getByText("rendered individually"),
+    ).toBeInTheDocument();
   });
 
   // --- Ungrouped groups NOT in groups zone ---
@@ -1387,8 +1504,12 @@ describe("PackageList", () => {
       />,
     );
     const groupsZone = screen.getByTestId("groups-zone");
-    expect(within(groupsZone).getByTestId("group-row-core")).toBeInTheDocument();
-    expect(within(groupsZone).queryByTestId("group-row-leftovers")).not.toBeInTheDocument();
+    expect(
+      within(groupsZone).getByTestId("group-row-core"),
+    ).toBeInTheDocument();
+    expect(
+      within(groupsZone).queryByTestId("group-row-leftovers"),
+    ).not.toBeInTheDocument();
   });
 
   // --- Summary counts with mixed group states ---
@@ -1425,15 +1546,27 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "bash", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "grep",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "sed",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
-    const pkgs = [
-      makePkg("curl", "baseos"),
-      makePkg("wget", "baseos"),
-    ];
+    const pkgs = [makePkg("curl", "baseos"), makePkg("wget", "baseos")];
     render(
       <PackageList
         mode="single"
@@ -1480,11 +1613,36 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "bash", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "systemd", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "util-linux", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "grep",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "sed",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "systemd",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "util-linux",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
     render(
@@ -1511,9 +1669,24 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "bash", locked: false, overlap_groups: ["editors"], in_base_image: false },
-        { name: "grep", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "sed", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: ["editors"],
+          in_base_image: false,
+        },
+        {
+          name: "grep",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "sed",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
     const group2: GroupInfo = {
@@ -1525,8 +1698,18 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "bash", locked: false, overlap_groups: ["core"], in_base_image: false },
-        { name: "vim", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: ["core"],
+          in_base_image: false,
+        },
+        {
+          name: "vim",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
     render(
@@ -1554,9 +1737,24 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "bash", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "systemd", locked: false, overlap_groups: [], in_base_image: true },
-        { name: "util-linux", locked: false, overlap_groups: [], in_base_image: true },
+        {
+          name: "bash",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "systemd",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
+        {
+          name: "util-linux",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: true,
+        },
       ],
     };
     render(
@@ -1583,8 +1781,18 @@ describe("PackageList", () => {
       render_state: "renderable",
       degradation_reason: null,
       members: [
-        { name: "kubectl", locked: false, overlap_groups: [], in_base_image: false },
-        { name: "helm", locked: false, overlap_groups: [], in_base_image: false },
+        {
+          name: "kubectl",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
+        {
+          name: "helm",
+          locked: false,
+          overlap_groups: [],
+          in_base_image: false,
+        },
       ],
     };
     render(
@@ -1794,9 +2002,7 @@ describe("PackageList", () => {
       );
       const row = screen.getByTestId("package-row-custom-agent");
       const liveRegion = within(row).getByRole("status");
-      expect(liveRegion.textContent).toMatch(
-        /RPM provided for custom-agent/,
-      );
+      expect(liveRegion.textContent).toMatch(/RPM provided for custom-agent/);
     });
 
     // --- Upload removal: focus and announcement ---
@@ -1817,7 +2023,9 @@ describe("PackageList", () => {
       );
       const user = userEvent.setup();
       // Click the remove button on the "RPM provided" label
-      const removeBtn = screen.getByLabelText("Remove uploaded RPM for custom-agent");
+      const removeBtn = screen.getByLabelText(
+        "Remove uploaded RPM for custom-agent",
+      );
       await user.click(removeBtn);
       expect(onRemoveUpload).toHaveBeenCalledWith("custom-agent");
 

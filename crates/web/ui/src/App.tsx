@@ -46,7 +46,9 @@ function App() {
   }
 
   if (health.data?.aggregate) {
-    return <AggregateApp aggregate={health.data.aggregate} health={health.data} />;
+    return (
+      <AggregateApp aggregate={health.data.aggregate} health={health.data} />
+    );
   }
 
   return <SingleHostApp healthFromRouter={health} />;
@@ -271,8 +273,7 @@ function SingleHostApp({
   );
 
   const handleUnmanagedIncludeNone = useCallback(() => {
-    const allItems =
-      view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+    const allItems = view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
     for (const item of allItems) {
       if (item.include) {
         mutation.mutate({
@@ -287,8 +288,7 @@ function SingleHostApp({
   }, [view.data?.unmanaged_files, mutation]);
 
   const handleUnmanagedResetAll = useCallback(() => {
-    const allItems =
-      view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+    const allItems = view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
     for (const item of allItems) {
       if (!item.include) {
         mutation.mutate({
@@ -310,7 +310,9 @@ function SingleHostApp({
     setUploadTarget(name);
   }, []);
 
-  function getItemTestIdFromEntry(entry: AnnotatedTimelineEntry): string | null {
+  function getItemTestIdFromEntry(
+    entry: AnnotatedTimelineEntry,
+  ): string | null {
     if (entry.kind === "View") {
       if (entry.directive === "UngroupGroup") {
         return `group-row-${entry.group_name}`;

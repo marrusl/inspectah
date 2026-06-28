@@ -15,7 +15,9 @@ const defaultAck: UseVariantAckResult = {
   totalCount: 0,
 };
 
-function makeSummary(overrides: Partial<AggregateSummary> = {}): AggregateSummary {
+function makeSummary(
+  overrides: Partial<AggregateSummary> = {},
+): AggregateSummary {
   return {
     host_count: 3,
     actionable_variant_items: [],
@@ -152,7 +154,11 @@ describe("AggregateBanner", () => {
     };
 
     render(
-      <AggregateBanner summary={summary} ackState={ack} onNavigate={onNavigate} />,
+      <AggregateBanner
+        summary={summary}
+        ackState={ack}
+        onNavigate={onNavigate}
+      />,
     );
 
     const link = screen.getByRole("button", {

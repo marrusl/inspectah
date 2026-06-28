@@ -1,7 +1,9 @@
 /* inspectah refine — app shell layout */
 
 /* Ensure the full viewport chain has no gaps */
-html, body, #root {
+html,
+body,
+#root {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -274,7 +276,11 @@ html, body, #root {
     outline: 2px solid var(--pf-t--global--color--brand--default);
     outline-offset: -2px;
     background-color: var(--pf-t--global--color--brand--default);
-    background-color: color-mix(in srgb, var(--pf-t--global--color--brand--default) 15%, transparent);
+    background-color: color-mix(
+      in srgb,
+      var(--pf-t--global--color--brand--default) 15%,
+      transparent
+    );
   }
   100% {
     outline: 2px solid transparent;
@@ -794,13 +800,15 @@ html, body, #root {
 
 /* Removal collapse — max-height is set via inline style (scrollHeight → 0) */
 .inspectah-cf-line--collapsing {
-  transition: max-height 0.5s ease-out, opacity 0.3s ease-out;
+  transition:
+    max-height 0.5s ease-out,
+    opacity 0.3s ease-out;
   opacity: 0;
 }
 
 /* Dot indicator on collapsed tab */
 .inspectah-cf-panel__tab--has-changes::after {
-  content: '';
+  content: "";
   display: block;
   width: 8px;
   height: 8px;

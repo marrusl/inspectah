@@ -23,7 +23,11 @@ function prevalenceLevel(count: number, total: number): string {
  * display. Uses global PrevalenceDisplayContext so one click changes all
  * badges across the UI.
  */
-export function PrevalenceBadge({ count, total, suffix }: PrevalenceBadgeProps) {
+export function PrevalenceBadge({
+  count,
+  total,
+  suffix,
+}: PrevalenceBadgeProps) {
   const { mode, cycle } = usePrevalenceDisplay();
   const label = formatPrevalence(count, total, mode);
 

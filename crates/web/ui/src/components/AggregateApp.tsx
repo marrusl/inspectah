@@ -126,7 +126,10 @@ function buildToggleOp(itemId: ItemId, include: boolean): RefinementOp {
   return { op: "SetInclude", target: { item_id: itemId, include } };
 }
 
-export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) {
+export function AggregateApp({
+  aggregate,
+  health: _health,
+}: AggregateAppProps) {
   const prevalenceDisplay = usePrevalenceDisplayState();
   const [view, setView] = useState<AggregateViewResponse | null>(null);
   const [activeSection, setActiveSection] = useState("packages");
@@ -153,7 +156,11 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
 
   const actionableIds =
     view?.summary.actionable_variant_items.map((v) => v.item_id) ?? [];
-  const ack = useVariantAck(aggregate.label, aggregate.merged_at, actionableIds);
+  const ack = useVariantAck(
+    aggregate.label,
+    aggregate.merged_at,
+    actionableIds,
+  );
   const diffHook = useAggregateDiff();
 
   // Restore focus to the last-focused aggregate item after view updates
@@ -335,7 +342,10 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
     return (
       <Page className="inspectah-page" data-testid="aggregate-app">
         <PageSection>
-          <EmptyState titleText="Failed to load aggregate view" headingLevel="h2">
+          <EmptyState
+            titleText="Failed to load aggregate view"
+            headingLevel="h2"
+          >
             <EmptyStateBody>
               {error}
               <br />
@@ -364,7 +374,9 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
     (s) => s.id === activeSection,
   );
 
-  const searchContextSections = buildAggregateSearchSections(aggregateView.sections);
+  const searchContextSections = buildAggregateSearchSections(
+    aggregateView.sections,
+  );
 
   // Compute aggregate-level stats from section data
   const aggregateSectionCounts = aggregateView.sections.reduce(
@@ -429,153 +441,153 @@ export function AggregateApp({ aggregate, health: _health }: AggregateAppProps) 
 
   return (
     <PrevalenceDisplayContext.Provider value={prevalenceDisplay}>
-    <div data-testid="aggregate-app">
-      <AppShell
-        sidebar={null}
-        containerfilePreview={aggregateView.containerfile_preview}
-        stats={aggregateStats}
-        generation={aggregateView.generation}
-        sessionIsSensitive={aggregateView.session_is_sensitive}
-        onUndo={undo}
-        onRedo={redo}
-        onExportComplete={() => {
-          fetchAggregateView().then(setView);
-        }}
-        isPending={isPending}
-        activeSection={activeSection}
-        onNavigateSection={setActiveSection}
-        searchPackageItems={[]}
-        searchConfigItems={[]}
-        searchContextSections={searchContextSections}
-        onSearchNavigate={handleSearchNavigate}
-        toolbarExtra={
-          <>
-            <AckProgress
-              unackedCount={ack.unackedCount}
-              totalCount={ack.totalCount}
-            />
-            <DivergentProgress
-              unconfirmedCount={unconfirmedDivergent}
-              totalCount={totalDivergent}
-            />
-          </>
-        }
-        extraShortcuts={[{ key: "c", description: "Compare variants" }]}
-        aggregateSummary={{
-          hostCount: aggregate.host_count,
-          hostnames: aggregate.hostnames,
-          totalItems,
-          needsReviewCount: ack.unackedCount,
-        }}
-        isAggregateMode
-        sectionIds={aggregateView.sections.map((s) => s.id)}
-      >
-        {({
-          sectionSearchOpen,
-          onSectionSearchClose,
-          filterClearCounter,
-          searchSlot,
-        }) => {
-          // Sync filterText reset with shell's filterClearCounter
-          if (filterClearCounter !== filterClearRef.current) {
-            filterClearRef.current = filterClearCounter;
-            // Schedule state update outside render via microtask
-            Promise.resolve().then(() => setFilterText(""));
-          }
-
-          return (
+      <div data-testid="aggregate-app">
+        <AppShell
+          sidebar={null}
+          containerfilePreview={aggregateView.containerfile_preview}
+          stats={aggregateStats}
+          generation={aggregateView.generation}
+          sessionIsSensitive={aggregateView.session_is_sensitive}
+          onUndo={undo}
+          onRedo={redo}
+          onExportComplete={() => {
+            fetchAggregateView().then(setView);
+          }}
+          isPending={isPending}
+          activeSection={activeSection}
+          onNavigateSection={setActiveSection}
+          searchPackageItems={[]}
+          searchConfigItems={[]}
+          searchContextSections={searchContextSections}
+          onSearchNavigate={handleSearchNavigate}
+          toolbarExtra={
             <>
-              <div className="inspectah-layout__sidebar">
-                <AggregateSidebar
-                  sections={aggregateView.sections}
-                  activeSection={activeSection}
-                  onSelect={setActiveSection}
-                  ackState={ack}
-                  searchSlot={searchSlot}
-                />
-              </div>
-              <div
-                className="inspectah-layout__main aggregate-content"
-                data-testid="aggregate-content"
-              >
-                <AggregateBanner
-                  summary={aggregateView.summary}
-                  ackState={ack}
-                  onNavigate={handleBannerNavigate}
-                  activeSection={activeSection}
-                />
-                {sectionSearchOpen && (
-                  <div
-                    className="aggregate-section-search"
-                    data-testid="aggregate-section-search"
-                  >
-                    <input
-                      type="text"
-                      placeholder="Filter items..."
-                      autoFocus
-                      value={filterText}
-                      onChange={(e) => setFilterText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") {
-                          setFilterText("");
-                          onSectionSearchClose();
-                        }
-                      }}
-                      aria-label="Filter section items"
-                    />
-                  </div>
-                )}
-                {refetchError && (
-                  <div className="refetch-error" data-testid="refetch-error">
-                    {refetchError}
-                    <Button variant="link" onClick={retry}>
-                      Retry
-                    </Button>
-                  </div>
-                )}
-                {activeSection === "packages" ? (
-                  <>
-                    <RepoBar
-                      repos={aggregateView.repo_groups}
-                      onToggle={handleAggregateRepoToggle}
-                      conflictCount={aggregateView.repo_conflict_count}
-                      dismissedCount={dismissedCount}
-                      onRestoreDismissed={handleRestoreDismissed}
-                    />
-                    <PackageList
-                      mode="aggregate"
-                      packages={aggregatePackages}
-                      repoGroups={aggregateView.repo_groups}
-                      onToggle={handleAggregatePackageToggle}
-                      onRepoToggle={handleAggregateRepoToggle}
-                      onDismissedCountChange={setDismissedCount}
-                      onRestoreDismissed={restoreDismissed}
-                    />
-                  </>
-                ) : (
-                  <AggregateSectionContent
-                    section={activeAggregateSection}
-                    filterText={filterText}
-                    isDecisionSection={
-                      activeAggregateSection?.is_decision_section ?? false
-                    }
-                    onToggle={handleToggle}
-                    ack={ack}
-                    onExpandVariant={handleExpandVariant}
-                    onForceExpandVariant={handleForceExpandVariant}
-                    pendingNavTarget={pendingNavTarget}
-                    onNavTargetConsumed={handleNavTargetConsumed}
-                    expandedItemId={expandedItemId}
-                    onSelectVariant={handleSelectVariant}
-                    diffHook={diffHook}
-                  />
-                )}
-              </div>
+              <AckProgress
+                unackedCount={ack.unackedCount}
+                totalCount={ack.totalCount}
+              />
+              <DivergentProgress
+                unconfirmedCount={unconfirmedDivergent}
+                totalCount={totalDivergent}
+              />
             </>
-          );
-        }}
-      </AppShell>
-    </div>
+          }
+          extraShortcuts={[{ key: "c", description: "Compare variants" }]}
+          aggregateSummary={{
+            hostCount: aggregate.host_count,
+            hostnames: aggregate.hostnames,
+            totalItems,
+            needsReviewCount: ack.unackedCount,
+          }}
+          isAggregateMode
+          sectionIds={aggregateView.sections.map((s) => s.id)}
+        >
+          {({
+            sectionSearchOpen,
+            onSectionSearchClose,
+            filterClearCounter,
+            searchSlot,
+          }) => {
+            // Sync filterText reset with shell's filterClearCounter
+            if (filterClearCounter !== filterClearRef.current) {
+              filterClearRef.current = filterClearCounter;
+              // Schedule state update outside render via microtask
+              Promise.resolve().then(() => setFilterText(""));
+            }
+
+            return (
+              <>
+                <div className="inspectah-layout__sidebar">
+                  <AggregateSidebar
+                    sections={aggregateView.sections}
+                    activeSection={activeSection}
+                    onSelect={setActiveSection}
+                    ackState={ack}
+                    searchSlot={searchSlot}
+                  />
+                </div>
+                <div
+                  className="inspectah-layout__main aggregate-content"
+                  data-testid="aggregate-content"
+                >
+                  <AggregateBanner
+                    summary={aggregateView.summary}
+                    ackState={ack}
+                    onNavigate={handleBannerNavigate}
+                    activeSection={activeSection}
+                  />
+                  {sectionSearchOpen && (
+                    <div
+                      className="aggregate-section-search"
+                      data-testid="aggregate-section-search"
+                    >
+                      <input
+                        type="text"
+                        placeholder="Filter items..."
+                        autoFocus
+                        value={filterText}
+                        onChange={(e) => setFilterText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            setFilterText("");
+                            onSectionSearchClose();
+                          }
+                        }}
+                        aria-label="Filter section items"
+                      />
+                    </div>
+                  )}
+                  {refetchError && (
+                    <div className="refetch-error" data-testid="refetch-error">
+                      {refetchError}
+                      <Button variant="link" onClick={retry}>
+                        Retry
+                      </Button>
+                    </div>
+                  )}
+                  {activeSection === "packages" ? (
+                    <>
+                      <RepoBar
+                        repos={aggregateView.repo_groups}
+                        onToggle={handleAggregateRepoToggle}
+                        conflictCount={aggregateView.repo_conflict_count}
+                        dismissedCount={dismissedCount}
+                        onRestoreDismissed={handleRestoreDismissed}
+                      />
+                      <PackageList
+                        mode="aggregate"
+                        packages={aggregatePackages}
+                        repoGroups={aggregateView.repo_groups}
+                        onToggle={handleAggregatePackageToggle}
+                        onRepoToggle={handleAggregateRepoToggle}
+                        onDismissedCountChange={setDismissedCount}
+                        onRestoreDismissed={restoreDismissed}
+                      />
+                    </>
+                  ) : (
+                    <AggregateSectionContent
+                      section={activeAggregateSection}
+                      filterText={filterText}
+                      isDecisionSection={
+                        activeAggregateSection?.is_decision_section ?? false
+                      }
+                      onToggle={handleToggle}
+                      ack={ack}
+                      onExpandVariant={handleExpandVariant}
+                      onForceExpandVariant={handleForceExpandVariant}
+                      pendingNavTarget={pendingNavTarget}
+                      onNavTargetConsumed={handleNavTargetConsumed}
+                      expandedItemId={expandedItemId}
+                      onSelectVariant={handleSelectVariant}
+                      diffHook={diffHook}
+                    />
+                  )}
+                </div>
+              </>
+            );
+          }}
+        </AppShell>
+      </div>
     </PrevalenceDisplayContext.Provider>
   );
 }

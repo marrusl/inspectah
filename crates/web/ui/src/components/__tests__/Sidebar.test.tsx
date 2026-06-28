@@ -293,9 +293,7 @@ describe("Sidebar", () => {
         hasUnmanagedScan={false}
       />,
     );
-    expect(
-      screen.getByText(/Re-run with/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Re-run with/)).toBeInTheDocument();
     expect(screen.getByTestId("unmanaged-hint")).toBeInTheDocument();
   });
 
@@ -334,15 +332,18 @@ describe("Sidebar", () => {
     const systemTuning = screen.getByText("System Tuning");
     // Containers before Language Packages
     expect(
-      containers.compareDocumentPosition(langPkgs) & Node.DOCUMENT_POSITION_FOLLOWING,
+      containers.compareDocumentPosition(langPkgs) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     // Language Packages before Unmanaged Files
     expect(
-      langPkgs.compareDocumentPosition(unmanagedFiles) & Node.DOCUMENT_POSITION_FOLLOWING,
+      langPkgs.compareDocumentPosition(unmanagedFiles) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     // Unmanaged Files before System Tuning
     expect(
-      unmanagedFiles.compareDocumentPosition(systemTuning) & Node.DOCUMENT_POSITION_FOLLOWING,
+      unmanagedFiles.compareDocumentPosition(systemTuning) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -357,14 +358,34 @@ describe("Sidebar", () => {
             id: "network_interfaces",
             display_name: "Network Interfaces",
             items: [
-              { id: "eth0", title: "eth0", subtitle: null, detail: null, searchable_text: "eth0" },
-              { id: "eth1", title: "eth1", subtitle: null, detail: null, searchable_text: "eth1" },
+              {
+                id: "eth0",
+                title: "eth0",
+                subtitle: null,
+                detail: null,
+                searchable_text: "eth0",
+              },
+              {
+                id: "eth1",
+                title: "eth1",
+                subtitle: null,
+                detail: null,
+                searchable_text: "eth1",
+              },
             ],
           },
           {
             id: "firewall",
             display_name: "Firewall",
-            items: [{ id: "rule1", title: "rule1", subtitle: null, detail: null, searchable_text: "rule1" }],
+            items: [
+              {
+                id: "rule1",
+                title: "rule1",
+                subtitle: null,
+                detail: null,
+                searchable_text: "rule1",
+              },
+            ],
           },
         ],
       },
@@ -390,7 +411,15 @@ describe("Sidebar", () => {
       {
         id: "network",
         display_name: "Network",
-        items: [{ id: "eth0", title: "eth0", subtitle: null, detail: null, searchable_text: "eth0" }],
+        items: [
+          {
+            id: "eth0",
+            title: "eth0",
+            subtitle: null,
+            detail: null,
+            searchable_text: "eth0",
+          },
+        ],
         subsections: [], // Empty subsections
       },
       { id: "containers", display_name: "Containers", items: [] },

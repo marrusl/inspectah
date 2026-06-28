@@ -205,7 +205,9 @@ describe("aggregate-client", () => {
         json: async () => ({ error: "Invalid diff request" }),
       });
 
-      await expect(fetchAggregateDiff(mockDiffRequest)).rejects.toThrow(ApiError);
+      await expect(fetchAggregateDiff(mockDiffRequest)).rejects.toThrow(
+        ApiError,
+      );
       await expect(fetchAggregateDiff(mockDiffRequest)).rejects.toMatchObject({
         status: 400,
         body: { error: "Invalid diff request" },

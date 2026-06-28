@@ -177,17 +177,21 @@ export function ContainerSection({
           >
             <div
               className="inspectah-decision-row__main"
-              onClick={q.content ? () => {
-                setExpandedPaths((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(q.path)) {
-                    next.delete(q.path);
-                  } else {
-                    next.add(q.path);
-                  }
-                  return next;
-                });
-              } : undefined}
+              onClick={
+                q.content
+                  ? () => {
+                      setExpandedPaths((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(q.path)) {
+                          next.delete(q.path);
+                        } else {
+                          next.add(q.path);
+                        }
+                        return next;
+                      });
+                    }
+                  : undefined
+              }
               style={q.content ? { cursor: "pointer" } : undefined}
             >
               <div role="gridcell" className="inspectah-decision-row__toggle">
@@ -259,8 +263,10 @@ export function ContainerSection({
                   fontSize: "var(--pf-t--global--font--size--xs)",
                   padding: "var(--pf-t--global--spacer--sm)",
                   margin: 0,
-                  background: "var(--pf-t--global--background--color--secondary--default)",
-                  borderTop: "1px solid var(--pf-t--global--border--color--default)",
+                  background:
+                    "var(--pf-t--global--background--color--secondary--default)",
+                  borderTop:
+                    "1px solid var(--pf-t--global--border--color--default)",
                 }}
               >
                 {q.content}

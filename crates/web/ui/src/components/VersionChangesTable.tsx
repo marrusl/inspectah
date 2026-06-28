@@ -62,9 +62,7 @@ export function VersionChangesTable({
               data-testid={`context-item-${id}`}
               tabIndex={-1}
               className={
-                revealItemId === id
-                  ? "inspectah-vc-row--revealed"
-                  : undefined
+                revealItemId === id ? "inspectah-vc-row--revealed" : undefined
               }
             >
               <Td dataLabel="Package">
