@@ -6,7 +6,8 @@ use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{
-    LanguagePackage, NonRpmItem, NonRpmSoftwareSection, PipPackage,
+    FileType, LanguagePackage, NonRpmItem, NonRpmSoftwareSection, PipPackage, ProvenanceSignals,
+    UnmanagedFile, UnmanagedFileSection,
 };
 use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
@@ -1270,6 +1271,286 @@ fn find_files_matching(
             }
             find_files_matching(exec, &child, filename, handler);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unmanaged file scanning
+// ---------------------------------------------------------------------------
+
+/// Scan roots for unmanaged files per spec: /opt, /srv, /usr/local ONLY.
+/// /var is NOT a scan root -- the spec's /var guidance is advisory for
+/// the refine UI, not a scan-scope directive.
+const UNMANAGED_SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local"];
+
+/// Determine the system install date (seconds since epoch).
+///
+/// Strategy: use the ctime of `/etc/machine-id` (created at OS install).
+/// Fallback: query RPM install time of the `filesystem` package
+/// (a baseos package present on every RHEL system).
+fn detect_system_install_date(exec: &dyn Executor) -> u64 {
+    // Try /etc/machine-id ctime first.
+    let result = exec.run("stat", &["-c", "%Z", "/etc/machine-id"]);
+    if result.exit_code == 0
+        && let Ok(ts) = result.stdout.trim().parse::<u64>()
+    {
+        return ts;
+    }
+    // Fallback: RPM install time of `filesystem` package.
+    let result = exec.run("rpm", &["-q", "--qf", "%{INSTALLTIME}", "filesystem"]);
+    if result.exit_code == 0
+        && let Ok(ts) = result.stdout.trim().parse::<u64>()
+    {
+        return ts;
+    }
+    0 // Unknown -- all files will be marked as not mutable
+}
+
+/// Parse /proc/mounts and return a map of mount_point -> is_rw.
+fn parse_mount_rw_flags(exec: &dyn Executor) -> HashMap<String, bool> {
+    let mut mounts = HashMap::new();
+    let result = exec.run("cat", &["/proc/mounts"]);
+    if result.exit_code != 0 {
+        return mounts;
+    }
+    for line in result.stdout.lines() {
+        // Format: device mount_point fs_type options ...
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4 {
+            let mount_point = parts[1].to_string();
+            let options = parts[3];
+            let is_rw = options.split(',').any(|opt| opt == "rw");
+            mounts.insert(mount_point, is_rw);
+        }
+    }
+    mounts
+}
+
+/// Check if a file path is on a writable mount by finding the
+/// longest-prefix mount point match.
+fn is_on_writable_mount(path: &str, mounts: &HashMap<String, bool>) -> bool {
+    let mut best_match_len = 0;
+    let mut best_rw = false;
+    for (mount_point, is_rw) in mounts {
+        if path.starts_with(mount_point.as_str()) && mount_point.len() > best_match_len {
+            best_match_len = mount_point.len();
+            best_rw = *is_rw;
+        }
+    }
+    best_rw
+}
+
+/// Collect all WorkingDirectory= values from systemd unit files.
+fn collect_service_working_dirs(exec: &dyn Executor) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for unit_dir in &["/etc/systemd/system", "/usr/lib/systemd/system"] {
+        let result = exec.run("grep", &["-rh", "WorkingDirectory=", unit_dir]);
+        if result.exit_code == 0 {
+            for line in result.stdout.lines() {
+                let value = line
+                    .trim()
+                    .strip_prefix("WorkingDirectory=")
+                    .unwrap_or("")
+                    .trim();
+                if !value.is_empty() && value.starts_with('/') {
+                    dirs.push(value.to_string());
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Check if a file path is under any service's WorkingDirectory.
+fn is_under_service_workdir(path: &str, workdirs: &[String]) -> bool {
+    workdirs.iter().any(|wd| path.starts_with(wd.as_str()))
+}
+
+/// Classify a file's type by reading its magic bytes / shebang.
+fn classify_unmanaged_file_type(exec: &dyn Executor, path: &str) -> FileType {
+    let result = exec.run("file", &["-b", path]);
+    if result.exit_code == 0 {
+        let output = result.stdout.to_lowercase();
+        if output.contains("elf") {
+            FileType::ElfBinary
+        } else if output.contains("java archive") || path.ends_with(".jar") {
+            FileType::Jar
+        } else if output.contains("script") || output.contains("text executable") {
+            FileType::Script
+        } else if output.contains("symbolic link") {
+            FileType::Symlink
+        } else if path.ends_with(".conf")
+            || path.ends_with(".cfg")
+            || path.ends_with(".ini")
+            || path.ends_with(".yaml")
+            || path.ends_with(".yml")
+            || path.ends_with(".toml")
+            || path.ends_with(".json")
+        {
+            FileType::Config
+        } else {
+            FileType::DataFile
+        }
+    } else {
+        FileType::Other
+    }
+}
+
+/// Get metadata for a file via stat command.
+/// Returns (size, last_modified, uid, gid, permissions).
+fn get_file_metadata(exec: &dyn Executor, path: &str) -> (u64, u64, u32, u32, String) {
+    // stat -c '%s %Y %u %g %a' <path>
+    let result = exec.run("stat", &["-c", "%s %Y %u %g %a", path]);
+    if result.exit_code == 0 {
+        let parts: Vec<&str> = result.stdout.split_whitespace().collect();
+        if parts.len() >= 5 {
+            let size = parts[0].parse().unwrap_or(0);
+            let mtime = parts[1].parse().unwrap_or(0);
+            let uid = parts[2].parse().unwrap_or(0);
+            let gid = parts[3].parse().unwrap_or(0);
+            let perms = format!("0{}", parts[4]);
+            return (size, mtime, uid, gid, perms);
+        }
+    }
+    (0, 0, 0, 0, String::new())
+}
+
+/// Check if a path is owned by an RPM package.
+///
+/// `RpmState.owned_paths` is filtered to `/etc` during construction
+/// and cannot contain paths under /opt, /srv, /usr/local. For these
+/// scan roots we query `rpm -qf <path>` directly: exit code 0 means
+/// the file is RPM-owned.
+fn is_rpm_owned_path(exec: &dyn Executor, path: &str) -> bool {
+    let result = exec.run("rpm", &["-qf", path]);
+    result.exit_code == 0
+}
+
+/// Scan for unmanaged files not claimed by RPM or Tier 1 language packages.
+///
+/// Exclusion layers (applied in order):
+/// 1. `exclude_paths` user-specified filters
+/// 2. RPM-owned paths via `rpm -qf` (direct query, not RpmState.owned_paths
+///    which is /etc-only)
+/// 3. Tier 1 language environment paths (no double-counting with Plan 1)
+pub fn scan_unmanaged_files(
+    exec: &dyn Executor,
+    language_env_paths: &[String],
+    exclude_paths: &[String],
+) -> UnmanagedFileSection {
+    let mut items = Vec::new();
+    let mut total_size: u64 = 0;
+
+    // Pre-compute derived signal inputs once.
+    let install_date = detect_system_install_date(exec);
+    let mounts = parse_mount_rw_flags(exec);
+    let service_workdirs = collect_service_working_dirs(exec);
+
+    for root in UNMANAGED_SCAN_ROOTS {
+        walk_for_unmanaged(
+            exec,
+            root,
+            language_env_paths,
+            exclude_paths,
+            install_date,
+            &mounts,
+            &service_workdirs,
+            &mut items,
+            &mut total_size,
+        );
+    }
+
+    let total_count = items.len();
+    UnmanagedFileSection {
+        items,
+        total_size,
+        total_count,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_for_unmanaged(
+    exec: &dyn Executor,
+    dir: &str,
+    language_env_paths: &[String],
+    exclude_paths: &[String],
+    install_date: u64,
+    mounts: &HashMap<String, bool>,
+    service_workdirs: &[String],
+    items: &mut Vec<UnmanagedFile>,
+    total_size: &mut u64,
+) {
+    let entries = match exec.read_dir(Path::new(dir)) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let child = format!("{}/{}", dir, entry);
+
+        // Check if this is a directory.
+        if exec.read_dir(Path::new(&child)).is_ok() {
+            if PRUNE_DIRS.contains(&entry.as_str()) {
+                continue;
+            }
+            walk_for_unmanaged(
+                exec,
+                &child,
+                language_env_paths,
+                exclude_paths,
+                install_date,
+                mounts,
+                service_workdirs,
+                items,
+                total_size,
+            );
+            continue;
+        }
+
+        // Layer 1: User-specified exclusions (prefix match).
+        if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+            continue;
+        }
+
+        // Layer 2: RPM-owned path exclusion via rpm -qf.
+        if is_rpm_owned_path(exec, &child) {
+            continue;
+        }
+
+        // Layer 3: Tier 1 language environment exclusion.
+        if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+            continue;
+        }
+
+        // Get file metadata via stat.
+        let (size, last_modified, uid, gid, permissions) = get_file_metadata(exec, &child);
+
+        let file_type = classify_unmanaged_file_type(exec, &child);
+
+        // Compute derived provenance signals.
+        let mutable = install_date > 0 && last_modified > install_date;
+        let writable_mount = is_on_writable_mount(&child, mounts);
+        let service_working_dir = is_under_service_workdir(&child, service_workdirs);
+
+        *total_size += size;
+        items.push(UnmanagedFile {
+            path: child,
+            size,
+            file_type: file_type.clone(),
+            provenance: ProvenanceSignals {
+                file_type,
+                last_modified,
+                uid,
+                gid,
+                permissions,
+                mutable,
+                writable_mount,
+                service_working_dir,
+            },
+            include: true,
+            under_var: false, // Not possible -- /var is not a scan root
+            ..Default::default()
+        });
     }
 }
 
