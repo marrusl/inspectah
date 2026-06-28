@@ -1563,7 +1563,8 @@ After the containers section block in `build_aggregate_sections`, add:
                         ctx,
                     ),
                     prevalence: aggregate_prevalence_dto(fp, ctx),
-                    variants: None, // Variant payloads added by Task 9a
+                    variants: None,
+                    variant_payload: None, // Populated by T11a for divergent items
                     source_repo: String::new(),
                     repo_conflict: None,
                 });
@@ -1760,7 +1761,12 @@ add:
                     ctx,
                 ),
                 prevalence: aggregate_prevalence_dto(fp, ctx),
-                variants: None, // Variant payloads added by Task 9a
+                variants: None,
+                // variant_payload populated by Task 11a after merge
+                // identifies divergent items. Initially None; T11a sets
+                // it to Some(UnmanagedFileVariantPayload) for items
+                // with different content_hash across hosts.
+                variant_payload: None,
                 source_repo: String::new(),
                 repo_conflict: None,
             });
@@ -2097,7 +2103,13 @@ Update the language packages section builder (T7) to populate
             .iter()
             .find(|k| item.manifest_files.contains_key(**k))
             .map(|k| k.to_string())
-            .or_else(|| item.manifest_files.keys().next().cloned()),
+            .or_else(|| {
+                // HashMap iteration is non-deterministic — sort keys
+                // for a stable fallback when no known manifest name matches.
+                let mut keys: Vec<&String> = item.manifest_files.keys().collect();
+                keys.sort();
+                keys.first().map(|k| k.to_string())
+            }),
         packages: item.packages.iter().map(|p| LanguagePackageDto {
             name: p.name.clone(),
             version: p.version.clone(),
