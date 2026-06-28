@@ -339,7 +339,32 @@ use crate::types::nonrpm::NonRpmItem;
 
 impl AggregateMergeable for NonRpmItem {
     fn identity_key(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.name)
+        // Composite key: method determines the ecosystem, path provides
+        // the environment scope. Falls back to name for legacy items
+        // that lack a path (binary detection, etc.).
+        if self.path.is_empty() {
+            Cow::Borrowed(&self.name)
+        } else {
+            let ecosystem = match self.method.as_str() {
+                "pip list" | "pip dist-info" | "venv" => "pip",
+                "npm lockfile" => "npm",
+                "gem lockfile" => "gem",
+                _ => "other",
+            };
+            Cow::Owned(format!("{ecosystem}:{}", self.path))
+        }
+    }
+
+    fn content_variant_key(&self) -> Option<Cow<'_, str>> {
+        use sha2::{Digest, Sha256};
+        // Hash the unified package list to detect divergence across hosts.
+        let mut hasher = Sha256::new();
+        hasher.update(self.method.as_bytes());
+        hasher.update(b"\n");
+        for pkg in &self.packages {
+            hasher.update(format!("{}={}\n", pkg.name, pkg.version).as_bytes());
+        }
+        Some(Cow::Owned(format!("{:x}", hasher.finalize())))
     }
 
     fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
@@ -2679,6 +2704,125 @@ mod tests {
         assert!(
             glibc.is_none(),
             "transitive package glibc must be filtered out by leaf filter"
+        );
+    }
+
+    #[test]
+    fn nonrpm_aggregate_identity_key_composite() {
+        use crate::types::nonrpm::NonRpmItem;
+
+        let item = NonRpmItem {
+            name: "requests".to_string(),
+            path: "/opt/myapp/venv".to_string(),
+            method: "venv".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(item.identity_key().as_ref(), "pip:/opt/myapp/venv");
+    }
+
+    #[test]
+    fn nonrpm_aggregate_identity_key_npm() {
+        use crate::types::nonrpm::NonRpmItem;
+
+        let item = NonRpmItem {
+            name: "express".to_string(),
+            path: "/srv/webapp".to_string(),
+            method: "npm lockfile".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(item.identity_key().as_ref(), "npm:/srv/webapp");
+    }
+
+    #[test]
+    fn nonrpm_aggregate_identity_key_fallback() {
+        use crate::types::nonrpm::NonRpmItem;
+
+        let item = NonRpmItem {
+            name: "custom-binary".to_string(),
+            path: String::new(),
+            method: "binary".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(item.identity_key().as_ref(), "custom-binary");
+    }
+
+    #[test]
+    fn nonrpm_merge_100_pct_prevalence_includes() {
+        use crate::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+
+        // Two hosts, same environment on both → 100% prevalence → include: true
+        let section_a = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+        let section_b = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+
+        let merged = merge_nonrpm_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let item = &merged.items[0];
+        let agg = item.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 2);
+        assert!(
+            item.include,
+            "100% prevalence should default to include: true"
+        );
+    }
+
+    #[test]
+    fn nonrpm_merge_partial_prevalence_excludes() {
+        use crate::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+
+        // Two hosts, environment on only one → 50% prevalence → include: false
+        let section_a = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+        let section_b = Some(NonRpmSoftwareSection {
+            items: vec![],
+            env_files: vec![],
+        });
+
+        let merged = merge_nonrpm_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let item = &merged.items[0];
+        let agg = item.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.total, 2);
+        assert!(
+            !item.include,
+            "partial prevalence should default to include: false"
         );
     }
 }
