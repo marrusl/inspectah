@@ -533,8 +533,20 @@ fn scan_python_venvs(
 
             let rel_path = venv.path.trim_start_matches('/').to_string();
 
-            // Collect manifest files (populated in Task 3).
-            let manifest_files = std::collections::HashMap::new();
+            // Collect manifest files: look for requirements.txt in the
+            // venv parent directory first, then the venv root itself.
+            let venv_parent = Path::new(&venv.path).parent().unwrap_or(Path::new("/"));
+            let candidates = [
+                venv_parent.join("requirements.txt"),
+                Path::new(&venv.path).join("requirements.txt"),
+            ];
+            let mut manifest_files = std::collections::HashMap::new();
+            for candidate in &candidates {
+                if let Ok(content) = exec.read_file(candidate) {
+                    manifest_files.insert("requirements.txt".to_string(), content);
+                    break;
+                }
+            }
 
             // Three-tier confidence:
             // - "high": requirements.txt collected AND rpm_filtered
@@ -2069,5 +2081,104 @@ mod tests {
         } else {
             panic!("expected NonRpmSoftware section");
         }
+    }
+
+    // ---- Test 24: venv with requirements.txt captures manifest ----
+
+    #[test]
+    fn venv_with_requirements_txt_captures_manifest() {
+        let requirements = "flask==2.3.3\nrequests==2.31.0\n";
+
+        // Venv at /opt/myapp/appenv (non-pruned name), requirements.txt
+        // in parent /opt/myapp — the typical project layout.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["appenv", "requirements.txt"])
+            .with_file("/opt/myapp/requirements.txt", requirements)
+            .with_dir("/opt/myapp/appenv", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/appenv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
+            .with_dir("/opt/myapp/appenv/lib", vec!["python3.9"])
+            .with_dir("/opt/myapp/appenv/lib/python3.9", vec!["site-packages"])
+            .with_dir(
+                "/opt/myapp/appenv/lib/python3.9/site-packages",
+                vec!["flask-2.3.3.dist-info"],
+            )
+            .with_command(
+                "pip list --path /opt/myapp/appenv/lib/python3.9/site-packages --format json",
+                ExecResult {
+                    stdout: r#"[{"name":"flask","version":"2.3.3"}]"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(section.items.len(), 1, "should find one venv");
+        let item = &section.items[0];
+        assert_eq!(
+            item.manifest_files.get("requirements.txt"),
+            Some(&requirements.to_string()),
+            "should capture requirements.txt content"
+        );
+        assert_eq!(
+            item.confidence, "high",
+            "should be high with manifest + rpm"
+        );
+    }
+
+    // ---- Test 25: venv without requirements.txt has empty manifests ----
+
+    #[test]
+    fn venv_without_requirements_txt_has_empty_manifests() {
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
+            .with_dir("/opt/myapp/lib", vec!["python3.9"])
+            .with_dir("/opt/myapp/lib/python3.9", vec!["site-packages"])
+            .with_dir(
+                "/opt/myapp/lib/python3.9/site-packages",
+                vec!["flask-2.3.3.dist-info"],
+            )
+            .with_command(
+                "pip list --path /opt/myapp/lib/python3.9/site-packages --format json",
+                ExecResult {
+                    stdout: r#"[{"name":"flask","version":"2.3.3"}]"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(section.items.len(), 1, "should find one venv");
+        let item = &section.items[0];
+        assert!(
+            item.manifest_files.is_empty(),
+            "should have no manifest files"
+        );
+        assert_eq!(
+            item.confidence, "medium",
+            "should be medium without manifest"
+        );
     }
 }
