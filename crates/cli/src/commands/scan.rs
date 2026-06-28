@@ -226,7 +226,7 @@ fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run_scan(args: &ScanArgs, _assume_yes: bool) -> Result<ScanOutcome> {
+pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
     let euid = unsafe { libc::geteuid() };
@@ -542,6 +542,31 @@ pub fn run_scan(args: &ScanArgs, _assume_yes: bool) -> Result<ScanOutcome> {
         redact(&mut snapshot, &RedactOptions::default());
     }
 
+    // Prompt for unmanaged file bundling if --include-unmanaged was used
+    if args.include_unmanaged
+        && let Some(ref unmanaged) = snapshot.unmanaged_files
+        && !unmanaged.items.is_empty()
+    {
+        let size_display = format_size(unmanaged.total_size);
+        let roots = describe_scan_roots(&unmanaged.items);
+        if !assume_yes {
+            eprintln!(
+                "Found {} unmanaged files in {} ({} total)",
+                unmanaged.total_count, roots, size_display,
+            );
+            eprint!("Include in tarball? [Y/n] ");
+            use std::io::Write;
+            std::io::stderr().flush().ok();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            let input = input.trim().to_lowercase();
+            if input == "n" || input == "no" {
+                // Clear unmanaged files from snapshot
+                snapshot.unmanaged_files = None;
+            }
+        }
+    }
+
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
         let json =
@@ -598,6 +623,12 @@ pub fn run_scan(args: &ScanArgs, _assume_yes: bool) -> Result<ScanOutcome> {
 
     let render_context = RenderContext { target: None };
     render::render_all(&snapshot, &render_context, render_dir.path()).context("render failed")?;
+
+    // Bundle unmanaged files into render directory if present
+    if let Some(ref unmanaged) = snapshot.unmanaged_files {
+        bundle_unmanaged_files(&unmanaged.items, render_dir.path())
+            .context("failed to bundle unmanaged files")?;
+    }
 
     // Step 8: Create tarball
     let stamp = get_output_stamp(&hostname);
@@ -821,6 +852,61 @@ fn print_quiet_footer(
             eprintln!("Scan cancelled. No report written.");
         }
     }
+}
+
+/// Format a byte count as human-readable size string.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}
+
+/// Describe which scan roots contain unmanaged files.
+fn describe_scan_roots(items: &[inspectah_core::types::nonrpm::UnmanagedFile]) -> String {
+    let mut roots: Vec<&str> = Vec::new();
+    for item in items {
+        for root in &["/opt", "/srv", "/usr/local"] {
+            if item.path.starts_with(root) && !roots.contains(root) {
+                roots.push(root);
+            }
+        }
+    }
+    if roots.is_empty() {
+        "unknown".to_string()
+    } else {
+        roots.join(", ")
+    }
+}
+
+/// Bundle unmanaged files into the render directory for tarball inclusion.
+fn bundle_unmanaged_files(
+    items: &[inspectah_core::types::nonrpm::UnmanagedFile],
+    render_dir: &Path,
+) -> Result<()> {
+    for item in items {
+        if !item.include {
+            continue;
+        }
+        // Strip leading / to create relative path under unmanaged/
+        let rel_path = item.path.trim_start_matches('/');
+        let dest = render_dir.join("unmanaged").join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create dir for {}", dest.display()))?;
+        }
+        std::fs::copy(&item.path, &dest)
+            .with_context(|| format!("failed to copy {} to tarball", item.path))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
