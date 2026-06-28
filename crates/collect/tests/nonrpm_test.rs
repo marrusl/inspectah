@@ -422,6 +422,24 @@ fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
         .with_dir(
             "/usr/lib/python3.9/site-packages",
             vec!["requests-2.31.0.dist-info", "flask-2.3.3.dist-info"],
+        )
+        // rpm -qf proves requests dist-info is RPM-owned.
+        .with_command(
+            "rpm -qf /usr/lib/python3.9/site-packages/requests-2.31.0.dist-info",
+            ExecResult {
+                stdout: "python3-requests-2.31.0-1.el9.noarch".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        // flask dist-info is NOT RPM-owned.
+        .with_command(
+            "rpm -qf /usr/lib/python3.9/site-packages/flask-2.3.3.dist-info",
+            ExecResult {
+                stderr: "file is not owned by any package".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
         );
 
     let source = pkg_source();
@@ -447,7 +465,8 @@ fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
         other => panic!("expected SectionData::NonRpmSoftware, got {:?}", other),
     };
 
-    // `flask` should survive (not RPM-owned).
+    // System pip now produces a single aggregated item per site-packages.
+    // Only flask should survive — requests is RPM-owned (rpm -qf says so).
     let pip_items: Vec<_> = section
         .items
         .iter()
@@ -456,10 +475,10 @@ fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
     assert_eq!(
         pip_items.len(),
         1,
-        "only flask should survive RPM filtering, got: {:?}",
+        "should produce one aggregated item for site-packages, got: {:?}",
         pip_items.iter().map(|i| &i.name).collect::<Vec<_>>()
     );
-    assert_eq!(pip_items[0].name, "flask");
+    assert_eq!(pip_items[0].name, "system-pip");
     assert!(
         pip_items[0].rpm_filtered,
         "surviving pip items should have rpm_filtered=true"
@@ -469,14 +488,17 @@ fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
         "dist-info + RPM cross-ref should be medium confidence"
     );
 
-    // Verify `requests` was excluded.
-    let requests_items: Vec<_> = section
-        .items
-        .iter()
-        .filter(|i| i.name == "requests")
-        .collect();
+    // Verify flask is in the packages list and requests is not.
+    assert_eq!(
+        pip_items[0].packages.len(),
+        1,
+        "only flask should survive RPM filtering in packages vec"
+    );
+    assert_eq!(pip_items[0].packages[0].name, "flask");
+
+    // Verify `requests` was excluded from the packages list.
     assert!(
-        requests_items.is_empty(),
-        "requests should be excluded because python3-requests RPM is installed"
+        !pip_items[0].packages.iter().any(|p| p.name == "requests"),
+        "requests should be excluded because python3-requests RPM owns the dist-info path"
     );
 }

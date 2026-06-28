@@ -531,11 +531,8 @@ fn scan_python_venvs(
                 packages
             };
 
-            // Filter out RPM-owned packages (e.g., python3-requests).
-            let pip_packages: Vec<_> = pip_packages
-                .into_iter()
-                .filter(|p| !is_pip_rpm_owned(&p.name, rpm_state))
-                .collect();
+            // Venv packages are never RPM-owned — the venv isolates them
+            // from the system. No RPM filtering needed for venvs.
 
             let rel_path = venv.path.trim_start_matches('/').to_string();
 
@@ -745,29 +742,12 @@ fn parse_dist_info_name(s: &str) -> (String, String) {
 // pip system-level scanning
 // ---------------------------------------------------------------------------
 
-/// Check whether a pip package name corresponds to an RPM-installed package.
-///
-/// RHEL/Fedora package Python modules as `python3-<name>` RPMs. The dist-info
-/// directory name uses PEP 503 normalization (hyphens become underscores, etc.)
-/// so we normalize both sides before comparing.
-fn is_pip_rpm_owned(name: &str, rpm_state: Option<&RpmState>) -> bool {
-    let rs = match rpm_state {
-        Some(rs) => rs,
-        None => return false,
-    };
-    // Normalize: lowercase, replace hyphens/dots/underscores with a single
-    // canonical separator (hyphen) to match RPM naming conventions.
-    let normalized = name.to_lowercase().replace(['_', '.'], "-");
-    let rpm_name = format!("python3-{normalized}");
-    rs.installed_packages.contains(&rpm_name)
-}
-
 /// Scan system-level pip packages via dist-info directories.
 ///
-/// When `rpm_state` is `Some`, packages whose names match an installed
-/// `python3-<name>` RPM are excluded from the inventory. All surviving
-/// items get `rpm_filtered: true` to signal that RPM cross-referencing
-/// was performed.
+/// When `rpm_state` is `Some`, packages whose dist-info path is owned by
+/// an RPM (verified via `rpm -qf`) are excluded from the inventory. All
+/// surviving items get `rpm_filtered: true` to signal that RPM
+/// cross-referencing was performed.
 fn scan_pip_packages(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
@@ -821,9 +801,16 @@ fn scan_pip_packages(
                     let (name, version) =
                         parse_dist_info_name(sp_entry.trim_end_matches(".dist-info"));
 
-                    // Skip packages owned by an RPM (e.g., python3-requests).
-                    if is_pip_rpm_owned(&name, rpm_state) {
-                        continue;
+                    // Skip packages owned by an RPM. Uses `rpm -qf` on the
+                    // actual dist-info path to prove ownership, avoiding
+                    // false positives from the old name-matching heuristic
+                    // (e.g., a user-installed `requests` in /usr/local
+                    // colliding with the `python3-requests` RPM name).
+                    if has_rpm_state {
+                        let dist_info_path = format!("{}/{}", sp_dir, sp_entry);
+                        if is_rpm_owned_path(exec, &dist_info_path) {
+                            continue;
+                        }
                     }
 
                     packages.push(PipPackage { name, version });
@@ -1931,6 +1918,63 @@ mod tests {
         );
     }
 
+    // ---- Test 10b: test_pip_rpm_path_ownership_filter ----
+
+    #[test]
+    fn test_pip_rpm_path_ownership_filter() {
+        // System site-packages with two dist-info dirs.
+        // `requests` dist-info is RPM-owned (rpm -qf returns 0),
+        // `flask` dist-info is user-managed (rpm -qf returns 1).
+        let exec = MockExecutor::new()
+            .with_dir("/usr/lib", vec!["python3.9"])
+            .with_dir("/usr/lib/python3.9", vec!["site-packages"])
+            .with_dir(
+                "/usr/lib/python3.9/site-packages",
+                vec!["requests-2.31.0.dist-info", "flask-2.3.3.dist-info"],
+            )
+            // requests is RPM-owned.
+            .with_command(
+                "rpm -qf /usr/lib/python3.9/site-packages/requests-2.31.0.dist-info",
+                ExecResult {
+                    stdout: "python3-requests-2.31.0-1.el9.noarch".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // flask is NOT RPM-owned.
+            .with_command(
+                "rpm -qf /usr/lib/python3.9/site-packages/flask-2.3.3.dist-info",
+                ExecResult {
+                    stderr: "file is not owned by any package".into(),
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut rpm_state = empty_rpm_state();
+        rpm_state
+            .installed_packages
+            .insert("python3-requests".into());
+
+        scan_pip_packages(&exec, &mut section, false, Some(&rpm_state));
+
+        // Should produce one item (the site-packages) with only flask.
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should produce one item for site-packages"
+        );
+        let item = &section.items[0];
+        assert_eq!(
+            item.packages.len(),
+            1,
+            "RPM-owned requests must be filtered out, only flask remains"
+        );
+        assert_eq!(item.packages[0].name, "flask");
+        assert!(item.rpm_filtered, "must have rpm_filtered set");
+    }
+
     // ---- Test 11: test_scan_npm_packages ----
 
     #[test]
@@ -2358,11 +2402,17 @@ mod tests {
             "same-path npm + gem must produce two items after dedup"
         );
         assert!(
-            section.items.iter().any(|i| i.method == METHOD_NPM_LOCKFILE),
+            section
+                .items
+                .iter()
+                .any(|i| i.method == METHOD_NPM_LOCKFILE),
             "npm item must survive dedup"
         );
         assert!(
-            section.items.iter().any(|i| i.method == METHOD_GEM_LOCKFILE),
+            section
+                .items
+                .iter()
+                .any(|i| i.method == METHOD_GEM_LOCKFILE),
             "gem item must survive dedup"
         );
     }

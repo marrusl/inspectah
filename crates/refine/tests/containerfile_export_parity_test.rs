@@ -7,7 +7,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::util::{env_hash, METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV};
+use inspectah_core::util::{METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV, env_hash};
 use inspectah_pipeline::render::language_packages::language_package_lines;
 use inspectah_refine::session::RefineSession;
 use std::collections::{BTreeSet, HashMap};

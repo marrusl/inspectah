@@ -7,7 +7,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::util::{
-    env_hash, METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
+    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV, env_hash,
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp, ViewDirective};
