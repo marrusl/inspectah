@@ -15,7 +15,7 @@
 - No `ansible.builtin.shell` tasks. All command execution via `ansible.builtin.command` with `argv` list.
 - No bare variables in `when:` conditions (always use `| bool`, `| default()`, etc.).
 - `become: true` only on tasks that require root. Never at play level inside the role.
-- Target platforms: RHEL/CentOS Stream 8-10, Fedora 40-41 on x86_64/aarch64. EL8 hosts are a primary migration target (podman >= 4.4 required via container-tools module stream).
+- Target platforms per spec Section 8.2: CentOS Stream 9 x86_64 (release-blocking); RHEL 9 (x86_64, aarch64), RHEL 10 (x86_64, aarch64), CentOS Stream 9 aarch64, CentOS Stream 10 x86_64 (smoke-tested); RHEL 8 (x86_64, aarch64), CentOS Stream 8 x86_64, AlmaLinux 8-9 (x86_64, aarch64), Rocky Linux 8-9 (x86_64, aarch64), Fedora 40-41 x86_64 (best-effort). EL8 hosts are a primary migration target (podman >= 4.4 required via container-tools module stream).
 - Minimum inspectah version: 0.8.0. Minimum podman version: 4.4.
 - All file paths are relative to `/Users/mrussell/Work/bootc-migration/ansible-role-inspectah/`.
 - License: MIT (matching inspectah).
@@ -2399,8 +2399,7 @@ jobs:
             -c local \
             --become \
             -e inspectah_install=true \
-            -e inspectah_install_method=copr \
-            -e inspectah_cleanup_host=true
+            -e inspectah_install_method=copr
         env:
           ANSIBLE_FORCE_COLOR: "true"
 ```
@@ -2626,15 +2625,19 @@ ansible-galaxy collection install -r requirements.yml
 
 ## Supported Platforms
 
-| Distribution | Versions | Architectures | Tier |
-|-------------|----------|---------------|------|
-| CentOS Stream | 9 | x86_64 | Release-blocking |
-| RHEL | 9, 10 | x86_64, aarch64 | Smoke-tested |
-| CentOS Stream | 9, 10 | x86_64, aarch64 | Smoke-tested |
-| RHEL | 8 | x86_64, aarch64 | Best-effort |
-| CentOS Stream / Alma / Rocky | 8 | x86_64 | Best-effort |
-| AlmaLinux / Rocky | 9 | x86_64, aarch64 | Best-effort |
-| Fedora | 40, 41 | x86_64 | Best-effort |
+| Distribution | Versions | Architectures | Tier | Notes |
+|-------------|----------|---------------|------|-------|
+| CentOS Stream | 9 | x86_64 | Release-blocking | Molecule + real-host smoke in CI |
+| RHEL | 9 | x86_64 | Smoke-tested | Manual validation, promote to release-blocking at Galaxy graduation |
+| RHEL | 9 | aarch64 | Smoke-tested | When aarch64 CI runner available; promote at Galaxy graduation |
+| RHEL | 10 | x86_64, aarch64 | Smoke-tested | COPR builds available, needs real-host validation |
+| CentOS Stream | 9 | aarch64 | Smoke-tested | When aarch64 CI runner available |
+| CentOS Stream | 10 | x86_64 | Smoke-tested | Tracks RHEL 10 |
+| RHEL | 8 | x86_64, aarch64 | Best-effort | EL8 hosts are a primary migration target; podman >= 4.4 required (available via container-tools module stream) |
+| CentOS Stream | 8 | x86_64 | Best-effort | EL8 migration target |
+| AlmaLinux | 8, 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
+| Rocky Linux | 8, 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
+| Fedora | 40, 41 | x86_64 | Best-effort | Latest 2 releases, COPR builds available |
 
 ## Role Variables
 
