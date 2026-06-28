@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import {
   Nav,
   NavGroup,
@@ -12,8 +12,9 @@ import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 
-/** Section IDs that represent review sections (packages, configs, users, services, containers). */
-const REVIEW_SECTIONS = [
+/** Base review section IDs (always present). Language Packages and Unmanaged Files
+ *  are conditionally inserted after Containers when their data is available. */
+const BASE_REVIEW_SECTIONS = [
   { id: "packages", label: "Packages" },
   { id: "configs", label: "Config Files" },
   { id: "users_groups", label: "Users & Groups" },
@@ -44,6 +45,12 @@ export interface SidebarProps {
   viewData?: ViewResponse | null;
   /** Number of user decisions (for the Users & Groups badge). */
   userDecisionCount?: number;
+  /** Whether the snapshot contains language package data. */
+  hasLanguagePackages?: boolean;
+  /** Whether the snapshot contains unmanaged file data. */
+  hasUnmanagedFiles?: boolean;
+  /** Whether the snapshot was collected with --include-unmanaged. */
+  hasUnmanagedScan?: boolean;
   /** When true, renders as a fixed overlay with backdrop. */
   overlay?: boolean;
   /** Called to close the overlay (Escape, backdrop click). */
@@ -95,6 +102,14 @@ function decisionCount(
       (viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0),
     );
   }
+  if (id === "language_packages") {
+    if (!viewData) return "...";
+    return String(viewData.language_packages?.length ?? 0);
+  }
+  if (id === "unmanaged_files") {
+    if (!viewData) return "...";
+    return String(viewData.unmanaged_files?.length ?? 0);
+  }
   if (!stats) return "...";
   const section = stats.sections?.find((s: { kind: string }) => {
     if (id === "packages") return s.kind === "package";
@@ -113,11 +128,32 @@ export function Sidebar({
   health,
   viewData,
   userDecisionCount,
+  hasLanguagePackages = false,
+  hasUnmanagedFiles = false,
+  hasUnmanagedScan = false,
   overlay = false,
   onClose,
   searchSlot,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
+
+  /** Build the review sections list, conditionally inserting Language Packages
+   *  and Unmanaged Files after Containers. */
+  const reviewSections = useMemo(() => {
+    const result = [...BASE_REVIEW_SECTIONS];
+    // Insert after Containers (index 4), before System Tuning (index 5)
+    const insertIdx = result.findIndex((s) => s.id === "system_tuning");
+    const at = insertIdx >= 0 ? insertIdx : result.length;
+    const toInsert: { id: string; label: string }[] = [];
+    if (hasLanguagePackages) {
+      toInsert.push({ id: "language_packages", label: "Language Packages" });
+    }
+    if (hasUnmanagedFiles) {
+      toInsert.push({ id: "unmanaged_files", label: "Unmanaged Files" });
+    }
+    result.splice(at, 0, ...toInsert);
+    return result;
+  }, [hasLanguagePackages, hasUnmanagedFiles]);
 
   // Focus trap and Escape handler for overlay mode
   useEffect(() => {
@@ -191,7 +227,7 @@ export function Sidebar({
       {searchSlot}
       <Nav aria-label="Sections">
         <NavGroup title="Review">
-          {REVIEW_SECTIONS.map((sec) => (
+          {reviewSections.map((sec) => (
             <NavItem
               key={sec.id}
               itemId={sec.id}
@@ -205,6 +241,16 @@ export function Sidebar({
               </Badge>
             </NavItem>
           ))}
+          {!hasUnmanagedScan && (
+            <Content
+              component="small"
+              className="inspectah-sidebar__hint"
+              data-testid="unmanaged-hint"
+            >
+              Unmanaged files not scanned. Re-run with{" "}
+              <code>--include-unmanaged</code> to review.
+            </Content>
+          )}
         </NavGroup>
         <NavGroup title="Reference">
           {REFERENCE_SECTIONS.map((sec) => (

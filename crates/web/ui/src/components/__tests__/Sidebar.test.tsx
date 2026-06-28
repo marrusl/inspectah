@@ -233,6 +233,119 @@ describe("Sidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("services");
   });
 
+  it("shows Language Packages in review group when data exists", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasLanguagePackages={true}
+        hasUnmanagedScan={true}
+      />,
+    );
+    expect(screen.getByText("Language Packages")).toBeInTheDocument();
+  });
+
+  it("shows Unmanaged Files section when scan data exists", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasUnmanagedFiles={true}
+        hasUnmanagedScan={true}
+      />,
+    );
+    expect(screen.getByText("Unmanaged Files")).toBeInTheDocument();
+  });
+
+  it("hides Language Packages when no data", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasLanguagePackages={false}
+        hasUnmanagedScan={true}
+      />,
+    );
+    expect(screen.queryByText("Language Packages")).not.toBeInTheDocument();
+  });
+
+  it("shows discoverability hint when unmanaged scan was not used", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasUnmanagedScan={false}
+      />,
+    );
+    expect(
+      screen.getByText(/Re-run with/),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("unmanaged-hint")).toBeInTheDocument();
+  });
+
+  it("hides discoverability hint when unmanaged scan was used", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasUnmanagedScan={true}
+      />,
+    );
+    expect(screen.queryByTestId("unmanaged-hint")).not.toBeInTheDocument();
+  });
+
+  it("places Language Packages and Unmanaged Files after Containers", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        hasLanguagePackages={true}
+        hasUnmanagedFiles={true}
+        hasUnmanagedScan={true}
+      />,
+    );
+    const containers = screen.getByText("Containers");
+    const langPkgs = screen.getByText("Language Packages");
+    const unmanagedFiles = screen.getByText("Unmanaged Files");
+    const systemTuning = screen.getByText("System Tuning");
+    // Containers before Language Packages
+    expect(
+      containers.compareDocumentPosition(langPkgs) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Language Packages before Unmanaged Files
+    expect(
+      langPkgs.compareDocumentPosition(unmanagedFiles) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Unmanaged Files before System Tuning
+    expect(
+      unmanagedFiles.compareDocumentPosition(systemTuning) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("counts subsection items when top-level items is empty", () => {
     const sectionsWithSubsections: ReferenceSection[] = [
       {

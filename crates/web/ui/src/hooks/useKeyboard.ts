@@ -7,10 +7,12 @@ const SINGLE_HOST_SECTION_IDS = [
   "users_groups", // 3
   "services", // 4
   "containers", // 5
-  "version_changes", // 6
-  "compose", // 7
-  "network", // 8
-  "storage", // 9
+  "language_packages", // 6
+  "unmanaged_files", // 7
+  "version_changes", // 8
+  "compose", // 9
+  "network",
+  "storage",
   "scheduled_tasks",
   "non_rpm_software",
   "kernel_boot",

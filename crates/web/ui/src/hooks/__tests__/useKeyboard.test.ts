@@ -111,12 +111,36 @@ describe("useKeyboard", () => {
     expect(opts.onSectionChange).toHaveBeenCalledWith("containers");
   });
 
-  it("maps key 9 to storage", () => {
+  it("maps key 6 to language_packages", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "6" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("language_packages");
+  });
+
+  it("maps key 7 to unmanaged_files", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "7" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("unmanaged_files");
+  });
+
+  it("maps key 8 to version_changes", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "8" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
+  });
+
+  it("maps key 9 to compose", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "9" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("storage");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("compose");
   });
 
   it("suppresses single-key shortcuts when focus is in an input", () => {
