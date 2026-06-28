@@ -436,7 +436,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
 - [ ] **Step 4: Update existing npm tests**
 
 Existing `test_scan_npm_packages` asserts per-package items. Update to
-assert one project item with `lang_packages` vec.
+assert one project item with `packages: Vec<LanguagePackage>`.
 
 - [ ] **Step 5: Run tests and verify clippy/fmt**
 
@@ -467,7 +467,7 @@ captured in manifest_files for Containerfile rendering.
 
 **Interfaces:**
 - Same pattern as Task 4 but for gem: one item per project with
-  `lang_packages: Vec<LanguagePackage>`, `manifest_files` with Gemfile/Gemfile.lock
+  `packages: Vec<LanguagePackage>`, `manifest_files` with Gemfile/Gemfile.lock
 
 - [ ] **Step 1: Write failing test**
 
@@ -486,7 +486,7 @@ fn gem_emits_one_item_per_project() {
 - [ ] **Step 3: Restructure scan_gem_packages**
 
 Same pattern as Task 4: project-level emission, collect Gemfile and
-Gemfile.lock content, parse gems into `gem_packages` vec.
+Gemfile.lock content, parse gems into `packages: Vec<LanguagePackage>`.
 
 ```rust
 fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
@@ -594,15 +594,19 @@ pub fn language_package_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut lines = Vec::new();
 
-    // Partition items by ecosystem
+    // Partition items by ecosystem. Include ALL language environment items
+    // regardless of include state — medium-confidence excluded items still
+    // render as commented-out blocks (spec requirement). The render_*
+    // functions check item.include and item.confidence to decide whether
+    // to emit active or commented-out instructions.
     let pip_items: Vec<&NonRpmItem> = nrs.items.iter()
-        .filter(|i| i.include && is_pip_env(i))
+        .filter(|i| is_pip_env(i))
         .collect();
     let npm_items: Vec<&NonRpmItem> = nrs.items.iter()
-        .filter(|i| i.include && i.method == "npm lockfile")
+        .filter(|i| i.method == "npm lockfile")
         .collect();
     let gem_items: Vec<&NonRpmItem> = nrs.items.iter()
-        .filter(|i| i.include && i.method == "gem lockfile")
+        .filter(|i| i.method == "gem lockfile")
         .collect();
 
     if !pip_items.is_empty() {
