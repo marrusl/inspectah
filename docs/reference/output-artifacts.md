@@ -66,6 +66,7 @@ system did not have the relevant configuration.
 | `inspectah-users.ks` | `users_groups` has included users or custom groups | Kickstart fragment for user/group provisioning. |
 | `inspectah-users.toml` | `users_groups` has included users or custom groups | Blueprint TOML fragment for bootc-image-builder user/group provisioning. |
 | `users/` | Users have `authorized_keys` data | SSH key staging tree (e.g., `users/home/<user>/.ssh/authorized_keys`). |
+| `language-packages/` | `non_rpm_software.language_packages` has included entries | Manifest files for pip/npm/gem language package environments. |
 
 ### `--inspect-only` mode
 
@@ -142,6 +143,7 @@ Same conditions as scan:
 | `users/` | SSH keys exist for included users. |
 | `inspectah-users.ks` | Included users or custom groups exist. |
 | `inspectah-users.toml` | Included users or custom groups exist. |
+| `language-packages/` | Included language package manifests exist. |
 
 ### Excluded from refine export
 
@@ -208,8 +210,15 @@ hostname-20260527-143000.tar.gz
     │   └── 99-inspectah-migrated.conf
     ├── inspectah-users.ks                (conditional)
     ├── inspectah-users.toml              (conditional)
-    └── users/                            (conditional)
-        └── home/<user>/.ssh/authorized_keys
+    ├── users/                            (conditional)
+    │   └── home/<user>/.ssh/authorized_keys
+    └── language-packages/                (conditional)
+        ├── pip/
+        │   └── <venv-path>/requirements.txt
+        ├── npm/
+        │   └── <project-path>/package-lock.json
+        └── gem/
+            └── <project-path>/Gemfile.lock
 ```
 
 ### Refine export tarball (flat)
@@ -230,7 +239,8 @@ export.tar.gz  (no prefix directory)
 ├── sysctl/                               (conditional)
 ├── inspectah-users.ks                    (conditional)
 ├── inspectah-users.toml                  (conditional)
-└── users/                                (conditional)
+├── users/                                (conditional)
+└── language-packages/                    (conditional)
 ```
 
 ### Aggregate aggregate tarball

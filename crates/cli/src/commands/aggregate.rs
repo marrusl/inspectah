@@ -558,13 +558,13 @@ mod tests {
     /// distinct hostnames to avoid the duplicate-hostname error.
     fn make_aggregate_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
         });
         let json_b = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
@@ -648,7 +648,7 @@ mod tests {
 
         // Create one normal snapshot and one sensitive snapshot
         let json_normal = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-normal.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -656,7 +656,7 @@ mod tests {
         });
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-sensitive.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -706,7 +706,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -717,7 +717,7 @@ mod tests {
         });
 
         let json_b = serde_json::json!({
-            "schema_version": 19,
+            "schema_version": 20,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
