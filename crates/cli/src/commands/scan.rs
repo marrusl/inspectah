@@ -547,11 +547,25 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Must run after collect() so language environment paths are available
     // for the exclusion layer, and before the size prompt which reads the result.
     if args.include_unmanaged {
-        // Collect language environment paths from Tier 1 to avoid double-counting
+        // Collect language environment paths from Tier 1 to avoid double-counting.
+        // Non-RPM collectors store paths as relative (no leading /), but
+        // scan_unmanaged_files() compares against absolute paths. Normalize
+        // to absolute so the Tier 1 exclusion actually matches.
         let language_env_paths: Vec<String> = snapshot
             .non_rpm_software
             .as_ref()
-            .map(|nrs| nrs.items.iter().map(|item| item.path.clone()).collect())
+            .map(|nrs| {
+                nrs.items
+                    .iter()
+                    .map(|item| {
+                        if item.path.starts_with('/') {
+                            item.path.clone()
+                        } else {
+                            format!("/{}", item.path)
+                        }
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         snapshot.unmanaged_files = Some(scan_unmanaged_files(
@@ -566,8 +580,11 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
         scan_dnf_cache_for_repoless(&executor, &mut rpm.packages_added);
     }
 
-    // Prompt for unmanaged file bundling if --include-unmanaged was used
-    if args.include_unmanaged
+    // Prompt for unmanaged file bundling if --include-unmanaged was used.
+    // Skip when --inspect-only: metadata is kept for the JSON snapshot,
+    // but bundling and the size prompt are irrelevant without a tarball.
+    if !args.inspect_only
+        && args.include_unmanaged
         && let Some(ref unmanaged) = snapshot.unmanaged_files
         && !unmanaged.items.is_empty()
     {
@@ -918,10 +935,15 @@ fn describe_scan_roots(items: &[inspectah_core::types::nonrpm::UnmanagedFile]) -
 }
 
 /// Bundle unmanaged files into the render directory for tarball inclusion.
+///
+/// Symlinks are recreated as symlinks (not followed) to prevent
+/// exfiltration of files outside the scan roots.
 fn bundle_unmanaged_files(
     items: &[inspectah_core::types::nonrpm::UnmanagedFile],
     render_dir: &Path,
 ) -> Result<()> {
+    use inspectah_core::types::nonrpm::FileType;
+
     for item in items {
         if !item.include {
             continue;
@@ -933,8 +955,24 @@ fn bundle_unmanaged_files(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create dir for {}", dest.display()))?;
         }
-        std::fs::copy(&item.path, &dest)
-            .with_context(|| format!("failed to copy {} to tarball", item.path))?;
+        if item.file_type == FileType::Symlink {
+            // Recreate symlink rather than following target.
+            // Use the recorded link_target if available, otherwise read it.
+            let target = if !item.link_target.is_empty() {
+                item.link_target.clone()
+            } else {
+                std::fs::read_link(&item.path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            };
+            if !target.is_empty() {
+                std::os::unix::fs::symlink(&target, &dest)
+                    .with_context(|| format!("failed to recreate symlink {}", item.path))?;
+            }
+        } else {
+            std::fs::copy(&item.path, &dest)
+                .with_context(|| format!("failed to copy {} to tarball", item.path))?;
+        }
     }
     Ok(())
 }

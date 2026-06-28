@@ -1,5 +1,5 @@
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::nonrpm::UnmanagedFile;
+use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
 use std::collections::BTreeMap;
 
 /// Render Containerfile lines for unmanaged files.
@@ -37,15 +37,37 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     for (dir, files) in &groups {
         let rel_dir = dir.trim_start_matches('/');
-        if files.len() > 1 {
-            // Directory-level COPY
+        // Separate symlinks from regular files for distinct rendering.
+        let symlinks: Vec<&&UnmanagedFile> = files
+            .iter()
+            .filter(|f| f.file_type == FileType::Symlink)
+            .collect();
+        let regular: Vec<&&UnmanagedFile> = files
+            .iter()
+            .filter(|f| f.file_type != FileType::Symlink)
+            .collect();
+
+        if regular.len() > 1 {
+            // Directory-level COPY for regular files
             lines.push(format!("COPY unmanaged/{rel_dir}/ /{rel_dir}/"));
         } else {
-            // Single file COPY
-            for file in files {
+            for file in &regular {
                 let rel_path = file.path.trim_start_matches('/');
                 lines.push(format!("COPY unmanaged/{rel_path} {}", file.path));
             }
+        }
+
+        // Symlinks get advisory comments instead of COPY directives.
+        for file in &symlinks {
+            let target = if file.link_target.is_empty() {
+                "unknown".to_string()
+            } else {
+                file.link_target.clone()
+            };
+            lines.push(format!(
+                "# SYMLINK: {} -> {} (recreate manually if needed)",
+                file.path, target
+            ));
         }
     }
 

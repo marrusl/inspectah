@@ -1510,7 +1510,66 @@ fn walk_for_unmanaged(
     for entry in &entries {
         let child = format!("{}/{}", dir, entry);
 
-        // Check if this is a directory.
+        // Security: check for symlinks BEFORE following. Directory symlinks
+        // could escape scan roots (e.g., /opt/app/leak -> /etc/shadow).
+        // File symlinks are recorded as Symlink type but not followed.
+        let is_symlink = exec.run("test", &["-L", &child]).exit_code == 0;
+
+        if is_symlink {
+            // Layer 1: User-specified exclusions (prefix match).
+            if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+                continue;
+            }
+
+            // Layer 2: RPM-owned path exclusion via rpm -qf.
+            if is_rpm_owned_path(exec, &child) {
+                continue;
+            }
+
+            // Layer 3: Tier 1 language environment exclusion.
+            if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+                continue;
+            }
+
+            // Record symlink target for advisory display but don't follow.
+            let link_result = exec.run("readlink", &["-f", &child]);
+            let link_target = if link_result.exit_code == 0 {
+                link_result.stdout.trim().to_string()
+            } else {
+                String::new()
+            };
+
+            // Use lstat metadata (symlink itself, not target).
+            let (size, last_modified, uid, gid, permissions) = get_file_metadata(exec, &child);
+
+            let mutable = install_date > 0 && last_modified > install_date;
+            let writable_mount = is_on_writable_mount(&child, mounts);
+            let service_working_dir = is_under_service_workdir(&child, service_workdirs);
+
+            *total_size += size;
+            items.push(UnmanagedFile {
+                path: child,
+                size,
+                file_type: FileType::Symlink,
+                provenance: ProvenanceSignals {
+                    file_type: FileType::Symlink,
+                    last_modified,
+                    uid,
+                    gid,
+                    permissions,
+                    mutable,
+                    writable_mount,
+                    service_working_dir,
+                },
+                include: true,
+                under_var: false,
+                link_target,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        // Check if this is a directory (safe now -- symlinks already handled).
         if exec.read_dir(Path::new(&child)).is_ok() {
             if PRUNE_DIRS.contains(&entry.as_str()) {
                 continue;
