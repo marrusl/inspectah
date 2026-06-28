@@ -5,7 +5,9 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
-use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
+use inspectah_core::types::nonrpm::{
+    LanguagePackage, NonRpmItem, NonRpmSoftwareSection, PipPackage,
+};
 use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::system::SourceSystem;
@@ -844,28 +846,58 @@ fn scan_pip_packages(
 // ---------------------------------------------------------------------------
 
 /// Scan for npm packages via package-lock.json files.
+///
+/// Emits one `NonRpmItem` per project directory (not per package).
+/// Individual packages are stored in the `packages` vec as
+/// `LanguagePackage` entries; raw lockfile and package.json content
+/// is captured in `manifest_files` for downstream rendering.
 fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
     for root in SCAN_ROOTS {
-        find_files_matching(exec, root, "package-lock.json", &mut |path| {
-            let rel_path = path.trim_start_matches('/').to_string();
+        find_files_matching(exec, root, "package-lock.json", &mut |lockfile_path| {
+            let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
+            let rel_path = project_dir
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .to_string();
             if is_ostree && rel_path.starts_with("var/") {
                 return;
             }
 
-            if let Ok(content) = exec.read_file(Path::new(path)) {
-                let packages = parse_package_lock(&content);
-                for pkg in packages {
-                    section.items.push(NonRpmItem {
-                        path: rel_path.clone(),
-                        name: pkg.name,
-                        method: "npm lockfile".to_string(),
-                        confidence: "high".to_string(),
-                        version: pkg.version,
-                        include: true,
-                        ..Default::default()
-                    });
-                }
+            let mut manifest_files = HashMap::new();
+            let mut packages = Vec::new();
+
+            // Collect lockfile content and parse packages.
+            if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
+                manifest_files.insert("package-lock.json".to_string(), content.clone());
+                packages = parse_package_lock(&content)
+                    .into_iter()
+                    .map(|p| LanguagePackage {
+                        name: p.name,
+                        version: p.version,
+                    })
+                    .collect();
             }
+
+            // Collect package.json if present.
+            let pkg_json_path = project_dir.join("package.json");
+            if let Ok(content) = exec.read_file(&pkg_json_path) {
+                manifest_files.insert("package.json".to_string(), content);
+            }
+
+            section.items.push(NonRpmItem {
+                path: rel_path,
+                name: project_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                method: "npm lockfile".to_string(),
+                confidence: "high".to_string(),
+                include: true,
+                packages,
+                manifest_files,
+                ..Default::default()
+            });
         });
     }
 }
@@ -1551,19 +1583,56 @@ mod tests {
 
     #[test]
     fn test_scan_npm_packages() {
-        let packages = parse_package_lock(package_lock_fixture());
-        assert_eq!(packages.len(), 2, "should find 2 npm packages");
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["package-lock.json", "package.json"])
+            .with_file("/opt/myapp/package-lock.json", package_lock_fixture())
+            .with_file(
+                "/opt/myapp/package.json",
+                r#"{"name": "myapp", "version": "1.0.0"}"#,
+            )
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_packages(&exec, &mut section, false);
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should emit one item per project, not per package"
+        );
+
+        let item = &section.items[0];
+        assert_eq!(item.path, "opt/myapp");
+        assert_eq!(item.name, "myapp");
+        assert_eq!(item.method, "npm lockfile");
+        assert_eq!(item.confidence, "high");
+        assert!(item.include);
+
+        // Packages vec should contain the individual npm dependencies.
+        assert_eq!(item.packages.len(), 2, "should have 2 packages in vec");
         assert!(
-            packages
+            item.packages
                 .iter()
                 .any(|p| p.name == "express" && p.version == "4.18.2"),
             "should find express package"
         );
         assert!(
-            packages
+            item.packages
                 .iter()
                 .any(|p| p.name == "lodash" && p.version == "4.17.21"),
             "should find lodash package"
+        );
+
+        // Manifest files should capture raw content.
+        assert!(
+            item.manifest_files.contains_key("package-lock.json"),
+            "should capture package-lock.json"
+        );
+        assert!(
+            item.manifest_files.contains_key("package.json"),
+            "should capture package.json"
         );
     }
 
