@@ -21,7 +21,7 @@
 - No team member names in code or commits.
 - Commit format: `type(scope): description`. Attribution: `Assisted-by: Claude Code (Opus 4.6)`.
 - All new `#[serde]` fields use `#[serde(default)]` for backward-compatible deserialization.
-- Schema version bumps from 19 to 20 at the end (Task 9), not incrementally.
+- Schema version bumps from 19 to 20 at the end (Task 11), not incrementally.
 - Existing tests must keep passing throughout. Run `cargo test` after each task.
 
 ## File Map
@@ -30,7 +30,7 @@
 
 | File | Change |
 |------|--------|
-| `crates/core/src/types/nonrpm.rs` | Add `manifest_files`, `rpm_filtered`, `lang_packages` to `NonRpmItem`; add unified `LanguagePackage` struct |
+| `crates/core/src/types/nonrpm.rs` | Rename `PipPackage` → `LanguagePackage`; add `manifest_files`, `rpm_filtered` to `NonRpmItem` |
 | `crates/core/src/snapshot.rs` | Bump `SCHEMA_VERSION` from 19 to 20 (Task 9 only) |
 | `crates/refine/src/types.rs` | Add `ItemId::LanguageEnv` variant |
 | `crates/collect/src/inspectors/nonrpm.rs` | RPM ownership filtering in `scan_pip_packages()`, project-level restructuring in `scan_npm_packages()` and `scan_gem_packages()`, requirements.txt collection in `scan_python_venvs()` |
@@ -57,20 +57,19 @@
 - Test: existing roundtrip test in `nonrpm.rs`, new test in `types.rs`
 
 **Interfaces:**
-- Produces: `LanguagePackage`, `NonRpmItem.manifest_files`, `NonRpmItem.rpm_filtered`,
-  `NonRpmItem.lang_packages`, `ItemId::LanguageEnv`, `inspectah_core::util::env_hash()`
+- Produces: `LanguagePackage` (renamed from `PipPackage`), `NonRpmItem.manifest_files`,
+  `NonRpmItem.rpm_filtered`, `ItemId::LanguageEnv`, `inspectah_core::util::env_hash()`
 - Consumed by: Tasks 2-11
 
-**Data contract note:** The spec describes a unified `packages` shape for
-all language ecosystems. This plan uses a single `LanguagePackage` struct
-(name + version) rather than separate per-ecosystem types. The existing
-`PipPackage` struct has the same shape — `LanguagePackage` replaces it
-for new code. The existing `packages: Vec<PipPackage>` field is preserved
-for backward compatibility; new code uses `lang_packages: Vec<LanguagePackage>`.
+**Data contract:** The spec says npm/gem project entries store package
+details on the project item's `packages` vec — the same field pip already
+uses. This plan renames `PipPackage` → `LanguagePackage` (identical shape:
+name + version) and reuses the existing `packages: Vec<LanguagePackage>`
+field for all ecosystems. No new field, no contract change.
 
-- [ ] **Step 1: Add unified LanguagePackage struct**
+- [ ] **Step 1: Rename PipPackage to LanguagePackage**
 
-In `crates/core/src/types/nonrpm.rs`, add after `PipPackage`:
+In `crates/core/src/types/nonrpm.rs`, rename the struct:
 
 ```rust
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +81,20 @@ pub struct LanguagePackage {
 }
 ```
 
+Update the field on `NonRpmItem`:
+```rust
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<LanguagePackage>,
+```
+
+Add a type alias for backward compat in downstream code:
+```rust
+pub type PipPackage = LanguagePackage;
+```
+
+Update all imports across crates that reference `PipPackage` — the alias
+covers most, but direct struct construction needs updating.
+
 - [ ] **Step 2: Extend NonRpmItem with new fields**
 
 Add these fields to `NonRpmItem` (after existing `git_remote` field):
@@ -92,15 +105,9 @@ Add these fields to `NonRpmItem` (after existing `git_remote` field):
 
     #[serde(default)]
     pub rpm_filtered: bool,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub lang_packages: Vec<LanguagePackage>,
 ```
 
-Add `use std::collections::HashMap;` to the file imports. The `lang_packages`
-field is the unified package list for npm/gem project-level items and pip
-items going forward. The existing `packages: Vec<PipPackage>` field remains
-for backward compat with existing snapshots.
+Add `use std::collections::HashMap;` to the file imports.
 
 - [ ] **Step 3: Add shared env_hash helper in inspectah-core**
 
@@ -136,8 +143,9 @@ In `crates/refine/src/types.rs`, add to the `ItemId` enum:
 - [ ] **Step 5: Update roundtrip test**
 
 In the existing `test_nonrpm_section_roundtrip` test in `nonrpm.rs`,
-add `manifest_files`, `rpm_filtered`, and `lang_packages` to the test
-fixture. Verify serde roundtrip preserves all fields.
+add `manifest_files` and `rpm_filtered` to the test fixture. Update
+`PipPackage` references to `LanguagePackage`. Verify serde roundtrip
+preserves all fields including the renamed type.
 
 - [ ] **Step 6: Run tests and verify clippy/fmt**
 
@@ -152,13 +160,13 @@ Expected: all pass, zero warnings.
 - [ ] **Step 7: Commit**
 
 ```
-feat(core): add unified language package data model
+feat(core): rename PipPackage to LanguagePackage, add manifest support
 
-Add LanguagePackage struct (unified name+version for all ecosystems),
-manifest_files, rpm_filtered, lang_packages fields to NonRpmItem.
-Add ItemId::LanguageEnv variant and shared env_hash() helper in
-inspectah-core. All new fields use serde(default) for backward
-compatibility.
+Rename PipPackage → LanguagePackage (same shape, unified across
+ecosystems). Add manifest_files and rpm_filtered fields to
+NonRpmItem. Add ItemId::LanguageEnv variant and shared env_hash()
+helper in inspectah-core. Type alias preserves backward compat.
+All new fields use serde(default).
 ```
 
 ---
@@ -355,7 +363,7 @@ manifest_files for Containerfile rendering. Sets confidence to
 **Interfaces:**
 - Consumes: `Executor.read_file()` for package.json and package-lock.json
 - Produces: One `NonRpmItem` per project directory (not per package) with
-  `lang_packages: Vec<LanguagePackage>`, `manifest_files` containing raw lockfile/manifest content,
+  `packages: Vec<LanguagePackage>`, `manifest_files` containing raw lockfile/manifest content,
   `method: "npm lockfile"`, `confidence: "high"`
 
 - [ ] **Step 1: Write failing test**
@@ -365,7 +373,7 @@ manifest_files for Containerfile rendering. Sets confidence to
 fn npm_emits_one_item_per_project() {
     // MockExecutor with /opt/myapp/package-lock.json containing 3 packages.
     // Assert: one NonRpmItem emitted (not 3).
-    // Assert: lang_packages has 3 entries.
+    // Assert: packages has 3 entries (Vec<LanguagePackage>).
     // Assert: manifest_files contains "package.json" and "package-lock.json".
     // Assert: method == "npm lockfile", confidence == "high".
 }
@@ -390,12 +398,12 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
             }
 
             let mut manifest_files = HashMap::new();
-            let mut lang_packages = Vec::new();
+            let mut packages = Vec::new();
 
             // Collect lockfile content and parse packages
             if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
                 manifest_files.insert("package-lock.json".to_string(), content.clone());
-                lang_packages = parse_package_lock(&content)
+                packages = parse_package_lock(&content)
                     .into_iter()
                     .map(|p| LanguagePackage { name: p.name, version: p.version })
                     .collect();
@@ -416,7 +424,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                 method: "npm lockfile".to_string(),
                 confidence: "high".to_string(),
                 include: true,
-                lang_packages,
+                packages,
                 manifest_files,
                 ..Default::default()
             });
@@ -446,7 +454,7 @@ Expected: all pass.
 feat(collect): restructure npm to project-level entries
 
 Emit one NonRpmItem per project directory instead of one per package.
-Package details stored in lang_packages vec. Lockfile and package.json
+Package details stored in packages vec (Vec<LanguagePackage>). Lockfile and package.json
 captured in manifest_files for Containerfile rendering.
 ```
 
@@ -468,7 +476,7 @@ captured in manifest_files for Containerfile rendering.
 fn gem_emits_one_item_per_project() {
     // MockExecutor with /opt/myapp/Gemfile.lock containing 2 gems.
     // Assert: one NonRpmItem emitted.
-    // Assert: lang_packages has 2 entries.
+    // Assert: packages has 2 entries (Vec<LanguagePackage>).
     // Assert: manifest_files contains "Gemfile" and "Gemfile.lock".
 }
 ```
@@ -491,11 +499,11 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
             }
 
             let mut manifest_files = HashMap::new();
-            let mut lang_packages = Vec::new();
+            let mut packages = Vec::new();
 
             if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
                 manifest_files.insert("Gemfile.lock".to_string(), content.clone());
-                lang_packages = parse_gemfile_lock(&content)
+                packages = parse_gemfile_lock(&content)
                     .into_iter()
                     .map(|g| LanguagePackage { name: g.name, version: g.version })
                     .collect();
@@ -515,7 +523,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                 method: "gem lockfile".to_string(),
                 confidence: "high".to_string(),
                 include: true,
-                lang_packages,
+                packages,
                 manifest_files,
                 ..Default::default()
             });
@@ -543,7 +551,7 @@ cargo fmt --check
 feat(collect): restructure gem to project-level entries
 
 Same pattern as npm: one NonRpmItem per project, gem details in
-lang_packages vec, Gemfile and Gemfile.lock in manifest_files.
+packages vec (Vec<LanguagePackage>), Gemfile and Gemfile.lock in manifest_files.
 ```
 
 ---
@@ -773,7 +781,14 @@ fn write_language_package_manifests(
             continue;
         }
 
-        let ecosystem = if !item.packages.is_empty() || item.method.contains("pip") {
+        // Determine ecosystem from method string (the canonical routing key).
+        // The include gate here is correct: only materialize manifests for
+        // items the operator included. The "Always" gate in the spec means
+        // no CLI flag is needed (Tier 1 is always active), not that the
+        // directory always exists. Medium-confidence items that remain
+        // excluded have no COPY paths to back — their Containerfile lines
+        // are commented-out inline installs, not COPY-based.
+        let ecosystem = if item.method.contains("pip") || item.method == "venv" {
             "pip"
         } else if item.method == "npm lockfile" {
             "npm"
@@ -1070,9 +1085,10 @@ schema version change — update insta snapshots with `cargo insta review`.
 ```
 chore(core): bump schema version to 20 for language package support
 
-New NonRpmItem fields (manifest_files, rpm_filtered, lang_packages)
-and new export root (language-packages/) constitute a schema change.
-Older tarballs remain loadable via serde(default).
+PipPackage → LanguagePackage rename, new NonRpmItem fields
+(manifest_files, rpm_filtered), and new export root
+(language-packages/) constitute a schema change. Older tarballs
+remain loadable via serde(default) and type alias.
 ```
 
 **Thorn checkpoint: review Tasks 10-11 before proceeding to Plan 2.**
