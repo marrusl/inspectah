@@ -1170,7 +1170,138 @@ Append to `UnmanagedFileList.test.tsx`:
     await user.keyboard("{ArrowLeft}");
     expect(groupHeader).toHaveAttribute("aria-expanded", "false");
   });
+
+  // --- Arrow-key navigation between groups and items ---
+
+  it("ArrowDown from group header moves focus to first item in group", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    groupHeader.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(
+      screen.getByTestId("unmanaged-item-/opt/splunk/bin/splunkd"),
+    );
+  });
+
+  it("ArrowDown from last item in group moves focus to next group header", async () => {
+    // groups fixture has /opt/splunk (2 items) and /opt/datadog (1 item)
+    render(
+      <UnmanagedFileList
+        groups={twoGroupFixture}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const lastItem = screen.getByTestId("unmanaged-item-/opt/splunk/etc/config.yml");
+    lastItem.focus();
+    await user.keyboard("{ArrowDown}");
+    const nextGroupHeader = screen.getByLabelText("/opt/datadog file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    expect(document.activeElement).toBe(nextGroupHeader);
+  });
+
+  it("ArrowUp from first item in group moves focus back to group header", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const firstItem = screen.getByTestId("unmanaged-item-/opt/splunk/bin/splunkd");
+    firstItem.focus();
+    await user.keyboard("{ArrowUp}");
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    expect(document.activeElement).toBe(groupHeader);
+  });
+
+  // --- Polite announcements for group and item toggles ---
+
+  it("announces group toggle via aria-live", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const groupCb = screen.getByLabelText("Toggle all files in /opt/splunk");
+    await user.click(groupCb);
+    const liveRegion = screen.getByTestId("unmanaged-group-announce-/opt/splunk");
+    expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    expect(liveRegion.textContent).toMatch(/Excluded \d+ files in \/opt\/splunk/);
+  });
+
+  it("announces item toggle via aria-live", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const fileCb = screen.getByLabelText("Toggle /opt/splunk/bin/splunkd");
+    await user.click(fileCb);
+    const liveRegion = screen.getByTestId("unmanaged-item-announce-/opt/splunk/bin/splunkd");
+    expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    expect(liveRegion.textContent).toMatch(/Excluded \/opt\/splunk\/bin\/splunkd/);
+  });
+
+  // --- Debounced size-rollup announcement ---
+
+  it("debounces size-rollup announcement after rapid toggles", async () => {
+    vi.useFakeTimers();
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const rollupAnnounce = screen.getByTestId("unmanaged-rollup-announce");
+
+    // Toggle two items rapidly
+    await user.click(screen.getByLabelText("Toggle /opt/splunk/bin/splunkd"));
+    await user.click(screen.getByLabelText("Toggle /opt/splunk/etc/config.yml"));
+
+    // Before debounce fires, announcement should not have updated
+    expect(rollupAnnounce.textContent).toBe("");
+
+    // After 500ms debounce, announcement should fire once
+    vi.advanceTimersByTime(500);
+    expect(rollupAnnounce.textContent).toMatch(/\d+ of \d+ items included, ~[\d.]+ [KMGT]?B/);
+
+    vi.useRealTimers();
+  });
 ```
+
+**Implementation note for the debounced rollup:** The `UnmanagedFileList`
+component needs a separate `aria-live="polite"` region
+(`data-testid="unmanaged-rollup-announce"`) that is updated via a 500ms
+debounced callback after any toggle. The visible rollup text
+(`data-testid="unmanaged-rollup"`) updates immediately; the announcement
+region updates on the debounce to avoid spamming screen readers during
+rapid toggling.
 
 - [ ] **Step 6: Verify tests pass, commit**
 
@@ -2343,6 +2474,111 @@ Append to `PackageList.test.tsx`:
       const liveRegion = within(row).getByRole("status");
       expect(liveRegion).toHaveAttribute("aria-live", "polite");
     });
+
+    // --- Upload success: focus returns to new checkbox ---
+
+    it("focuses checkbox after upload success replaces upload trigger", async () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      // Simulate upload success — row transitions to uploaded_excluded
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const checkbox = within(row).getByRole("checkbox");
+      expect(document.activeElement).toBe(checkbox);
+    });
+
+    it("announces upload success via aria-live", async () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion.textContent).toMatch(
+        /RPM provided for custom-agent/,
+      );
+    });
+
+    // --- Upload removal: focus and announcement ---
+
+    it("announces RPM removal and returns to blocked state", async () => {
+      const onRemoveUpload = vi.fn();
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+          onRemoveRpmUpload={onRemoveUpload}
+        />,
+      );
+      const user = userEvent.setup();
+      // Click the remove button on the "RPM provided" label
+      const removeBtn = screen.getByLabelText("Remove uploaded RPM for custom-agent");
+      await user.click(removeBtn);
+      expect(onRemoveUpload).toHaveBeenCalledWith("custom-agent");
+
+      // Simulate state reverting to needs_upload
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+          onRemoveRpmUpload={onRemoveUpload}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion.textContent).toMatch(
+        /RPM removed for custom-agent.*upload required/,
+      );
+      // Checkbox should be hidden again, upload icon back
+      expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
+      expect(
+        within(row).getByLabelText("Upload RPM for custom-agent"),
+      ).toBeInTheDocument();
+    });
   });
 ```
 
@@ -2376,10 +2612,22 @@ const isCached = rowState === "cached_excluded" || rowState === "cached_included
 // Repo text transitions
 const repoText = isBlocked ? "none" : isUploaded ? "uploaded" : pkg.source_repo;
 
-// Row-level aria-live announcement
-const liveAnnouncement = isUploaded
-  ? `RPM provided for ${pkg.name}, now available for inclusion`
-  : undefined;
+// Row-level aria-live announcement — covers both success and revert
+// Use a ref to track the previous state so announcements only fire
+// on transitions, not on initial render.
+const prevRowStateRef = useRef(rowState);
+const [liveAnnouncement, setLiveAnnouncement] = useState("");
+useEffect(() => {
+  const prev = prevRowStateRef.current;
+  prevRowStateRef.current = rowState;
+  if (prev === "needs_upload" && (rowState === "uploaded_excluded" || rowState === "uploaded_included")) {
+    setLiveAnnouncement(`RPM provided for ${pkg.name}, now available for inclusion`);
+    // Focus the new checkbox after the upload trigger is replaced
+    requestAnimationFrame(() => checkboxRef.current?.focus());
+  } else if ((prev === "uploaded_excluded" || prev === "uploaded_included") && rowState === "needs_upload") {
+    setLiveAnnouncement(`RPM removed for ${pkg.name}, upload required`);
+  }
+}, [rowState, pkg.name]);
 ```
 
 Replace the checkbox with conditional rendering per spec's blocked-row layout:
@@ -2808,6 +3056,59 @@ firstItem?.focus();
 ```
 
 This already works generically if the section test IDs follow the `section-{id}` pattern and list items have `tabIndex={-1}`.
+
+Write explicit tests in `MainContent.test.tsx` (or create
+`MainContent.newSections.test.tsx`):
+
+```typescript
+it("focuses first language package item when language_packages section is selected", () => {
+  const { rerender } = render(
+    <MainContent activeSection="packages" {...defaultProps} />,
+  );
+  rerender(<MainContent activeSection="language_packages" {...defaultProps} />);
+  const firstItem = screen.getByTestId("section-language_packages")
+    .querySelector("[tabindex='-1']");
+  expect(document.activeElement).toBe(firstItem);
+});
+
+it("focuses first unmanaged file group when unmanaged_files section is selected", () => {
+  const { rerender } = render(
+    <MainContent activeSection="packages" {...defaultProps} />,
+  );
+  rerender(<MainContent activeSection="unmanaged_files" {...defaultProps} />);
+  const firstGroup = screen.getByTestId("section-unmanaged_files")
+    .querySelector("[role='button']");
+  expect(document.activeElement).toBe(firstGroup);
+});
+
+it("SectionSearch filters language package environments by path", async () => {
+  render(<MainContent activeSection="language_packages" {...defaultProps} />);
+  const user = userEvent.setup();
+  const searchInput = screen.getByPlaceholderText("Filter items...");
+  await user.type(searchInput, "myapp");
+  expect(screen.getByText("/opt/myapp/venv")).toBeInTheDocument();
+  expect(screen.queryByText("/opt/other/venv")).not.toBeInTheDocument();
+});
+
+it("SectionSearch filters unmanaged files and auto-expands matching groups", async () => {
+  render(<MainContent activeSection="unmanaged_files" {...defaultProps} />);
+  const user = userEvent.setup();
+  const searchInput = screen.getByPlaceholderText("Filter items...");
+  await user.type(searchInput, "splunkd");
+  // Group containing splunkd should be expanded
+  const groupHeader = screen.getByLabelText("/opt/splunk file group")
+    .querySelector("[role='button']")!;
+  expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("/opt/splunk/bin/splunkd")).toBeInTheDocument();
+});
+
+it("reveal highlighting scrolls to and highlights search result", async () => {
+  render(<MainContent activeSection="language_packages" {...defaultProps}
+    revealItemId="pip:/opt/myapp/venv" />);
+  const item = screen.getByTestId("langpkg-item-pip:/opt/myapp/venv");
+  expect(item).toHaveClass("inspectah-reveal-highlight");
+});
+```
 
 - [ ] **Step 6: Add MainContent props for new section callbacks**
 
