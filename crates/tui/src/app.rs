@@ -68,6 +68,7 @@ fn item_id_to_viewed_key(item_id: &ItemId) -> String {
         ItemId::NonRpm { name } => name.clone(),
         ItemId::LanguageEnv { ecosystem, path } => format!("{ecosystem}:{path}"),
         ItemId::Group { name } => name.clone(),
+        ItemId::UnmanagedFile { path } => path.clone(),
     }
 }
 

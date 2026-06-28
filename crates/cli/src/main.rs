@@ -21,6 +21,10 @@ struct Cli {
     #[arg(long, hide = true)]
     markdown_help: bool,
 
+    /// Assume yes to all interactive prompts (for CI/automation)
+    #[arg(short = 'y', long = "yes", global = true)]
+    pub yes: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -59,7 +63,7 @@ fn main() {
     };
 
     match command {
-        Commands::Scan(args) => match commands::scan::run_scan(&args) {
+        Commands::Scan(args) => match commands::scan::run_scan(&args, cli.yes) {
             Ok(outcome) => {
                 let code = outcome.exit_code();
                 if code != 0 {

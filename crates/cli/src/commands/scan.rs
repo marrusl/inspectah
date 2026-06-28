@@ -147,6 +147,15 @@ pub struct ScanArgs {
     /// Suppress the scan progress checklist (completion summary still prints)
     #[arg(long, short, conflicts_with = "verbose")]
     pub quiet: bool,
+
+    /// Catalog and bundle unmanaged files from /opt, /srv, /usr/local.
+    /// Prompts with total size before bundling (suppressed by -y/--yes).
+    #[arg(long)]
+    pub include_unmanaged: bool,
+
+    /// Exclude specific paths from unmanaged file collection (repeatable)
+    #[arg(long = "exclude-path", value_name = "PATH")]
+    pub exclude_path: Vec<String>,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -217,7 +226,7 @@ fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run_scan(args: &ScanArgs) -> Result<ScanOutcome> {
+pub fn run_scan(args: &ScanArgs, _assume_yes: bool) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
     let euid = unsafe { libc::geteuid() };
@@ -904,6 +913,8 @@ VARIANT_ID="workstation"
             progress: None,
             verbose: false,
             quiet: false,
+            include_unmanaged: false,
+            exclude_path: vec![],
         }
     }
 
