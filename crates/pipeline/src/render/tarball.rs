@@ -54,7 +54,8 @@ pub fn create_tarball(
     paths.sort();
 
     for path in &paths {
-        let meta = match std::fs::metadata(path) {
+        // Use symlink_metadata to detect symlinks without following them.
+        let meta = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -76,7 +77,6 @@ pub fn create_tarball(
         }
 
         let mut header = Header::new_gnu();
-        header.set_size(if meta.is_dir() { 0 } else { meta.len() });
         header.set_mode(if meta.is_dir() { 0o755 } else { 0o644 });
         header.set_mtime(
             meta.modified()
@@ -96,6 +96,12 @@ pub fn create_tarball(
             header.set_size(0);
             header.set_cksum();
             tar.append_data(&mut header, &dir_name, &[][..])?;
+        } else if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(path)?;
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_cksum();
+            tar.append_link(&mut header, &arcname, &target)?;
         } else {
             header.set_entry_type(tar::EntryType::Regular);
             let data = std::fs::read(path)?;

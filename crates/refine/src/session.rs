@@ -2858,10 +2858,21 @@ fn extract_payload_dirs_from_tarball(
                 std::fs::create_dir_all(parent)
                     .map_err(|e| RefineError::TarballError(e.to_string()))?;
             }
-            let mut outfile = std::fs::File::create(&dest)
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
-            std::io::copy(&mut entry, &mut outfile)
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            if entry.header().entry_type() == tar::EntryType::Symlink
+                || entry.header().entry_type() == tar::EntryType::Link
+            {
+                // Preserve symlinks rather than dereferencing them.
+                if let Ok(Some(target)) = entry.link_name() {
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink(&target, &dest)
+                        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                }
+            } else {
+                let mut outfile = std::fs::File::create(&dest)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                std::io::copy(&mut entry, &mut outfile)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
         }
     }
     Ok(())
