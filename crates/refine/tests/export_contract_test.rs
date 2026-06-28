@@ -977,6 +977,125 @@ fn export_redacts_gemfile_source_auth() {
 }
 
 #[test]
+fn export_redacts_package_lock_json_resolved_auth() {
+    let mut snap = test_snapshot();
+    let raw = r#"{
+  "name": "myapp",
+  "lockfileVersion": 3,
+  "packages": {
+    "node_modules/@scope/pkg": {
+      "version": "1.2.3",
+      "resolved": "https://deploy:s3cret@npm.corp.example.com/@scope/pkg/-/pkg-1.2.3.tgz",
+      "integrity": "sha512-abc123"
+    }
+  }
+}"#
+    .to_string();
+    let mut manifests = HashMap::new();
+    manifests.insert("package-lock.json".to_string(), raw);
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/webapp".into(),
+            name: "webapp".into(),
+            method: METHOD_NPM_LOCKFILE.into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-lockfile-npm.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    // Check sidecar file
+    let hash = env_hash("/opt/webapp");
+    let lockfile_path = format!("language-packages/npm/{hash}/package-lock.json");
+    let content = tarball_read_file(&tarball_path, &lockfile_path)
+        .expect("package-lock.json must exist in export");
+
+    assert!(
+        !content.contains("s3cret"),
+        "auth token must be scrubbed from package-lock.json sidecar, got:\n{content}"
+    );
+    assert!(
+        content.contains("REDACTED@npm.corp.example.com"),
+        "scrubbed URL must contain REDACTED@host, got:\n{content}"
+    );
+    assert!(
+        content.contains("integrity"),
+        "non-resolved fields must be preserved, got:\n{content}"
+    );
+
+    // Check inspection-snapshot.json
+    let snapshot_json =
+        tarball_read_file(&tarball_path, "inspection-snapshot.json").expect("snapshot must exist");
+    assert!(
+        !snapshot_json.contains("s3cret"),
+        "auth token must be scrubbed from inspection-snapshot.json, got lockfile leak"
+    );
+}
+
+#[test]
+fn export_redacts_gemfile_lock_auth() {
+    let mut snap = test_snapshot();
+    let raw = "GEM\n  remote: https://deploy:g3m_tok@gems.corp.example.com/\n  specs:\n    rails (7.0.8)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rails (~> 7.0)\n".to_string();
+    let mut manifests = HashMap::new();
+    manifests.insert("Gemfile.lock".to_string(), raw);
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/railsapp".into(),
+            name: "railsapp".into(),
+            method: METHOD_GEM_LOCKFILE.into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-lockfile-gem.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    // Check sidecar file
+    let hash = env_hash("/opt/railsapp");
+    let lockfile_path = format!("language-packages/gem/{hash}/Gemfile.lock");
+    let content = tarball_read_file(&tarball_path, &lockfile_path)
+        .expect("Gemfile.lock must exist in export");
+
+    assert!(
+        !content.contains("g3m_tok"),
+        "auth token must be scrubbed from Gemfile.lock sidecar, got:\n{content}"
+    );
+    assert!(
+        content.contains("REDACTED@gems.corp.example.com"),
+        "scrubbed URL must contain REDACTED@host, got:\n{content}"
+    );
+    assert!(
+        content.contains("rails (7.0.8)"),
+        "spec lines must be preserved, got:\n{content}"
+    );
+
+    // Check inspection-snapshot.json
+    let snapshot_json =
+        tarball_read_file(&tarball_path, "inspection-snapshot.json").expect("snapshot must exist");
+    assert!(
+        !snapshot_json.contains("g3m_tok"),
+        "auth token must be scrubbed from inspection-snapshot.json, got lockfile leak"
+    );
+}
+
+#[test]
 fn export_allowlist_includes_unmanaged_root() {
     // Build a snapshot with unmanaged files
     let mut snap = test_snapshot();

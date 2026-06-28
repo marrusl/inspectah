@@ -2528,12 +2528,16 @@ fn scrub_url_auth(url: &str) -> String {
 ///
 /// - `requirements.txt`: `--index-url` / `--extra-index-url` lines with auth
 /// - `package.json`: `"registry"` URLs with embedded auth
+/// - `package-lock.json`: `"resolved"` URLs with embedded auth
 /// - `Gemfile`: `source` URLs with embedded auth
+/// - `Gemfile.lock`: any `https://user:pass@host` URLs in raw text
 fn scrub_manifest_auth(filename: &str, content: &str) -> String {
     match filename {
         "requirements.txt" => scrub_requirements_txt(content),
         "package.json" => scrub_package_json(content),
+        "package-lock.json" => scrub_package_lock_json(content),
         "Gemfile" => scrub_gemfile(content),
+        "Gemfile.lock" => scrub_gemfile_lock(content),
         _ => content.to_string(),
     }
 }
@@ -2629,6 +2633,63 @@ fn scrub_gemfile(content: &str) -> String {
                         let indent = &line[..line.len() - trimmed.len()];
                         result = format!("{}{}", indent, trimmed.replace(url, &scrubbed));
                         break;
+                    }
+                }
+                result
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub `"resolved"` URLs with embedded auth in package-lock.json.
+fn scrub_package_lock_json(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.contains("\"resolved\"") {
+                scrub_json_url_value(line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub any `https://user:pass@host` URLs found in Gemfile.lock.
+fn scrub_gemfile_lock(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if line.contains("://") && line.contains('@') {
+                let mut result = line.to_string();
+                if let Some(scheme_pos) = result.find("://") {
+                    let authority_start = scheme_pos + 3;
+                    let rest = &result[authority_start..];
+                    if let Some(at_pos) = rest.find('@') {
+                        let slash_pos = rest.find('/').unwrap_or(rest.len());
+                        if at_pos < slash_pos {
+                            let url_start = result[..scheme_pos]
+                                .rfind(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                                .map(|p| p + 1)
+                                .unwrap_or(0);
+                            let url_end = result[authority_start + at_pos + 1..]
+                                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                                .map(|p| authority_start + at_pos + 1 + p)
+                                .unwrap_or(result.len());
+                            let url = &result[url_start..url_end];
+                            let scrubbed = scrub_url_auth(url);
+                            result = format!(
+                                "{}{}{}",
+                                &result[..url_start],
+                                scrubbed,
+                                &result[url_end..]
+                            );
+                        }
                     }
                 }
                 result
