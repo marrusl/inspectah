@@ -364,6 +364,7 @@ fn find_compose_files(
             path: rel_path,
             images: parse_result.services,
             include: true,
+            raw_content: Some(content.clone()),
             ..Default::default()
         });
     }
