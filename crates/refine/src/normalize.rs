@@ -167,6 +167,13 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         {
             rpm.packages_added[i].include = false;
         }
+
+        // Repo-less RPMs are pre-excluded — user must explicitly include.
+        // This is the provenance trust gate per spec. Applies to both
+        // empty source_repo and packages from disabled/removed repos.
+        if !rpm.packages_added[i].repoless_annotation.is_empty() {
+            rpm.packages_added[i].include = false;
+        }
     }
 }
 
@@ -1034,6 +1041,97 @@ mod tests {
         assert!(
             !nrs.items[0].include,
             "empty confidence should default to excluded"
+        );
+    }
+
+    // --- repo-less RPM pre-exclusion tests ---
+
+    #[test]
+    fn repoless_rpms_pre_excluded_by_normalizer() {
+        use crate::types::{RefinedPackage, Triage, TriageBucket, TriageReason, TriageTag};
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        // Build a snapshot with three packages:
+        // 1. Normal package with repo
+        // 2. Repo-less package with empty source_repo
+        // 3. Repo-less package with disabled repo
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "httpd".into(),
+                        arch: "x86_64".into(),
+                        state: PackageState::Added,
+                        source_repo: "appstream".into(),
+                        include: true,
+                        locked: false,
+                        repoless_annotation: String::new(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "custom-tool".into(),
+                        arch: "x86_64".into(),
+                        state: PackageState::Added,
+                        source_repo: String::new(),
+                        include: true,
+                        locked: false,
+                        repoless_cached: true,
+                        repoless_annotation: "Empty source_repo — cached RPM bundled (pre-excluded, no GPG verification)".into(),
+                        ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "internal-tool".into(),
+                        arch: "x86_64".into(),
+                        state: PackageState::Added,
+                        source_repo: "disabled-repo".into(),
+                        include: true,
+                        locked: false,
+                        repoless_annotation: "Disabled/removed source_repo — manual resolution needed".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // Build RefinedPackage list — all Site bucket (user-added)
+        let packages: Vec<RefinedPackage> = snap
+            .rpm
+            .as_ref()
+            .unwrap()
+            .packages_added
+            .iter()
+            .map(|entry| RefinedPackage {
+                entry: entry.clone(),
+                triage: TriageTag {
+                    triage: Triage::SingleHost(TriageBucket::Site),
+                    primary_reason: TriageReason::PackageUserAdded,
+                    annotations: Vec::new(),
+                },
+            })
+            .collect();
+
+        normalize_package_defaults(&mut snap, &packages);
+        let rpm = snap.rpm.as_ref().unwrap();
+
+        // httpd: normal package, should stay included
+        assert!(
+            rpm.packages_added[0].include,
+            "Normal package with repo should stay included"
+        );
+
+        // custom-tool: repo-less with empty source_repo, should be pre-excluded
+        assert!(
+            !rpm.packages_added[1].include,
+            "Repo-less package with empty source_repo should be pre-excluded"
+        );
+
+        // internal-tool: repo-less with disabled repo, should be pre-excluded
+        assert!(
+            !rpm.packages_added[2].include,
+            "Repo-less package with disabled repo should be pre-excluded"
         );
     }
 }
