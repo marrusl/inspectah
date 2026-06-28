@@ -2917,53 +2917,117 @@ Create `crates/web/ui/src/components/__tests__/SectionPlumbing.test.tsx`:
 
 ```typescript
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// Import MainContent and mock dependencies per existing test patterns
 
-// These test the integration of new sections into MainContent's
-// existing search/focus plumbing. They verify:
-// 1. Section renders when activeSection matches
-// 2. SectionSearch filters items and shows match count
-// 3. First item receives focus when section is selected
-// 4. Reveal highlighting works via revealItemId prop
+const langPkgFixture = [
+  { ecosystem: "pip", path: "/opt/myapp/venv", confidence: "high",
+    packages: [{ name: "flask", version: "2.3.3" }], manifest_basis: "requirements.txt", include: true },
+  { ecosystem: "npm", path: "/opt/other/app", confidence: "high",
+    packages: [{ name: "express", version: "4.18.2" }], manifest_basis: "package-lock.json", include: true },
+];
+
+const unmanagedFixture = {
+  groups: [
+    { directory: "/opt/splunk", items: [
+      { path: "/opt/splunk/bin/splunkd", size: 24000000, file_type: "ELF", include: true,
+        provenance: { mutable: false, writable_mount: false, service_working_dir: false, var_path: false } },
+    ]},
+  ],
+};
 
 describe("MainContent — Language Packages section", () => {
   it("renders LanguagePackageList when activeSection is language_packages", () => {
-    // Render MainContent with activeSection="language_packages" and
-    // viewData containing language_packages array.
-    // Assert: language-package-list test ID is in the document.
-    // Implementation: MainContent adds an `if (activeSection === "language_packages")` block.
+    render(
+      <MainContent activeSection="language_packages"
+        viewData={{ ...defaultViewData, language_packages: langPkgFixture }}
+        {...defaultProps} />,
+    );
+    expect(screen.getByTestId("language-package-list")).toBeInTheDocument();
   });
 
-  it("renders SectionSearch for language_packages section", () => {
-    // Render MainContent with activeSection="language_packages",
-    // sectionSearchOpen=true.
-    // Assert: SectionSearch component is rendered.
+  it("focuses first language package item when section is selected", () => {
+    const { rerender } = render(
+      <MainContent activeSection="packages" viewData={defaultViewData} {...defaultProps} />,
+    );
+    rerender(
+      <MainContent activeSection="language_packages"
+        viewData={{ ...defaultViewData, language_packages: langPkgFixture }}
+        {...defaultProps} />,
+    );
+    const firstItem = screen.getByTestId("section-language_packages")
+      .querySelector("[tabindex='-1']");
+    expect(document.activeElement).toBe(firstItem);
   });
 
-  it("focuses first language package row when section is selected", () => {
-    // Render MainContent with activeSection="language_packages".
-    // Assert: document.querySelector('[data-testid^="lang-env-row-"]')
-    //   receives focus (matching existing firstItem focus pattern at line ~286).
+  it("SectionSearch filters language package environments by path", async () => {
+    render(
+      <MainContent activeSection="language_packages"
+        viewData={{ ...defaultViewData, language_packages: langPkgFixture }}
+        sectionSearchOpen={true}
+        {...defaultProps} />,
+    );
+    const user = userEvent.setup();
+    const searchInput = screen.getByPlaceholderText("Filter items...");
+    await user.type(searchInput, "myapp");
+    expect(screen.getByText("/opt/myapp/venv")).toBeInTheDocument();
+    expect(screen.queryByText("/opt/other/app")).not.toBeInTheDocument();
+  });
+
+  it("reveal highlighting applies class to target item", () => {
+    render(
+      <MainContent activeSection="language_packages"
+        viewData={{ ...defaultViewData, language_packages: langPkgFixture }}
+        revealItemId="pip:/opt/myapp/venv"
+        {...defaultProps} />,
+    );
+    const item = screen.getByTestId("langpkg-item-pip:/opt/myapp/venv");
+    expect(item.className).toContain("inspectah-reveal-highlight");
   });
 });
 
 describe("MainContent — Unmanaged Files section", () => {
   it("renders UnmanagedFileList when activeSection is unmanaged_files", () => {
-    // Same pattern as above.
+    render(
+      <MainContent activeSection="unmanaged_files"
+        viewData={{ ...defaultViewData, unmanaged_files: unmanagedFixture }}
+        {...defaultProps} />,
+    );
+    expect(screen.getByTestId("unmanaged-file-list")).toBeInTheDocument();
   });
 
-  it("renders SectionSearch for unmanaged_files section", () => {
-    // Same pattern as above.
+  it("focuses first unmanaged file group header when section is selected", () => {
+    const { rerender } = render(
+      <MainContent activeSection="packages" viewData={defaultViewData} {...defaultProps} />,
+    );
+    rerender(
+      <MainContent activeSection="unmanaged_files"
+        viewData={{ ...defaultViewData, unmanaged_files: unmanagedFixture }}
+        {...defaultProps} />,
+    );
+    const firstGroup = screen.getByTestId("section-unmanaged_files")
+      .querySelector("[role='button']");
+    expect(document.activeElement).toBe(firstGroup);
   });
 
-  it("focuses first unmanaged file group when section is selected", () => {
-    // Same pattern as above.
+  it("SectionSearch auto-expands groups containing matching items", async () => {
+    render(
+      <MainContent activeSection="unmanaged_files"
+        viewData={{ ...defaultViewData, unmanaged_files: unmanagedFixture }}
+        sectionSearchOpen={true}
+        {...defaultProps} />,
+    );
+    const user = userEvent.setup();
+    const searchInput = screen.getByPlaceholderText("Filter items...");
+    await user.type(searchInput, "splunkd");
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")!;
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("/opt/splunk/bin/splunkd")).toBeInTheDocument();
   });
 });
 ```
-
-Note: These tests follow the same pattern as MainContent's existing section tests (lines 304-509 in the current file). The exact test implementation depends on MainContent's test harness — adapt to match the existing `MainContent.test.tsx` patterns for rendering with mock ViewResponse data.
 
 - [ ] **Step 2: Add SECTION_LABELS entries to MainContent**
 
