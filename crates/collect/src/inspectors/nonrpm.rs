@@ -956,26 +956,51 @@ fn parse_package_lock(content: &str) -> Vec<NpmPackage> {
 /// Scan for gem packages via Gemfile.lock files.
 fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
     for root in SCAN_ROOTS {
-        find_files_matching(exec, root, "Gemfile.lock", &mut |path| {
-            let rel_path = path.trim_start_matches('/').to_string();
+        find_files_matching(exec, root, "Gemfile.lock", &mut |lockfile_path| {
+            let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
+            let rel_path = project_dir
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .to_string();
             if is_ostree && rel_path.starts_with("var/") {
                 return;
             }
 
-            if let Ok(content) = exec.read_file(Path::new(path)) {
-                let gems = parse_gemfile_lock(&content);
-                for gem in gems {
-                    section.items.push(NonRpmItem {
-                        path: rel_path.clone(),
-                        name: gem.name,
-                        method: "gem lockfile".to_string(),
-                        confidence: "high".to_string(),
-                        version: gem.version,
-                        include: true,
-                        ..Default::default()
-                    });
-                }
+            let mut manifest_files = HashMap::new();
+            let mut packages = Vec::new();
+
+            // Collect lockfile content and parse packages.
+            if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
+                manifest_files.insert("Gemfile.lock".to_string(), content.clone());
+                packages = parse_gemfile_lock(&content)
+                    .into_iter()
+                    .map(|g| LanguagePackage {
+                        name: g.name,
+                        version: g.version,
+                    })
+                    .collect();
             }
+
+            // Collect Gemfile if present.
+            let gemfile_path = project_dir.join("Gemfile");
+            if let Ok(content) = exec.read_file(&gemfile_path) {
+                manifest_files.insert("Gemfile".to_string(), content);
+            }
+
+            section.items.push(NonRpmItem {
+                path: rel_path,
+                name: project_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                method: "gem lockfile".to_string(),
+                confidence: "high".to_string(),
+                include: true,
+                packages,
+                manifest_files,
+                ..Default::default()
+            });
         });
     }
 }
@@ -1640,20 +1665,60 @@ mod tests {
 
     #[test]
     fn test_scan_gem_packages() {
-        let gems = parse_gemfile_lock(gemfile_lock_fixture());
-        assert!(!gems.is_empty(), "should find gems in Gemfile.lock");
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["Gemfile.lock", "Gemfile"])
+            .with_file("/opt/myapp/Gemfile.lock", gemfile_lock_fixture())
+            .with_file(
+                "/opt/myapp/Gemfile",
+                "source 'https://rubygems.org'\ngem 'sinatra'\n",
+            )
+            .with_dir("/srv", vec![])
+            .with_dir("/usr/local", vec![]);
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_gem_packages(&exec, &mut section, false);
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should emit one item per project, not per package"
+        );
+
+        let item = &section.items[0];
+        assert_eq!(item.path, "opt/myapp");
+        assert_eq!(item.name, "myapp");
+        assert_eq!(item.method, "gem lockfile");
+        assert_eq!(item.confidence, "high");
+        assert!(item.include);
+
+        // Packages vec should contain the individual gem dependencies.
         assert!(
-            gems.iter()
-                .any(|g| g.name == "rack" && g.version == "3.0.8"),
-            "should find rack gem, got: {:?}",
-            gems.iter()
-                .map(|g| format!("{}={}", g.name, g.version))
-                .collect::<Vec<_>>()
+            item.packages.len() >= 2,
+            "should have at least 2 packages in vec, got {}",
+            item.packages.len()
         );
         assert!(
-            gems.iter()
-                .any(|g| g.name == "sinatra" && g.version == "3.1.0"),
-            "should find sinatra gem"
+            item.packages
+                .iter()
+                .any(|p| p.name == "rack" && p.version == "3.0.8"),
+            "should find rack package"
+        );
+        assert!(
+            item.packages
+                .iter()
+                .any(|p| p.name == "sinatra" && p.version == "3.1.0"),
+            "should find sinatra package"
+        );
+
+        // Manifest files should capture raw content.
+        assert!(
+            item.manifest_files.contains_key("Gemfile.lock"),
+            "should capture Gemfile.lock"
+        );
+        assert!(
+            item.manifest_files.contains_key("Gemfile"),
+            "should capture Gemfile"
         );
     }
 
