@@ -49,9 +49,7 @@ describe("useRpmUpload", () => {
     act(() => {
       result.current.initFromBackend([]);
     });
-    expect(
-      result.current.getRowState("normal-package.x86_64"),
-    ).toBeUndefined();
+    expect(result.current.getRowState("normal-package.x86_64")).toBeUndefined();
   });
 
   it("uploadRpm calls POST /api/upload-rpm and transitions state", async () => {
@@ -66,13 +64,9 @@ describe("useRpmUpload", () => {
         },
       ]);
     });
-    const mockFile = new File(
-      ["rpm-content"],
-      "nginx-1.24-1.el9.x86_64.rpm",
-      {
-        type: "application/x-rpm",
-      },
-    );
+    const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm", {
+      type: "application/x-rpm",
+    });
     await act(async () => {
       await result.current.uploadRpm("nginx.x86_64", mockFile);
     });
@@ -86,7 +80,7 @@ describe("useRpmUpload", () => {
     );
   });
 
-  it("removeUpload transitions back to needs_upload", async () => {
+  it("removeUpload calls DELETE and transitions back to needs_upload", async () => {
     const { result } = renderHook(() => useRpmUpload());
     act(() => {
       result.current.initFromBackend([
@@ -105,10 +99,50 @@ describe("useRpmUpload", () => {
     expect(result.current.getRowState("nginx.x86_64")).toBe(
       "uploaded_excluded",
     );
-    act(() => {
-      result.current.removeUpload("nginx.x86_64");
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    await act(async () => {
+      await result.current.removeUpload("nginx.x86_64");
     });
+    // Verify DELETE was called with the correct URL and method
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/upload-rpm/nginx.x86_64",
+      expect.objectContaining({ method: "DELETE" }),
+    );
     expect(result.current.getRowState("nginx.x86_64")).toBe("needs_upload");
+  });
+
+  it("removeUpload does not clear state on DELETE failure", async () => {
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        {
+          name: "nginx",
+          arch: "x86_64",
+          repoless_annotation: "manual resolution",
+          repoless_cached: false,
+        },
+      ]);
+    });
+    const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm");
+    await act(async () => {
+      await result.current.uploadRpm("nginx.x86_64", mockFile);
+    });
+    expect(result.current.getRowState("nginx.x86_64")).toBe(
+      "uploaded_excluded",
+    );
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      statusText: "Not Found",
+    });
+    await expect(
+      act(async () => {
+        await result.current.removeUpload("nginx.x86_64");
+      }),
+    ).rejects.toThrow("Remove upload failed");
+    // State should remain uploaded_excluded since DELETE failed
+    expect(result.current.getRowState("nginx.x86_64")).toBe(
+      "uploaded_excluded",
+    );
   });
 
   it("validateFilename accepts matching NEVRA", () => {

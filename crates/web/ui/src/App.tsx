@@ -332,7 +332,9 @@ function SingleHostApp({
 
   const handleRemoveRpmUpload = useCallback(
     (nameArch: string) => {
-      rpmUpload.removeUpload(nameArch);
+      rpmUpload.removeUpload(nameArch).catch((err: unknown) => {
+        console.error("Failed to remove uploaded RPM:", err);
+      });
     },
     [rpmUpload],
   );

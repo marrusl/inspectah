@@ -1,4 +1,4 @@
-use axum::extract::{Multipart, State};
+use axum::extract::{Multipart, Path, State};
 use axum::response::Json;
 use std::sync::Arc;
 
@@ -62,5 +62,36 @@ pub async fn upload_rpm(
     Ok(Json(serde_json::json!({
         "uploaded": uploaded_count,
         "status": "staged"
+    })))
+}
+
+/// Remove a previously uploaded RPM file.
+///
+/// Accepts `name_arch` in canonical `name.arch` format (e.g. `nginx.x86_64`).
+/// Reverses the effect of `upload_rpm`: deletes the staged file and clears
+/// the `repoless_cached` / `cache_path` fields on the matching PackageEntry.
+pub async fn delete_uploaded_rpm(
+    State(state): State<Arc<AppState>>,
+    Path(name_arch): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Split "name.arch" on the last dot to handle package names containing dots
+    let (name, arch) = name_arch.rsplit_once('.').ok_or_else(|| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid name.arch format: {name_arch}"
+        )))
+    })?;
+
+    let mut session = state.session.lock().unwrap();
+    let found = session.unmark_uploaded_rpm(name, arch).map_err(AppError)?;
+
+    if !found {
+        return Err(AppError(inspectah_refine::types::RefineError::NotFound(
+            format!("no uploaded RPM for {name_arch}"),
+        )));
+    }
+
+    Ok(Json(serde_json::json!({
+        "removed": name_arch,
+        "status": "removed"
     })))
 }

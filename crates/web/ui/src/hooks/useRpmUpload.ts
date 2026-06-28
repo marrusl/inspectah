@@ -27,7 +27,7 @@ export interface UseRpmUploadResult {
   /** Upload an RPM via POST /api/upload-rpm. Transitions to uploaded_excluded on success. */
   uploadRpm: (packageName: string, file: File) => Promise<void>;
   /** Remove a local upload, reverting to needs_upload. */
-  removeUpload: (packageName: string) => void;
+  removeUpload: (packageName: string) => Promise<void>;
   /** Validate a filename against expected NEVRA. */
   validateFilename: (
     packageName: string,
@@ -113,7 +113,15 @@ export function useRpmUpload(): UseRpmUploadResult {
     });
   }, []);
 
-  const removeUpload = useCallback((packageName: string) => {
+  const removeUpload = useCallback(async (packageName: string) => {
+    const response = await fetch(`/api/upload-rpm/${packageName}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Remove upload failed: ${response.statusText}`);
+    }
+
     setUploadedSet((prev) => {
       const next = new Set(prev);
       next.delete(packageName);

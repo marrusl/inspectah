@@ -9,7 +9,7 @@ pub mod web_types;
 use axum::Router;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use handlers::AppState;
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -29,7 +29,7 @@ async fn origin_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if req.method() == Method::POST {
+    if req.method() == Method::POST || req.method() == Method::DELETE {
         match req.headers().get("origin") {
             Some(origin)
                 if normalize_loopback(origin.to_str().unwrap_or(""))
@@ -59,7 +59,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             HeaderValue::from_str(served_origin).unwrap(),
             HeaderValue::from_str(&localhost_origin).unwrap(),
         ]))
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderName::from_static(handlers::ACK_SENSITIVE_HEADER),
@@ -97,6 +97,10 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route(
             "/api/upload-rpm",
             post(upload::upload_rpm).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)), // 500 MiB for RPM uploads
+        )
+        .route(
+            "/api/upload-rpm/{name_arch}",
+            delete(upload::delete_uploaded_rpm),
         )
         .layer(cors)
         .layer(axum::middleware::from_fn(move |req, next| {

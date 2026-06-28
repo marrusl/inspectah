@@ -21,6 +21,7 @@ impl IntoResponse for AppError {
             RefineError::UntrustedSnapshot(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             RefineError::ArchiveSafety(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             RefineError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            RefineError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             // Internal errors — do not leak details
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into()),
         };

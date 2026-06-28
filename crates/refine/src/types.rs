@@ -648,6 +648,8 @@ pub enum RefineError {
     ArchiveSafety(String),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

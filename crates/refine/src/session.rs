@@ -634,6 +634,47 @@ impl RefineSession {
         }
     }
 
+    /// Reverse the effect of `mark_uploaded_rpm` for a given `name.arch`.
+    ///
+    /// Clears `repoless_cached` and `cache_path` on the matching PackageEntry,
+    /// deletes the staged RPM file from the upload directory, and invalidates
+    /// cached views so subsequent renders and exports reflect the removal.
+    ///
+    /// Returns `Ok(true)` if a matching upload was found and removed,
+    /// `Ok(false)` if no matching uploaded RPM existed.
+    pub fn unmark_uploaded_rpm(&mut self, name: &str, arch: &str) -> Result<bool, RefineError> {
+        let mut found = false;
+
+        if let Some(ref mut rpm) = self.original.rpm {
+            for pkg in &mut rpm.packages_added {
+                if pkg.name == name && pkg.arch == arch && pkg.repoless_cached {
+                    // Delete the staged file if it exists
+                    if let Some(ref cache_path) = pkg.cache_path {
+                        let path = std::path::Path::new(cache_path);
+                        if path.exists() {
+                            std::fs::remove_file(path)?;
+                        }
+                    }
+
+                    pkg.repoless_cached = false;
+                    pkg.cache_path = None;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if found {
+            self.cached_view = None;
+            self.cached_render_context = None;
+            self.cached_decisions = None;
+            self.generation += 1;
+            self.recompute_view();
+        }
+
+        Ok(found)
+    }
+
     /// Returns the upload directory path, if set.
     pub fn upload_dir_path(&self) -> Option<&Path> {
         self.upload_dir.as_deref()
