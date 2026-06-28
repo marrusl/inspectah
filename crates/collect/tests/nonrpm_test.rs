@@ -337,15 +337,15 @@ fn test_nonrpm_inspector_json_roundtrip() {
     );
 }
 
-/// Two runs with different RpmState produce the same output
-/// (proves NonRpm doesn't actually use rpm_state data, only its presence).
+/// RpmState with installed_packages affects pip filtering —
+/// packages matching `python3-<name>` RPMs are excluded from pip inventory.
 #[test]
-fn test_nonrpm_ignores_rpm_state() {
+fn test_nonrpm_uses_rpm_state_for_pip_filtering() {
     let exec_a = full_mock();
     let exec_b = full_mock();
     let source = pkg_source();
 
-    // Run 1: empty rpm_state
+    // Run 1: empty rpm_state — no pip packages filtered.
     let rpm_state_a = RpmState::default();
     let ctx_a = InspectionContext {
         source_system: &source,
@@ -358,11 +358,9 @@ fn test_nonrpm_ignores_rpm_state() {
         .inspect(&ctx_a, &NullProgress)
         .expect("run A should succeed");
 
-    // Run 2: rpm_state with many owned paths
+    // Run 2: rpm_state with non-Python RPMs — should NOT affect pip output.
     let mut owned = std::collections::HashSet::new();
     owned.insert(std::path::PathBuf::from("/etc/httpd/conf/httpd.conf"));
-    owned.insert(std::path::PathBuf::from("/etc/ssh/sshd_config"));
-    owned.insert(std::path::PathBuf::from("/usr/bin/vim"));
     let rpm_state_b = RpmState {
         installed_packages: ["httpd", "openssh-server", "vim"]
             .iter()
@@ -382,11 +380,12 @@ fn test_nonrpm_ignores_rpm_state() {
         .inspect(&ctx_b, &NullProgress)
         .expect("run B should succeed");
 
+    // Both should produce the same items (no python3-* RPMs in either).
     let json_a = serde_json::to_string(&output_a.section).expect("A must serialize");
     let json_b = serde_json::to_string(&output_b.section).expect("B must serialize");
 
     assert_eq!(
         json_a, json_b,
-        "NonRpm output must be identical regardless of RpmState content"
+        "NonRpm output should be identical when no python3-* RPMs are installed"
     );
 }

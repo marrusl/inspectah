@@ -1,6 +1,6 @@
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
-    InspectionContext, Inspector, InspectorError, InspectorOutput,
+    InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
@@ -171,7 +171,7 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::PipPackages,
         });
         let pre = section.items.len();
-        scan_pip_packages(exec, &mut section, is_ostree);
+        scan_pip_packages(exec, &mut section, is_ostree, ctx.rpm_state);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -698,8 +698,36 @@ fn parse_dist_info_name(s: &str) -> (String, String) {
 // pip system-level scanning
 // ---------------------------------------------------------------------------
 
+/// Check whether a pip package name corresponds to an RPM-installed package.
+///
+/// RHEL/Fedora package Python modules as `python3-<name>` RPMs. The dist-info
+/// directory name uses PEP 503 normalization (hyphens become underscores, etc.)
+/// so we normalize both sides before comparing.
+fn is_pip_rpm_owned(name: &str, rpm_state: Option<&RpmState>) -> bool {
+    let rs = match rpm_state {
+        Some(rs) => rs,
+        None => return false,
+    };
+    // Normalize: lowercase, replace hyphens/dots/underscores with a single
+    // canonical separator (hyphen) to match RPM naming conventions.
+    let normalized = name.to_lowercase().replace(['_', '.'], "-");
+    let rpm_name = format!("python3-{normalized}");
+    rs.installed_packages.contains(&rpm_name)
+}
+
 /// Scan system-level pip packages via dist-info directories.
-fn scan_pip_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
+///
+/// When `rpm_state` is `Some`, packages whose names match an installed
+/// `python3-<name>` RPM are excluded from the inventory. All surviving
+/// items get `rpm_filtered: true` to signal that RPM cross-referencing
+/// was performed.
+fn scan_pip_packages(
+    exec: &dyn Executor,
+    section: &mut NonRpmSoftwareSection,
+    is_ostree: bool,
+    rpm_state: Option<&RpmState>,
+) {
+    let has_rpm_state = rpm_state.is_some();
     let search_roots = &[
         "/usr/lib/python3",
         "/usr/lib64/python3",
@@ -742,12 +770,24 @@ fn scan_pip_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                         continue;
                     }
 
+                    // Skip packages owned by an RPM (e.g., python3-requests).
+                    if is_pip_rpm_owned(&name, rpm_state) {
+                        continue;
+                    }
+
+                    let confidence = if has_rpm_state {
+                        "medium" // dist-info detection with RPM cross-ref
+                    } else {
+                        "low" // no RPM filtering available
+                    };
+
                     section.items.push(NonRpmItem {
                         path: rel_path.clone(),
                         name: name.clone(),
                         method: "pip dist-info".to_string(),
-                        confidence: "medium".to_string(),
+                        confidence: confidence.to_string(),
                         packages: vec![PipPackage { name, version }],
+                        rpm_filtered: has_rpm_state,
                         include: true,
                         ..Default::default()
                     });
