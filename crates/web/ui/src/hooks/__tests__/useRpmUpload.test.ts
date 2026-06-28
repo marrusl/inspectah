@@ -24,7 +24,9 @@ describe("useRpmUpload", () => {
         },
       ]);
     });
-    expect(result.current.getRowState("custom-tool")).toBe("cached_excluded");
+    expect(result.current.getRowState("custom-tool.x86_64")).toBe(
+      "cached_excluded",
+    );
   });
 
   it("derives needs_upload state from backend fields when not cached", () => {
@@ -39,7 +41,7 @@ describe("useRpmUpload", () => {
         },
       ]);
     });
-    expect(result.current.getRowState("my-agent")).toBe("needs_upload");
+    expect(result.current.getRowState("my-agent.x86_64")).toBe("needs_upload");
   });
 
   it("returns undefined for non-repoless packages", () => {
@@ -47,7 +49,9 @@ describe("useRpmUpload", () => {
     act(() => {
       result.current.initFromBackend([]);
     });
-    expect(result.current.getRowState("normal-package")).toBeUndefined();
+    expect(
+      result.current.getRowState("normal-package.x86_64"),
+    ).toBeUndefined();
   });
 
   it("uploadRpm calls POST /api/upload-rpm and transitions state", async () => {
@@ -62,18 +66,24 @@ describe("useRpmUpload", () => {
         },
       ]);
     });
-    const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm", {
-      type: "application/x-rpm",
-    });
+    const mockFile = new File(
+      ["rpm-content"],
+      "nginx-1.24-1.el9.x86_64.rpm",
+      {
+        type: "application/x-rpm",
+      },
+    );
     await act(async () => {
-      await result.current.uploadRpm("nginx", mockFile);
+      await result.current.uploadRpm("nginx.x86_64", mockFile);
     });
     // Verify POST was called
     expect(mockFetch).toHaveBeenCalledWith(
       "/api/upload-rpm",
       expect.objectContaining({ method: "POST" }),
     );
-    expect(result.current.getRowState("nginx")).toBe("uploaded_excluded");
+    expect(result.current.getRowState("nginx.x86_64")).toBe(
+      "uploaded_excluded",
+    );
   });
 
   it("removeUpload transitions back to needs_upload", async () => {
@@ -90,13 +100,15 @@ describe("useRpmUpload", () => {
     });
     const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm");
     await act(async () => {
-      await result.current.uploadRpm("nginx", mockFile);
+      await result.current.uploadRpm("nginx.x86_64", mockFile);
     });
-    expect(result.current.getRowState("nginx")).toBe("uploaded_excluded");
+    expect(result.current.getRowState("nginx.x86_64")).toBe(
+      "uploaded_excluded",
+    );
     act(() => {
-      result.current.removeUpload("nginx");
+      result.current.removeUpload("nginx.x86_64");
     });
-    expect(result.current.getRowState("nginx")).toBe("needs_upload");
+    expect(result.current.getRowState("nginx.x86_64")).toBe("needs_upload");
   });
 
   it("validateFilename accepts matching NEVRA", () => {
@@ -159,12 +171,12 @@ describe("useRpmUpload", () => {
     expect(result.current.needsUploadCount).toBe(3);
     const mockFile = new File(["rpm"], "nginx-1.0-1.el9.x86_64.rpm");
     await act(async () => {
-      await result.current.uploadRpm("nginx", mockFile);
+      await result.current.uploadRpm("nginx.x86_64", mockFile);
     });
     expect(result.current.needsUploadCount).toBe(2);
   });
 
-  it("batchMatch matches files to packages by name prefix", () => {
+  it("batchMatch matches files to packages by name.arch", () => {
     const { result } = renderHook(() => useRpmUpload());
     act(() => {
       result.current.initFromBackend([
@@ -217,7 +229,42 @@ describe("useRpmUpload", () => {
       matchResult = result.current.batchMatch(files);
     });
     expect(matchResult!.conflicts).toHaveLength(1);
-    expect(matchResult!.conflicts[0].packageName).toBe("nginx");
+    expect(matchResult!.conflicts[0].packageName).toBe("nginx.x86_64");
     expect(matchResult!.conflicts[0].files).toHaveLength(2);
+  });
+
+  it("disambiguates multilib packages with same name but different arch", () => {
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        {
+          name: "glibc",
+          arch: "x86_64",
+          repoless_annotation: "manual",
+          repoless_cached: false,
+        },
+        {
+          name: "glibc",
+          arch: "i686",
+          repoless_annotation: "manual",
+          repoless_cached: false,
+        },
+      ]);
+    });
+    expect(result.current.getRowState("glibc.x86_64")).toBe("needs_upload");
+    expect(result.current.getRowState("glibc.i686")).toBe("needs_upload");
+    expect(result.current.needsUploadCount).toBe(2);
+
+    const files = [
+      new File(["rpm1"], "glibc-2.34-1.el9.x86_64.rpm"),
+      new File(["rpm2"], "glibc-2.34-1.el9.i686.rpm"),
+    ];
+    let matchResult: ReturnType<typeof result.current.batchMatch>;
+    act(() => {
+      matchResult = result.current.batchMatch(files);
+    });
+    expect(matchResult!.matched).toHaveLength(2);
+    expect(matchResult!.unmatched).toHaveLength(0);
+    expect(matchResult!.conflicts).toHaveLength(0);
   });
 });

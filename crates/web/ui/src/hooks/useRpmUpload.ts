@@ -44,7 +44,19 @@ export interface UseRpmUploadResult {
   needsUploadPackages: string[];
 }
 
-/** Extract the package name prefix from an RPM filename (before first hyphen followed by a digit). */
+/**
+ * Extract the package name.arch from an RPM filename.
+ * RPM filenames follow the NEVRA pattern: name-version-release.arch.rpm
+ * We match the arch suffix to build the canonical "name.arch" identity.
+ */
+function extractPackageNameArch(filename: string): string | null {
+  // Match: name-version-release.arch.rpm
+  const match = filename.match(/^(.+?)-\d.*\.(\w+)\.rpm$/);
+  if (!match) return null;
+  return `${match[1]}.${match[2]}`;
+}
+
+/** Extract just the bare package name from an RPM filename. */
 function extractPackageName(filename: string): string | null {
   const match = filename.match(/^(.+?)-\d/);
   return match ? match[1] : null;
@@ -59,7 +71,8 @@ export function useRpmUpload(): UseRpmUploadResult {
   const initFromBackend = useCallback((entries: RepolessEntry[]) => {
     const map = new Map<string, RepolessEntry>();
     for (const e of entries) {
-      map.set(e.name, e);
+      // Key by canonical "name.arch" to disambiguate multilib packages
+      map.set(`${e.name}.${e.arch}`, e);
     }
     setRepolessMap(map);
   }, []);
@@ -168,21 +181,36 @@ export function useRpmUpload(): UseRpmUploadResult {
       const conflictMap = new Map<string, File[]>();
 
       for (const file of files) {
-        const extractedName = extractPackageName(file.name);
-        if (!extractedName || !repolessMap.has(extractedName)) {
+        // Try canonical name.arch extraction first
+        const nameArch = extractPackageNameArch(file.name);
+        // Fall back to bare name match against map keys
+        const key =
+          nameArch && repolessMap.has(nameArch)
+            ? nameArch
+            : (() => {
+                const bareName = extractPackageName(file.name);
+                if (!bareName) return null;
+                // Find a map key that starts with this bare name
+                for (const k of repolessMap.keys()) {
+                  if (k.startsWith(`${bareName}.`)) return k;
+                }
+                return null;
+              })();
+
+        if (!key) {
           unmatched.push(file);
           continue;
         }
 
-        const existing = conflictMap.get(extractedName);
+        const existing = conflictMap.get(key);
         if (existing) {
           existing.push(file);
-        } else if (matched.some((m) => m.packageName === extractedName)) {
-          const prev = matched.find((m) => m.packageName === extractedName)!;
-          conflictMap.set(extractedName, [prev.file, file]);
+        } else if (matched.some((m) => m.packageName === key)) {
+          const prev = matched.find((m) => m.packageName === key)!;
+          conflictMap.set(key, [prev.file, file]);
           matched.splice(matched.indexOf(prev), 1);
         } else {
-          matched.push({ packageName: extractedName, file });
+          matched.push({ packageName: key, file });
         }
       }
 

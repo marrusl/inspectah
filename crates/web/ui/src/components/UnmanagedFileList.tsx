@@ -311,15 +311,23 @@ export function UnmanagedFileList({
     .filter((i) => i.include)
     .reduce((sum, i) => sum + i.size, 0);
 
-  /** Schedule a debounced rollup announcement for screen readers. */
+  // Store latest counts in a ref so the debounced callback always
+  // reads post-toggle values instead of stale closure captures.
+  const countsRef = useRef({ includedCount, totalCount, includedSize, totalSize });
+  countsRef.current = { includedCount, totalCount, includedSize, totalSize };
+
+  /** Schedule a debounced rollup announcement for screen readers.
+   *  Reads from countsRef so the announced totals reflect the
+   *  post-toggle state, not the pre-toggle closure capture. */
   const scheduleRollupAnnounce = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
+      const c = countsRef.current;
       setRollupAnnounceText(
-        `${includedCount} of ${totalCount} items included, ~${formatSize(includedSize)} of ~${formatSize(totalSize)}`,
+        `${c.includedCount} of ${c.totalCount} items included, ~${formatSize(c.includedSize)} of ~${formatSize(c.totalSize)}`,
       );
     }, ROLLUP_ANNOUNCE_DELAY_MS);
-  }, [includedCount, totalCount, includedSize, totalSize]);
+  }, []);
 
   // Clean up debounce and announce timeouts on unmount.
   useEffect(() => {

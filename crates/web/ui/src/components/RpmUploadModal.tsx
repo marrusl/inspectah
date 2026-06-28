@@ -81,13 +81,7 @@ export function RpmUploadModal({
   }, [isOpen]);
 
   const handleFileChange = useCallback(
-    (_event: unknown, selectedFile: File | undefined) => {
-      if (!selectedFile) {
-        setFile(null);
-        setFilename("");
-        setValidation(null);
-        return;
-      }
+    (_event: unknown, selectedFile: File) => {
       setFile(selectedFile);
       setFilename(selectedFile.name);
       setValidation(
@@ -150,7 +144,7 @@ export function RpmUploadModal({
             id={`rpm-upload-${packageName}`}
             value={file ?? undefined}
             filename={filename}
-            onChange={handleFileChange}
+            onFileInputChange={handleFileChange}
             onClearClick={handleClear}
             browseButtonText="Choose RPM"
             dropzoneProps={{

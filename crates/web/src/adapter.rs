@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
+use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
@@ -22,8 +23,10 @@ use inspectah_refine::session::RefineSession;
 
 use crate::web_types::{
     ContextItem, ContextSubsection, DropInDecisionDto, FlatpakDecisionDto, GroupInfo,
-    GroupMemberInfo, PackageProvenance, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
-    ServiceDecisionDto, SysctlDecisionDto, TunedDecisionDto, VersionChangeEntry, ViewResponse,
+    GroupMemberInfo, LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto,
+    QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto, SysctlDecisionDto,
+    TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto, VersionChangeEntry,
+    ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -303,6 +306,79 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         }
     }
 
+    // -- Language packages (from non_rpm_software items with lang field) ------
+
+    let snap = session.snapshot();
+
+    let language_packages: Vec<LanguagePackageEnvDto> = snap
+        .non_rpm_software
+        .as_ref()
+        .map(|nrs| {
+            nrs.items
+                .iter()
+                .filter(|item| !item.lang.is_empty())
+                .map(|item| {
+                    let manifest_basis = item
+                        .manifest_files
+                        .keys()
+                        .next()
+                        .cloned()
+                        .unwrap_or_default();
+                    LanguagePackageEnvDto {
+                        ecosystem: item.lang.clone(),
+                        path: item.path.clone(),
+                        method: item.method.clone(),
+                        packages: item.packages.iter().map(|p| p.name.clone()).collect(),
+                        confidence: item.confidence.clone(),
+                        manifest_basis,
+                        include: item.include,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // -- Unmanaged files (grouped by parent directory) -----------------------
+
+    let has_unmanaged_scan = snap.unmanaged_files.is_some();
+
+    let unmanaged_files: Vec<UnmanagedFileGroupDto> = snap
+        .unmanaged_files
+        .as_ref()
+        .map(|ufs| {
+            // Group files by parent directory
+            let mut groups: HashMap<String, Vec<UnmanagedFileItemDto>> = HashMap::new();
+            for file in &ufs.items {
+                let dir = Path::new(&file.path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "/".to_string());
+                groups.entry(dir).or_default().push(UnmanagedFileItemDto {
+                    path: file.path.clone(),
+                    size: file.size,
+                    is_var_path: file.under_var,
+                    include: file.include,
+                    provenance: ProvenanceSignalsDto {
+                        file_type: file_type_str(&file.file_type),
+                        last_modified: file.provenance.last_modified,
+                        uid: file.provenance.uid,
+                        gid: file.provenance.gid,
+                        permissions: file.provenance.permissions.clone(),
+                        mutability: file.provenance.mutable,
+                        writable_mount: file.provenance.writable_mount,
+                        service_working_dir: file.provenance.service_working_dir,
+                    },
+                });
+            }
+            let mut result: Vec<UnmanagedFileGroupDto> = groups
+                .into_iter()
+                .map(|(directory, items)| UnmanagedFileGroupDto { directory, items })
+                .collect();
+            result.sort_by(|a, b| a.directory.cmp(&b.directory));
+            result
+        })
+        .unwrap_or_default();
+
     ViewResponse {
         view,
         repo_groups,
@@ -318,6 +394,9 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         package_groups,
         package_provenances,
         session_is_sensitive: decisions.is_sensitive,
+        language_packages,
+        unmanaged_files,
+        has_unmanaged_scan,
     }
 }
 
@@ -329,6 +408,21 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
 // (subtitles, searchable_text, display_name, empty_reason strings) is
 // ported from each normalize_* function in handlers.rs.
 // =========================================================================
+
+// -- FileType helper -------------------------------------------------------
+
+/// Map a `FileType` enum variant to the snake_case string the frontend expects.
+fn file_type_str(ft: &FileType) -> String {
+    match ft {
+        FileType::ElfBinary => "elf_binary".to_string(),
+        FileType::Jar => "jar".to_string(),
+        FileType::Script => "script".to_string(),
+        FileType::DataFile => "data_file".to_string(),
+        FileType::Config => "config".to_string(),
+        FileType::Symlink => "symlink".to_string(),
+        FileType::Other => "other".to_string(),
+    }
+}
 
 // -- Services --------------------------------------------------------------
 
@@ -1537,6 +1631,123 @@ mod tests {
 
         assert_eq!(section.subsections[4].id, "proxy");
         assert_eq!(section.subsections[4].items.len(), 1);
+    }
+
+    #[test]
+    fn build_web_view_includes_language_packages() {
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        let mut snap = InspectionSnapshot::new();
+        let mut manifest_files = std::collections::HashMap::new();
+        manifest_files.insert("requirements.txt".to_string(), "flask==2.0".to_string());
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/app/venv".into(),
+                name: "app-venv".into(),
+                method: "pip-freeze".into(),
+                confidence: "high".into(),
+                include: true,
+                lang: "pip".into(),
+                packages: vec![LanguagePackage {
+                    name: "flask".into(),
+                    version: "2.0".into(),
+                }],
+                manifest_files,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let session = RefineSession::new(snap);
+        let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
+
+        let lang = json["language_packages"].as_array().unwrap();
+        assert_eq!(lang.len(), 1);
+        assert_eq!(lang[0]["ecosystem"], "pip");
+        assert_eq!(lang[0]["path"], "/opt/app/venv");
+        assert_eq!(lang[0]["packages"][0], "flask");
+        assert_eq!(lang[0]["manifest_basis"], "requirements.txt");
+        assert_eq!(lang[0]["include"], true);
+        assert_eq!(json["has_unmanaged_scan"], false);
+    }
+
+    #[test]
+    fn build_web_view_includes_unmanaged_files() {
+        use inspectah_core::types::nonrpm::{
+            FileType, ProvenanceSignals, UnmanagedFile, UnmanagedFileSection,
+        };
+
+        let mut snap = InspectionSnapshot::new();
+        snap.unmanaged_files = Some(UnmanagedFileSection {
+            items: vec![
+                UnmanagedFile {
+                    path: "/opt/splunk/bin/splunkd".into(),
+                    size: 52428800,
+                    file_type: FileType::ElfBinary,
+                    provenance: ProvenanceSignals {
+                        file_type: FileType::ElfBinary,
+                        last_modified: 1700000000,
+                        uid: 0,
+                        gid: 0,
+                        permissions: "0755".into(),
+                        mutable: false,
+                        writable_mount: false,
+                        service_working_dir: false,
+                    },
+                    include: true,
+                    under_var: false,
+                    ..Default::default()
+                },
+                UnmanagedFile {
+                    path: "/opt/splunk/etc/config.ini".into(),
+                    size: 1024,
+                    file_type: FileType::Config,
+                    provenance: ProvenanceSignals {
+                        file_type: FileType::Config,
+                        last_modified: 1700000000,
+                        uid: 0,
+                        gid: 0,
+                        permissions: "0644".into(),
+                        mutable: true,
+                        writable_mount: false,
+                        service_working_dir: false,
+                    },
+                    include: false,
+                    under_var: false,
+                    ..Default::default()
+                },
+            ],
+            total_size: 52429824,
+            total_count: 2,
+        });
+        let session = RefineSession::new(snap);
+        let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
+
+        assert_eq!(json["has_unmanaged_scan"], true);
+        let groups = json["unmanaged_files"].as_array().unwrap();
+        // Both files under /opt/splunk — but in different subdirectories
+        // /opt/splunk/bin and /opt/splunk/etc
+        assert_eq!(groups.len(), 2);
+
+        // Find the bin group
+        let bin_group = groups
+            .iter()
+            .find(|g| g["directory"].as_str() == Some("/opt/splunk/bin"))
+            .expect("bin group");
+        let bin_items = bin_group["items"].as_array().unwrap();
+        assert_eq!(bin_items.len(), 1);
+        assert_eq!(bin_items[0]["path"], "/opt/splunk/bin/splunkd");
+        assert_eq!(bin_items[0]["provenance"]["file_type"], "elf_binary");
+        assert_eq!(bin_items[0]["include"], true);
+
+        // Find the etc group
+        let etc_group = groups
+            .iter()
+            .find(|g| g["directory"].as_str() == Some("/opt/splunk/etc"))
+            .expect("etc group");
+        let etc_items = etc_group["items"].as_array().unwrap();
+        assert_eq!(etc_items.len(), 1);
+        assert_eq!(etc_items[0]["include"], false);
+        assert_eq!(etc_items[0]["provenance"]["mutability"], true);
     }
 
     #[test]

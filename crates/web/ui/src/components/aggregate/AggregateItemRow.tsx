@@ -78,6 +78,10 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.name;
     case "Group":
       return itemId.key.name;
+    case "LanguageEnv":
+      return `${itemId.key.ecosystem}:${itemId.key.path}`;
+    case "UnmanagedFile":
+      return itemId.key.path;
   }
 }
 

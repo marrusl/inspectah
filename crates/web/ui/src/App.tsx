@@ -92,6 +92,28 @@ function SingleHostApp({
         }
       }
 
+      // Language packages: focus first environment row
+      if (activeSection === "language_packages") {
+        const firstLangRow = container.querySelector(
+          '[data-testid^="lang-env-row-"]',
+        ) as HTMLElement | null;
+        if (firstLangRow) {
+          firstLangRow.focus();
+          return;
+        }
+      }
+
+      // Unmanaged files: focus first group header (data-focusable on group headers)
+      if (activeSection === "unmanaged_files") {
+        const firstGroupHeader = container.querySelector(
+          '[data-focusable="true"]',
+        ) as HTMLElement | null;
+        if (firstGroupHeader) {
+          firstGroupHeader.focus();
+          return;
+        }
+      }
+
       const firstRow = container.querySelector(
         '[role="row"]',
       ) as HTMLElement | null;
@@ -184,12 +206,12 @@ function SingleHostApp({
   useEffect(() => {
     if (view.data?.packages) {
       const repolessEntries = view.data.packages
-        .filter((p) => p.repoless_annotation)
+        .filter((p) => p.entry.repoless_annotation)
         .map((p) => ({
-          name: p.name,
-          arch: p.arch,
-          repoless_annotation: p.repoless_annotation!,
-          repoless_cached: p.repoless_cached ?? false,
+          name: p.entry.name,
+          arch: p.entry.arch,
+          repoless_annotation: p.entry.repoless_annotation!,
+          repoless_cached: p.entry.repoless_cached ?? false,
         }));
       if (repolessEntries.length > 0) {
         rpmUpload.initFromBackend(repolessEntries);
@@ -197,18 +219,20 @@ function SingleHostApp({
     }
   }, [view.data?.packages]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Derive per-row RPM upload states, merging hook state with view include state
+  // Derive per-row RPM upload states, merging hook state with view include state.
+  // Keys use canonical "name.arch" to disambiguate multilib packages.
   const rpmRowStates = useMemo(() => {
     const states: Record<string, RpmUploadRowState> = {};
     for (const pkg of view.data?.packages ?? []) {
-      const state = rpmUpload.getRowState(pkg.name);
+      const key = `${pkg.entry.name}.${pkg.entry.arch}`;
+      const state = rpmUpload.getRowState(key);
       if (state) {
-        if (state === "cached_excluded" && pkg.include) {
-          states[pkg.name] = "cached_included";
-        } else if (state === "uploaded_excluded" && pkg.include) {
-          states[pkg.name] = "uploaded_included";
+        if (state === "cached_excluded" && pkg.entry.include) {
+          states[key] = "cached_included";
+        } else if (state === "uploaded_excluded" && pkg.entry.include) {
+          states[key] = "uploaded_included";
         } else {
-          states[pkg.name] = state;
+          states[key] = state;
         }
       }
     }
@@ -301,6 +325,13 @@ function SingleHostApp({
       }
     }
   }, [view.data?.unmanaged_files, mutation]);
+
+  const handleRemoveRpmUpload = useCallback(
+    (nameArch: string) => {
+      rpmUpload.removeUpload(nameArch);
+    },
+    [rpmUpload],
+  );
 
   const handleUploadClick = useCallback((name: string) => {
     const triggerEl = document.querySelector(
@@ -401,11 +432,19 @@ function SingleHostApp({
     if (!itemId) return;
 
     requestAnimationFrame(() => {
+      // Try multiple testid patterns to find the target element:
+      // decision items, context items, language env rows, unmanaged items
       const el = (document.querySelector(
         `[data-testid="decision-item-${itemId}"]`,
       ) ??
         document.querySelector(
           `[data-testid="context-item-${itemId}"]`,
+        ) ??
+        document.querySelector(
+          `[data-testid="lang-env-row-${itemId}"]`,
+        ) ??
+        document.querySelector(
+          `[data-testid="unmanaged-item-${itemId}"]`,
         )) as HTMLElement | null;
       if (!el) return;
 
@@ -601,6 +640,7 @@ function SingleHostApp({
                 onUnmanagedResetAll={handleUnmanagedResetAll}
                 rpmRowStates={rpmRowStates}
                 onUploadClick={handleUploadClick}
+                onRemoveRpmUpload={handleRemoveRpmUpload}
               />
             </div>
             {isMobile && sidebarOverlayOpen && (
@@ -628,8 +668,8 @@ function SingleHostApp({
         isOpen={uploadTarget !== null}
         packageName={uploadTarget ?? ""}
         packageArch={
-          view.data?.packages?.find((p) => p.name === uploadTarget)?.arch ??
-          "x86_64"
+          view.data?.packages?.find((p) => p.entry.name === uploadTarget)
+            ?.entry.arch ?? "x86_64"
         }
         onUpload={(name, file) => {
           rpmUpload.uploadRpm(name, file).catch((err) => {

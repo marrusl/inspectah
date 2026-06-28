@@ -8,6 +8,20 @@ expression: json
   "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n# 1 custom audit rule file(s) materialized under config/etc/audit/rules.d/\n# 1 custom PAM config file(s) materialized under config/etc/pam.d/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "flatpaks": [],
   "generation": 0,
+  "has_unmanaged_scan": false,
+  "language_packages": [
+    {
+      "confidence": "high",
+      "ecosystem": "javascript",
+      "include": false,
+      "manifest_basis": "",
+      "method": "binary",
+      "packages": [
+        "express"
+      ],
+      "path": "/usr/local/bin/node"
+    }
+  ],
   "package_groups": [],
   "packages": [
     {

@@ -1,6 +1,9 @@
 import { useEffect, useCallback } from "react";
 
-/** Single-host sidebar section IDs in display order (for 1-9 jump). */
+/** Single-host sidebar section IDs in display order (for 1-9 jump).
+ *  Order must match Sidebar visible rendering: review sections first,
+ *  then reference sections. system_tuning follows the conditional
+ *  language_packages and unmanaged_files sections in the review group. */
 const SINGLE_HOST_SECTION_IDS = [
   "packages", // 1
   "configs", // 2
@@ -9,8 +12,9 @@ const SINGLE_HOST_SECTION_IDS = [
   "containers", // 5
   "language_packages", // 6
   "unmanaged_files", // 7
-  "version_changes", // 8
-  "compose", // 9
+  "system_tuning", // 8
+  "version_changes", // 9
+  "compose",
   "network",
   "storage",
   "scheduled_tasks",

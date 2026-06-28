@@ -127,20 +127,20 @@ describe("useKeyboard", () => {
     expect(opts.onSectionChange).toHaveBeenCalledWith("unmanaged_files");
   });
 
-  it("maps key 8 to version_changes", () => {
+  it("maps key 8 to system_tuning", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "8" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("system_tuning");
   });
 
-  it("maps key 9 to compose", () => {
+  it("maps key 9 to version_changes", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "9" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("compose");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
   });
 
   it("suppresses single-key shortcuts when focus is in an input", () => {

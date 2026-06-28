@@ -11,6 +11,51 @@ use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::types::{RefinedView, RepoProvenance, RepoTier, TriageTag};
 use serde::Serialize;
 
+// -- Non-RPM DTOs (language packages + unmanaged files for the frontend) ----
+
+/// A language package environment (pip venv, npm project, gem project)
+/// projected for the view response.
+#[derive(Serialize, Clone, Debug)]
+pub struct LanguagePackageEnvDto {
+    pub ecosystem: String,
+    pub path: String,
+    pub method: String,
+    pub packages: Vec<String>,
+    pub confidence: String,
+    pub manifest_basis: String,
+    pub include: bool,
+}
+
+/// Provenance signals for an unmanaged file.
+#[derive(Serialize, Clone, Debug)]
+pub struct ProvenanceSignalsDto {
+    pub file_type: String,
+    pub last_modified: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub permissions: String,
+    pub mutability: bool,
+    pub writable_mount: bool,
+    pub service_working_dir: bool,
+}
+
+/// A single unmanaged file discovered by --include-unmanaged.
+#[derive(Serialize, Clone, Debug)]
+pub struct UnmanagedFileItemDto {
+    pub path: String,
+    pub size: u64,
+    pub is_var_path: bool,
+    pub include: bool,
+    pub provenance: ProvenanceSignalsDto,
+}
+
+/// Directory group for unmanaged files.
+#[derive(Serialize, Clone, Debug)]
+pub struct UnmanagedFileGroupDto {
+    pub directory: String,
+    pub items: Vec<UnmanagedFileItemDto>,
+}
+
 // -- Reference section DTOs (presentation layer only) ---------------------
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -195,6 +240,14 @@ pub struct ViewResponse {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub package_provenances: HashMap<String, PackageProvenance>,
     pub session_is_sensitive: bool,
+    /// Language package environments (Tier 1 non-RPM). Empty when absent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub language_packages: Vec<LanguagePackageEnvDto>,
+    /// Unmanaged file groups (Tier 2, flag-gated). Empty when absent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unmanaged_files: Vec<UnmanagedFileGroupDto>,
+    /// Whether --include-unmanaged was used at scan time.
+    pub has_unmanaged_scan: bool,
 }
 
 #[derive(Serialize)]

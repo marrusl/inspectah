@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import type {
   LanguagePackageEnv,
   UnmanagedFileItem,
-  UnmanagedFileGroup,
   ProvenanceSignals,
   RpmUploadRowState,
 } from "../../api/types";

@@ -83,6 +83,8 @@ export interface MainContentProps {
   rpmRowStates?: Record<string, import("../api/types").RpmUploadRowState>;
   /** Called when user clicks the upload button on a repo-less package row. */
   onUploadClick?: (packageName: string) => void;
+  /** Called when user removes a previously uploaded RPM. */
+  onRemoveRpmUpload?: (packageName: string) => void;
 }
 
 interface ToastEntry {
@@ -126,6 +128,7 @@ export function MainContent({
   isPending = false,
   rpmRowStates,
   onUploadClick,
+  onRemoveRpmUpload,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -191,16 +194,24 @@ export function MainContent({
     [viewData],
   );
 
-  // Language packages filtered by SectionSearch query (path substring, case-insensitive)
+  // Language packages filtered by SectionSearch query:
+  // matches environment path, package names, and ecosystem (case-insensitive)
   const langPkgs = viewData?.language_packages ?? [];
   const filteredLangPkgs = useMemo(() => {
     if (!filterText.trim()) return langPkgs;
     const q = filterText.toLowerCase();
-    return langPkgs.filter((env) => env.path.toLowerCase().includes(q));
+    return langPkgs.filter(
+      (env) =>
+        env.path.toLowerCase().includes(q) ||
+        env.ecosystem.toLowerCase().includes(q) ||
+        env.packages.some((pkg) => pkg.toLowerCase().includes(q)),
+    );
   }, [langPkgs, filterText]);
 
-  // Unmanaged file groups filtered by SectionSearch query (item path substring, case-insensitive).
-  // Groups with zero matching items are excluded; groups with matches are narrowed to matched items.
+  // Unmanaged file groups filtered by SectionSearch query:
+  // matches file path and file type (case-insensitive).
+  // Groups with zero matching items are excluded; groups with matches
+  // are narrowed to matched items and auto-expand.
   const unmanagedGroups = viewData?.unmanaged_files ?? [];
   const filteredUnmanagedGroups = useMemo(() => {
     if (!filterText.trim()) return unmanagedGroups;
@@ -208,8 +219,10 @@ export function MainContent({
     return unmanagedGroups
       .map((group) => ({
         ...group,
-        items: group.items.filter((item) =>
-          item.path.toLowerCase().includes(q),
+        items: group.items.filter(
+          (item) =>
+            item.path.toLowerCase().includes(q) ||
+            item.provenance.file_type.toLowerCase().includes(q),
         ),
       }))
       .filter((group) => group.items.length > 0);
@@ -426,6 +439,7 @@ export function MainContent({
           onGroupUngroup={handleGroupUngroup}
           rpmRowStates={rpmRowStates}
           onUploadClick={onUploadClick}
+          onRemoveRpmUpload={onRemoveRpmUpload}
         />
         {toasts.length > 0 && (
           <AlertGroup isToast isLiveRegion>

@@ -8,6 +8,7 @@ expression: json
   "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# \"Web Server\" degraded (member excluded): members rendered individually\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n# TODO: 'mod_ssl.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "flatpaks": [],
   "generation": 0,
+  "has_unmanaged_scan": false,
   "package_groups": [
     {
       "added_count": 2,
