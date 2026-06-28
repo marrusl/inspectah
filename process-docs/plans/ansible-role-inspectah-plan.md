@@ -655,14 +655,31 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 - [ ] **Step 1: Write tasks/preflight.yml**
 
-Platform enforcement follows the approved spec Section 8 tiered matrix:
-- **Hard reject:** non-RedHat families, unsupported architectures, EL7 and below, Fedora < 40
-- **Advisory warn (non-blocking):** best-effort platforms (EL8, AlmaLinux, Rocky, Fedora aarch64, EL10)
-- **Silent pass:** release-blocking and smoke-tested platforms (CentOS Stream 9 x86_64, RHEL 9 x86_64, CentOS Stream 9 aarch64)
+Platform enforcement follows the approved spec Section 8.2 tiered matrix
+exactly. Each row in the spec table maps to one of three preflight
+behaviors:
 
-EL8 is a primary migration target for inspectah. The podman >= 4.4 preflight check is the actual gate -- RHEL 8.6+ ships podman 4.x via the container-tools module stream. No separate OS version rejection for EL8.
+- **Hard reject (fail):** non-RedHat families, architectures other than
+  x86_64/aarch64, EL7 and below, Fedora < 40, OracleLinux (not in spec
+  table), Fedora on aarch64 (not in spec table), CentOS Stream 8
+  aarch64 (not in spec table), CentOS Stream 10 aarch64 (not in spec
+  table), AlmaLinux/Rocky 10+ (not in spec table)
+- **Advisory warn (non-blocking debug message):** best-effort platforms
+  per spec: RHEL 8 (x86_64, aarch64), CentOS Stream 8 (x86_64 only),
+  AlmaLinux/Rocky 8-9 (x86_64, aarch64), Fedora 40-41 x86_64
+- **Silent pass (no message):** release-blocking and smoke-tested
+  platforms per spec: CentOS Stream 9 x86_64 (release-blocking),
+  RHEL 9 x86_64, RHEL 9 aarch64, RHEL 10 x86_64, RHEL 10 aarch64,
+  CentOS Stream 9 aarch64, CentOS Stream 10 x86_64
 
-The tiers are about CI coverage claims, not runtime rejection. Best-effort platforms work but are not CI-gated.
+EL8 is a primary migration target for inspectah. The podman >= 4.4
+preflight check is the actual gate -- RHEL 8.6+ ships podman 4.x via
+the container-tools module stream. No separate OS version rejection
+for EL8.
+
+The tiers are about CI coverage claims, not runtime rejection.
+Best-effort platforms work but are not CI-gated. Platforms NOT in the
+spec table are hard-rejected to avoid silent over-admission.
 
 ```yaml
 ---
@@ -761,6 +778,16 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
       on {{ ansible_architecture }}.
   when: ansible_architecture not in ['x86_64', 'aarch64']
 
+- name: Reject OracleLinux (not in supported platform matrix)
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported distribution: {{ ansible_distribution }}.
+      OracleLinux is not in the supported platform matrix.
+      Supported distributions: RHEL, CentOS Stream, AlmaLinux,
+      Rocky Linux, and Fedora. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when: ansible_distribution == 'OracleLinux'
+
 - name: Reject EL7 and older
   ansible.builtin.fail:
     msg: >-
@@ -769,8 +796,20 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
       EL >= 8. Detected: {{ ansible_distribution }}
       {{ ansible_distribution_version }}.
   when:
-    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
+    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky']
     - ansible_distribution_major_version | int < 8
+
+- name: Reject AlmaLinux / Rocky 10+ (not in supported platform matrix)
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported version: {{ ansible_distribution }}
+      {{ ansible_distribution_major_version }}. The supported platform
+      matrix covers AlmaLinux and Rocky Linux versions 8 and 9 only.
+      Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution in ['AlmaLinux', 'Rocky']
+    - ansible_distribution_major_version | int >= 10
 
 - name: Validate Fedora version floor
   ansible.builtin.fail:
@@ -783,39 +822,76 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
     - ansible_distribution == 'Fedora'
     - ansible_distribution_major_version | int < 40
 
-# --- Tiered platform advisory warnings ---
-# The hard rejections above enforce the outer boundary (non-RedHat,
-# unsupported arch, EL7 and below, old Fedora). The warnings below
-# inform operators when they are running on a best-effort platform
-# that is NOT CI-gated. The role still runs — tiers are about CI
-# coverage claims, not runtime rejection.
+- name: Reject Fedora on aarch64 (not in supported platform matrix)
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported platform: Fedora on aarch64 is not in the supported
+      platform matrix. Fedora is supported on x86_64 only.
+      Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution == 'Fedora'
+    - ansible_architecture == 'aarch64'
 
-- name: Warn on EL8 (best-effort, migration target)
+- name: Reject CentOS Stream 8 aarch64 (not in supported platform matrix)
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported platform: CentOS Stream 8 on aarch64 is not in the
+      supported platform matrix. CentOS Stream 8 is supported on
+      x86_64 only. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution == 'CentOS'
+    - ansible_distribution_major_version | int == 8
+    - ansible_architecture == 'aarch64'
+
+- name: Reject CentOS Stream 10 aarch64 (not in supported platform matrix)
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported platform: CentOS Stream 10 on aarch64 is not in the
+      supported platform matrix. CentOS Stream 10 is supported on
+      x86_64 only. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution == 'CentOS'
+    - ansible_distribution_major_version | int == 10
+    - ansible_architecture == 'aarch64'
+
+# --- Tiered platform advisory warnings ---
+# The hard rejections above enforce the outer boundary per spec
+# Section 8.2. The warnings below inform operators when they are
+# running on a best-effort platform that is NOT CI-gated. The role
+# still runs -- tiers are about CI coverage claims, not runtime
+# rejection. Platforms that are release-blocking or smoke-tested
+# pass silently (no warning).
+
+- name: Warn on RHEL 8 (best-effort, migration target)
   ansible.builtin.debug:
     msg: >-
-      NOTE: {{ ansible_distribution }} {{ ansible_distribution_major_version }}
-      is a best-effort migration target. EL8 hosts are a primary use case
+      NOTE: RHEL {{ ansible_distribution_major_version }} is a
+      best-effort migration target. EL8 hosts are a primary use case
       for inspectah (migrating to EL9 bootc). Ensure podman >= 4.4 is
       available (RHEL 8.6+ provides it via the container-tools module
       stream). The podman version preflight check enforces this.
       Detected: {{ ansible_distribution }}
       {{ ansible_distribution_version }} on {{ ansible_architecture }}.
   when:
-    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
+    - ansible_distribution == 'RedHat'
     - ansible_distribution_major_version | int == 8
 
-- name: Warn on Fedora aarch64 (best-effort, not CI-gated)
+- name: Warn on CentOS Stream 8 x86_64 (best-effort, migration target)
   ansible.builtin.debug:
     msg: >-
-      NOTE: Fedora on aarch64 is best-effort. The CI matrix only covers
-      Fedora on x86_64. The role should work, but this platform is not
-      validated in CI. Detected: {{ ansible_distribution }}
+      NOTE: CentOS Stream {{ ansible_distribution_major_version }} on
+      x86_64 is a best-effort migration target. Ensure podman >= 4.4
+      is available. The podman version preflight check enforces this.
+      Detected: {{ ansible_distribution }}
       {{ ansible_distribution_version }} on {{ ansible_architecture }}.
   when:
-    - ansible_distribution == 'Fedora'
-    - ansible_architecture == 'aarch64'
+    - ansible_distribution == 'CentOS'
+    - ansible_distribution_major_version | int == 8
 
-- name: Warn on AlmaLinux / Rocky (best-effort, not CI-gated)
+- name: Warn on AlmaLinux / Rocky 8-9 (best-effort, not CI-gated)
   ansible.builtin.debug:
     msg: >-
       NOTE: {{ ansible_distribution }} is best-effort. The CI matrix
@@ -826,16 +902,18 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
   when:
     - ansible_distribution in ['AlmaLinux', 'Rocky']
 
-- name: Warn on EL10 (smoke-tested, limited CI coverage)
+- name: Warn on Fedora x86_64 (best-effort, not CI-gated)
   ansible.builtin.debug:
     msg: >-
-      NOTE: EL10 is smoke-tested tier. COPR builds are available but
-      real-host validation is limited. Detected:
-      {{ ansible_distribution }} {{ ansible_distribution_version }}
-      on {{ ansible_architecture }}.
+      NOTE: Fedora is best-effort. COPR builds are available but
+      Fedora is not CI-gated. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
   when:
-    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
-    - ansible_distribution_major_version | int == 10
+    - ansible_distribution == 'Fedora'
+
+# NOTE: No warning for RHEL/CentOS 9 (any arch), RHEL/CentOS 10
+# x86_64 -- these are release-blocking or smoke-tested tiers per
+# spec Section 8.2 and pass silently.
 
 - name: Validate inspectah_base_image format when set
   ansible.builtin.fail:
@@ -1902,6 +1980,13 @@ This proves the RPM install path end-to-end without network access.
 ```
 
 - [ ] **Step 3: Write molecule/air_gapped/converge.yml**
+
+The air-gapped scenario tests the RPM install path end-to-end.
+`inspectah_cleanup_host` is NOT set here -- this scenario proves
+that a locally-pushed RPM installs and scans correctly. Cleanup
+is exercised by the real-host smoke test and can be tested in a
+dedicated cleanup scenario if needed.
+
 ```yaml
 ---
 - name: Converge (RPM install path)
@@ -1913,7 +1998,6 @@ This proves the RPM install path end-to-end without network access.
         inspectah_install: true
         inspectah_install_method: rpm
         inspectah_rpm_path: "{{ playbook_dir }}/inspectah-stub.rpm"
-        inspectah_cleanup_host: true
 ```
 
 - [ ] **Step 4: Write molecule/air_gapped/verify.yml**
@@ -1957,9 +2041,10 @@ molecule test --scenario-name air_gapped
 ```
 Expected: converge, verify, and destroy all pass. The RPM install path
 is exercised end-to-end: prepare builds a real RPM with rpmbuild,
-converge installs it via `inspectah_install_method: rpm`, the scan
-runs using the stub binary from the RPM, and host cleanup removes the
-package and staged RPM.
+converge installs it via `inspectah_install_method: rpm`, and the scan
+runs using the stub binary from the RPM. Verify confirms the binary
+is still present and the scan result was registered. Host cleanup is
+NOT tested here -- it is covered by the real-host smoke test.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -2277,7 +2362,7 @@ jobs:
     #   - Real inspectah scan execution (not a stub)
     #   - Real tarball content (not a dummy)
     #   - Real container lifecycle (podman storage, base image pull)
-    #   - End-to-end COPR install -> scan -> fetch -> cleanup pipeline
+    #   - End-to-end COPR install -> scan -> fetch -> aggregate pipeline
     runs-on: [self-hosted, centos-stream-9, x86_64]
     steps:
       - name: Checkout
@@ -2322,13 +2407,15 @@ jobs:
 
 - [ ] **Step 3.5: Write tests/smoke.yml**
 
-A minimal playbook that exercises the real end-to-end pipeline on
-a CentOS Stream 9 host: install from COPR, scan, verify tarball,
-clean up. This is NOT a Molecule scenario -- it runs directly via
-`ansible-playbook` on the self-hosted runner.
+A minimal playbook that exercises the full real end-to-end pipeline on
+a CentOS Stream 9 host: install from COPR, scan, fetch, aggregate,
+and validate aggregate output. This covers the complete pipeline
+required by spec Section 12.3. This is NOT a Molecule scenario -- it
+runs directly via `ansible-playbook` on the self-hosted runner.
 
 ```yaml
 ---
+# Play 1: Scan via the role (install, preflight, scan, fetch)
 - name: Real-host smoke test
   hosts: all
   become: false
@@ -2342,6 +2429,7 @@ clean up. This is NOT a Molecule scenario -- it runs directly via
         inspectah_fetch_dest: "{{ _smoke_fetch_dest }}"
         inspectah_cleanup_host_tarball: false
 
+# Play 2: Verify scan and fetch results on target
 - name: Verify smoke test results
   hosts: all
   become: true
@@ -2389,13 +2477,55 @@ clean up. This is NOT a Molecule scenario -- it runs directly via
         fail_msg: >-
           Smoke test failed: fetched tarball not found on control node.
 
-    - name: Clean up smoke test artifacts
+# Play 3: Aggregate on control node and validate output
+- name: Aggregate and validate output
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _smoke_fetch_dest: "/tmp/inspectah-smoke-results"
+    _smoke_aggregate_output: "/tmp/inspectah-smoke-aggregate"
+  tasks:
+    - name: Ensure aggregate output directory exists
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ _smoke_aggregate_output }}"
+        state: directory
+        mode: "0755"
+
+    - name: Run inspectah aggregate
+      ansible.builtin.command:
+        argv:
+          - inspectah
+          - aggregate
+          - "{{ _smoke_fetch_dest }}"
+          - --output-dir
+          - "{{ _smoke_aggregate_output }}"
+      changed_when: true
+
+    - name: Verify aggregate output directory is non-empty
+      ansible.builtin.find:
+        paths: "{{ _smoke_aggregate_output }}"
+        file_type: file
+      register: _smoke_aggregate_files
+
+    - name: Assert aggregate produced output files
+      ansible.builtin.assert:
+        that:
+          - _smoke_aggregate_files.matched > 0
+        fail_msg: >-
+          Smoke test failed: inspectah aggregate produced no output
+          files in {{ _smoke_aggregate_output }}.
+
+# Play 4: Clean up all smoke test artifacts
+- name: Clean up smoke test artifacts on target
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Remove scan tarball from target
+      ansible.builtin.file:
+        path: "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
         state: absent
-      loop:
-        - "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
-      become: true
 
 - name: Clean up control node artifacts
   hosts: localhost
@@ -2404,6 +2534,11 @@ clean up. This is NOT a Molecule scenario -- it runs directly via
     - name: Remove fetched smoke test results
       ansible.builtin.file:
         path: "/tmp/inspectah-smoke-results"
+        state: absent
+
+    - name: Remove aggregate output
+      ansible.builtin.file:
+        path: "/tmp/inspectah-smoke-aggregate"
         state: absent
 ```
 
@@ -2425,7 +2560,9 @@ default, air_gapped, and fallback scenarios across ansible-core
 2.14-2.17 with podman driver. Fallback job skips community.general
 install to prove the no-collection rescue path. Real-host smoke
 test runs weekly and on manual dispatch against a self-hosted
-CentOS Stream 9 x86_64 runner with real inspectah from COPR.
+CentOS Stream 9 x86_64 runner with real inspectah from COPR,
+covering the full scan-fetch-aggregate pipeline with aggregate
+output validation.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
