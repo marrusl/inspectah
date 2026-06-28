@@ -559,6 +559,53 @@ Language Packages and Unmanaged Files appear in the aggregate sidebar
 Review group with the same zone-based layout (consensus / near-consensus /
 divergent) as other aggregate decision sections.
 
+**Aggregate decision-support contract:**
+
+The current aggregate surface (`AggregateItemRow`, `ItemDetailPane`,
+`AggregateSection`) guarantees item name, prevalence, variant count,
+and a generic detail pane. The new sections require additional metadata
+to make items reviewable, not just toggleable.
+
+**Language Packages — aggregate row metadata:**
+
+| Field | Row display | Detail pane | Searchable |
+|-------|-------------|-------------|------------|
+| Ecosystem | Icon or label (pip/npm/gem) | Yes | Yes |
+| Environment path | Primary label | Full path | Yes |
+| Package count | Badge: "12 packages" | Full package list | Package names searchable |
+| Confidence | Label color (green=high, orange=medium) | Confidence level + basis | No |
+| Manifest basis | Subtitle: "from requirements.txt" or "from dist-info" | Manifest type | Yes ("lockfile", "dist-info") |
+| Prevalence | Standard prevalence badge | Host list | No |
+
+**Language Packages — aggregate variant view:**
+When hosts diverge on the same environment path, the variant comparison
+shows a diff of the package lists: added packages, removed packages,
+version differences. This is analogous to config variant comparison
+(content diff) but structured as a package-list diff rather than text
+diff.
+
+**Unmanaged Files — aggregate row metadata:**
+
+| Field | Row display | Detail pane | Searchable |
+|-------|-------------|-------------|------------|
+| File path | Primary label | Full path | Yes |
+| File type | Icon or label (ELF/JAR/script/other) | Type + detail | Yes |
+| Size | Badge: "2.3 MB" | Exact size | No |
+| `/var` warning | Warning icon if under `/var` | Persistence warning | No |
+| Prevalence | Standard prevalence badge | Host list | No |
+
+**Unmanaged Files — aggregate variant view:**
+When hosts have the same file path but different content (different
+content hash), the variant comparison shows: file size per variant,
+last-modified timestamp per variant, and a "content differs" indicator.
+No binary diff — just metadata comparison. The user selects which
+variant to include (or excludes the file entirely).
+
+**Aggregate search scope:**
+Global search in aggregate mode includes Language Packages and Unmanaged
+Files. Search matches against the "Searchable" fields listed above.
+Results navigate to the correct section and highlight the matched item.
+
 ### Item Identity Contract
 
 The refine plumbing uses `ItemId` for toggle/undo/redo operations and
@@ -581,44 +628,102 @@ keyboard focus tracking, and search result targeting.
 
 ### Compose Sidebar Reconciliation
 
-Compose stacks currently live in the Containers reference section in the
-sidebar. This spec does not move them. The compose comment block in the
-Containerfile and the `compose/` export root are new outputs, but compose
-remains a reference surface in the sidebar — no include toggles, no
-decision semantics.
+The live UI today exposes `Compose` as its own sidebar destination
+(section ID `compose` in `Sidebar.tsx` line 28, mapped to the
+`containers` backend reference payload via `lookupId` at line 60-61).
+It has its own numeric shortcut (key 7 in the current
+`SINGLE_HOST_SECTION_IDS`).
 
-**Global search:** Compose entries are searchable via global search
-(matching on compose file path and service names), consistent with other
-reference section items. Search results for compose items navigate to
-the Containers reference section.
+**This spec preserves compose as a dedicated sidebar destination.**
+Compose keeps its own sidebar entry, its own section ID (`compose`),
+and its own shortcut key. The new sections (Language Packages, Unmanaged
+Files) are inserted into the shortcut order after System Tuning, pushing
+existing reference sections down. No existing shortcuts are silently
+remapped — see the full shortcut map below.
 
-**Keyboard shortcut:** Compose is part of the Containers section (key 5).
-No separate shortcut needed.
+**Global search:** Compose entries remain searchable via global search
+(matching on compose file path and service names). Search results
+navigate to the `compose` sidebar destination, same as today.
+
+**New behavior from this spec:** Compose gains the `compose/` export
+root (verbatim files with redaction gating) and the Containerfile
+comment block with Quadlet nudge. The sidebar entry gains a subtle
+banner about Quadlet migration. No other compose UX changes.
 
 ### RPM Upload Row Contract
 
 Repo-less RPM packages appear in the existing Packages section alongside
 normal RPMs. The upload interaction adds new row states that must be
-truthful on the current Packages surface:
+truthful on the current `PackageList.tsx` row layout.
 
-**Row states:**
+**Current row layout** (from `PackageList.tsx`):
+```
+[checkbox] [name + provenance badge] [repo text] [prevalence badge]
+```
 
-| State | Checkbox | Badge | Primary Action | Containerfile |
-|-------|----------|-------|----------------|---------------|
-| Cached RPM, pre-excluded | Enabled, unchecked | Orange "No repo" | Toggle include | Commented `dnf localinstall` |
-| Cached RPM, user-included | Enabled, checked | Orange "No repo" | Toggle include | Active `dnf localinstall` |
-| No RPM, needs upload | Disabled | Orange "RPM needed" (clickable) | Click → upload modal | Commented `# MANUAL` |
-| RPM uploaded, pre-excluded | Enabled, unchecked | Green "RPM provided" | Toggle include | Commented `dnf localinstall` |
-| RPM uploaded, user-included | Enabled, checked | Green "RPM provided" | Toggle include | Active `dnf localinstall` |
+The left column has: checkbox, name container (name + optional
+provenance badge). The right column has: repo text (single-host) or
+prevalence badge (aggregate).
+
+**Blocked-row layout (pre-upload):**
+
+The checkbox is **hidden** (not disabled — hidden). In its place, an
+upload icon button appears as the **primary action**. This communicates
+"the first thing to do here is provide the RPM" rather than "there's
+a toggle but it doesn't work yet."
+
+```
+[upload icon ▲] [name] ["RPM needed" orange label] [repo: "none"]
+```
+
+- Upload icon button: PatternFly `Button variant="plain"` with
+  `OutlinedUploadIcon`. Click opens the upload modal. `aria-label`:
+  "Upload RPM for [package-name]".
+- Inline blocked text: the orange "RPM needed" label in the provenance
+  badge slot serves as the persistent explanation. No additional text
+  needed — the label + hidden checkbox communicates the blocked state.
+- The row is visually muted (opacity 0.7) to distinguish it from
+  actionable rows.
+
+**Post-upload layout:**
+
+After successful upload, the row transitions to a normal package row:
+
+```
+[checkbox ☐] [name] ["RPM provided" green label] [repo: "uploaded"]
+```
+
+- Checkbox appears (enabled, unchecked — item is pre-excluded, user
+  must explicitly include)
+- Green "RPM provided" label replaces the orange "RPM needed" label
+- Small "×" button on the label to remove the upload and revert to
+  blocked state
+- Row opacity returns to 1.0
+
+**Full row states:**
+
+| State | Checkbox | Badge | Repo Text | Row Style | Primary Action |
+|-------|----------|-------|-----------|-----------|----------------|
+| Cached RPM, pre-excluded | Shown, unchecked | Orange "No repo" | source repo name | Normal | Toggle include |
+| Cached RPM, user-included | Shown, checked | Orange "No repo" | source repo name | Normal | Toggle include |
+| No RPM, needs upload | **Hidden** (upload icon in its place) | Orange "RPM needed" | "none" | **Muted (0.7)** | **Upload icon → modal** |
+| RPM uploaded, pre-excluded | Shown, unchecked | Green "RPM provided ×" | "uploaded" | Normal | Toggle include |
+| RPM uploaded, user-included | Shown, checked | Green "RPM provided ×" | "uploaded" | Normal | Toggle include |
 
 **State transitions:**
-- "RPM needed" → upload modal → success → "RPM provided" (checkbox
-  enables, item remains excluded until user toggles)
-- "RPM provided" → click "x" on badge → "RPM needed" (file removed,
-  checkbox disables)
+- "RPM needed" → click upload icon → modal → success → "RPM provided"
+  (upload icon replaced by checkbox, row unmutes, item remains excluded
+  until user toggles)
+- "RPM provided" → click "×" on label → "RPM needed" (file removed,
+  checkbox hidden, upload icon returns, row mutes)
 
-**ARIA:** Badge state changes announced via `aria-live="polite"` on the
-row. Modal open/close announced via standard PatternFly modal semantics.
+**ARIA:**
+- Upload icon: `aria-label="Upload RPM for [package-name]"`
+- State transition: `aria-live="polite"` on the row announces "RPM
+  provided for [package-name], now available for inclusion" on upload
+  success
+- Revert: announces "[package-name] RPM removed, upload required"
+- Modal: standard PatternFly modal focus trap semantics
 
 ### Unmanaged Files Grouped Interaction
 
@@ -648,21 +753,43 @@ form one group). Groups are collapsible.
 
 ### Section IDs and Keyboard Navigation
 
-New section IDs for `useKeyboard.ts`:
+The live `SINGLE_HOST_SECTION_IDS` in `useKeyboard.ts` currently maps
+the full sidebar order (review + reference) to keys 1-9+. This spec
+inserts the two new review sections after System Tuning (key 6),
+preserving existing reference section shortcuts by shifting them down.
 
-| Section | ID | Key |
-|---------|-----|-----|
-| Packages | `packages` | 1 |
-| Config Files | `configs` | 2 |
-| Users & Groups | `users_groups` | 3 |
-| Services | `services` | 4 |
-| Containers | `containers` | 5 |
-| System Tuning | `system_tuning` | 6 |
-| Language Packages | `language_packages` | 7 |
-| Unmanaged Files | `unmanaged_files` | 8 |
+**Full shortcut map after this spec:**
+
+| Key | Section | ID | Type | Change |
+|-----|---------|-----|------|--------|
+| 1 | Packages | `packages` | Review | *unchanged* |
+| 2 | Config Files | `configs` | Review | *unchanged* |
+| 3 | Users & Groups | `users_groups` | Review | *unchanged* |
+| 4 | Services | `services` | Review | *unchanged* |
+| 5 | Containers | `containers` | Review | *unchanged* |
+| 6 | Version Changes | `version_changes` | Reference | *unchanged* |
+| 7 | **Language Packages** | `language_packages` | **Review** | **new** (was: Compose) |
+| 8 | **Unmanaged Files** | `unmanaged_files` | **Review** | **new** (was: Network) |
+| 9 | Compose | `compose` | Reference | was key 7 → now key 9 |
+| — | Network | `network` | Reference | was key 8 → now key 10 (no shortcut) |
+| — | Storage | `storage` | Reference | was key 9 → now key 11 (no shortcut) |
+| — | System Tuning | `system_tuning` | Reference | was key 6 → stays reachable via sidebar |
+| — | Scheduled Tasks | `scheduled_tasks` | Reference | no shortcut (unchanged) |
+| — | Non-RPM Software | `non_rpm_software` | Reference | no shortcut (unchanged) |
+| — | Kernel & Boot | `kernel_boot` | Reference | no shortcut (unchanged) |
+| — | Security & Access | `selinux` | Reference | no shortcut (unchanged) |
+
+**Shortcut remapping note:** Keys 7-9 change meaning. This affects
+expert users who have muscle memory for Compose=7, Network=8, Storage=9.
+Mitigation: the keyboard shortcut help overlay (`?`) shows the current
+map. The shortcuts dialog (`onOpenShortcuts`) is already accessible and
+will reflect the new order immediately. No phased migration needed —
+the reference sections being displaced are low-frequency navigation
+targets compared to the new review sections.
 
 Key 8 (`unmanaged_files`) is a no-op when the section is not visible
-(flag not used). Keys 9+ remain unassigned.
+(flag not used). The shortcut simply does nothing; no error or visual
+feedback.
 
 ### Search Behavior
 
