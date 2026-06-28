@@ -15,7 +15,7 @@
 - No `ansible.builtin.shell` tasks. All command execution via `ansible.builtin.command` with `argv` list.
 - No bare variables in `when:` conditions (always use `| bool`, `| default()`, etc.).
 - `become: true` only on tasks that require root. Never at play level inside the role.
-- Target platforms: RHEL/CentOS Stream 9-10, Fedora 40-41 on x86_64/aarch64.
+- Target platforms: RHEL/CentOS Stream 8-10, Fedora 40-41 on x86_64/aarch64. EL8 hosts are a primary migration target (podman >= 4.4 required via container-tools module stream).
 - Minimum inspectah version: 0.8.0. Minimum podman version: 4.4.
 - All file paths are relative to `/Users/mrussell/Work/bootc-migration/ansible-role-inspectah/`.
 - License: MIT (matching inspectah).
@@ -250,6 +250,7 @@ galaxy_info:
   platforms:
     - name: EL
       versions:
+        - "8"
         - "9"
         - "10"
     - name: Fedora
@@ -432,7 +433,7 @@ Expected: exit 0, no errors.
 git add meta/
 git commit -m "feat(meta): add Galaxy metadata and argument specs
 
-Galaxy metadata targets EL 9-10 and Fedora 40-41 with MIT license.
+Galaxy metadata targets EL 8-10 and Fedora 40-41 with MIT license.
 Argument specs define type validation for all 16 public variables
 including choices for install_method and preserve categories.
 
@@ -655,9 +656,11 @@ Assisted-by: Claude Code (Opus 4.6)"
 - [ ] **Step 1: Write tasks/preflight.yml**
 
 Platform enforcement follows the approved spec Section 8 tiered matrix:
-- **Hard reject:** non-RedHat families, unsupported architectures, EL8 and below, Fedora < 40
-- **Advisory warn (non-blocking):** best-effort platforms (AlmaLinux, Rocky, Fedora aarch64, EL10)
+- **Hard reject:** non-RedHat families, unsupported architectures, EL7 and below, Fedora < 40
+- **Advisory warn (non-blocking):** best-effort platforms (EL8, AlmaLinux, Rocky, Fedora aarch64, EL10)
 - **Silent pass:** release-blocking and smoke-tested platforms (CentOS Stream 9 x86_64, RHEL 9 x86_64, CentOS Stream 9 aarch64)
+
+EL8 is a primary migration target for inspectah. The podman >= 4.4 preflight check is the actual gate -- RHEL 8.6+ ships podman 4.x via the container-tools module stream. No separate OS version rejection for EL8.
 
 The tiers are about CI coverage claims, not runtime rejection. Best-effort platforms work but are not CI-gated.
 
@@ -758,16 +761,16 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
       on {{ ansible_architecture }}.
   when: ansible_architecture not in ['x86_64', 'aarch64']
 
-- name: Reject EL8 and older (podman >= 4.4 not available)
+- name: Reject EL7 and older
   ansible.builtin.fail:
     msg: >-
       Unsupported EL version: {{ ansible_distribution }}
       {{ ansible_distribution_major_version }}. This role requires
-      EL >= 9 (RHEL 8 does not ship podman >= 4.4 in default repos
-      and is past active development). Upgrade to EL9 or newer.
+      EL >= 8. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }}.
   when:
     - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
-    - ansible_distribution_major_version | int < 9
+    - ansible_distribution_major_version | int < 8
 
 - name: Validate Fedora version floor
   ansible.builtin.fail:
@@ -782,10 +785,24 @@ The tiers are about CI coverage claims, not runtime rejection. Best-effort platf
 
 # --- Tiered platform advisory warnings ---
 # The hard rejections above enforce the outer boundary (non-RedHat,
-# unsupported arch, EL8, old Fedora). The warnings below inform
-# operators when they are running on a best-effort platform that is
-# NOT CI-gated. The role still runs — tiers are about CI coverage
-# claims, not runtime rejection.
+# unsupported arch, EL7 and below, old Fedora). The warnings below
+# inform operators when they are running on a best-effort platform
+# that is NOT CI-gated. The role still runs — tiers are about CI
+# coverage claims, not runtime rejection.
+
+- name: Warn on EL8 (best-effort, migration target)
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: {{ ansible_distribution }} {{ ansible_distribution_major_version }}
+      is a best-effort migration target. EL8 hosts are a primary use case
+      for inspectah (migrating to EL9 bootc). Ensure podman >= 4.4 is
+      available (RHEL 8.6+ provides it via the container-tools module
+      stream). The podman version preflight check enforces this.
+      Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
+    - ansible_distribution_major_version | int == 8
 
 - name: Warn on Fedora aarch64 (best-effort, not CI-gated)
   ansible.builtin.debug:
@@ -903,9 +920,10 @@ git add tasks/preflight.yml
 git commit -m "feat(preflight): add prerequisite and version validation tasks
 
 Checks: inspectah binary + version >= 0.8.0, podman >= 4.4, nsenter
-presence, RedHat OS family, RPM path validation for air-gapped installs,
-scan output directory, and reserved flag stripping from extra_args.
-Produces _inspectah_safe_extra_args for downstream scan command.
+presence, RedHat OS family (EL8+ supported as migration targets),
+RPM path validation for air-gapped installs, scan output directory,
+and reserved flag stripping from extra_args. Produces
+_inspectah_safe_extra_args for downstream scan command.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2476,8 +2494,10 @@ ansible-galaxy collection install -r requirements.yml
 | CentOS Stream | 9 | x86_64 | Release-blocking |
 | RHEL | 9, 10 | x86_64, aarch64 | Smoke-tested |
 | CentOS Stream | 9, 10 | x86_64, aarch64 | Smoke-tested |
-| Fedora | 40, 41 | x86_64 | Best-effort |
+| RHEL | 8 | x86_64, aarch64 | Best-effort |
+| CentOS Stream / Alma / Rocky | 8 | x86_64 | Best-effort |
 | AlmaLinux / Rocky | 9 | x86_64, aarch64 | Best-effort |
+| Fedora | 40, 41 | x86_64 | Best-effort |
 
 ## Role Variables
 
