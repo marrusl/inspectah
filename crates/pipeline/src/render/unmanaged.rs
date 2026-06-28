@@ -18,11 +18,12 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         return Vec::new();
     }
 
-    let mut lines = Vec::new();
-    lines.push(String::new());
-    lines.push("# === Unmanaged files (no package manager provenance) ===".into());
-    lines.push("# These files were copied directly from the source host. They have".into());
-    lines.push("# no upstream update path and must be manually maintained.".into());
+    let mut lines = vec![
+        String::new(),
+        "# === Unmanaged files (no package manager provenance) ===".into(),
+        "# These files were copied directly from the source host. They have".into(),
+        "# no upstream update path and must be manually maintained.".into(),
+    ];
 
     // Group by parent directory
     let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();
