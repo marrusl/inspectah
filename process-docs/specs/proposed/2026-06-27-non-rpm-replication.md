@@ -482,7 +482,8 @@ a Quadlet migration nudge:
 
 ### Refine UI
 
-Compose stacks appear in the Containers reference section (existing).
+Compose remains its own dedicated sidebar destination (section ID
+`compose`, shortcut key 9 — see Section IDs and Keyboard Navigation).
 Read-only — no include toggles. Expandable to view services and images.
 Subtle banner: "Compose stacks should be deployed as container workloads
 on the running system. Consider Quadlet units."
@@ -505,21 +506,27 @@ The final sidebar section list with new sections integrated:
 3. Users & Groups *(existing)*
 4. Services *(existing)*
 5. Containers *(existing — quadlets, flatpaks)*
-6. System Tuning *(existing)*
-7. **Language Packages** *(new)*
-8. **Unmanaged Files** *(new, flag-gated)*
+6. **Language Packages** *(new)*
+7. **Unmanaged Files** *(new, flag-gated)*
 
 **Reference (read-only sections):**
+- Version Changes *(existing)*
+- **Compose** *(existing — own sidebar destination, not inside Containers)*
+- Network *(existing)*
+- Storage *(existing)*
+- System Tuning *(existing)*
+- Scheduled Tasks *(existing)*
 - Non-RPM Software *(existing — retains ELF/binary inventory not
   covered by Language Packages or Unmanaged Files)*
 - Kernel & Boot *(existing)*
 - Security & Access Control *(existing)*
-- Scheduled Tasks *(existing)*
 
-Language Packages replaces the pip/npm/gem portion of the existing
-Non-RPM Software reference section. Non-RPM Software retains any items
-not claimed by Tier 1 or Tier 2 (e.g., .env files, git repos, binaries
-when `--include-unmanaged` is not used).
+This is the complete sidebar inventory. Language Packages replaces the
+pip/npm/gem portion of the existing Non-RPM Software reference section.
+Non-RPM Software retains any items not claimed by Tier 1 or Tier 2
+(e.g., .env files, git repos, binaries when `--include-unmanaged` is
+not used). Compose remains its own dedicated reference destination
+(not merged into Containers) — see Compose Sidebar Reconciliation.
 
 ### Aggregate Mode
 
@@ -760,6 +767,10 @@ preserving existing reference section shortcuts by shifting them down.
 
 **Full shortcut map after this spec:**
 
+The live `SINGLE_HOST_SECTION_IDS` maps the full sidebar order to keys
+1-9. This spec inserts two new review sections after Containers (key 5),
+shifting reference sections down.
+
 | Key | Section | ID | Type | Change |
 |-----|---------|-----|------|--------|
 | 1 | Packages | `packages` | Review | *unchanged* |
@@ -767,25 +778,25 @@ preserving existing reference section shortcuts by shifting them down.
 | 3 | Users & Groups | `users_groups` | Review | *unchanged* |
 | 4 | Services | `services` | Review | *unchanged* |
 | 5 | Containers | `containers` | Review | *unchanged* |
-| 6 | Version Changes | `version_changes` | Reference | *unchanged* |
-| 7 | **Language Packages** | `language_packages` | **Review** | **new** (was: Compose) |
-| 8 | **Unmanaged Files** | `unmanaged_files` | **Review** | **new** (was: Network) |
+| 6 | **Language Packages** | `language_packages` | **Review** | **new** (was: Version Changes) |
+| 7 | **Unmanaged Files** | `unmanaged_files` | **Review** | **new** (was: Compose) |
+| 8 | Version Changes | `version_changes` | Reference | was key 6 → now key 8 |
 | 9 | Compose | `compose` | Reference | was key 7 → now key 9 |
-| — | Network | `network` | Reference | was key 8 → now key 10 (no shortcut) |
-| — | Storage | `storage` | Reference | was key 9 → now key 11 (no shortcut) |
-| — | System Tuning | `system_tuning` | Reference | was key 6 → stays reachable via sidebar |
+| — | Network | `network` | Reference | was key 8 → no shortcut |
+| — | Storage | `storage` | Reference | was key 9 → no shortcut |
+| — | System Tuning | `system_tuning` | Reference | no shortcut (unchanged) |
 | — | Scheduled Tasks | `scheduled_tasks` | Reference | no shortcut (unchanged) |
 | — | Non-RPM Software | `non_rpm_software` | Reference | no shortcut (unchanged) |
 | — | Kernel & Boot | `kernel_boot` | Reference | no shortcut (unchanged) |
 | — | Security & Access | `selinux` | Reference | no shortcut (unchanged) |
 
-**Shortcut remapping note:** Keys 7-9 change meaning. This affects
-expert users who have muscle memory for Compose=7, Network=8, Storage=9.
-Mitigation: the keyboard shortcut help overlay (`?`) shows the current
-map. The shortcuts dialog (`onOpenShortcuts`) is already accessible and
-will reflect the new order immediately. No phased migration needed —
-the reference sections being displaced are low-frequency navigation
-targets compared to the new review sections.
+**Shortcut remapping note:** Keys 6-9 change meaning. This affects
+expert users who have muscle memory for Version Changes=6, Compose=7,
+Network=8, Storage=9. Mitigation: the keyboard shortcut help overlay
+(`?`) shows the current map. The shortcuts dialog (`onOpenShortcuts`)
+is already accessible and will reflect the new order immediately. No
+phased migration needed — the reference sections being displaced are
+low-frequency navigation targets compared to the new review sections.
 
 Key 8 (`unmanaged_files`) is a no-op when the section is not visible
 (flag not used). The shortcut simply does nothing; no error or visual
