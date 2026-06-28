@@ -97,9 +97,7 @@ Sections consumed by this plan:
 | Field | Aggregate Use |
 |-------|---------------|
 | `manifest_files` | Variant diff key for language envs |
-| `npm_packages` | Package list for npm aggregate items |
-| `gem_packages` | Package list for gem aggregate items |
-| `packages` (existing) | Package list for pip aggregate items |
+| `packages` | Unified package list (`Vec<LanguagePackage>`) for all ecosystems |
 
 ## File Map
 
@@ -855,30 +853,18 @@ in the same environment:
 ```rust
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
         use sha2::{Digest, Sha256};
-        // Hash the package list to detect divergence across hosts.
-        // Includes pip packages, npm_packages, and gem_packages.
+        // Hash the unified package list to detect divergence across hosts.
+        // All ecosystems use packages: Vec<LanguagePackage> (Plan 1 Task 1
+        // renames PipPackage → LanguagePackage and reuses the same field).
         let mut hasher = Sha256::new();
+        hasher.update(self.method.as_bytes());
+        hasher.update(b"\n");
         for pkg in &self.packages {
-            hasher.update(format!("pip:{}={}\n", pkg.name, pkg.version).as_bytes());
-        }
-        // npm_packages and gem_packages are added by Plan 1 Task 1.
-        // When those fields exist, hash them too.
-        // Note: these fields may not exist yet if Plan 1 hasn't landed.
-        // The serde default ensures empty vecs, so this is safe.
-        for pkg in &self.npm_packages {
-            hasher.update(format!("npm:{}={}\n", pkg.name, pkg.version).as_bytes());
-        }
-        for pkg in &self.gem_packages {
-            hasher.update(format!("gem:{}={}\n", pkg.name, pkg.version).as_bytes());
+            hasher.update(format!("{}={}\n", pkg.name, pkg.version).as_bytes());
         }
         Some(Cow::Owned(format!("{:x}", hasher.finalize())))
     }
 ```
-
-**Note:** This depends on Plan 1 Task 1 having added `npm_packages` and
-`gem_packages` to `NonRpmItem`. If those fields don't exist yet at
-implementation time, comment out the npm/gem loops with a TODO referencing
-Plan 1.
 
 - [ ] **Step 3: Add unit test for composite identity key**
 

@@ -31,7 +31,7 @@
 | File | Change |
 |------|--------|
 | `crates/core/src/types/nonrpm.rs` | Rename `PipPackage` → `LanguagePackage`; add `manifest_files`, `rpm_filtered` to `NonRpmItem` |
-| `crates/core/src/snapshot.rs` | Bump `SCHEMA_VERSION` from 19 to 20 (Task 9 only) |
+| `crates/core/src/snapshot.rs` | Bump `SCHEMA_VERSION` from 19 to 20 (Task 11 only) |
 | `crates/refine/src/types.rs` | Add `ItemId::LanguageEnv` variant |
 | `crates/collect/src/inspectors/nonrpm.rs` | RPM ownership filtering in `scan_pip_packages()`, project-level restructuring in `scan_npm_packages()` and `scan_gem_packages()`, requirements.txt collection in `scan_python_venvs()` |
 | `crates/pipeline/src/render/containerfile.rs` | Replace advisory stubs in `non_rpm_section_lines()` with executable COPY/RUN |
@@ -574,17 +574,10 @@ Create `crates/pipeline/src/render/language_packages.rs`:
 ```rust
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::NonRpmItem;
-use sha2::{Digest, Sha256};
+use inspectah_core::util::env_hash; // shared helper from Task 1
 
 const HIGH_CONFIDENCE: &str = "high";
 const MEDIUM_CONFIDENCE: &str = "medium";
-
-fn env_hash(path: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(&result[..6])
-}
 
 pub fn language_package_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let nrs = match &snap.non_rpm_software {
