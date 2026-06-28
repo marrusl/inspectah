@@ -49,6 +49,10 @@ pub struct RefineSession {
     /// Path to the source tarball. When set, auto-save writes a session
     /// sidecar file after every cursor-changing mutation.
     tarball_path: Option<PathBuf>,
+    /// Staging directory for user-uploaded RPMs (from the refine UI upload
+    /// endpoint). Export reads from both the source tarball AND this dir,
+    /// merging uploads into `repoless-packages/`.
+    upload_dir: Option<PathBuf>,
     /// Set to true when auto-save encounters a permanent I/O failure
     /// (EROFS, EACCES). Suppresses further save attempts for this session.
     durability_degraded: bool,
@@ -437,6 +441,7 @@ impl RefineSession {
             generation: 0,
             viewed: HashSet::new(),
             tarball_path: None,
+            upload_dir: None,
             durability_degraded: false,
         };
         session.recompute_view();
@@ -560,6 +565,46 @@ impl RefineSession {
     /// Called by the CLI after `from_tarball()` to wire up persistence.
     pub fn set_tarball_path(&mut self, path: PathBuf) {
         self.tarball_path = Some(path);
+    }
+
+    /// Set the upload directory for user-uploaded RPMs.
+    pub fn set_upload_dir(&mut self, path: PathBuf) {
+        self.upload_dir = Some(path);
+    }
+
+    /// Return the upload directory, creating it if necessary.
+    /// Derives the path from `tarball_path` when `upload_dir` is not
+    /// explicitly set: `<tarball_stem>-uploads/`.
+    pub fn ensure_upload_dir(&mut self) -> Result<&Path, RefineError> {
+        if self.upload_dir.is_none() {
+            let base = self
+                .tarball_path
+                .as_ref()
+                .ok_or_else(|| {
+                    RefineError::TarballError(
+                        "cannot derive upload dir: no tarball path set".into(),
+                    )
+                })?
+                .clone();
+            let mut dir = base;
+            dir.set_extension(""); // strip .gz
+            dir.set_extension(""); // strip .tar
+            let dir = PathBuf::from(format!("{}-uploads", dir.display()));
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| RefineError::TarballError(format!("create upload dir: {e}")))?;
+            self.upload_dir = Some(dir);
+        }
+        Ok(self.upload_dir.as_ref().unwrap())
+    }
+
+    /// Returns the source tarball path, if set.
+    pub fn source_tarball_path(&self) -> Option<&Path> {
+        self.tarball_path.as_deref()
+    }
+
+    /// Returns the upload directory path, if set.
+    pub fn upload_dir_path(&self) -> Option<&Path> {
+        self.upload_dir.as_deref()
     }
 
     pub fn repo_index(&self) -> &RepoIndex {
@@ -1090,6 +1135,8 @@ impl RefineSession {
             path,
             Some(&orig_inc),
             self.cached_render_context.as_ref(),
+            self.tarball_path.as_deref(),
+            self.upload_dir.as_deref(),
         )
     }
 
@@ -2642,11 +2689,120 @@ fn write_language_package_manifests(
     Ok(())
 }
 
+/// Extract `unmanaged/` and `repoless-packages/` from the source scan
+/// tarball into the export directory, filtering by include flags from the
+/// projected snapshot. Only files whose corresponding snapshot entry has
+/// `include == true` are extracted.
+fn extract_payload_dirs_from_tarball(
+    source_tarball: &Path,
+    snap: &InspectionSnapshot,
+    out: &Path,
+) -> Result<(), RefineError> {
+    let file = std::fs::File::open(source_tarball)
+        .map_err(|e| RefineError::TarballError(format!("open source tarball: {e}")))?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+
+    // Build set of included unmanaged paths for filtering.
+    // Tarball stores paths relative to the root (no leading slash).
+    let included_unmanaged: HashSet<String> = snap
+        .unmanaged_files
+        .as_ref()
+        .map(|s| {
+            s.items
+                .iter()
+                .filter(|f| f.include)
+                .map(|f| f.path.trim_start_matches('/').to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Build set of included repo-less RPM filenames.
+    let included_repoless: HashSet<String> = snap
+        .rpm
+        .as_ref()
+        .map(|r| {
+            r.packages_added
+                .iter()
+                .filter(|p| p.include && p.repoless_cached)
+                .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if included_unmanaged.is_empty() && included_repoless.is_empty() {
+        return Ok(());
+    }
+
+    for entry in archive
+        .entries()
+        .map_err(|e| RefineError::TarballError(e.to_string()))?
+    {
+        let mut entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let path = entry
+            .path()
+            .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let path_str = path.to_string_lossy();
+
+        // Strip the top-level directory prefix from the tarball entry
+        // (e.g. "hostname-inspectah/unmanaged/opt/foo" → "unmanaged/opt/foo").
+        let rel = path_str
+            .find('/')
+            .map(|i| &path_str[i + 1..])
+            .unwrap_or(&path_str);
+
+        let should_extract = if let Some(file_rel) = rel.strip_prefix("unmanaged/") {
+            !file_rel.is_empty() && included_unmanaged.contains(file_rel)
+        } else if let Some(filename) = rel.strip_prefix("repoless-packages/") {
+            !filename.is_empty() && included_repoless.contains(filename)
+        } else {
+            false
+        };
+
+        if should_extract {
+            let dest = out.join(rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
+            let mut outfile = std::fs::File::create(&dest)
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            std::io::copy(&mut entry, &mut outfile)
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy uploaded RPMs from the upload staging directory into
+/// `repoless-packages/` in the export directory.
+fn copy_uploaded_rpms(upload_dir: &Path, out: &Path) -> Result<(), RefineError> {
+    if !upload_dir.exists() {
+        return Ok(());
+    }
+    let dest_dir = out.join("repoless-packages");
+    for entry in
+        std::fs::read_dir(upload_dir).map_err(|e| RefineError::TarballError(e.to_string()))?
+    {
+        let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().ends_with(".rpm") {
+            std::fs::create_dir_all(&dest_dir)
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            std::fs::copy(entry.path(), dest_dir.join(&name))
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
     render_ctx: Option<&RenderContext>,
+    source_tarball: Option<&Path>,
+    upload_dir: Option<&Path>,
 ) -> Result<(), RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
@@ -2682,7 +2838,20 @@ pub fn render_refine_export(
     //     non-RPM items with include=true have collected manifest files).
     write_language_package_manifests(snap, out)?;
 
-    // 2e. Remove any top-level artifacts outside the approved export contract.
+    // 2e. Extract payload files from source tarball for unmanaged files
+    //     and repo-less RPMs. These were bundled at scan time and must be
+    //     re-extracted into the export tempdir, filtered by include flags.
+    if let Some(source) = source_tarball {
+        extract_payload_dirs_from_tarball(source, snap, out)?;
+    }
+
+    // 2f. Copy uploaded RPMs (from refine UI upload endpoint) alongside
+    //     cached RPMs from the source tarball.
+    if let Some(uploads) = upload_dir {
+        copy_uploaded_rpms(uploads, out)?;
+    }
+
+    // 2g. Remove any top-level artifacts outside the approved export contract.
     //     "quadlet" is intentionally excluded — quadlet units are written by
     //     write_config_tree as a side effect but are NOT part of the refine
     //     export contract. The Containerfile references them via config/ paths.
@@ -2702,6 +2871,8 @@ pub fn render_refine_export(
         "inspectah-users.ks",
         "inspectah-users.toml",
         "language-packages",
+        "unmanaged",
+        "repoless-packages",
     ]
     .iter()
     .copied()
@@ -4028,7 +4199,7 @@ mod tests {
 
         let tmpdir = tempfile::tempdir().unwrap();
         let tarball_path = tmpdir.path().join("export.tar.gz");
-        render_refine_export(&snap, &tarball_path, None, None).unwrap();
+        render_refine_export(&snap, &tarball_path, None, None, None, None).unwrap();
 
         // Read tarball entries
         let f = std::fs::File::open(&tarball_path).unwrap();

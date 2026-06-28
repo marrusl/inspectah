@@ -309,7 +309,15 @@ pub async fn export_tarball(
     })?;
 
     // Snapshot state under the lock, then release before expensive work.
-    let (projected, _generation, sensitive, original_includes, export_filename) = {
+    let (
+        projected,
+        _generation,
+        sensitive,
+        original_includes,
+        export_filename,
+        source_tarball,
+        upload_dir,
+    ) = {
         let session = state.session.lock().unwrap();
         if req.generation != session.generation() {
             return Err(AppError(
@@ -345,6 +353,8 @@ pub async fn export_tarball(
             session.is_sensitive(),
             orig_inc,
             filename,
+            session.source_tarball_path().map(|p| p.to_path_buf()),
+            session.upload_dir_path().map(|p| p.to_path_buf()),
         )
     };
     // Lock is released here.
@@ -378,6 +388,8 @@ pub async fn export_tarball(
                 &tarball_path,
                 Some(&original_includes),
                 None,
+                source_tarball.as_deref(),
+                upload_dir.as_deref(),
             )?;
             Ok(std::fs::read(&tarball_path)?)
         },
