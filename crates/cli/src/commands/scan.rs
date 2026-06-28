@@ -547,16 +547,22 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Must run after collect() so language environment paths are available
     // for the exclusion layer, and before the size prompt which reads the result.
     if args.include_unmanaged {
-        // Collect language environment paths from Tier 1 to avoid double-counting.
-        // Non-RPM collectors store paths as relative (no leading /), but
-        // scan_unmanaged_files() compares against absolute paths. Normalize
-        // to absolute so the Tier 1 exclusion actually matches.
+        // Collect ONLY Tier 1 language environment paths to avoid
+        // double-counting. Non-Tier-1 items (ELF findings, git repos)
+        // must NOT suppress Tier 2 unmanaged file collection.
         let language_env_paths: Vec<String> = snapshot
             .non_rpm_software
             .as_ref()
             .map(|nrs| {
                 nrs.items
                     .iter()
+                    .filter(|item| {
+                        use inspectah_core::util::*;
+                        item.method == METHOD_PYTHON_VENV
+                            || item.method == METHOD_PIP_DIST_INFO
+                            || item.method == METHOD_NPM_LOCKFILE
+                            || item.method == METHOD_GEM_LOCKFILE
+                    })
                     .map(|item| {
                         if item.path.starts_with('/') {
                             item.path.clone()
