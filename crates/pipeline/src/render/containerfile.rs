@@ -203,6 +203,9 @@ fn render_containerfile_inner(
     }
     lines.extend(containers_section_lines(snap));
 
+    // 7b. Compose stacks (reference-only comment block)
+    lines.extend(compose_comment_lines(snap));
+
     // 8. Users
     if is_degraded(&snap.completeness, InspectorId::UsersGroups) {
         lines.push(
@@ -1098,6 +1101,58 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         &format!("Container Workloads ({total_workloads})"),
         body,
     ));
+    lines
+}
+
+// --- Compose comment block (reference-only) ---
+
+/// Generates a Containerfile comment block for detected compose stacks.
+///
+/// No COPY or RUN directives — compose is reference-only. The comment
+/// lists detected stacks and nudges toward Quadlet migration.
+fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    let mut lines = Vec::new();
+    let containers = match &snap.containers {
+        Some(c) => c,
+        None => return lines,
+    };
+
+    let compose_files: Vec<_> = containers
+        .compose_files
+        .iter()
+        .filter(|c| c.include)
+        .collect();
+
+    if compose_files.is_empty() {
+        return lines;
+    }
+
+    let mut body: Vec<String> = vec![
+        "# === Compose stacks detected ===".into(),
+        "# The following compose stacks were running on the source host.".into(),
+        "# These are application workloads, not OS configuration.".into(),
+        "# See compose/ in the build context for the original files.".into(),
+        "#".into(),
+        "# Consider converting to Quadlet units \u{2014} .container files under".into(),
+        "# /etc/containers/systemd/ that let systemd manage your container".into(),
+        "# workloads natively.".into(),
+        "#   man quadlet(5)".into(),
+        "#   https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html".into(),
+        "#   https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/building_running_and_managing_containers/porting-containers-to-systemd-using-podman".into(),
+        "#".into(),
+    ];
+
+    for cf in &compose_files {
+        let svc_count = cf.images.len();
+        let svc_label = if svc_count == 1 {
+            "1 service".to_string()
+        } else {
+            format!("{svc_count} services")
+        };
+        body.push(format!("#   - /{} ({svc_label})", cf.path));
+    }
+
+    lines.extend(section("Compose Stacks (reference only)", body));
     lines
 }
 
@@ -3807,5 +3862,92 @@ mod tests {
             output.contains("# \"Build Essentials\" degraded"),
             "degraded provenance comment must appear for Build Essentials"
         );
+    }
+
+    // --- Compose comment block tests ---
+
+    #[test]
+    fn compose_comment_block_emitted() {
+        use inspectah_core::types::containers::{ComposeFile, ComposeService, ContainerSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            containers: Some(ContainerSection {
+                compose_files: vec![
+                    ComposeFile {
+                        path: "opt/myapp/docker-compose.yml".to_string(),
+                        images: vec![
+                            ComposeService {
+                                service: "web".to_string(),
+                                image: "nginx:latest".to_string(),
+                            },
+                            ComposeService {
+                                service: "db".to_string(),
+                                image: "postgres:16".to_string(),
+                            },
+                        ],
+                        include: true,
+                        ..Default::default()
+                    },
+                    ComposeFile {
+                        path: "srv/monitoring/compose.yml".to_string(),
+                        images: vec![ComposeService {
+                            service: "prometheus".to_string(),
+                            image: "prom/prometheus".to_string(),
+                        }],
+                        include: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(output.contains("Compose stacks detected"));
+        assert!(output.contains("quadlet(5)"));
+        assert!(output.contains("podman-systemd.unit.5.html"));
+        assert!(output.contains("porting-containers-to-systemd-using-podman"));
+        assert!(output.contains("opt/myapp/docker-compose.yml (2 services)"));
+        assert!(output.contains("srv/monitoring/compose.yml (1 service)"));
+        // No COPY or RUN for compose
+        assert!(!output.contains("COPY compose/"));
+        assert!(!output.contains("RUN compose"));
+    }
+
+    #[test]
+    fn compose_comment_block_absent_when_no_compose() {
+        use inspectah_core::types::containers::ContainerSection;
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            containers: Some(ContainerSection::default()),
+            ..Default::default()
+        };
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(!output.contains("Compose stacks detected"));
+    }
+
+    #[test]
+    fn compose_comment_excludes_non_included() {
+        use inspectah_core::types::containers::{ComposeFile, ContainerSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            containers: Some(ContainerSection {
+                compose_files: vec![ComposeFile {
+                    path: "opt/excluded/docker-compose.yml".to_string(),
+                    include: false,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(!output.contains("Compose stacks detected"));
     }
 }
