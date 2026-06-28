@@ -2,7 +2,7 @@
 
 **Author:** Pele (Automation & Fleet Configuration Engineer)
 **Date:** 2026-06-27
-**Revised:** 2026-06-27 (round 2 review)
+**Revised:** 2026-06-27 (round 3 review — campaign ID scoping fix)
 **Status:** Proposed
 **Scope:** Galaxy-publishable Ansible role for fleet-wide inspectah scan orchestration
 
@@ -230,7 +230,11 @@ Modifications:
 
 **Agree with modification.**
 
-Two-play structure is correct. Modifications:
+Three-play structure. Play 0 generates the campaign ID on localhost
+(truly once, before serial batching), Play 1 scans the fleet with the
+campaign ID passed via `hostvars['localhost']`, and Play 2 aggregates.
+This replaces the earlier two-play structure to fix a `run_once` scoping
+bug (see Section 5.5). Modifications:
 
 1. **The `serial: 10` recommendation belongs in the example playbook
    itself, not just the README.** Show it as a commented-out line in the
@@ -425,10 +429,27 @@ inspectah_extra_args: []
 
 # --- Fetch ---
 
+# Campaign identifier for grouping fetched tarballs into a single
+# directory. When set, tarballs are fetched into
+# {{ inspectah_fetch_dest }}/{{ inspectah_campaign_id }}/.
+# When empty (default), tarballs are fetched directly into
+# {{ inspectah_fetch_dest }}/{{ inventory_hostname }}.tar.gz with
+# no campaign subdirectory — suitable for simple single-run scans.
+#
+# The example playbook (examples/site.yml) demonstrates generating
+# a campaign ID in a dedicated Play 0 on localhost and passing it
+# to the role. This is the recommended pattern for fleet scans
+# with serial batching. See Section 5.5 for details.
+#
+# NOTE: Do not use run_once to generate this value inside the
+# fleet play. In Ansible, run_once fires once per serial batch,
+# not once per play — a fleet run with serial: 10 would split
+# tarballs across multiple campaign directories.
+inspectah_campaign_id: ""
+
 # Base directory on the control node to receive per-host tarballs.
-# A campaign-scoped subdirectory is created automatically per
-# invocation (see Section 5.5). Tarballs are stored as
-# {{ inventory_hostname }}.tar.gz inside the campaign directory.
+# When inspectah_campaign_id is set, a subdirectory is created
+# under this path. When empty, tarballs land directly here.
 inspectah_fetch_dest: "{{ playbook_dir }}/scans"
 
 # --- Cleanup ---
@@ -603,12 +624,25 @@ argument_specs:
           --preserve, or --no-redaction (these are managed by the
           role's own variables and stripped with a warning).
 
+      inspectah_campaign_id:
+        type: str
+        default: ""
+        description: >-
+          Campaign identifier for grouping fetched tarballs. When
+          set, tarballs are fetched into a subdirectory named by
+          this value. When empty (default), tarballs land directly
+          in inspectah_fetch_dest. The example playbook generates
+          this in a separate Play 0 on localhost — do not use
+          run_once inside a serial-batched play (it fires per
+          batch, not per play).
+
       inspectah_fetch_dest:
         type: path
         default: "{{ playbook_dir }}/scans"
         description: >-
           Base directory on the control node for fetched tarballs.
-          A campaign-scoped subdirectory is created automatically.
+          When inspectah_campaign_id is set, a subdirectory is
+          created under this path.
 
       inspectah_cleanup_host_tarball:
         type: bool
@@ -819,29 +853,40 @@ the role captures current state, not desired state.
 The role knows the exact tarball path from `inspectah_scan_output` — no
 discovery step is needed.
 
-**Campaign directory generation:** A single campaign directory is created
-once on the controller via `run_once` + `delegate_to: localhost`. All
-hosts fetch into this same directory. This avoids clock-skew and serial-batch
-problems that arise from deriving timestamps per-host.
+**Campaign directory derivation:** The fetch destination depends on
+whether the consuming playbook provides `inspectah_campaign_id`:
+
+- **With campaign ID** (fleet scans): tarballs go into
+  `{{ inspectah_fetch_dest }}/{{ inspectah_campaign_id }}/`. The
+  campaign ID is an input variable — the role does not generate it.
+  The example playbook (Section 6.1) generates it in a dedicated
+  Play 0 on localhost and passes it to the role via `vars`.
+- **Without campaign ID** (simple scans): tarballs go directly into
+  `{{ inspectah_fetch_dest }}/`. No subdirectory is created.
+
+**Why the role does not generate the campaign ID internally:**
+
+In Ansible, `run_once` fires once per `serial` batch, not once per
+play. A fleet run with `serial: 10` and 50 hosts would fire `run_once`
+five times, creating five different campaign directories. Tarballs would
+scatter across directories and `inspectah aggregate` would see only a
+partial fleet per directory.
+
+The correct pattern is a separate play on `localhost` that runs before
+the fleet play begins serial batching. `set_fact` on localhost in its
+own play is truly play-scoped — it executes exactly once, and all
+serial batches in the subsequent fleet play read the same value from
+`hostvars['localhost']`. The example playbook demonstrates this.
 
 ```yaml
-- name: Generate campaign run directory on controller
-  ansible.builtin.command:
-    argv:
-      - date
-      - "+%Y%m%dT%H%M%S"
-  delegate_to: localhost
-  run_once: true
-  register: _inspectah_campaign_ts
-  changed_when: false
-
-- name: Set campaign-scoped fetch directory
+- name: Set fetch directory (with or without campaign scoping)
   ansible.builtin.set_fact:
     _inspectah_run_dir: >-
-      {{ inspectah_fetch_dest }}/{{ _inspectah_campaign_ts.stdout }}
-  run_once: true
+      {{ (inspectah_campaign_id | default('') | length > 0)
+         | ternary(inspectah_fetch_dest ~ '/' ~ inspectah_campaign_id,
+                   inspectah_fetch_dest) }}
 
-- name: Ensure campaign fetch directory exists
+- name: Ensure fetch directory exists
   ansible.builtin.file:
     path: "{{ _inspectah_run_dir }}"
     state: directory
@@ -872,16 +917,20 @@ problems that arise from deriving timestamps per-host.
   the role constructs it deterministically, the exact tarball location
   is known from the `inspectah_scan_output` variable. No
   `ansible.builtin.find`, no mtime sorting, no glob ambiguity.
-- **Campaign-scoped directory.** The timestamp is generated once on
-  the controller (`run_once` + `delegate_to: localhost`) and shared to
-  all hosts via `set_fact`. This guarantees every host in the campaign
-  fetches into the same directory regardless of clock skew, serial
-  batching, or `--limit` retries. Each `ansible-playbook` invocation
-  creates a new campaign directory (`scans/20260627T143052/`),
-  preventing stale tarballs from contaminating aggregate input.
+- **Campaign scoping is opt-in.** Users who just want a basic
+  scan-fetch do not need to set `inspectah_campaign_id` at all.
+  Tarballs land directly in `inspectah_fetch_dest`. Campaign scoping
+  is a feature of the example playbook for fleet-scale operations.
+- **The directory-create task still uses `run_once`.** This is safe
+  because `run_once` on a `delegate_to: localhost` task only creates
+  the directory — the same directory path is idempotent. Even if
+  `run_once` fires per serial batch, the `file` module with
+  `state: directory` is idempotent. The critical point is that the
+  campaign ID VALUE must be the same across batches, which is
+  guaranteed by generating it in a separate play (see Section 6.1).
 - **Sensitive campaign permissions.** When `inspectah_preserve` is
   non-empty or `inspectah_no_redaction` is true, `_inspectah_sensitive_campaign`
-  is true and the campaign directory is created with `0700` permissions.
+  is true and the fetch directory is created with `0700` permissions.
   This restricts access to fetched tarballs that may contain password
   hashes, SSH keys, or unredacted secrets. Non-sensitive campaigns use
   the default `0755`.
@@ -1044,20 +1093,43 @@ this cleanup step removes that artifact.
 ---
 # Full inspectah fleet scan pipeline.
 #
-# Play 1: Scan all targets (role applies per-host)
-# Play 2: Aggregate results on localhost
+# Three-play structure:
+#   Play 0: Generate a campaign ID on localhost (runs exactly once)
+#   Play 1: Scan the fleet (serial batching is safe — campaign ID
+#           comes from Play 0, not run_once)
+#   Play 2: Aggregate results on localhost
 #
-# Fleet-scale tuning:
+# Why three plays instead of two?
+#   Ansible's run_once fires once per serial BATCH, not once per
+#   play. With serial: 10 and 50 hosts, run_once in Play 1 fires
+#   5 times — creating 5 campaign directories and splitting tarballs
+#   across them. set_fact on localhost in a separate play is truly
+#   play-scoped: it runs exactly once before serial batching begins,
+#   and all batches read the same value from hostvars['localhost'].
+#
+# Fleet-scale tuning (Play 1):
 #   serial: 10          — process 10 hosts at a time to avoid
 #                          thundering herd on base image pulls
 #   max_fail_percentage: 10  — tolerate up to 10% host failures
 #                                without aborting the campaign
 
+# Play 0: Generate campaign ID (truly once, before any serial batching)
+- name: Initialize campaign
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Generate campaign ID
+      ansible.builtin.set_fact:
+        inspectah_campaign_id: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+# Play 1: Scan the fleet (serial batching is safe — campaign ID comes from Play 0)
 - name: Scan fleet hosts
   hosts: scan_targets
   # serial: 10
   # max_fail_percentage: 10
   become: false
+  vars:
+    inspectah_campaign_id: "{{ hostvars['localhost'].inspectah_campaign_id }}"
   roles:
     - role: ansible-role-inspectah
       vars:
@@ -1069,6 +1141,7 @@ this cleanup step removes that artifact.
         #   - subscription
         # inspectah_cleanup_host: true    # Remove inspectah after scan
 
+# Play 2: Aggregate on control node
 - name: Aggregate scan results
   hosts: localhost
   connection: local
@@ -1076,11 +1149,8 @@ this cleanup step removes that artifact.
   vars:
     # inspectah aggregate needs the same minimum version as the role.
     _inspectah_min_version: "0.8.0"
-    # The campaign directory is created by the role. When running the
-    # full pipeline (scan + aggregate), the campaign directory from
-    # play 1 is available. For standalone aggregate runs, point at a
-    # specific campaign directory.
-    _aggregate_input: "{{ playbook_dir }}/scans"
+    # The campaign directory is named by the campaign ID from Play 0.
+    _aggregate_input: "{{ playbook_dir }}/scans/{{ inspectah_campaign_id }}"
     _aggregate_output: "{{ playbook_dir }}/aggregate"
   tasks:
     - name: Check localhost inspectah version
@@ -1104,25 +1174,17 @@ this cleanup step removes that artifact.
           minimum required {{ _inspectah_min_version }}. Upgrade
           inspectah on the control node before running aggregate.
 
-    - name: Find most recent scan campaign directory
-      ansible.builtin.find:
-        paths: "{{ _aggregate_input }}"
-        file_type: directory
-      register: _scan_runs
+    - name: Verify campaign directory exists
+      ansible.builtin.stat:
+        path: "{{ _aggregate_input }}"
+      register: _campaign_dir
 
-    - name: Set aggregate input to most recent campaign
-      ansible.builtin.set_fact:
-        _aggregate_run_dir: >-
-          {{ (_scan_runs.files | sort(attribute='mtime', reverse=true)
-              | first).path }}
-      when: _scan_runs.files | length > 0
-
-    - name: Fail if no scan campaigns found
+    - name: Fail if campaign directory missing
       ansible.builtin.fail:
         msg: >-
-          No scan campaign directories found in {{ _aggregate_input }}.
+          Campaign directory {{ _aggregate_input }} not found.
           Run the scan play first.
-      when: _scan_runs.files | length == 0
+      when: not _campaign_dir.stat.exists
 
     - name: Ensure aggregate output directory exists
       ansible.builtin.file:
@@ -1135,7 +1197,7 @@ this cleanup step removes that artifact.
         argv:
           - inspectah
           - aggregate
-          - "{{ _aggregate_run_dir }}"
+          - "{{ _aggregate_input }}"
           - --output-dir
           - "{{ _aggregate_output }}"
           # When scan used --preserve or --no-redaction, aggregate
@@ -1145,6 +1207,13 @@ this cleanup step removes that artifact.
           # - --ack-sensitive
       changed_when: true
 ```
+
+**Three-play rationale:** The `set_fact` on localhost in Play 0 is
+truly play-scoped — it executes exactly once, before Play 1 begins
+serial batching. Every serial batch in Play 1 reads the same
+`inspectah_campaign_id` from `hostvars['localhost']`, guaranteeing
+all tarballs land in a single campaign directory. This is not possible
+with `run_once` inside Play 1 (see the comment in the playbook above).
 
 **Partial-campaign behavior:** When `max_fail_percentage` allows some
 hosts to fail, the aggregate play runs on whatever tarballs were
@@ -1369,9 +1438,10 @@ failures logged but do not abort).
 **What is safe to retry after partial failure:**
 
 - **Scan failed on some hosts:** Re-run the playbook with
-  `--limit @playbook.retry` to target only failed hosts. Each retry
-  creates a new campaign directory, so results from different
-  attempts do not mix.
+  `--limit @playbook.retry` to target only failed hosts. Each
+  re-invocation of the playbook generates a new campaign ID in
+  Play 0, creating a new campaign directory — results from
+  different attempts do not mix.
 - **Fetch failed (scan succeeded):** The tarball remains on the target
   host (tarball cleanup only runs on successful fetch). Re-running
   the role re-scans the host (scan is not idempotent — it captures
@@ -1387,10 +1457,12 @@ failures logged but do not abort).
   scans on the same host race on this file. Use `serial: 1` or
   `forks: 1` per host to prevent this.
 
-**Campaign isolation:** Campaign-scoped fetch directories prevent stale
-tarball aggregation. Each `ansible-playbook` invocation writes to its
-own timestamped campaign directory. The aggregate play should point at
-a specific campaign directory, not the parent.
+**Campaign isolation:** When using the example playbook's three-play
+pattern, each `ansible-playbook` invocation generates a unique campaign
+ID in Play 0 and writes all tarballs to its own timestamped campaign
+directory. The aggregate play (Play 2) points directly at that campaign
+directory via the same `inspectah_campaign_id` fact, so there is no
+ambiguity about which tarballs to aggregate.
 
 ---
 
