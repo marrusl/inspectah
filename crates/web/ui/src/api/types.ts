@@ -6,11 +6,7 @@
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type PackageState =
-  | "added"
-  | "base_image_only"
-  | "modified"
-  | "local_install"
-  | "no_repo";
+  "added" | "base_image_only" | "modified" | "local_install" | "no_repo";
 
 export interface AggregatePrevalence {
   count: number;
@@ -30,16 +26,17 @@ export interface PackageEntry {
   acknowledged?: boolean;
   source_repo: string;
   aggregate: AggregatePrevalence | null;
+  /** Triage annotation for repo-less packages (from Plan 2 backend). */
+  repoless_annotation?: string;
+  /** True if cached RPM was found in /var/cache/dnf/ (from Plan 2 backend). */
+  repoless_cached?: boolean;
 }
 
 // --- Config types (inspectah-core/src/types/config.rs) ---
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type ConfigFileKind =
-  | "rpm_owned_default"
-  | "rpm_owned_modified"
-  | "unowned"
-  | "orphaned";
+  "rpm_owned_default" | "rpm_owned_modified" | "unowned" | "orphaned";
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type ConfigCategory =
@@ -113,7 +110,8 @@ export interface AttentionTag {
 export type TriageBucket = "baseline" | "site" | "investigate";
 
 /** Rust: #[serde(rename_all = "snake_case")] */
-export type AggregateBucket = "investigate" | "divergent" | "partial" | "universal";
+export type AggregateBucket =
+  "investigate" | "divergent" | "partial" | "universal";
 
 export interface Prevalence {
   count: number;
@@ -272,8 +270,7 @@ export type ViewDirective = {
  * A single timeline entry sent to /api/op — either a refinement op or a view directive.
  */
 export type TimelineEntry =
-  | ({ kind: "Op" } & RefinementOp)
-  | ({ kind: "View" } & ViewDirective);
+  ({ kind: "Op" } & RefinementOp) | ({ kind: "View" } & ViewDirective);
 
 /**
  * Flat shape returned by /api/ops history (Rust uses #[serde(flatten)]).
@@ -501,6 +498,12 @@ export interface ViewResponse extends RefinedView {
   package_groups: GroupInfo[];
   package_provenances?: Record<string, PackageProvenance>;
   session_is_sensitive: boolean;
+  /** Language package environments (Tier 1 non-RPM). */
+  language_packages?: LanguagePackageEnv[];
+  /** Unmanaged file groups (Tier 2, flag-gated). Present only when --include-unmanaged was used. */
+  unmanaged_files?: UnmanagedFileGroup[];
+  /** Whether --include-unmanaged was used at scan time. Drives discoverability hint. */
+  has_unmanaged_scan?: boolean;
 }
 
 // --- User decision types (inspectah-core/src/types/users.rs) ---
@@ -657,6 +660,92 @@ export interface ItemIdGroup {
   kind: "Group";
   key: { name: string };
 }
+
+/**
+ * A language package environment (pip venv, npm project, gem project).
+ * Identity contract: matches Plan 1's ItemId::LanguageEnv { ecosystem, path }.
+ */
+export interface LanguagePackageEnv {
+  /** Ecosystem identifier: "pip" | "npm" | "gem". */
+  ecosystem: "pip" | "npm" | "gem";
+  /** Absolute path to the environment root. */
+  path: string;
+  /** Method string from Plan 1 contract. */
+  method: string;
+  /** Package names in this environment. */
+  packages: string[];
+  /** Confidence level from collector. */
+  confidence: "high" | "medium" | "low";
+  /** How the environment was discovered (e.g., "requirements.txt", "dist-info", "package-lock.json", "Gemfile.lock"). */
+  manifest_basis: string;
+  /** Whether to include in export. */
+  include: boolean;
+}
+
+/**
+ * Provenance signals for an unmanaged file.
+ * Matches Plan 2's ProvenanceSignals struct — carry through for
+ * reviewability, don't narrow at the DTO layer.
+ */
+export interface ProvenanceSignals {
+  /** File type classification. */
+  file_type:
+    | "elf_binary"
+    | "jar"
+    | "script"
+    | "data_file"
+    | "config"
+    | "symlink"
+    | "other";
+  /** Last-modified timestamp (seconds since epoch). */
+  last_modified: number;
+  /** Filesystem UID. */
+  uid: number;
+  /** Filesystem GID. */
+  gid: number;
+  /** Octal file permissions (e.g., "0755"). */
+  permissions: string;
+  /** True when file's mtime is newer than system install date. */
+  mutability: boolean;
+  /** True when file lives on a read-write mount point. */
+  writable_mount: boolean;
+  /** True when file is under a systemd service's WorkingDirectory. */
+  service_working_dir: boolean;
+}
+
+/** A single unmanaged file discovered by --include-unmanaged. */
+export interface UnmanagedFileItem {
+  /** Absolute file path (matches Plan 1's ItemId::UnmanagedFile { path }). */
+  path: string;
+  /** File size in bytes. */
+  size: number;
+  /** Whether path is under /var. */
+  is_var_path: boolean;
+  /** Whether to include in export. */
+  include: boolean;
+  /** Provenance signals from Plan 2's backend. */
+  provenance: ProvenanceSignals;
+}
+
+/** Directory group for unmanaged files. */
+export interface UnmanagedFileGroup {
+  /** Parent directory path. */
+  directory: string;
+  /** Items in this directory. */
+  items: UnmanagedFileItem[];
+}
+
+/**
+ * Row state for repo-less RPM packages.
+ * Derived from Plan 2's backend fields (repoless_annotation, repoless_cached)
+ * combined with local upload state. See spec "RPM Upload Row Contract".
+ */
+export type RpmUploadRowState =
+  | "cached_excluded" // Cached RPM found, pre-excluded (no GPG)
+  | "cached_included" // Cached RPM found, user-included
+  | "needs_upload" // No RPM anywhere, needs user upload
+  | "uploaded_excluded" // RPM uploaded via POST /api/upload-rpm, pre-excluded
+  | "uploaded_included"; // RPM uploaded, user-included
 
 export type ItemId =
   | ItemIdPackage
