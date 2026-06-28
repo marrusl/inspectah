@@ -4,7 +4,7 @@ use crate::types::config::ConfigSection;
 use crate::types::containers::ContainerSection;
 use crate::types::kernelboot::KernelBootSection;
 use crate::types::network::NetworkSection;
-use crate::types::nonrpm::NonRpmSoftwareSection;
+use crate::types::nonrpm::{NonRpmSoftwareSection, UnmanagedFileSection};
 use crate::types::os::{OsRelease, SystemType};
 use crate::types::preflight::PreflightResult;
 use crate::types::redaction::{RedactionFinding, RedactionHint, RedactionState};
@@ -36,6 +36,8 @@ pub struct InspectionSnapshot {
     pub scheduled_tasks: Option<ScheduledTaskSection>,
     pub containers: Option<ContainerSection>,
     pub non_rpm_software: Option<NonRpmSoftwareSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmanaged_files: Option<UnmanagedFileSection>,
     pub kernel_boot: Option<KernelBootSection>,
     pub selinux: Option<SelinuxSection>,
     pub users_groups: Option<UserGroupSection>,

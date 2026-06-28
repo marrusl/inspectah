@@ -150,6 +150,11 @@ pub enum ItemId {
         path: String,
     },
 
+    // Unmanaged files section
+    UnmanagedFile {
+        path: String,
+    },
+
     // Group section (new — group-aware rendering)
     Group {
         name: String,

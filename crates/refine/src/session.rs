@@ -1249,6 +1249,7 @@ impl RefineSession {
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
                     | ItemId::LanguageEnv { .. }
+                    | ItemId::UnmanagedFile { .. }
                     | ItemId::ModuleStream { .. }
                     | ItemId::VersionLock { .. }
                     | ItemId::Group { .. } => {
