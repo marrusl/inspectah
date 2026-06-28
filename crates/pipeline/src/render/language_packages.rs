@@ -145,6 +145,14 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         return lines;
     }
 
+    // Excluded items never render as active, even at high confidence.
+    // Downgrade to medium so they render commented-out.
+    let effective_confidence = if !item.include {
+        MEDIUM_CONFIDENCE
+    } else {
+        item.confidence.as_str()
+    };
+
     let is_venv = item.method == METHOD_PYTHON_VENV;
     let has_requirements = item.manifest_files.contains_key("requirements.txt");
 
@@ -156,7 +164,7 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         lines.push("# native compilation toolchains (gcc, python3-devel).".into());
     }
 
-    if is_venv && has_requirements && item.confidence == HIGH_CONFIDENCE {
+    if is_venv && has_requirements && effective_confidence == HIGH_CONFIDENCE {
         // High confidence venv with requirements.txt: executable COPY/RUN.
         let hash = env_hash(&item.path);
         let venv_name = std::path::Path::new(&item.path)
@@ -248,10 +256,17 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         return lines;
     }
 
+    // Excluded items never render as active, even at high confidence.
+    let effective_confidence = if !item.include {
+        MEDIUM_CONFIDENCE
+    } else {
+        item.confidence.as_str()
+    };
+
     let hash = env_hash(&item.path);
     let project_path = format!("/{}", item.path.trim_start_matches('/'));
 
-    if item.confidence == HIGH_CONFIDENCE {
+    if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!(
             "# npm packages: {project_path} (from package-lock.json)"
         ));
@@ -316,10 +331,17 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
         return lines;
     }
 
+    // Excluded items never render as active, even at high confidence.
+    let effective_confidence = if !item.include {
+        MEDIUM_CONFIDENCE
+    } else {
+        item.confidence.as_str()
+    };
+
     let hash = env_hash(&item.path);
     let project_path = format!("/{}", item.path.trim_start_matches('/'));
 
-    if item.confidence == HIGH_CONFIDENCE {
+    if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!(
             "# gem packages: {project_path} (from Gemfile.lock)"
         ));
@@ -758,6 +780,61 @@ mod tests {
         assert!(
             !output.contains("WARNING: python3 not found"),
             "should not warn when RPM section is absent: {output}"
+        );
+    }
+
+    #[test]
+    fn high_confidence_excluded_renders_commented_out() {
+        // High-confidence item with include: false must NOT produce active
+        // COPY/RUN — it should render commented-out like medium confidence.
+        let mut item = pip_venv_item(
+            "/opt/myapp/venv",
+            HIGH_CONFIDENCE,
+            true,
+            vec![("flask", "2.3.3")],
+        );
+        item.include = false;
+
+        let snap = test_snap(vec![item], &["python3"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        // Must not contain active (uncommented) COPY or RUN.
+        assert!(
+            !output.contains("\nCOPY "),
+            "excluded high-confidence must not produce active COPY: {output}"
+        );
+        assert!(
+            !output.contains("\nRUN "),
+            "excluded high-confidence must not produce active RUN: {output}"
+        );
+        // Must still render as commented-out.
+        assert!(
+            output.contains("# RUN python3") || output.contains("# Uncomment"),
+            "excluded high-confidence must render commented-out: {output}"
+        );
+    }
+
+    #[test]
+    fn high_confidence_excluded_npm_renders_commented_out() {
+        let mut item = npm_item("/opt/webapp", HIGH_CONFIDENCE);
+        item.include = false;
+
+        let snap = test_snap(vec![item], &["nodejs"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            !output.contains("\nCOPY "),
+            "excluded high-confidence npm must not produce active COPY: {output}"
+        );
+        assert!(
+            !output.contains("\nRUN "),
+            "excluded high-confidence npm must not produce active RUN: {output}"
+        );
+        assert!(
+            output.contains("# RUN cd") || output.contains("# COPY"),
+            "excluded high-confidence npm must render commented-out: {output}"
         );
     }
 
