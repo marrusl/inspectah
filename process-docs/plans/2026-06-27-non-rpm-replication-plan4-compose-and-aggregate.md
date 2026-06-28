@@ -1115,10 +1115,17 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Consumed by: Tasks 6, 8, 9a, 11a
 
 Plan 2 defines `UnmanagedFile` without `content_hash` or
-`variant_selection` because those are aggregate-only concerns — the
-collector does not compute content hashes, and variant selection is a
-merge-layer output. This task adds them with `serde(default)` so
+`variant_selection` because variant selection is a merge-layer output.
+`content_hash` is a SHA-256 of the actual file content, computed by the
+collector during `--include-unmanaged` scan (the file is read for
+bundling anyway, so hashing is negligible). In single-host mode it
+remains empty. This task adds both fields with `serde(default)` so
 existing single-host snapshots deserialize without breakage.
+
+**Note:** The `content_hash` is populated by Plan 2's unmanaged file
+collector (the scan reads file content for tarball bundling — hash it
+at the same time). If Plan 2 does not yet compute it, add a step to
+Plan 2's cataloging task that hashes file content during bundling.
 
 - [ ] **Step 1: Add `content_hash` field to `UnmanagedFile`**
 
@@ -1126,9 +1133,12 @@ In `crates/core/src/types/nonrpm.rs`, add after the `aggregate` field
 on `UnmanagedFile`:
 
 ```rust
-    /// Content hash for aggregate variant detection.
-    /// Empty in single-host mode — populated by the aggregate merge layer
-    /// from file metadata (size + last-modified + path as hash input).
+    /// SHA-256 hash of the actual file content, for aggregate variant
+    /// detection. Empty in single-host mode — populated by the collector
+    /// during scan (the file content is read for bundling anyway when
+    /// --include-unmanaged is used, so hashing adds negligible cost).
+    /// Same file content across hosts produces the same hash; different
+    /// content at the same path produces different hashes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content_hash: String,
 ```
@@ -1188,6 +1198,26 @@ in `ComposeFile`, `ConfigFileEntry`, etc. for the canonical import path).
         };
         let json = serde_json::to_string(&uf).unwrap();
         assert!(!json.contains("content_hash"), "empty content_hash should be omitted");
+    }
+
+    #[test]
+    fn same_content_produces_same_hash() {
+        // content_hash is a SHA-256 of the actual file bytes.
+        // Two hosts with identical file content at the same path
+        // must produce the same variant key.
+        use sha2::{Digest, Sha256};
+        let content = b"#!/bin/bash\necho hello\n";
+        let hash1 = format!("{:x}", Sha256::digest(content));
+        let hash2 = format!("{:x}", Sha256::digest(content));
+        assert_eq!(hash1, hash2, "identical content must produce identical hash");
+    }
+
+    #[test]
+    fn different_content_produces_different_hash() {
+        use sha2::{Digest, Sha256};
+        let hash1 = format!("{:x}", Sha256::digest(b"version 1.0"));
+        let hash2 = format!("{:x}", Sha256::digest(b"version 2.0"));
+        assert_ne!(hash1, hash2, "different content must produce different hash");
     }
 ```
 
@@ -2019,6 +2049,8 @@ pub struct UnmanagedFileProvenanceDto {
     pub gid: u32,
     pub permissions: String,
     pub writable_mount: bool,
+    pub mutability: bool,
+    pub service_working_dir: bool,
 }
 ```
 
@@ -2031,11 +2063,20 @@ Extend `AggregateItem` with an optional metadata field:
 pub struct AggregateItem {
     // ... existing fields ...
 
-    /// Section-specific metadata, serialized as JSON.
+    /// Section-specific per-item metadata, serialized as JSON.
     /// Language packages: LanguagePackageMetadata
     /// Unmanaged files: UnmanagedFileMetadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section_metadata: Option<serde_json::Value>,
+
+    /// Section-specific variant payload, serialized as JSON.
+    /// Only populated when the item has variants (multiple hosts
+    /// with different content at the same identity key).
+    /// Language packages: LanguagePackageVariantPayload
+    /// Unmanaged files: UnmanagedFileVariantPayload
+    /// Track C (T12) reads this field to render variant diff views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant_payload: Option<serde_json::Value>,
 }
 ```
 
@@ -2049,7 +2090,14 @@ Update the language packages section builder (T7) to populate
         ecosystem: ecosystem.to_string(),
         confidence: item.confidence.clone(),
         package_count: item.packages.len(),
-        manifest_basis: item.manifest_files.first().map(|mf| mf.path.clone()),
+        // Deterministic manifest_basis from Plan 1's manifest_files: HashMap<String, String>.
+        // Priority order: requirements.txt > package-lock.json > Gemfile.lock > first key.
+        // This matches the rendering priority in Plan 1 Task 6.
+        manifest_basis: ["requirements.txt", "package-lock.json", "Gemfile.lock"]
+            .iter()
+            .find(|k| item.manifest_files.contains_key(**k))
+            .map(|k| k.to_string())
+            .or_else(|| item.manifest_files.keys().next().cloned()),
         packages: item.packages.iter().map(|p| LanguagePackageDto {
             name: p.name.clone(),
             version: p.version.clone(),
@@ -2071,6 +2119,8 @@ Update the unmanaged files section builder (T8) to populate
             gid: f.provenance.gid,
             permissions: f.provenance.permissions.clone(),
             writable_mount: f.provenance.writable_mount,
+            mutability: f.provenance.mutable,
+            service_working_dir: f.provenance.service_working_dir,
         },
     }).ok()),
 ```
@@ -2145,6 +2195,8 @@ export interface UnmanagedFileProvenanceDto {
   gid: number;
   permissions: string;
   writable_mount: boolean;
+  mutability: boolean;
+  service_working_dir: boolean;
 }
 
 /** Variant payload — language packages */
@@ -2181,6 +2233,11 @@ Add `section_metadata` to the `AggregateItem` interface:
 export interface AggregateItem {
   // ... existing fields ...
   section_metadata?: Record<string, unknown>;
+  /** Variant payload — only present when item has variants across hosts.
+   *  Language packages: LanguagePackageVariantPayload
+   *  Unmanaged files: UnmanagedFileVariantPayload
+   *  Track C T12 reads this to render variant diff views. */
+  variant_payload?: Record<string, unknown>;
 }
 ```
 
