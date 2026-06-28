@@ -1005,3 +1005,60 @@ html, body, #root {
     transition: none;
   }
 }
+
+/* ─── RPM Batch Upload Modal ─────────────────────────────────────────── */
+
+.inspectah-rpm-batch__dropzone {
+  border: 2px dashed var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--medium);
+  padding: var(--pf-t--global--spacer--xl);
+  text-align: center;
+  background: var(--pf-t--global--background--color--secondary--default);
+  margin-bottom: var(--pf-t--global--spacer--md);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.inspectah-rpm-batch__dropzone--active {
+  border-color: var(--pf-t--global--color--brand--default);
+  background: var(--pf-t--global--background--color--primary--default);
+}
+
+.inspectah-rpm-batch__browse-label {
+  color: var(--pf-t--global--text--color--link--default);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.inspectah-rpm-batch__file-input {
+  display: none;
+}
+
+.inspectah-rpm-batch__match-summary {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-rpm-batch__section {
+  margin-bottom: var(--pf-t--global--spacer--md);
+}
+
+.inspectah-rpm-batch__section-title {
+  font-size: var(--pf-t--global--font--size--body--default);
+  margin-bottom: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-rpm-batch__file-name {
+  margin-left: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-rpm-batch__remove-btn {
+  margin-left: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-rpm-batch__alert {
+  margin-bottom: var(--pf-t--global--spacer--md);
+}
+
+.inspectah-rpm-batch__conflict {
+  margin-bottom: var(--pf-t--global--spacer--sm);
+}
