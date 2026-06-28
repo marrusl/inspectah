@@ -12,6 +12,9 @@ use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
+use inspectah_core::util::{
+    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
+};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -568,7 +571,7 @@ fn scan_python_venvs(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
-                method: "python venv".to_string(),
+                method: METHOD_PYTHON_VENV.to_string(),
                 confidence: confidence.to_string(),
                 system_site_packages: venv.system_site_packages,
                 packages: pip_packages,
@@ -828,7 +831,7 @@ fn scan_pip_packages(
                     section.items.push(NonRpmItem {
                         path: rel_path.clone(),
                         name: name.clone(),
-                        method: "pip dist-info".to_string(),
+                        method: METHOD_PIP_DIST_INFO.to_string(),
                         confidence: confidence.to_string(),
                         packages: vec![PipPackage { name, version }],
                         rpm_filtered: has_rpm_state,
@@ -891,7 +894,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string(),
-                method: "npm lockfile".to_string(),
+                method: METHOD_NPM_LOCKFILE.to_string(),
                 confidence: "high".to_string(),
                 include: true,
                 packages,
@@ -994,7 +997,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string(),
-                method: "gem lockfile".to_string(),
+                method: METHOD_GEM_LOCKFILE.to_string(),
                 confidence: "high".to_string(),
                 include: true,
                 packages,

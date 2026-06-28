@@ -6,22 +6,12 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::NonRpmItem;
-use inspectah_core::util::env_hash;
+use inspectah_core::util::{
+    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
+};
 
 const HIGH_CONFIDENCE: &str = "high";
 const MEDIUM_CONFIDENCE: &str = "medium";
-
-/// Method string for Python virtual environments detected via pyvenv.cfg.
-const METHOD_PYTHON_VENV: &str = "python venv";
-
-/// Method string for system-level pip packages detected via dist-info.
-const METHOD_PIP_DIST_INFO: &str = "pip dist-info";
-
-/// Method string for npm projects detected via package-lock.json.
-const METHOD_NPM_LOCKFILE: &str = "npm lockfile";
-
-/// Method string for gem projects detected via Gemfile.lock.
-const METHOD_GEM_LOCKFILE: &str = "gem lockfile";
 
 /// Runtime RPM package names checked for each ecosystem.
 const RUNTIME_PYTHON: &str = "python3";

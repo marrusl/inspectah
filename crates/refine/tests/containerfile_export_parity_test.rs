@@ -98,7 +98,7 @@ fn containerfile_copy_paths_match_export_layout() {
     let pip_item = NonRpmItem {
         path: pip_path.into(),
         name: "venv".into(),
-        method: "venv".into(), // Matches export logic: item.method == "venv"
+        method: "python venv".into(), // Must match collector's actual output
         confidence: "high".into(),
         include: true,
         manifest_files: pip_manifests,

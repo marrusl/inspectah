@@ -26,7 +26,9 @@ use crate::types::{
 };
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::rpm::PackageEntry;
-use inspectah_core::util::env_hash;
+use inspectah_core::util::{
+    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
+};
 
 pub struct RefineSession {
     original: InspectionSnapshot,
@@ -2608,11 +2610,12 @@ fn write_language_package_manifests(
 
         // Route to ecosystem subdirectory based on the method string —
         // the canonical detection-method key used throughout the pipeline.
-        let ecosystem = if item.method.contains("pip") || item.method == "venv" {
+        let ecosystem = if item.method == METHOD_PYTHON_VENV || item.method == METHOD_PIP_DIST_INFO
+        {
             "pip"
-        } else if item.method == "npm lockfile" {
+        } else if item.method == METHOD_NPM_LOCKFILE {
             "npm"
-        } else if item.method == "gem lockfile" {
+        } else if item.method == METHOD_GEM_LOCKFILE {
             "gem"
         } else {
             continue;

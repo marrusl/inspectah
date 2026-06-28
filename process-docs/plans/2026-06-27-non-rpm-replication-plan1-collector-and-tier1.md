@@ -785,11 +785,13 @@ fn write_language_package_manifests(
         // directory always exists. Medium-confidence items that remain
         // excluded have no COPY paths to back — their Containerfile lines
         // are commented-out inline installs, not COPY-based.
-        let ecosystem = if item.method.contains("pip") || item.method == "venv" {
+        let ecosystem = if item.method == METHOD_PYTHON_VENV
+            || item.method == METHOD_PIP_DIST_INFO
+        {
             "pip"
-        } else if item.method == "npm lockfile" {
+        } else if item.method == METHOD_NPM_LOCKFILE {
             "npm"
-        } else if item.method == "gem lockfile" {
+        } else if item.method == METHOD_GEM_LOCKFILE {
             "gem"
         } else {
             continue;
@@ -1124,7 +1126,7 @@ The `method` field is the branch key for rendering and UI routing:
 |--------|-----------|--------|
 | `"pip list"` | pip | System-level pip |
 | `"pip dist-info"` | pip | dist-info directory scan |
-| `"venv"` | pip | Python venv |
+| `"python venv"` | pip | Python venv |
 | `"npm lockfile"` | npm | package-lock.json parse |
 | `"gem lockfile"` | gem | Gemfile.lock parse |
 | `"binary"` | — | ELF binary (Plan 2) |

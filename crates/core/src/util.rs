@@ -1,5 +1,22 @@
 use sha2::{Digest, Sha256};
 
+// ── Method string constants ──────────────────────────────────────────
+// Canonical detection-method keys shared by the collector, renderer,
+// and exporter.  Every crate that routes on `NonRpmItem.method` must
+// reference these constants instead of inline literals.
+
+/// Method string for Python virtual environments detected via pyvenv.cfg.
+pub const METHOD_PYTHON_VENV: &str = "python venv";
+
+/// Method string for system-level pip packages detected via dist-info.
+pub const METHOD_PIP_DIST_INFO: &str = "pip dist-info";
+
+/// Method string for npm projects detected via package-lock.json.
+pub const METHOD_NPM_LOCKFILE: &str = "npm lockfile";
+
+/// Method string for gem projects detected via Gemfile.lock.
+pub const METHOD_GEM_LOCKFILE: &str = "gem lockfile";
+
 /// Compute a short hash (12 hex chars) from a path for use in language environment identifiers.
 ///
 /// This generates a stable, deterministic hash from the path string that can be used to create
