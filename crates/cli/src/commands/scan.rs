@@ -20,8 +20,9 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::network::NetworkInspector;
-use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
+use inspectah_collect::inspectors::nonrpm::{NonRpmInspector, scan_unmanaged_files};
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
@@ -540,6 +541,29 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
         snapshot.redaction_state = Some(RedactionState::Raw);
     } else {
         redact(&mut snapshot, &RedactOptions::default());
+    }
+
+    // Scan for unmanaged files when --include-unmanaged is set.
+    // Must run after collect() so language environment paths are available
+    // for the exclusion layer, and before the size prompt which reads the result.
+    if args.include_unmanaged {
+        // Collect language environment paths from Tier 1 to avoid double-counting
+        let language_env_paths: Vec<String> = snapshot
+            .non_rpm_software
+            .as_ref()
+            .map(|nrs| nrs.items.iter().map(|item| item.path.clone()).collect())
+            .unwrap_or_default();
+
+        snapshot.unmanaged_files = Some(scan_unmanaged_files(
+            &executor,
+            &language_env_paths,
+            &args.exclude_path,
+        ));
+    }
+
+    // Annotate repo-less RPMs with dnf cache paths so they can be bundled.
+    if let Some(ref mut rpm) = snapshot.rpm {
+        scan_dnf_cache_for_repoless(&executor, &mut rpm.packages_added);
     }
 
     // Prompt for unmanaged file bundling if --include-unmanaged was used

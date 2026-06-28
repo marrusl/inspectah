@@ -21,9 +21,14 @@ pub async fn upload_rpm(
             "multipart error: {e}"
         )))
     })? {
-        let filename = field
+        let raw_filename = field
             .file_name()
             .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown.rpm".to_string());
+        // Sanitize: strip directory components to prevent path traversal
+        let filename = std::path::Path::new(&raw_filename)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown.rpm".to_string());
 
         if !filename.ends_with(".rpm") {

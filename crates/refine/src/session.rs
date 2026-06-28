@@ -2781,14 +2781,14 @@ fn copy_uploaded_rpms(upload_dir: &Path, out: &Path) -> Result<(), RefineError> 
         return Ok(());
     }
     let dest_dir = out.join("repoless-packages");
+    // Create destination once before the loop instead of per-iteration
+    std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
     for entry in
         std::fs::read_dir(upload_dir).map_err(|e| RefineError::TarballError(e.to_string()))?
     {
         let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
         let name = entry.file_name();
         if name.to_string_lossy().ends_with(".rpm") {
-            std::fs::create_dir_all(&dest_dir)
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
             std::fs::copy(entry.path(), dest_dir.join(&name))
                 .map_err(|e| RefineError::TarballError(e.to_string()))?;
         }
