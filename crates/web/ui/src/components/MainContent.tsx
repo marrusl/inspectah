@@ -29,6 +29,8 @@ import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
+import { LanguagePackageList } from "./LanguagePackageList";
+import { UnmanagedFileList } from "./UnmanagedFileList";
 import { Content } from "@patternfly/react-core";
 
 /** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */
@@ -46,6 +48,8 @@ const SECTION_LABELS: Record<string, string> = {
   non_rpm_software: "Non-RPM Software",
   kernel_boot: "Kernel & Boot",
   selinux: "Security & Access Control",
+  language_packages: "Language Packages",
+  unmanaged_files: "Unmanaged Files",
 };
 
 export interface MainContentProps {
@@ -63,6 +67,18 @@ export interface MainContentProps {
   revealItemId?: string;
   /** Called with test ID when an action needs focus restoration after undo. */
   onSetUndoFocusTarget?: (testId: string | null) => void;
+  /** Toggle a language package environment include/exclude. */
+  onToggleLangEnv?: (ecosystem: string, path: string) => void;
+  /** Toggle a single unmanaged file include/exclude. */
+  onToggleUnmanagedFile?: (path: string) => void;
+  /** Toggle all files in an unmanaged directory group. */
+  onToggleUnmanagedGroup?: (directory: string, include: boolean) => void;
+  /** Bulk-exclude all unmanaged files. */
+  onUnmanagedIncludeNone?: () => void;
+  /** Reset all unmanaged files to included. */
+  onUnmanagedResetAll?: () => void;
+  /** True while an optimistic mutation is in flight. */
+  isPending?: boolean;
 }
 
 interface ToastEntry {
@@ -98,6 +114,12 @@ export function MainContent({
   filterClearCounter = 0,
   revealItemId,
   onSetUndoFocusTarget,
+  onToggleLangEnv,
+  onToggleUnmanagedFile,
+  onToggleUnmanagedGroup,
+  onUnmanagedIncludeNone,
+  onUnmanagedResetAll,
+  isPending = false,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -152,6 +174,30 @@ export function MainContent({
     () => (viewData ? toConfigItems(viewData.config_files) : []),
     [viewData],
   );
+
+  // Language packages filtered by SectionSearch query (path substring, case-insensitive)
+  const langPkgs = viewData?.language_packages ?? [];
+  const filteredLangPkgs = useMemo(() => {
+    if (!filterText.trim()) return langPkgs;
+    const q = filterText.toLowerCase();
+    return langPkgs.filter((env) => env.path.toLowerCase().includes(q));
+  }, [langPkgs, filterText]);
+
+  // Unmanaged file groups filtered by SectionSearch query (item path substring, case-insensitive).
+  // Groups with zero matching items are excluded; groups with matches are narrowed to matched items.
+  const unmanagedGroups = viewData?.unmanaged_files ?? [];
+  const filteredUnmanagedGroups = useMemo(() => {
+    if (!filterText.trim()) return unmanagedGroups;
+    const q = filterText.toLowerCase();
+    return unmanagedGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) =>
+          item.path.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [unmanagedGroups, filterText]);
 
   const filteredConfigItems = useMemo(() => {
     if (!filterText.trim()) return configItems;
@@ -467,6 +513,90 @@ export function MainContent({
           onMutationError={onMutationError}
         />
       </>
+    );
+  }
+
+  // Language Packages decision section
+  if (activeSection === "language_packages") {
+    return (
+      <div data-testid="section-language_packages">
+        <Content>
+          <h2>{SECTION_LABELS.language_packages}</h2>
+        </Content>
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={filteredLangPkgs.length}
+          />
+        )}
+        {filterText.trim() && filteredLangPkgs.length === 0 ? (
+          <EmptyState titleText="No items match your search" headingLevel="h3">
+            <EmptyStateBody>
+              <Button variant="link" onClick={() => setFilterText("")}>
+                Clear filter
+              </Button>
+            </EmptyStateBody>
+          </EmptyState>
+        ) : (
+          <LanguagePackageList
+            environments={filteredLangPkgs}
+            onToggle={(ecosystem, path) => {
+              onToggleLangEnv?.(ecosystem, path);
+            }}
+            isPending={isPending}
+            revealItemId={revealItemId}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Unmanaged Files decision section
+  if (activeSection === "unmanaged_files") {
+    return (
+      <div data-testid="section-unmanaged_files">
+        <Content>
+          <h2>{SECTION_LABELS.unmanaged_files}</h2>
+        </Content>
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={filteredUnmanagedGroups.reduce(
+              (sum, g) => sum + g.items.length,
+              0,
+            )}
+          />
+        )}
+        {filterText.trim() && filteredUnmanagedGroups.length === 0 ? (
+          <EmptyState titleText="No items match your search" headingLevel="h3">
+            <EmptyStateBody>
+              <Button variant="link" onClick={() => setFilterText("")}>
+                Clear filter
+              </Button>
+            </EmptyStateBody>
+          </EmptyState>
+        ) : (
+          <UnmanagedFileList
+            groups={filteredUnmanagedGroups}
+            onToggleItem={(path) => {
+              onToggleUnmanagedFile?.(path);
+            }}
+            onToggleGroup={(directory, include) => {
+              onToggleUnmanagedGroup?.(directory, include);
+            }}
+            isPending={isPending}
+            onIncludeNone={onUnmanagedIncludeNone}
+            onResetAll={onUnmanagedResetAll}
+            revealItemId={revealItemId}
+          />
+        )}
+      </div>
     );
   }
 
