@@ -186,8 +186,8 @@ const aggregateStages = [
 
 const futureStages = [
   {
-    id: 'architect',
-    label: 'Architect',
+    id: 'factor',
+    label: 'Factor',
     sublabel: 'planned',
     color: 'purple',
     tooltip: 'Planned capability — not yet available in the Rust CLI.',
@@ -292,7 +292,7 @@ for (let i = 0; i < aggregateStages.length - 1; i++) {
   });
 }
 
-// Future: Aggregate Refine → Architect (dashed)
+// Future: Aggregate Refine → Factor (dashed)
 connectorDefs.push({
   from: lastAggregate,
   to: futureStages[0],

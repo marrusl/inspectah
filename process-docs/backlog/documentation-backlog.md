@@ -6,15 +6,15 @@
 
 - [ ] **README split** — README.md is 562 lines and growing. Split into multiple docs following Diataxis framework:
   - `docs/getting-started.md` — Install, first run, quickstart for one host
-  - `docs/how-to/` — Task-oriented guides (fleet aggregation, refining findings, building images, architecting layers)
+  - `docs/how-to/` — Task-oriented guides (fleet aggregation, refining findings, building images, factoring layers)
   - `docs/reference/cli.md` — Complete CLI flag reference extracted from argparse
   - `docs/explanation/architecture.md` — How inspectah works (inspector/renderer pipeline, baseline subtraction, layer ordering)
   - Keep README as landing page with project overview + links to detailed docs
 
 - [ ] **Cross-repo coherence** — Ensure inspectah and driftify READMEs reference each other clearly:
   - inspectah README should mention driftify as the testing/validation companion tool
-  - driftify README already links to inspectah but could add examples showing the full workflow (driftify → inspectah inspect → inspectah fleet → inspectah architect)
-  - Shared glossary of terms across both projects (drift profile, inspector, baseline, architect layer, fleet aggregation, prevalence)
+  - driftify README already links to inspectah but could add examples showing the full workflow (driftify → inspectah inspect → inspectah fleet → inspectah factor)
+  - Shared glossary of terms across both projects (drift profile, inspector, baseline, factor layer, fleet aggregation, prevalence)
 
 - [ ] **Changelog ownership setup** — Establish CHANGELOG.md maintenance workflow:
   - Create initial CHANGELOG.md for both inspectah and driftify
@@ -24,16 +24,16 @@
 
 ## Priority 2 (Do When Time Allows)
 
-- [ ] **API reference docs** — Document HTTP endpoints for `inspectah refine` and `inspectah architect`:
+- [ ] **API reference docs** — Document HTTP endpoints for `inspectah refine` and `inspectah factor`:
   - Refine server: `GET /`, `POST /api/re-render`, `GET /api/tarball`
-  - Architect server: `GET /` (index), `GET /api/health`, `GET /api/topology`, `POST /api/move`, `POST /api/copy`, `GET /api/preview/{layer}`, `GET /api/export`
+  - Factor server: `GET /` (index), `GET /api/health`, `GET /api/topology`, `POST /api/move`, `POST /api/copy`, `GET /api/preview/{layer}`, `GET /api/export`
   - Include request/response schemas, error codes, example curl commands
   - Decision: separate `docs/reference/api.md` or embed in how-to guides?
 
-- [ ] **Container wrapper documentation** — Document run-inspectah.sh, run-fleet-test.sh, and run-architect-test.sh usage patterns:
+- [ ] **Container wrapper documentation** — Document run-inspectah.sh, run-fleet-test.sh, and run-factor-test.sh usage patterns:
   - When to use container wrapper vs native install
   - Environment variable reference (INSPECTAH_IMAGE, INSPECTAH_HOSTNAME, INSPECTAH_OUTPUT_DIR, etc.)
-  - Port exposure details for refine/architect when running via container
+  - Port exposure details for refine/factor when running via container
   - How wrapper scripts map to direct `inspectah` commands
 
 - [ ] **Man page strategy decision** — Evaluate and decide on man page generation:
@@ -65,7 +65,7 @@
 - [ ] **Video/screencast documentation** — For visual learners:
   - Quickstart: inspect → refine → build in under 5 minutes
   - Fleet workflow: multi-host aggregation with prevalence tuning
-  - Architect demo: layer decomposition for multi-role fleets
+  - Factor demo: layer decomposition for multi-role fleets
 
 - [ ] **Glossary page** — Centralized terminology reference:
   - bootc, ostree, composefs, image mode vs package mode

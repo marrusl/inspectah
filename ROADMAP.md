@@ -7,9 +7,9 @@ Group Rendering: Refine UI (spec'd)
     |
     +-- Classification Logic Developer Docs
     |
-Aggregate Spec 3: Architect
+Aggregate Spec 3: Factor
     |
-Architect v2 (multi-artifact decomposition)
+Factor v2 (multi-artifact decomposition)
 ```
 
 ## High
@@ -92,10 +92,10 @@ Add `[profile.release]` settings: `lto = "thin"`, `strip = true`, `codegen-units
 
 ## Milestones
 
-### Aggregate Spec 3: Architect
+### Aggregate Spec 3: Factor
 
 Takes refined aggregate tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec after current work stabilizes.
 
-### Architect v2
+### Factor v2
 
 Multi-artifact decomposition — decomposes a refined tarball into per-role artifacts.

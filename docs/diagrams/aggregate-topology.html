@@ -118,8 +118,8 @@ const artifacts = [
 
 const futureNodes = [
   {
-    id: 'architect',
-    label: 'Architect',
+    id: 'factor',
+    label: 'Factor',
     sublabel: 'Image Composition',
     color: 'purple',
     tooltip: 'Planned capability — build-time image composition, not runtime layer boundaries.',
@@ -238,7 +238,7 @@ artifacts.forEach(a => {
     .attr('marker-end', 'url(#arrow-default)');
 });
 
-// Artifacts → Architect (future, dashed)
+// Artifacts → Factor (future, dashed)
 const arch = futureNodes[0];
 const artCenterX = artStartX + totalArtW / 2;
 connectors.append('line')
@@ -480,7 +480,7 @@ const futureNodesSel = drawNodes(futureNodes, futureGroup, {
   isDashed: true,
 });
 
-// "planned" badge on Architect
+// "planned" badge on Factor
 futureGroup.append('text')
   .attr('x', arch.x + nodeW / 2)
   .attr('y', arch.y - 8)
