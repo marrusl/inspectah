@@ -389,3 +389,94 @@ fn test_nonrpm_uses_rpm_state_for_pip_filtering() {
         "NonRpm output should be identical when no python3-* RPMs are installed"
     );
 }
+
+/// When `installed_packages` contains `python3-requests`, the `requests`
+/// dist-info package should be excluded from pip inventory while `flask`
+/// (not RPM-owned) survives.
+#[test]
+fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
+    // Minimal mock: only system-level pip dist-info under /usr/lib/python3.9.
+    let exec = MockExecutor::new()
+        .with_command(
+            "readelf --version",
+            ExecResult {
+                stdout: "GNU readelf version 2.40\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "file --version",
+            ExecResult {
+                stdout: "file-5.39\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/opt", vec![])
+        .with_dir("/srv", vec![])
+        .with_dir("/usr/local", vec![])
+        // System-level python with two dist-info packages.
+        .with_dir("/usr/lib", vec!["python3.9"])
+        .with_dir("/usr/lib/python3.9", vec!["site-packages"])
+        .with_dir(
+            "/usr/lib/python3.9/site-packages",
+            vec!["requests-2.31.0.dist-info", "flask-2.3.3.dist-info"],
+        );
+
+    let source = pkg_source();
+
+    // RpmState with python3-requests installed — should exclude `requests`.
+    let rpm_state = RpmState {
+        installed_packages: ["python3-requests"].iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = NonRpmInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::NonRpmSoftware(s) => s,
+        other => panic!("expected SectionData::NonRpmSoftware, got {:?}", other),
+    };
+
+    // `flask` should survive (not RPM-owned).
+    let pip_items: Vec<_> = section
+        .items
+        .iter()
+        .filter(|i| i.method == "pip dist-info")
+        .collect();
+    assert_eq!(
+        pip_items.len(),
+        1,
+        "only flask should survive RPM filtering, got: {:?}",
+        pip_items.iter().map(|i| &i.name).collect::<Vec<_>>()
+    );
+    assert_eq!(pip_items[0].name, "flask");
+    assert!(
+        pip_items[0].rpm_filtered,
+        "surviving pip items should have rpm_filtered=true"
+    );
+    assert_eq!(
+        pip_items[0].confidence, "medium",
+        "dist-info + RPM cross-ref should be medium confidence"
+    );
+
+    // Verify `requests` was excluded.
+    let requests_items: Vec<_> = section
+        .items
+        .iter()
+        .filter(|i| i.name == "requests")
+        .collect();
+    assert!(
+        requests_items.is_empty(),
+        "requests should be excluded because python3-requests RPM is installed"
+    );
+}

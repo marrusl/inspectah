@@ -153,7 +153,7 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::PythonVenvs,
         });
         let pre = section.items.len();
-        scan_python_venvs(exec, &mut section, &mut warnings);
+        scan_python_venvs(exec, &mut section, &mut warnings, ctx.rpm_state);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -498,12 +498,17 @@ fn walk_for_elf_binaries(
 // ---------------------------------------------------------------------------
 
 /// Scan for Python virtual environments (pyvenv.cfg) under scan roots.
+///
+/// When `rpm_state` is `Some`, packages matching an installed
+/// `python3-<name>` RPM are excluded from each venv's package list.
 fn scan_python_venvs(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
     warnings: &mut Vec<Warning>,
+    rpm_state: Option<&RpmState>,
 ) {
     let mut pip_fail_count = 0;
+    let has_rpm_state = rpm_state.is_some();
 
     for root in SCAN_ROOTS {
         let venvs = find_venvs(exec, root);
@@ -520,7 +525,29 @@ fn scan_python_venvs(
                 packages
             };
 
+            // Filter out RPM-owned packages (e.g., python3-requests).
+            let pip_packages: Vec<_> = pip_packages
+                .into_iter()
+                .filter(|p| !is_pip_rpm_owned(&p.name, rpm_state))
+                .collect();
+
             let rel_path = venv.path.trim_start_matches('/').to_string();
+
+            // Collect manifest files (populated in Task 3).
+            let manifest_files = std::collections::HashMap::new();
+
+            // Three-tier confidence:
+            // - "high": requirements.txt collected AND rpm_filtered
+            // - "medium": dist-info/pip-list detection AND rpm_filtered
+            // - "low": no RPM filtering available
+            let confidence = if manifest_files.contains_key("requirements.txt") && has_rpm_state {
+                "high"
+            } else if has_rpm_state {
+                "medium"
+            } else {
+                "low"
+            };
+
             section.items.push(NonRpmItem {
                 path: rel_path,
                 name: Path::new(&venv.path)
@@ -528,9 +555,11 @@ fn scan_python_venvs(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 method: "python venv".to_string(),
-                confidence: "high".to_string(),
+                confidence: confidence.to_string(),
                 system_site_packages: venv.system_site_packages,
                 packages: pip_packages,
+                manifest_files,
+                rpm_filtered: has_rpm_state,
                 include: true,
                 ..Default::default()
             });
@@ -775,11 +804,12 @@ fn scan_pip_packages(
                         continue;
                     }
 
-                    let confidence = if has_rpm_state {
-                        "medium" // dist-info detection with RPM cross-ref
-                    } else {
-                        "low" // no RPM filtering available
-                    };
+                    // Three-tier confidence:
+                    // - "high": requirements.txt collected AND rpm_filtered
+                    //   (wired in Task 3 — manifest_files populated there)
+                    // - "medium": dist-info detection AND rpm_filtered
+                    // - "low": no RPM filtering available
+                    let confidence = if !has_rpm_state { "low" } else { "medium" };
 
                     section.items.push(NonRpmItem {
                         path: rel_path.clone(),
@@ -1460,7 +1490,7 @@ mod tests {
             "should find flask package"
         );
 
-        scan_python_venvs(&exec, &mut section, &mut warnings);
+        scan_python_venvs(&exec, &mut section, &mut warnings, None);
         assert_eq!(section.items.len(), 1);
         assert_eq!(section.items[0].method, "python venv");
     }
