@@ -135,6 +135,14 @@ project path to ensure uniqueness without embedding full host paths.
 - Preview/export parity: the Containerfile preview in the refine UI
   must reference the same paths the export materializes
 
+**Manifest sensitivity/redaction:** Collected manifest files
+(`requirements.txt`, `package.json`, `Gemfile`) may contain private
+registry URLs, auth tokens, or internal package names. Apply the same
+redaction rules as compose files: if the snapshot has
+`redaction_state == Some(Redacted)`, scrub registry URLs and auth
+tokens from manifest content before export. If unredacted, export
+verbatim.
+
 ### Containerfile Rendering
 
 Each ecosystem has its own rendering logic. Fidelity comments indicate
@@ -644,9 +652,9 @@ It has its own numeric shortcut (key 7 in the current
 **This spec preserves compose as a dedicated sidebar destination.**
 Compose keeps its own sidebar entry, its own section ID (`compose`),
 and its own shortcut key. The new sections (Language Packages, Unmanaged
-Files) are inserted into the shortcut order after System Tuning, pushing
-existing reference sections down. No existing shortcuts are silently
-remapped — see the full shortcut map below.
+Files) are inserted into the shortcut order after Containers (key 5),
+pushing existing reference sections down. No existing shortcuts are
+silently remapped — see the full shortcut map below.
 
 **Global search:** Compose entries remain searchable via global search
 (matching on compose file path and service names). Search results
@@ -762,8 +770,8 @@ form one group). Groups are collapsible.
 
 The live `SINGLE_HOST_SECTION_IDS` in `useKeyboard.ts` currently maps
 the full sidebar order (review + reference) to keys 1-9+. This spec
-inserts the two new review sections after System Tuning (key 6),
-preserving existing reference section shortcuts by shifting them down.
+inserts the two new review sections after Containers (key 5),
+shifting reference sections down.
 
 **Full shortcut map after this spec:**
 
@@ -820,8 +828,9 @@ existing decision sections:
 
 RPM upload modal focus:
 - On open: focus moves to the file upload drop zone
-- On close (success or cancel): focus returns to the "RPM needed" trigger
-  label on the package row
+- On close (success or cancel): focus returns to the upload icon button
+  on the package row (or the checkbox if the row transitioned to
+  "RPM provided" state)
 - Tab order within modal: file upload area → file picker button →
   cancel → confirm
 
