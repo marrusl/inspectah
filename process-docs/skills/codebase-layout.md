@@ -117,7 +117,15 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 - `components/` — React components
   - `aggregate/` — aggregate-specific views (variants, consensus, diff drawer)
   - Single-host components at top level (DecisionList, PackageList, ContainerfilePanel, etc.)
-- `types.ts` — TypeScript types
+  - `LanguagePackageList.tsx` — Language Packages decision section (pip/npm/gem environments)
+  - `UnmanagedFileList.tsx` — Unmanaged Files decision section (directory grouping, provenance signals)
+  - `RpmUploadModal.tsx` — Single-RPM upload modal with NEVRA validation
+  - `RpmBatchUploadModal.tsx` — Multi-RPM batch upload with auto-matching and conflicts view
+- `hooks/` — React hooks
+  - `useRpmUpload.ts` — 5-state RPM upload row machine wired to POST /api/upload-rpm
+  - `useKeyboard.ts` — keyboard shortcuts (keys 6-7 = Language Packages, Unmanaged Files)
+  - `useView.ts`, `useMutation.ts` — view data and mutation hooks
+- `api/types.ts` — TypeScript types (LanguagePackageEnv, UnmanagedFileItem, ProvenanceSignals, RpmUploadRowState)
 - `utils/` — utility functions
 - `test-utils/` — test fixtures
 - `e2e/` — Playwright end-to-end tests
