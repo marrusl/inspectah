@@ -2,15 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Harden the non-RPM collector to produce trustworthy, project-level language environment data, then render executable pip/npm/gem sections in the Containerfile backed by collected manifest artifacts.
+**Goal:** Harden the non-RPM collector to produce trustworthy, project-level language environment data, then render executable pip/npm/gem sections in the Containerfile backed by collected manifest artifacts, with manifest redaction and confidence-gated rendering.
 
-**Architecture:** Three layers change in sequence: (1) core types gain new fields and ItemId variants, (2) the collector emits project-level entries with RPM ownership filtering and manifest capture, (3) the pipeline renderer emits real COPY/RUN instructions instead of advisory stubs, backed by a new `language-packages/` export root.
+**Architecture:** Four layers change in sequence: (1) core types gain new fields, a unified `LanguagePackage` type, and `ItemId` variants, (2) the collector emits project-level entries with RPM ownership filtering and manifest capture, (3) the pipeline renderer emits real COPY/RUN instructions for high-confidence items and commented-out instructions for medium-confidence items, backed by a new `language-packages/` export root with redaction support, (4) refine classification wires up confidence-based defaulting.
+
+**Scope boundary:** This plan covers backend plumbing only — collector, renderer, export contract, refine classification. The refine UI decision surface (Language Packages section, per-environment toggles, sidebar integration) is Plan 3. Aggregate-mode reviewability (aggregate identity, prevalence, variant handling) is Plan 4. Both plans consume the `ItemId::LanguageEnv` and confidence contracts established here.
 
 **Tech Stack:** Rust (2024 edition), serde, insta (snapshot testing), inspectah-core types, inspectah-refine, inspectah-pipeline, inspectah-collect.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 1 and the shared contracts Plans 2-4 depend on.
+**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 1 backend + shared contracts. Plan 3 covers Tier 1 UI. Plan 4 covers aggregate.
 
-**Thorn Checkpoints:** After Tasks 3, 6, 9.
+**Thorn Checkpoints:** After Tasks 3, 7, 11.
 
 ## Global Constraints
 
@@ -28,7 +30,7 @@
 
 | File | Change |
 |------|--------|
-| `crates/core/src/types/nonrpm.rs` | Add `manifest_files`, `rpm_filtered` to `NonRpmItem`; add `NpmPackage`, `GemPackage` structs |
+| `crates/core/src/types/nonrpm.rs` | Add `manifest_files`, `rpm_filtered`, `lang_packages` to `NonRpmItem`; add unified `LanguagePackage` struct |
 | `crates/core/src/snapshot.rs` | Bump `SCHEMA_VERSION` from 19 to 20 (Task 9 only) |
 | `crates/refine/src/types.rs` | Add `ItemId::LanguageEnv` variant |
 | `crates/collect/src/inspectors/nonrpm.rs` | RPM ownership filtering in `scan_pip_packages()`, project-level restructuring in `scan_npm_packages()` and `scan_gem_packages()`, requirements.txt collection in `scan_python_venvs()` |
@@ -42,6 +44,7 @@
 |------|---------------|
 | `crates/pipeline/src/render/language_packages.rs` | Containerfile rendering for pip/npm/gem sections |
 | `crates/collect/tests/nonrpm_rpm_filter_test.rs` | Integration tests for RPM ownership filtering |
+| `crates/core/src/util/env_hash.rs` | Shared `env_hash()` helper (used by pipeline and refine) |
 
 ---
 
@@ -50,27 +53,28 @@
 **Files:**
 - Modify: `crates/core/src/types/nonrpm.rs`
 - Modify: `crates/refine/src/types.rs`
+- Create: `crates/core/src/util/env_hash.rs` (or `crates/core/src/util.rs`)
 - Test: existing roundtrip test in `nonrpm.rs`, new test in `types.rs`
 
 **Interfaces:**
-- Produces: `NonRpmItem.manifest_files`, `NonRpmItem.rpm_filtered`, `NpmPackage`, `GemPackage`, `ItemId::LanguageEnv`
-- Consumed by: Tasks 2-9
+- Produces: `LanguagePackage`, `NonRpmItem.manifest_files`, `NonRpmItem.rpm_filtered`,
+  `NonRpmItem.lang_packages`, `ItemId::LanguageEnv`, `inspectah_core::util::env_hash()`
+- Consumed by: Tasks 2-11
 
-- [ ] **Step 1: Add NpmPackage and GemPackage structs**
+**Data contract note:** The spec describes a unified `packages` shape for
+all language ecosystems. This plan uses a single `LanguagePackage` struct
+(name + version) rather than separate per-ecosystem types. The existing
+`PipPackage` struct has the same shape — `LanguagePackage` replaces it
+for new code. The existing `packages: Vec<PipPackage>` field is preserved
+for backward compatibility; new code uses `lang_packages: Vec<LanguagePackage>`.
+
+- [ ] **Step 1: Add unified LanguagePackage struct**
 
 In `crates/core/src/types/nonrpm.rs`, add after `PipPackage`:
 
 ```rust
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NpmPackage {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GemPackage {
+pub struct LanguagePackage {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -90,15 +94,34 @@ Add these fields to `NonRpmItem` (after existing `git_remote` field):
     pub rpm_filtered: bool,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub npm_packages: Vec<NpmPackage>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub gem_packages: Vec<GemPackage>,
+    pub lang_packages: Vec<LanguagePackage>,
 ```
 
-Add `use std::collections::HashMap;` to the file imports.
+Add `use std::collections::HashMap;` to the file imports. The `lang_packages`
+field is the unified package list for npm/gem project-level items and pip
+items going forward. The existing `packages: Vec<PipPackage>` field remains
+for backward compat with existing snapshots.
 
-- [ ] **Step 3: Add ItemId::LanguageEnv variant**
+- [ ] **Step 3: Add shared env_hash helper in inspectah-core**
+
+Create `crates/core/src/util.rs` (or add to existing util module):
+
+```rust
+use sha2::{Digest, Sha256};
+
+pub fn env_hash(path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(&result[..6])
+}
+```
+
+This lives in `inspectah-core` so both `inspectah-pipeline` and
+`inspectah-refine` can depend on it without violating crate dependency
+direction. Add `sha2` and `hex` to `inspectah-core`'s `Cargo.toml`.
+
+- [ ] **Step 4: Add ItemId::LanguageEnv variant**
 
 In `crates/refine/src/types.rs`, add to the `ItemId` enum:
 
@@ -110,26 +133,32 @@ In `crates/refine/src/types.rs`, add to the `ItemId` enum:
     },
 ```
 
-- [ ] **Step 4: Update roundtrip test**
+- [ ] **Step 5: Update roundtrip test**
 
 In the existing `test_nonrpm_section_roundtrip` test in `nonrpm.rs`,
-add `manifest_files`, `rpm_filtered`, `npm_packages`, and `gem_packages`
-to the test fixture. Verify serde roundtrip preserves all fields.
+add `manifest_files`, `rpm_filtered`, and `lang_packages` to the test
+fixture. Verify serde roundtrip preserves all fields.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 6: Run tests and verify clippy/fmt**
 
-Run: `cargo test -p inspectah-core -p inspectah-refine`
-Expected: all pass, zero clippy warnings.
+Run:
+```bash
+cargo test -p inspectah-core -p inspectah-refine
+cargo clippy -p inspectah-core -p inspectah-refine -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass, zero warnings.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```
-feat(core): add language package data model extensions
+feat(core): add unified language package data model
 
-Add NpmPackage, GemPackage structs and manifest_files, rpm_filtered,
-npm_packages, gem_packages fields to NonRpmItem. Add
-ItemId::LanguageEnv variant. All new fields use serde(default)
-for backward compatibility.
+Add LanguagePackage struct (unified name+version for all ecosystems),
+manifest_files, rpm_filtered, lang_packages fields to NonRpmItem.
+Add ItemId::LanguageEnv variant and shared env_hash() helper in
+inspectah-core. All new fields use serde(default) for backward
+compatibility.
 ```
 
 ---
@@ -212,9 +241,14 @@ Set `confidence` on pip items based on detection quality:
 - `"medium"` when dist-info/pip-list detection AND rpm_filtered
 - `"low"` when no RPM filtering available (defensive)
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Run tests and verify clippy/fmt**
 
-Run: `cargo test -p inspectah-collect`
+Run:
+```bash
+cargo test -p inspectah-collect
+cargo clippy -p inspectah-collect -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass including new filter tests. Existing tests may need
 `rpm_state` parameter added to `scan_pip_packages` calls.
 
@@ -290,7 +324,12 @@ Set on the emitted `NonRpmItem`:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cargo test -p inspectah-collect`
+Run:
+```bash
+cargo test -p inspectah-collect
+cargo clippy -p inspectah-collect -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -316,7 +355,7 @@ manifest_files for Containerfile rendering. Sets confidence to
 **Interfaces:**
 - Consumes: `Executor.read_file()` for package.json and package-lock.json
 - Produces: One `NonRpmItem` per project directory (not per package) with
-  `npm_packages: Vec<NpmPackage>`, `manifest_files` containing raw lockfile/manifest content,
+  `lang_packages: Vec<LanguagePackage>`, `manifest_files` containing raw lockfile/manifest content,
   `method: "npm lockfile"`, `confidence: "high"`
 
 - [ ] **Step 1: Write failing test**
@@ -326,7 +365,7 @@ manifest_files for Containerfile rendering. Sets confidence to
 fn npm_emits_one_item_per_project() {
     // MockExecutor with /opt/myapp/package-lock.json containing 3 packages.
     // Assert: one NonRpmItem emitted (not 3).
-    // Assert: npm_packages has 3 entries.
+    // Assert: lang_packages has 3 entries.
     // Assert: manifest_files contains "package.json" and "package-lock.json".
     // Assert: method == "npm lockfile", confidence == "high".
 }
@@ -351,14 +390,14 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
             }
 
             let mut manifest_files = HashMap::new();
-            let mut npm_packages = Vec::new();
+            let mut lang_packages = Vec::new();
 
             // Collect lockfile content and parse packages
             if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
                 manifest_files.insert("package-lock.json".to_string(), content.clone());
-                npm_packages = parse_package_lock(&content)
+                lang_packages = parse_package_lock(&content)
                     .into_iter()
-                    .map(|p| NpmPackage { name: p.name, version: p.version })
+                    .map(|p| LanguagePackage { name: p.name, version: p.version })
                     .collect();
             }
 
@@ -377,7 +416,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                 method: "npm lockfile".to_string(),
                 confidence: "high".to_string(),
                 include: true,
-                npm_packages,
+                lang_packages,
                 manifest_files,
                 ..Default::default()
             });
@@ -389,11 +428,16 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
 - [ ] **Step 4: Update existing npm tests**
 
 Existing `test_scan_npm_packages` asserts per-package items. Update to
-assert one project item with `npm_packages` vec.
+assert one project item with `lang_packages` vec.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Run tests and verify clippy/fmt**
 
-Run: `cargo test -p inspectah-collect`
+Run:
+```bash
+cargo test -p inspectah-collect
+cargo clippy -p inspectah-collect -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
 - [ ] **Step 6: Commit**
@@ -402,7 +446,7 @@ Expected: all pass.
 feat(collect): restructure npm to project-level entries
 
 Emit one NonRpmItem per project directory instead of one per package.
-Package details stored in npm_packages vec. Lockfile and package.json
+Package details stored in lang_packages vec. Lockfile and package.json
 captured in manifest_files for Containerfile rendering.
 ```
 
@@ -415,7 +459,7 @@ captured in manifest_files for Containerfile rendering.
 
 **Interfaces:**
 - Same pattern as Task 4 but for gem: one item per project with
-  `gem_packages: Vec<GemPackage>`, `manifest_files` with Gemfile/Gemfile.lock
+  `lang_packages: Vec<LanguagePackage>`, `manifest_files` with Gemfile/Gemfile.lock
 
 - [ ] **Step 1: Write failing test**
 
@@ -424,7 +468,7 @@ captured in manifest_files for Containerfile rendering.
 fn gem_emits_one_item_per_project() {
     // MockExecutor with /opt/myapp/Gemfile.lock containing 2 gems.
     // Assert: one NonRpmItem emitted.
-    // Assert: gem_packages has 2 entries.
+    // Assert: lang_packages has 2 entries.
     // Assert: manifest_files contains "Gemfile" and "Gemfile.lock".
 }
 ```
@@ -447,13 +491,13 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
             }
 
             let mut manifest_files = HashMap::new();
-            let mut gem_packages = Vec::new();
+            let mut lang_packages = Vec::new();
 
             if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
                 manifest_files.insert("Gemfile.lock".to_string(), content.clone());
-                gem_packages = parse_gemfile_lock(&content)
+                lang_packages = parse_gemfile_lock(&content)
                     .into_iter()
-                    .map(|g| GemPackage { name: g.name, version: g.version })
+                    .map(|g| LanguagePackage { name: g.name, version: g.version })
                     .collect();
             }
 
@@ -471,7 +515,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                 method: "gem lockfile".to_string(),
                 confidence: "high".to_string(),
                 include: true,
-                gem_packages,
+                lang_packages,
                 manifest_files,
                 ..Default::default()
             });
@@ -484,9 +528,14 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
 
 Update `test_scan_gem_packages` to assert one project item.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Run tests and verify clippy/fmt**
 
-Run: `cargo test -p inspectah-collect`
+Run:
+```bash
+cargo test -p inspectah-collect
+cargo clippy -p inspectah-collect -- -W clippy::all
+cargo fmt --check
+```
 
 - [ ] **Step 6: Commit**
 
@@ -494,7 +543,7 @@ Run: `cargo test -p inspectah-collect`
 feat(collect): restructure gem to project-level entries
 
 Same pattern as npm: one NonRpmItem per project, gem details in
-gem_packages vec, Gemfile and Gemfile.lock in manifest_files.
+lang_packages vec, Gemfile and Gemfile.lock in manifest_files.
 ```
 
 ---
@@ -567,10 +616,24 @@ per the spec's Containerfile Rendering section. Key rules:
 - pip venv: `RUN python3 -m venv <path> && <path>/bin/pip install ...`
 - pip system: `RUN pip install ...`
 - pip with requirements.txt (high confidence): `COPY language-packages/pip/<hash>/requirements.txt ...`
-- pip without (medium confidence): commented-out inline install
+- pip without (medium confidence): commented-out inline install, still rendered but prefixed with `# `
 - npm: `COPY language-packages/npm/<hash>/package.json + package-lock.json ... && npm ci`
 - gem: `COPY language-packages/gem/<hash>/Gemfile + Gemfile.lock ... && bundle install`
 - Runtime prerequisite check: warn if python3/nodejs/rubygems not in RPM list
+- **C-extension safety gate:** If `NonRpmItem.has_c_extensions` is true, emit a
+  `# WARNING: This environment contains packages with C extensions that may need
+  native compilation toolchains (gcc, python3-devel).` comment before the install
+  command. Do not suppress the install — warn, don't block.
+
+**Medium-confidence rendering:** Items with `confidence == "medium"` are
+rendered as commented-out executable instructions, not skipped. The
+`language_package_lines()` function must process ALL language environment
+items (not just `include: true`), and render medium-confidence items as
+commented-out blocks. This ensures they remain visible and reviewable in
+the Containerfile even when pre-excluded in refine.
+
+Use `env_hash()` from `inspectah_core::util` (Task 1) for path hashing —
+do NOT duplicate this function.
 
 - [ ] **Step 2: Add module to mod.rs**
 
@@ -620,10 +683,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pip_venv_with_requirements_renders_copy_and_run() { ... }
+    fn pip_venv_high_confidence_renders_copy_and_run() { ... }
 
     #[test]
     fn pip_venv_medium_confidence_renders_commented_out() { ... }
+
+    #[test]
+    fn pip_c_extension_emits_toolchain_warning() { ... }
 
     #[test]
     fn npm_lockfile_renders_copy_and_npm_ci() { ... }
@@ -635,7 +701,10 @@ mod tests {
     fn missing_runtime_emits_warning_comment() { ... }
 
     #[test]
-    fn excluded_items_not_rendered() { ... }
+    fn medium_confidence_items_rendered_even_when_excluded() { ... }
+
+    #[test]
+    fn low_confidence_items_render_advisory_only() { ... }
 }
 ```
 
@@ -767,7 +836,160 @@ Export contract test verifies presence and exclusion rules.
 
 ---
 
-### Task 8: Preview/Export Parity
+### Task 8: Manifest Redaction
+
+**Files:**
+- Modify: `crates/refine/src/session.rs` (redaction in export path)
+
+**Interfaces:**
+- Consumes: `InspectionSnapshot.redaction_state`, `NonRpmItem.manifest_files`
+- Produces: Scrubbed manifest content in export when redaction is enabled
+
+- [ ] **Step 1: Write failing test**
+
+```rust
+#[test]
+fn export_redacts_manifest_files_when_snapshot_redacted() {
+    // Build a snapshot with redaction_state == Some(Redacted)
+    // and a pip NonRpmItem with manifest_files containing
+    // "requirements.txt" with content including:
+    //   --index-url https://token:s3cret@private.pypi.org/simple/
+    //   flask==2.3.3
+    // Assert: exported requirements.txt has the auth token scrubbed.
+}
+
+#[test]
+fn export_preserves_manifest_files_when_unredacted() {
+    // Snapshot with no redaction_state.
+    // Assert: manifest_files exported verbatim.
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p inspectah-refine --test export_contract_test`
+Expected: FAIL
+
+- [ ] **Step 3: Implement manifest redaction**
+
+In `write_language_package_manifests()`, before writing each manifest
+file, check `snap.redaction_state`:
+
+```rust
+let content = if is_redacted(snap) {
+    scrub_manifest_secrets(filename, raw_content)
+} else {
+    raw_content.clone()
+};
+```
+
+Implement `scrub_manifest_secrets()` to handle:
+- `requirements.txt`: scrub `--index-url` / `--extra-index-url` auth tokens
+- `package.json`: scrub `"registry"` URLs with embedded auth
+- `Gemfile`: scrub `source` URLs with embedded auth
+
+Use the same `SECRET_PATTERNS` approach as existing redaction code.
+
+- [ ] **Step 4: Run tests and verify clippy/fmt**
+
+Run:
+```bash
+cargo test -p inspectah-refine
+cargo clippy -p inspectah-refine -- -W clippy::all
+cargo fmt --check
+```
+
+- [ ] **Step 5: Commit**
+
+```
+feat(refine): add manifest redaction for language package exports
+
+Scrub auth tokens and private registry URLs from requirements.txt,
+package.json, and Gemfile when snapshot redaction is enabled.
+Manifests export verbatim when unredacted.
+```
+
+---
+
+### Task 9: Refine Classification — Confidence-Based Defaulting
+
+**Files:**
+- Modify: `crates/refine/src/normalize.rs` or `crates/refine/src/classify.rs`
+
+**Interfaces:**
+- Consumes: `NonRpmItem.confidence` from collector
+- Produces: `NonRpmItem.include` defaulted based on confidence level
+
+- [ ] **Step 1: Write failing test**
+
+```rust
+#[test]
+fn medium_confidence_language_env_defaults_to_excluded() {
+    // Snapshot with a pip NonRpmItem, confidence: "medium".
+    // After normalize/classify, assert include == false.
+}
+
+#[test]
+fn high_confidence_language_env_defaults_to_included() {
+    // Snapshot with an npm NonRpmItem, confidence: "high".
+    // After normalize/classify, assert include == true.
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+- [ ] **Step 3: Implement confidence-based defaulting**
+
+In the normalize pipeline (where `normalize_package_defaults` and
+`normalize_config_defaults` run), add a language environment defaulting
+step:
+
+```rust
+fn normalize_language_env_defaults(snapshot: &mut InspectionSnapshot) {
+    let nrs = match snapshot.non_rpm_software.as_mut() {
+        Some(n) => n,
+        None => return,
+    };
+    for item in &mut nrs.items {
+        if !is_language_env(item) {
+            continue;
+        }
+        match item.confidence.as_str() {
+            "high" => { /* leave include: true (default) */ }
+            "medium" | "low" | _ => { item.include = false; }
+        }
+    }
+}
+```
+
+Wire this into the `RefineSession::new()` normalize chain in
+`crates/refine/src/session.rs`.
+
+- [ ] **Step 4: Run tests and verify clippy/fmt**
+
+Run:
+```bash
+cargo test -p inspectah-refine
+cargo clippy -p inspectah-refine -- -W clippy::all
+cargo fmt --check
+```
+
+- [ ] **Step 5: Commit**
+
+```
+feat(refine): add confidence-based defaulting for language environments
+
+High-confidence items (lockfile-backed, RPM-filtered) default to
+included. Medium/low-confidence items default to excluded — users
+must explicitly include them. Implements the spec's provenance
+trust gate.
+```
+
+**Thorn checkpoint: review Tasks 7-9 before proceeding.**
+
+---
+
+### Task 10: Preview/Export Parity (was Task 8)
 
 **Files:**
 - Modify: `crates/pipeline/src/render/containerfile.rs`
@@ -815,7 +1037,7 @@ tarball layout exactly.
 
 ---
 
-### Task 9: Schema Version Bump + Docs
+### Task 11: Schema Version Bump + Docs
 
 **Files:**
 - Modify: `crates/core/src/snapshot.rs` (SCHEMA_VERSION 19 → 20)
@@ -848,12 +1070,12 @@ schema version change — update insta snapshots with `cargo insta review`.
 ```
 chore(core): bump schema version to 20 for language package support
 
-New NonRpmItem fields (manifest_files, rpm_filtered, npm_packages,
-gem_packages) and new export root (language-packages/) constitute
-a schema change. Older tarballs remain loadable via serde(default).
+New NonRpmItem fields (manifest_files, rpm_filtered, lang_packages)
+and new export root (language-packages/) constitute a schema change.
+Older tarballs remain loadable via serde(default).
 ```
 
-**Thorn checkpoint: review Tasks 7-9 before proceeding to Plan 2.**
+**Thorn checkpoint: review Tasks 10-11 before proceeding to Plan 2.**
 
 ---
 
