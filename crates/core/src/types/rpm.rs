@@ -42,6 +42,17 @@ pub struct PackageEntry {
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
+    /// Triage annotation for repo-less packages.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repoless_annotation: String,
+    /// True if a cached RPM was found in /var/cache/dnf/.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub repoless_cached: bool,
+    /// Path to the cached RPM file in /var/cache/dnf/.
+    /// Survives serialization into the snapshot so the CLI bundler
+    /// can read it when creating the tarball.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
     pub aggregate: Option<AggregatePrevalence>,
 }
 
