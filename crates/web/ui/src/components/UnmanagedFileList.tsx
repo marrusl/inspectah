@@ -291,6 +291,7 @@ export function UnmanagedFileList({
 }: UnmanagedFileListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const announceTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [rollupAnnounceText, setRollupAnnounceText] = useState("");
   const [groupAnnounces, setGroupAnnounces] = useState<Record<string, string>>(
     {},
@@ -318,10 +319,12 @@ export function UnmanagedFileList({
     }, ROLLUP_ANNOUNCE_DELAY_MS);
   }, [includedCount, totalCount, includedSize, totalSize]);
 
-  // Clean up debounce on unmount.
+  // Clean up debounce and announce timeouts on unmount.
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      announceTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+      announceTimeoutsRef.current.clear();
     };
   }, []);
 
@@ -335,6 +338,17 @@ export function UnmanagedFileList({
           ...prev,
           [path]: `${action} ${path}`,
         }));
+
+        // Clear any existing timeout for this item
+        const existingTimeout = announceTimeoutsRef.current.get(path);
+        if (existingTimeout) clearTimeout(existingTimeout);
+
+        // Schedule new timeout to clear announce text after 3s
+        const timeout = setTimeout(() => {
+          setItemAnnounces((prev) => ({ ...prev, [path]: "" }));
+          announceTimeoutsRef.current.delete(path);
+        }, 3000);
+        announceTimeoutsRef.current.set(path, timeout);
       }
       onToggleItem(path);
       scheduleRollupAnnounce();
@@ -352,6 +366,18 @@ export function UnmanagedFileList({
         ...prev,
         [directory]: `${action} ${count} files in ${directory}`,
       }));
+
+      // Clear any existing timeout for this group
+      const existingTimeout = announceTimeoutsRef.current.get(directory);
+      if (existingTimeout) clearTimeout(existingTimeout);
+
+      // Schedule new timeout to clear announce text after 3s
+      const timeout = setTimeout(() => {
+        setGroupAnnounces((prev) => ({ ...prev, [directory]: "" }));
+        announceTimeoutsRef.current.delete(directory);
+      }, 3000);
+      announceTimeoutsRef.current.set(directory, timeout);
+
       onToggleGroup(directory, include);
       scheduleRollupAnnounce();
     },
