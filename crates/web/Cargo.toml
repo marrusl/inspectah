@@ -9,7 +9,7 @@ build = "build.rs"
 inspectah-core = { path = "../core" }
 inspectah-pipeline = { path = "../pipeline" }
 inspectah-refine = { path = "../refine" }
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["cors"] }
 rust-embed = "8"
 serde.workspace = true

@@ -3,6 +3,7 @@ pub mod aggregate_handlers;
 pub mod assets;
 pub mod error;
 pub mod handlers;
+pub mod upload;
 pub mod web_types;
 
 use axum::Router;
@@ -93,6 +94,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             "/api/viewed",
             get(handlers::get_viewed).post(handlers::mark_viewed),
         )
+        .route("/api/upload-rpm", post(upload::upload_rpm))
         .layer(cors)
         .layer(axum::middleware::from_fn(move |req, next| {
             origin_guard(served.clone(), req, next)
