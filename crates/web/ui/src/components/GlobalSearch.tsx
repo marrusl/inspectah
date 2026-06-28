@@ -10,7 +10,12 @@ import {
 import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
-import type { ReferenceSection, UserDecision } from "../api/types";
+import type {
+  LanguagePackageEnv,
+  ReferenceSection,
+  UnmanagedFileGroup,
+  UserDecision,
+} from "../api/types";
 
 export interface GlobalSearchResult {
   /** Section ID (e.g. "packages", "configs", "services"). */
@@ -38,6 +43,8 @@ const SECTION_LABELS: Record<string, string> = {
   kernel_boot: "Kernel & Boot",
   selinux: "Security & Access Control",
   system_tuning: "System Tuning",
+  language_packages: "Language Packages",
+  unmanaged_files: "Unmanaged Files",
 };
 
 export interface GlobalSearchProps {
@@ -49,6 +56,10 @@ export interface GlobalSearchProps {
   userDecisions?: UserDecision[];
   /** Reference sections (services, containers, etc.). */
   contextSections: ReferenceSection[] | null;
+  /** Language package environments from --include-language-packages. */
+  languagePackageEnvs?: LanguagePackageEnv[];
+  /** Unmanaged file groups from --include-unmanaged. */
+  unmanagedFileGroups?: UnmanagedFileGroup[];
   /** Called when user selects a result -- navigates to section + item. */
   onNavigate: (sectionId: string, itemId: string) => void;
 }
@@ -91,7 +102,15 @@ function itemSearchText(item: DecisionItemKind): string {
  */
 export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
   function GlobalSearch(
-    { packageItems, configItems, userDecisions, contextSections, onNavigate },
+    {
+      packageItems,
+      configItems,
+      userDecisions,
+      contextSections,
+      languagePackageEnvs,
+      unmanagedFileGroups,
+      onNavigate,
+    },
     ref,
   ) {
     const [query, setQuery] = useState("");
@@ -163,8 +182,48 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         }
       }
 
+      if (languagePackageEnvs) {
+        for (const env of languagePackageEnvs) {
+          const envItemId = `${env.ecosystem}:${env.path}`;
+          results.push({
+            sectionId: "language_packages",
+            sectionLabel: SECTION_LABELS.language_packages,
+            title: env.path,
+            itemId: envItemId,
+          });
+          for (const pkg of env.packages) {
+            results.push({
+              sectionId: "language_packages",
+              sectionLabel: SECTION_LABELS.language_packages,
+              title: `${pkg} (${env.ecosystem} in ${env.path})`,
+              itemId: envItemId,
+            });
+          }
+        }
+      }
+
+      if (unmanagedFileGroups) {
+        for (const group of unmanagedFileGroups) {
+          for (const file of group.items) {
+            results.push({
+              sectionId: "unmanaged_files",
+              sectionLabel: SECTION_LABELS.unmanaged_files,
+              title: file.path,
+              itemId: file.path,
+            });
+          }
+        }
+      }
+
       return results;
-    }, [packageItems, configItems, userDecisions, contextSections]);
+    }, [
+      packageItems,
+      configItems,
+      userDecisions,
+      contextSections,
+      languagePackageEnvs,
+      unmanagedFileGroups,
+    ]);
 
     // Build searchable text keyed by a composite of sectionId + itemId.
     // Context section items use bare IDs (e.g. "/" for a mount point) that
@@ -203,6 +262,10 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
           }
         }
       }
+      // Language package and unmanaged file items don't need separate
+      // searchTextMap entries -- the title fallback in the filter step
+      // handles matching on their allItems titles directly.
+
       return map;
     }, [packageItems, configItems, userDecisions, contextSections]);
 
@@ -318,7 +381,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
             ) : (
               filtered.map((result, idx) => (
                 <div
-                  key={`${result.sectionId}:${result.itemId}`}
+                  key={`${result.sectionId}:${result.itemId}:${idx}`}
                   role="option"
                   aria-selected={idx === selectedIndex}
                   data-result-index={idx}

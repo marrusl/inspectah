@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { GlobalSearch } from "../GlobalSearch";
 import type { GlobalSearchProps } from "../GlobalSearch";
 import type { DecisionItemKind } from "../DecisionItem";
-import type { ReferenceSection, TriageAnnotation } from "../../api/types";
+import type {
+  LanguagePackageEnv,
+  ReferenceSection,
+  TriageAnnotation,
+  UnmanagedFileGroup,
+} from "../../api/types";
 
 const DEFAULT_TRIAGE = {
   triage: { mode: "single_host" as const, baseline: null },
@@ -301,5 +306,138 @@ describe("GlobalSearch", () => {
     expect(
       screen.queryByTestId("global-search-results"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("GlobalSearch language packages and unmanaged files", () => {
+  const langEnvs: LanguagePackageEnv[] = [
+    {
+      ecosystem: "pip" as const,
+      path: "/opt/myapp/venv",
+      method: "pip list",
+      packages: ["flask", "requests"],
+      confidence: "high" as const,
+      manifest_basis: "requirements.txt",
+      include: true,
+    },
+  ];
+
+  const unmanagedGroups: UnmanagedFileGroup[] = [
+    {
+      directory: "/opt/splunk",
+      items: [
+        {
+          path: "/opt/splunk/bin/splunkd",
+          size: 1024,
+          is_var_path: false,
+          include: true,
+          provenance: {
+            file_type: "elf_binary" as const,
+            last_modified: 1700000000,
+            uid: 0,
+            gid: 0,
+            permissions: "0755",
+            mutability: false,
+            writable_mount: false,
+            service_working_dir: false,
+          },
+        },
+      ],
+    },
+  ];
+
+  it("finds language package environments by path", async () => {
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        contextSections={null}
+        languagePackageEnvs={langEnvs}
+        onNavigate={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Search all sections");
+    await user.type(input, "myapp");
+    expect(screen.getByText("/opt/myapp/venv")).toBeInTheDocument();
+  });
+
+  it("finds language package environments by package name", async () => {
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        contextSections={null}
+        languagePackageEnvs={langEnvs}
+        onNavigate={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Search all sections");
+    await user.type(input, "flask");
+    // Should match the environment that contains flask
+    expect(
+      screen.getByText(/flask.*pip.*\/opt\/myapp\/venv/),
+    ).toBeInTheDocument();
+  });
+
+  it("finds unmanaged files by path", async () => {
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        contextSections={null}
+        unmanagedFileGroups={unmanagedGroups}
+        onNavigate={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Search all sections");
+    await user.type(input, "splunkd");
+    expect(screen.getByText("/opt/splunk/bin/splunkd")).toBeInTheDocument();
+  });
+
+  it("selecting a language package search result navigates to section and sets reveal state", async () => {
+    const onNavigate = vi.fn();
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        contextSections={null}
+        languagePackageEnvs={langEnvs}
+        onNavigate={onNavigate}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Search all sections");
+    await user.type(input, "myapp");
+    const result = screen.getByText("/opt/myapp/venv");
+    await user.click(result);
+    expect(onNavigate).toHaveBeenCalledWith(
+      "language_packages",
+      "pip:/opt/myapp/venv",
+    );
+  });
+
+  it("selecting an unmanaged file search result navigates to section with reveal", async () => {
+    const onNavigate = vi.fn();
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        contextSections={null}
+        unmanagedFileGroups={unmanagedGroups}
+        onNavigate={onNavigate}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Search all sections");
+    await user.type(input, "splunkd");
+    const result = screen.getByText("/opt/splunk/bin/splunkd");
+    await user.click(result);
+    expect(onNavigate).toHaveBeenCalledWith(
+      "unmanaged_files",
+      "/opt/splunk/bin/splunkd",
+    );
   });
 });
