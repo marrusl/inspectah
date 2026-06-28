@@ -77,8 +77,13 @@ Each language environment item gets an explicit confidence level:
 - `low`: detection without RPM filtering (should not occur after
   hardening, but defensive)
 
-The Containerfile renderer uses confidence to select the rendering
-path and fidelity comment.
+The Containerfile renderer uses confidence to gate rendering:
+- `high`: executable output (`COPY`/`RUN`)
+- `medium`: commented-out executable output with fidelity warning,
+  pre-excluded in refine (user must explicitly include). This prevents
+  medium-confidence items from silently becoming executable installs.
+- `low`: advisory-only, not renderable (defensive — should not occur
+  after hardening)
 
 ### Detection
 
@@ -149,16 +154,19 @@ reason doesn't go away in the image.
       && /opt/myapp/venv/bin/pip install -r /tmp/myapp-requirements.txt \
       && rm /tmp/myapp-requirements.txt
   ```
-- Venv without `requirements.txt` (medium confidence):
+- Venv without `requirements.txt` (medium confidence — commented out,
+  user must explicitly include):
   ```dockerfile
   # pip packages: /opt/myapp/venv (detected via dist-info — transitive deps may differ)
-  RUN python3 -m venv /opt/myapp/venv \
-      && /opt/myapp/venv/bin/pip install flask==2.3.3 requests==2.31.0
+  # Uncomment after verifying package list is complete:
+  # RUN python3 -m venv /opt/myapp/venv \
+  #     && /opt/myapp/venv/bin/pip install flask==2.3.3 requests==2.31.0
   ```
-- System-level pip (medium confidence):
+- System-level pip (medium confidence — commented out):
   ```dockerfile
   # pip packages: system (detected via pip list, RPM-filtered)
-  RUN pip install flask==2.3.3 requests==2.31.0
+  # Uncomment after verifying package list is complete:
+  # RUN pip install flask==2.3.3 requests==2.31.0
   ```
 
 Inline pinned versions are preferred over lockfile-copy for pip because
@@ -203,9 +211,6 @@ compilation toolchains.
 New "Language Packages" decision section. Include toggles per environment
 (whole venv or npm/gem project as a unit, not per individual package).
 Standard toggle behavior matching packages and configs.
-
-v1 scope: single-host mode only. Aggregate support requires defining the
-aggregate identity model for language environments (see Future Work).
 
 ## Tier 2: Unmanaged Files
 
@@ -289,6 +294,19 @@ Files grouped by source directory for readability.
   link handles the reverse)
 - Items toggled off are excluded from the export tarball
 
+### `/var` Path Guidance
+
+Unmanaged files under `/var` require special handling in bootc images.
+`/var` is persistent and mutable — it survives image updates via ostree
+3-way merge. Files `COPY`'d into `/var` in a Containerfile become the
+initial state but can drift from the image definition at runtime.
+
+When an unmanaged file's path is under `/var` (e.g., `/var/lib/myapp/data`),
+the refine UI shows an additional warning: "This path is under /var
+(persistent, mutable). Changes at runtime will not be reset by image
+updates." The Containerfile comment for `/var` items includes:
+`# NOTE: /var is persistent — this file can drift from the image after boot.`
+
 ### Messaging
 
 Frame as a "lift and shift" capability, not a recommendation. The
@@ -320,12 +338,20 @@ Export contract: `render_refine_export()` allowlist extended.
 ### Containerfile Rendering
 
 Use `dnf localinstall` instead of `rpm -i` to preserve dependency
-resolution and trust chain:
+resolution. However, repo-less RPMs bypass the normal trust chain
+(no repo GPG key verification, no upstream provenance). The Containerfile
+must make this explicit.
 
-- Cached RPM available:
+**Provenance gating:** Repo-less RPMs are pre-excluded by default in
+refine. The user must explicitly include them — this is the trust gate.
+The triage annotation and Containerfile warning make the provenance gap
+visible so the decision is informed, not silent.
+
+- Cached RPM available (pre-excluded, user must explicitly include):
   ```dockerfile
   # Repo-less package: custom-tool (cached RPM, no repository provenance)
-  # WARNING: This package has no upstream repo. Updates must be managed manually.
+  # WARNING: This package has no upstream repo and no GPG verification.
+  # It was found in the local dnf cache. Updates must be managed manually.
   COPY repoless-packages/custom-tool-1.2.3.x86_64.rpm /tmp/
   RUN dnf localinstall -y /tmp/custom-tool-1.2.3.x86_64.rpm \
       && rm /tmp/custom-tool-1.2.3.x86_64.rpm
@@ -342,7 +368,7 @@ resolution and trust chain:
 These packages appear in the normal Packages section (they're RPMs).
 New triage annotations:
 
-- "No repo source — cached RPM bundled"
+- "No repo source — cached RPM bundled (pre-excluded, no GPG verification)"
 - "No repo source — manual resolution needed"
 
 **RPM upload interaction:**
@@ -497,16 +523,128 @@ when `--include-unmanaged` is not used).
 
 ### Aggregate Mode
 
-v1 scope: **single-host only** for Language Packages and Unmanaged Files.
+Language Packages and Unmanaged Files ship in aggregate mode from day one.
+Deferring aggregate creates feature drift between modes — the same parity
+problem this spec should prevent.
 
-Aggregate support requires defining:
-- The aggregate identity unit (environment path? lockfile hash? package set?)
-- How host divergence surfaces (same project, different versions across hosts)
-- Prevalence-based default logic for language environments
+**Aggregate identity model:**
 
-These are non-trivial design decisions deferred to a follow-up spec.
-The aggregate sidebar does not show Language Packages or Unmanaged Files
-sections until the aggregate identity model is defined.
+The new sections follow the same aggregate pattern as existing sections:
+identity key determines grouping, prevalence shows host coverage, variant
+selection handles divergence.
+
+| Section | Identity Key | Prevalence | Variant Trigger |
+|---------|-------------|------------|-----------------|
+| Language Packages | ecosystem + environment path (e.g., `pip:/opt/myapp/venv`) | How many hosts have this environment | Different package lists across hosts for the same env path |
+| Unmanaged Files | file path (e.g., `/opt/splunk/bin/splunkd`) | How many hosts have this file | Different file content (hash) across hosts |
+
+This is the same model packages use (`name.arch` → prevalence → version
+variants) and configs use (`path` → prevalence → content variants).
+
+**Prevalence-based defaults:**
+- Language environments present on 100% of hosts: `include: true`
+- Language environments on <100% of hosts: `include: false`
+- Same rule for unmanaged files (consistent with the Tier 2 aggregate
+  default selection fix shipped in beta.5)
+
+**Variant handling:**
+- When hosts diverge on package versions within the same environment
+  path, use the existing variant selection model: majority variant
+  selected by default, user can switch via the variant picker
+- For unmanaged files, content-hash comparison surfaces divergent files
+  with the same variant picker UX
+
+**Aggregate sidebar sections:**
+Language Packages and Unmanaged Files appear in the aggregate sidebar
+Review group with the same zone-based layout (consensus / near-consensus /
+divergent) as other aggregate decision sections.
+
+### Item Identity Contract
+
+The refine plumbing uses `ItemId` for toggle/undo/redo operations and
+DTO projection. New item types must define canonical identities that
+are unique, stable across undo/redo, and serializable.
+
+| Item Type | `ItemId` Variant | Identity Key | Example |
+|-----------|-----------------|--------------|---------|
+| Language Package env | `ItemId::LanguageEnv { ecosystem, path }` | ecosystem + environment path | `pip:/opt/myapp/venv` |
+| Unmanaged File | `ItemId::UnmanagedFile { path }` | absolute file path | `/opt/splunk/bin/splunkd` |
+
+These extend the existing `ItemId` enum in `crates/refine/src/types.rs`.
+The `RefinementOp::SetInclude` operation already accepts any `ItemId`
+variant — no new op types needed.
+
+**DTO contract:** The web API response for language package and unmanaged
+file sections must include per-item `id` fields matching the `ItemId`
+serialization format. The React UI uses these IDs for toggle callbacks,
+keyboard focus tracking, and search result targeting.
+
+### Compose Sidebar Reconciliation
+
+Compose stacks currently live in the Containers reference section in the
+sidebar. This spec does not move them. The compose comment block in the
+Containerfile and the `compose/` export root are new outputs, but compose
+remains a reference surface in the sidebar — no include toggles, no
+decision semantics.
+
+**Global search:** Compose entries are searchable via global search
+(matching on compose file path and service names), consistent with other
+reference section items. Search results for compose items navigate to
+the Containers reference section.
+
+**Keyboard shortcut:** Compose is part of the Containers section (key 5).
+No separate shortcut needed.
+
+### RPM Upload Row Contract
+
+Repo-less RPM packages appear in the existing Packages section alongside
+normal RPMs. The upload interaction adds new row states that must be
+truthful on the current Packages surface:
+
+**Row states:**
+
+| State | Checkbox | Badge | Primary Action | Containerfile |
+|-------|----------|-------|----------------|---------------|
+| Cached RPM, pre-excluded | Enabled, unchecked | Orange "No repo" | Toggle include | Commented `dnf localinstall` |
+| Cached RPM, user-included | Enabled, checked | Orange "No repo" | Toggle include | Active `dnf localinstall` |
+| No RPM, needs upload | Disabled | Orange "RPM needed" (clickable) | Click → upload modal | Commented `# MANUAL` |
+| RPM uploaded, pre-excluded | Enabled, unchecked | Green "RPM provided" | Toggle include | Commented `dnf localinstall` |
+| RPM uploaded, user-included | Enabled, checked | Green "RPM provided" | Toggle include | Active `dnf localinstall` |
+
+**State transitions:**
+- "RPM needed" → upload modal → success → "RPM provided" (checkbox
+  enables, item remains excluded until user toggles)
+- "RPM provided" → click "x" on badge → "RPM needed" (file removed,
+  checkbox disables)
+
+**ARIA:** Badge state changes announced via `aria-live="polite"` on the
+row. Modal open/close announced via standard PatternFly modal semantics.
+
+### Unmanaged Files Grouped Interaction
+
+Items are grouped by parent directory (e.g., all files under `/opt/splunk/`
+form one group). Groups are collapsible.
+
+**Keyboard behavior:**
+- Arrow keys navigate between groups (collapsed) or items (expanded)
+- Enter/Space on a group header toggles expand/collapse
+- Enter/Space on a group toggle changes include state for all children
+- Tab moves between group toggle → first child toggle → next group
+
+**Search behavior:**
+- Section search matches on file path and file type
+- When search matches items inside a collapsed group, the group
+  auto-expands to show matches (same pattern as package group search)
+- Search match count in section header reflects individual items, not
+  groups
+
+**Live announcements:**
+- Group toggle: `aria-live="polite"` announces "Included 12 files in
+  /opt/splunk" or "Excluded 12 files in /opt/splunk"
+- Individual toggle: announces "Included /opt/splunk/bin/splunkd" or
+  "Excluded /opt/splunk/bin/splunkd"
+- Size rollup update announced after a debounce: "340 MB of 1.2 GB
+  included"
 
 ### Section IDs and Keyboard Navigation
 
@@ -639,8 +777,6 @@ which is the existing schema versioning policy.
 - **Compose → Quadlet auto-conversion:** Convert docker-compose.yml to
   `.container` quadlet units. Simple stacks (1-3 services) auto-convert;
   complex stacks get best-effort with manual review flag.
-- **Aggregate mode for language packages:** Define aggregate identity
-  model, host divergence surfacing, prevalence defaults. Follow-up spec.
 - **Non-lockfile npm/gem detection:** Scan `node_modules` or gem
   directories when no lockfile exists. Requires new provenance rules
   and confidence labeling. Lower priority — lockfile-backed detection
