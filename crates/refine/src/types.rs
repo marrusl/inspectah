@@ -144,6 +144,12 @@ pub enum ItemId {
         name: String,
     },
 
+    // Language packages section
+    LanguageEnv {
+        ecosystem: String,
+        path: String,
+    },
+
     // Group section (new — group-aware rendering)
     Group {
         name: String,

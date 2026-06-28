@@ -1243,6 +1243,7 @@ impl RefineSession {
                     | ItemId::SelinuxPort { .. }
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
+                    | ItemId::LanguageEnv { .. }
                     | ItemId::ModuleStream { .. }
                     | ItemId::VersionLock { .. }
                     | ItemId::Group { .. } => {

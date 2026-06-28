@@ -1,14 +1,18 @@
 use super::aggregate::AggregatePrevalence;
 use super::config::ConfigFileEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PipPackage {
+pub struct LanguagePackage {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub version: String,
 }
+
+/// Type alias for backward compatibility.
+pub type PipPackage = LanguagePackage;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NonRpmItem {
@@ -37,7 +41,7 @@ pub struct NonRpmItem {
     #[serde(default)]
     pub system_site_packages: bool,
     #[serde(default)]
-    pub packages: Vec<PipPackage>,
+    pub packages: Vec<LanguagePackage>,
     #[serde(default)]
     pub has_c_extensions: bool,
     #[serde(default)]
@@ -46,6 +50,10 @@ pub struct NonRpmItem {
     pub git_commit: String,
     #[serde(default)]
     pub git_branch: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub manifest_files: HashMap<String, String>,
+    #[serde(default)]
+    pub rpm_filtered: bool,
     pub files: Option<serde_json::Value>,
     #[serde(default)]
     pub content: String,
@@ -70,6 +78,9 @@ mod tests {
 
     #[test]
     fn test_nonrpm_section_roundtrip() {
+        let mut manifest_files = HashMap::new();
+        manifest_files.insert("package.json".to_string(), "{}".to_string());
+
         let section = NonRpmSoftwareSection {
             items: vec![NonRpmItem {
                 path: "/opt/app/bin".to_string(),
@@ -84,11 +95,16 @@ mod tests {
                 version: "1.0.0".to_string(),
                 shared_libs: vec!["/lib64/libc.so.6".to_string()],
                 system_site_packages: false,
-                packages: vec![],
+                packages: vec![LanguagePackage {
+                    name: "example-pkg".to_string(),
+                    version: "1.2.3".to_string(),
+                }],
                 has_c_extensions: false,
                 git_remote: String::new(),
                 git_commit: String::new(),
                 git_branch: String::new(),
+                manifest_files: manifest_files.clone(),
+                rpm_filtered: true,
                 files: None,
                 content: String::new(),
                 aggregate: None,

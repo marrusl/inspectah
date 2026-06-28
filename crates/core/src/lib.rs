@@ -4,6 +4,7 @@ pub mod pipeline;
 pub mod snapshot;
 pub mod traits;
 pub mod types;
+pub mod util;
 
 pub(crate) fn is_false(v: &bool) -> bool {
     !*v
