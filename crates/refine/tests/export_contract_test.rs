@@ -2,9 +2,11 @@ use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
+use inspectah_core::util::env_hash;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp, ViewDirective};
 use std::collections::{BTreeSet, HashMap};
@@ -610,5 +612,86 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
     assert_eq!(
         preview, exported,
         "preview and exported Containerfile must be byte-identical (with groups + UngroupGroup)"
+    );
+}
+
+#[test]
+fn export_includes_language_packages_root() {
+    let mut snap = test_snapshot();
+    let mut manifests = HashMap::new();
+    manifests.insert(
+        "package.json".to_string(),
+        r#"{"name":"myapp"}"#.to_string(),
+    );
+    manifests.insert(
+        "package-lock.json".to_string(),
+        r#"{"lockfileVersion":3}"#.to_string(),
+    );
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/myapp".into(),
+            name: "myapp".into(),
+            method: "npm lockfile".into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("lang-pkg-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let actual = tarball_file_set(&tarball_path);
+    let hash = env_hash("/opt/myapp");
+
+    let pkg_json = format!("language-packages/npm/{hash}/package.json");
+    let lock_json = format!("language-packages/npm/{hash}/package-lock.json");
+
+    assert!(
+        actual.contains(&pkg_json),
+        "tarball must contain {pkg_json}, got: {actual:?}"
+    );
+    assert!(
+        actual.contains(&lock_json),
+        "tarball must contain {lock_json}, got: {actual:?}"
+    );
+}
+
+#[test]
+fn export_excludes_language_packages_when_none_included() {
+    let mut snap = test_snapshot();
+    let mut manifests = HashMap::new();
+    manifests.insert("requirements.txt".to_string(), "flask==3.0".to_string());
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/venv".into(),
+            name: "venv".into(),
+            method: "pip".into(),
+            confidence: "medium".into(),
+            include: false,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("no-lang-pkg-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let actual = tarball_file_set(&tarball_path);
+    let has_lang_pkg = actual.iter().any(|p| p.starts_with("language-packages/"));
+    assert!(
+        !has_lang_pkg,
+        "tarball must not contain language-packages/ when no items are included, got: {actual:?}"
     );
 }

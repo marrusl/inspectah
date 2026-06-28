@@ -25,6 +25,7 @@ use crate::types::{
 };
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::util::env_hash;
 
 pub struct RefineSession {
     original: InspectionSnapshot,
@@ -2429,6 +2430,51 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
     Ok(())
 }
 
+/// Materialize collected manifest files into the export directory under
+/// `language-packages/<ecosystem>/<hash>/`. Only included items with
+/// non-empty manifest_files are materialized — excluded items use
+/// commented-out inline installs in the Containerfile, not COPY paths.
+fn write_language_package_manifests(
+    snap: &InspectionSnapshot,
+    out: &Path,
+) -> Result<(), RefineError> {
+    let nrs = match &snap.non_rpm_software {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+
+    for item in &nrs.items {
+        if !item.include || item.manifest_files.is_empty() {
+            continue;
+        }
+
+        // Route to ecosystem subdirectory based on the method string —
+        // the canonical detection-method key used throughout the pipeline.
+        let ecosystem = if item.method.contains("pip") || item.method == "venv" {
+            "pip"
+        } else if item.method == "npm lockfile" {
+            "npm"
+        } else if item.method == "gem lockfile" {
+            "gem"
+        } else {
+            continue;
+        };
+
+        let hash = env_hash(&item.path);
+        let dir = out.join("language-packages").join(ecosystem).join(&hash);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| RefineError::RenderFailed(format!("mkdir {}: {e}", dir.display())))?;
+
+        for (filename, content) in &item.manifest_files {
+            let file_path = dir.join(filename);
+            std::fs::write(&file_path, content).map_err(|e| {
+                RefineError::RenderFailed(format!("write {}: {e}", file_path.display()))
+            })?;
+        }
+    }
+    Ok(())
+}
+
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
@@ -2465,7 +2511,11 @@ pub fn render_refine_export(
         write_aggregate_variants(snap, out)?;
     }
 
-    // 2d. Remove any top-level artifacts outside the approved export contract.
+    // 2d. Materialize language-package manifests (conditional — only when
+    //     non-RPM items with include=true have collected manifest files).
+    write_language_package_manifests(snap, out)?;
+
+    // 2e. Remove any top-level artifacts outside the approved export contract.
     //     "quadlet" is intentionally excluded — quadlet units are written by
     //     write_config_tree as a side effect but are NOT part of the refine
     //     export contract. The Containerfile references them via config/ paths.
@@ -2484,6 +2534,7 @@ pub fn render_refine_export(
         "audit-report.md",
         "inspectah-users.ks",
         "inspectah-users.toml",
+        "language-packages",
     ]
     .iter()
     .copied()
