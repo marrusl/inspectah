@@ -1272,6 +1272,8 @@ fn export_allowlist_includes_repoless_packages_root() {
 fn export_includes_uploaded_rpms() {
     // Build a snapshot with repo-less RPM that will be uploaded
     let mut snap = test_snapshot();
+    // After upload, mark_uploaded_rpm sets repoless_cached = true.
+    // The export filter relies on this to include the uploaded RPM.
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "uploaded-tool".into(),
@@ -1280,8 +1282,8 @@ fn export_includes_uploaded_rpms() {
             arch: "x86_64".into(),
             source_repo: String::new(),
             include: true,
-            repoless_cached: false,
-            repoless_annotation: "No repo source — upload required".into(),
+            repoless_cached: true,
+            repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
         }],
         ..Default::default()
@@ -1341,8 +1343,8 @@ fn export_merges_cached_and_uploaded_rpms() {
                 arch: "x86_64".into(),
                 source_repo: String::new(),
                 include: true,
-                repoless_cached: false,
-                repoless_annotation: "No repo source — upload required".into(),
+                repoless_cached: true, // set by mark_uploaded_rpm after upload
+                repoless_annotation: "No repo source — cached RPM bundled".into(),
                 ..Default::default()
             },
         ],

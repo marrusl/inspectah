@@ -52,6 +52,10 @@ pub async fn upload_rpm(
             )))
         })?;
 
+        // Mark the matching PackageEntry as cached so the renderer
+        // generates active COPY/localinstall lines instead of MANUAL blocks.
+        session.mark_uploaded_rpm(&filename, &dest.to_string_lossy());
+
         uploaded_count += 1;
     }
 

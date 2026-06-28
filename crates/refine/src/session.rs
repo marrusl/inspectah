@@ -602,6 +602,38 @@ impl RefineSession {
         self.tarball_path.as_deref()
     }
 
+    /// Mark a repo-less PackageEntry as cached after an RPM upload.
+    ///
+    /// Matches the uploaded filename against package NEVRAs in the original
+    /// snapshot. When found, sets `repoless_cached = true` and `cache_path`
+    /// so the renderer generates active COPY/localinstall lines.
+    pub fn mark_uploaded_rpm(&mut self, filename: &str, staged_path: &str) {
+        // NEVRA filename format: name-version-release.arch.rpm
+        // We match against all repo-less packages in the snapshot.
+        if let Some(ref mut rpm) = self.original.rpm {
+            for pkg in &mut rpm.packages_added {
+                if pkg.repoless_annotation.is_empty() {
+                    continue; // not repo-less
+                }
+                let expected = format!(
+                    "{}-{}-{}.{}.rpm",
+                    pkg.name, pkg.version, pkg.release, pkg.arch
+                );
+                if filename == expected {
+                    pkg.repoless_cached = true;
+                    pkg.cache_path = Some(staged_path.to_string());
+                    // Invalidate cached view so the next view() reflects the change.
+                    self.cached_view = None;
+                    self.cached_render_context = None;
+                    self.cached_decisions = None;
+                    self.generation += 1;
+                    self.recompute_view();
+                    break;
+                }
+            }
+        }
+    }
+
     /// Returns the upload directory path, if set.
     pub fn upload_dir_path(&self) -> Option<&Path> {
         self.upload_dir.as_deref()
@@ -2837,10 +2869,32 @@ fn extract_payload_dirs_from_tarball(
 
 /// Copy uploaded RPMs from the upload staging directory into
 /// `repoless-packages/` in the export directory.
-fn copy_uploaded_rpms(upload_dir: &Path, out: &Path) -> Result<(), RefineError> {
+///
+/// Only copies RPMs whose corresponding PackageEntry has `include == true`
+/// in the projected snapshot. This prevents excluded uploads from leaking
+/// into the export.
+fn copy_uploaded_rpms(
+    upload_dir: &Path,
+    out: &Path,
+    snap: &InspectionSnapshot,
+) -> Result<(), RefineError> {
     if !upload_dir.exists() {
         return Ok(());
     }
+
+    // Build allowlist of included repo-less package NEVRA filenames.
+    let included_nevras: std::collections::HashSet<String> = snap
+        .rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.packages_added
+                .iter()
+                .filter(|p| p.include && p.repoless_cached)
+                .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let dest_dir = out.join("repoless-packages");
     // Create destination once before the loop instead of per-iteration
     std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
@@ -2849,7 +2903,8 @@ fn copy_uploaded_rpms(upload_dir: &Path, out: &Path) -> Result<(), RefineError> 
     {
         let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
         let name = entry.file_name();
-        if name.to_string_lossy().ends_with(".rpm") {
+        let name_str = name.to_string_lossy();
+        if name_str.ends_with(".rpm") && included_nevras.contains(name_str.as_ref()) {
             std::fs::copy(entry.path(), dest_dir.join(&name))
                 .map_err(|e| RefineError::TarballError(e.to_string()))?;
         }
@@ -2907,9 +2962,10 @@ pub fn render_refine_export(
     }
 
     // 2f. Copy uploaded RPMs (from refine UI upload endpoint) alongside
-    //     cached RPMs from the source tarball.
+    //     cached RPMs from the source tarball. Filtered by include state
+    //     so excluded uploads don't leak into export.
     if let Some(uploads) = upload_dir {
-        copy_uploaded_rpms(uploads, out)?;
+        copy_uploaded_rpms(uploads, out, snap)?;
     }
 
     // 2g. Remove any top-level artifacts outside the approved export contract.
