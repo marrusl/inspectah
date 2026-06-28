@@ -10,11 +10,17 @@ use inspectah_core::types::rpm::PackageEntry;
 
 /// Fetch the list of enabled repo IDs from `dnf repolist --enabled`.
 ///
-/// Returns an empty vec if the command fails (e.g., dnf not available).
-fn get_enabled_repos(exec: &dyn Executor) -> Vec<String> {
+/// Returns `None` if the command fails (e.g., dnf not available).
+/// Callers must distinguish "no enabled repos" (`Some(vec![])`) from
+/// "unable to determine" (`None`) to avoid treating all packages as
+/// repo-less when dnf itself is broken.
+fn get_enabled_repos(exec: &dyn Executor) -> Option<Vec<String>> {
     let result = exec.run("dnf", &["repolist", "--enabled", "-q"]);
-    match result {
-        ref r if r.exit_code == 0 => r
+    if result.exit_code != 0 {
+        return None;
+    }
+    Some(
+        result
             .stdout
             .lines()
             .skip(1) // Skip header line
@@ -27,8 +33,7 @@ fn get_enabled_repos(exec: &dyn Executor) -> Vec<String> {
                 }
             })
             .collect(),
-        _ => Vec::new(),
-    }
+    )
 }
 
 /// Identify repo-less packages and scan `/var/cache/dnf/` for cached RPMs.
@@ -45,11 +50,21 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
     let enabled_repos = get_enabled_repos(exec);
 
     // Identify which packages are repo-less.
+    // When dnf repolist failed (None), only process packages with empty
+    // source_repo -- skip the disabled-repo branch entirely to avoid
+    // false-flagging every package as repo-less.
     let repoless_indices: Vec<usize> = packages
         .iter()
         .enumerate()
         .filter(|(_, p)| {
-            p.source_repo.is_empty() || !enabled_repos.iter().any(|r| r == &p.source_repo)
+            if p.source_repo.is_empty() {
+                true // Always repo-less: no repo recorded
+            } else {
+                match &enabled_repos {
+                    Some(repos) => !repos.iter().any(|r| r == &p.source_repo),
+                    None => false, // dnf failed -- don't assume disabled
+                }
+            }
         })
         .map(|(i, _)| i)
         .collect();
@@ -270,11 +285,14 @@ mod tests {
         );
 
         let repos = get_enabled_repos(&exec);
-        assert_eq!(repos, vec!["baseos", "appstream"]);
+        assert_eq!(
+            repos,
+            Some(vec!["baseos".to_string(), "appstream".to_string()])
+        );
     }
 
     #[test]
-    fn get_enabled_repos_returns_empty_on_failure() {
+    fn get_enabled_repos_returns_none_on_failure() {
         let exec = MockExecutor::new().with_command(
             "dnf repolist --enabled -q",
             ExecResult {
@@ -284,7 +302,49 @@ mod tests {
         );
 
         let repos = get_enabled_repos(&exec);
-        assert!(repos.is_empty());
+        assert!(repos.is_none(), "should return None when dnf fails");
+    }
+
+    #[test]
+    fn dnf_repolist_failure_only_flags_empty_source_repo() {
+        // When dnf repolist fails, only packages with empty source_repo
+        // should be treated as repo-less. Packages with a named source_repo
+        // should NOT be flagged (we can't confirm the repo is disabled).
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repolist --enabled -q",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "find /var/cache/dnf -name *.rpm -type f",
+                ExecResult {
+                    stdout: "/var/cache/dnf/local/packages/custom-tool-1.0-1.el9.x86_64.rpm\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut packages = vec![
+            pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"),
+            pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),
+        ];
+        scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+        // httpd has a named source_repo -- must NOT be flagged when dnf fails
+        assert!(
+            packages[0].repoless_annotation.is_empty(),
+            "httpd should not be flagged as repo-less when dnf fails"
+        );
+
+        // custom-tool has empty source_repo -- should be flagged
+        assert!(
+            packages[1].repoless_cached,
+            "custom-tool with empty source_repo should still be detected"
+        );
     }
 
     #[test]

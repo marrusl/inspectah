@@ -194,9 +194,10 @@ fn mixed_batch_only_repoless_annotated() {
 }
 
 #[test]
-fn dnf_repolist_failure_treats_all_as_repoless() {
-    // When dnf repolist fails, enabled_repos is empty, so every package
-    // with a non-empty source_repo will be flagged as repo-less.
+fn dnf_repolist_failure_skips_named_repo_packages() {
+    // When dnf repolist fails, packages with a named source_repo must NOT
+    // be flagged as repo-less. Only packages with empty source_repo are
+    // processed. This prevents overfiring when dnf is unavailable.
     let exec = MockExecutor::new()
         .with_command(
             "dnf repolist --enabled -q",
@@ -208,24 +209,27 @@ fn dnf_repolist_failure_treats_all_as_repoless() {
         .with_command(
             "find /var/cache/dnf -name *.rpm -type f",
             ExecResult {
-                stdout: "".into(),
+                stdout: "/var/cache/dnf/local/packages/custom-tool-1.0-1.el9.x86_64.rpm\n".into(),
                 exit_code: 0,
                 ..Default::default()
             },
         );
 
-    let mut packages = vec![pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream")];
+    let mut packages = vec![
+        pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"),
+        pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),
+    ];
     scan_dnf_cache_for_repoless(&exec, &mut packages);
 
-    // With dnf failing, "appstream" is not in the empty enabled_repos list.
+    // httpd has a named source_repo -- must NOT be flagged when dnf fails
     assert!(
-        !packages[0].repoless_annotation.is_empty(),
-        "should be flagged when dnf repolist fails"
+        packages[0].repoless_annotation.is_empty(),
+        "httpd should not be flagged when dnf repolist fails"
     );
+
+    // custom-tool has empty source_repo -- should still be detected
     assert!(
-        packages[0]
-            .repoless_annotation
-            .contains("manual resolution needed"),
-        "should indicate manual resolution when cache is empty"
+        packages[1].repoless_cached,
+        "custom-tool with empty source_repo should be detected even when dnf fails"
     );
 }
