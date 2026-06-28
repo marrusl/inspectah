@@ -164,10 +164,14 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         lines.push("# native compilation toolchains (gcc, python3-devel).".into());
     }
 
+    // Normalize path to absolute — the collector strips the leading slash
+    // before storing. npm/gem renderers already do this; pip must too.
+    let abs_path = format!("/{}", item.path.trim_start_matches('/'));
+
     if is_venv && has_requirements && effective_confidence == HIGH_CONFIDENCE {
         // High confidence venv with requirements.txt: executable COPY/RUN.
         let hash = env_hash(&item.path);
-        let venv_name = std::path::Path::new(&item.path)
+        let venv_name = std::path::Path::new(&abs_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "venv".to_string());
@@ -177,30 +181,28 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
             "from requirements.txt"
         };
 
-        lines.push(format!("# pip packages: {} ({fidelity})", item.path));
+        lines.push(format!("# pip packages: {abs_path} ({fidelity})"));
         lines.push(format!(
             "COPY language-packages/pip/{hash}/requirements.txt /tmp/{venv_name}-requirements.txt"
         ));
-        lines.push(format!("RUN python3 -m venv {} \\", item.path));
+        lines.push(format!("RUN python3 -m venv {abs_path} \\"));
         lines.push(format!(
-            "    && {}/bin/pip install -r /tmp/{venv_name}-requirements.txt \\",
-            item.path
+            "    && {abs_path}/bin/pip install -r /tmp/{venv_name}-requirements.txt \\"
         ));
         lines.push(format!("    && rm /tmp/{venv_name}-requirements.txt"));
     } else if is_venv {
         // Medium confidence venv (no requirements.txt): commented out.
         let pkgs = pinned_package_list(item);
         lines.push(format!(
-            "# pip packages: {} (detected via dist-info \
-             — transitive deps may differ)",
-            item.path
+            "# pip packages: {abs_path} (detected via dist-info \
+             — transitive deps may differ)"
         ));
         lines.push("# Uncomment after verifying package list is complete:".into());
-        lines.push(format!("# RUN python3 -m venv {} \\", item.path));
+        lines.push(format!("# RUN python3 -m venv {abs_path} \\"));
         if pkgs.is_empty() {
-            lines.push(format!("#     && {}/bin/pip install <packages>", item.path));
+            lines.push(format!("#     && {abs_path}/bin/pip install <packages>"));
         } else {
-            lines.push(format!("#     && {}/bin/pip install {pkgs}", item.path));
+            lines.push(format!("#     && {abs_path}/bin/pip install {pkgs}"));
         }
     } else {
         // System-level pip (always medium confidence): commented out.
@@ -812,6 +814,29 @@ mod tests {
         assert!(
             output.contains("# RUN python3") || output.contains("# Uncomment"),
             "excluded high-confidence must render commented-out: {output}"
+        );
+    }
+
+    #[test]
+    fn pip_venv_normalizes_relative_path_to_absolute() {
+        // The collector strips the leading slash; the renderer must restore it.
+        let item = pip_venv_item(
+            "opt/myapp/venv", // no leading slash — collector output shape
+            HIGH_CONFIDENCE,
+            true,
+            vec![("flask", "2.3.3")],
+        );
+        let snap = test_snap(vec![item], &["python3"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("RUN python3 -m venv /opt/myapp/venv"),
+            "must normalize path to absolute: {output}"
+        );
+        assert!(
+            !output.contains("RUN python3 -m venv opt/"),
+            "must not use relative path: {output}"
         );
     }
 
