@@ -2,6 +2,11 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
 use std::collections::BTreeMap;
 
+/// Single-quote a path for safe shell interpolation in RUN directives.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Render Containerfile lines for unmanaged files.
 ///
 /// Groups files by parent directory for readability.
@@ -57,17 +62,21 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
             }
         }
 
-        // Symlinks get advisory comments instead of COPY directives.
+        // Symlinks are recreated with ln -sf so the image preserves
+        // the original link topology. Unknown targets get advisory comments.
         for file in &symlinks {
-            let target = if file.link_target.is_empty() {
-                "unknown".to_string()
+            if file.link_target.is_empty() {
+                lines.push(format!(
+                    "# SYMLINK: {} -> unknown (recreate manually)",
+                    file.path
+                ));
             } else {
-                file.link_target.clone()
-            };
-            lines.push(format!(
-                "# SYMLINK: {} -> {} (recreate manually if needed)",
-                file.path, target
-            ));
+                lines.push(format!(
+                    "RUN ln -sf {} {}",
+                    shell_escape(&file.link_target),
+                    shell_escape(&file.path)
+                ));
+            }
         }
     }
 
@@ -136,6 +145,75 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l.contains("COPY unmanaged/opt/splunk/bin/ /opt/splunk/bin/"))
+        );
+    }
+
+    #[test]
+    fn symlinks_render_as_ln_sf() {
+        let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
+            path: "/opt/app/bin/tool".into(),
+            file_type: FileType::Symlink,
+            link_target: "/opt/app/lib/tool-1.2".into(),
+            include: true,
+            ..Default::default()
+        }]);
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("RUN ln -sf") && l.contains("/opt/app/lib/tool-1.2")),
+            "symlink must produce RUN ln -sf, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn symlink_only_dir_produces_output() {
+        let snap = test_snapshot_with_unmanaged(vec![
+            UnmanagedFile {
+                path: "/opt/myapp/bin/run".into(),
+                file_type: FileType::Symlink,
+                link_target: "/opt/myapp/lib/run-2.0".into(),
+                include: true,
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/opt/myapp/bin/debug".into(),
+                file_type: FileType::Symlink,
+                link_target: "/opt/myapp/lib/debug-2.0".into(),
+                include: true,
+                ..Default::default()
+            },
+        ]);
+        let lines = unmanaged_file_lines(&snap);
+        let ln_lines: Vec<_> = lines.iter().filter(|l| l.contains("RUN ln -sf")).collect();
+        assert_eq!(ln_lines.len(), 2, "each symlink must produce a RUN ln -sf");
+    }
+
+    #[test]
+    fn mixed_regular_and_symlink_dir() {
+        let snap = test_snapshot_with_unmanaged(vec![
+            UnmanagedFile {
+                path: "/opt/app/server".into(),
+                file_type: FileType::ElfBinary,
+                include: true,
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/opt/app/current".into(),
+                file_type: FileType::Symlink,
+                link_target: "/opt/app/server".into(),
+                include: true,
+                ..Default::default()
+            },
+        ]);
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            lines.iter().any(|l| l.starts_with("COPY unmanaged/")),
+            "regular file must produce COPY"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("RUN ln -sf")),
+            "symlink must produce RUN ln -sf"
         );
     }
 }
