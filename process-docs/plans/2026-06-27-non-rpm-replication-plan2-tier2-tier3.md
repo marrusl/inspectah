@@ -4,18 +4,21 @@
 
 **Goal:** Add opt-in unmanaged file cataloging/bundling (Tier 2) and automatic repo-less RPM bundling (Tier 3) to the scan and refine pipeline. Both tiers produce executable Containerfile output backed by collected artifacts in the export tarball.
 
-**Architecture:** Five layers change: (1) CLI gains `--include-unmanaged`, `--exclude-path`, `-y`/`--yes` flags, (2) core types gain `ItemId::UnmanagedFile` and unmanaged file data model, (3) the non-RPM inspector catalogs unmanaged files and the RPM inspector scans the dnf cache for repo-less packages, (4) the pipeline renderer emits `COPY`/`RUN` directives for both tiers with appropriate warning blocks, (5) refine export materializes `unmanaged/` and `repoless-packages/` roots.
+**Architecture:** Five layers change: (1) CLI gains `--include-unmanaged`, `--exclude-path`, `-y`/`--yes` flags, (2) core types gain `ItemId::UnmanagedFile` and unmanaged file data model with derived provenance signals, (3) the non-RPM inspector catalogs unmanaged files (excluding RPM-owned paths and Tier 1 language environments) and the RPM inspector scans the dnf cache for repo-less packages (including packages whose repo is no longer configured), (4) the pipeline renderer emits `COPY`/`RUN` directives for both tiers with appropriate warning blocks, (5) refine export extracts payload files from the source tarball and materializes `unmanaged/` and `repoless-packages/` roots, with an upload endpoint for user-provided RPMs.
 
-**Tech Stack:** Rust (2024 edition), clap (CLI args), serde, insta (snapshot testing), sha2/hex (path hashing), inspectah-core types, inspectah-refine, inspectah-pipeline, inspectah-collect, inspectah-cli.
+**Scope boundary:** This plan covers backend plumbing only — collector, CLI flags, renderer, export contract, refine classification, RPM upload API endpoint. The refine UI decision surface (Unmanaged Files section, Repo-less RPM toggles, upload modal, grouped interaction, size rollup) is Plan 3. Aggregate-mode reviewability (aggregate identity, prevalence, variant handling) is Plan 4. Both plans consume the `ItemId::UnmanagedFile` and export contracts established here.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 2 and Tier 3. Plan 1 covers Tier 1 and shared contracts.
+**Tech Stack:** Rust (2024 edition), clap (CLI args), serde, insta (snapshot testing), sha2/hex (path hashing), axum (upload endpoint), inspectah-core types, inspectah-refine, inspectah-pipeline, inspectah-collect, inspectah-cli, inspectah-refine-web.
 
-**Thorn Checkpoints:** After Tasks 3, 6, 9.
+**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 2 and Tier 3 backend. Plan 1 covers Tier 1 and shared contracts. Plan 3 covers Tier 2/3 UI.
+
+**Thorn Checkpoints:** After Tasks 3, 7, 12.
 
 ## Global Constraints
 
 - Clippy clean: `cargo clippy -- -W clippy::all` with zero warnings.
 - Format: `cargo fmt --check` must pass.
+- **Verification commands:** Every task's "Run tests" step must also run `cargo clippy -- -W clippy::all` and `cargo fmt --check` in addition to `cargo test`. These are hard gates, not aspirational.
 - No team member names in code or commits.
 - Commit format: `type(scope): description`. Attribution: `Assisted-by: Claude Code (Opus 4.6)`.
 - All new `#[serde]` fields use `#[serde(default)]` for backward-compatible deserialization.
@@ -30,16 +33,18 @@
 | File | Change |
 |------|--------|
 | `crates/cli/src/main.rs` | Add `-y`/`--yes` global flag to `Cli` struct |
-| `crates/cli/src/commands/scan.rs` | Add `--include-unmanaged` and `--exclude-path` flags to `ScanArgs`; pass config to pipeline; prompt before bundling; bundle files into render dir |
-| `crates/core/src/types/nonrpm.rs` | Add `UnmanagedFile` struct, `UnmanagedFileSection` struct, `FileType` enum, `ProvenanceSignals` struct |
+| `crates/cli/src/commands/scan.rs` | Add `--include-unmanaged` and `--exclude-path` flags to `ScanArgs`; pass config to pipeline; prompt before bundling; bundle files into scan tarball |
+| `crates/core/src/types/nonrpm.rs` | Add `UnmanagedFile` struct, `UnmanagedFileSection` struct, `FileType` enum, `ProvenanceSignals` struct (with derived signals) |
+| `crates/core/src/types/rpm.rs` | Add `repoless_annotation`, `repoless_cached`, `cache_path` fields to `PackageEntry` |
 | `crates/core/src/snapshot.rs` | Add `unmanaged_files: Option<UnmanagedFileSection>` field to `InspectionSnapshot` |
 | `crates/refine/src/types.rs` | Add `ItemId::UnmanagedFile` variant |
-| `crates/collect/src/inspectors/nonrpm.rs` | Add `scan_unmanaged_files()` function, `scan_dnf_cache_for_repoless()` function |
+| `crates/collect/src/inspectors/nonrpm.rs` | Add `scan_unmanaged_files()` function with RPM-ownership exclusion and derived provenance signals |
 | `crates/pipeline/src/render/containerfile.rs` | Add calls to new unmanaged and repoless renderers in `render_containerfile_inner()` |
 | `crates/pipeline/src/render/mod.rs` | Add `pub mod unmanaged;` and `pub mod repoless;` declarations |
-| `crates/refine/src/session.rs` | Add `unmanaged` and `repoless-packages` to export allowlist; add materialization functions |
+| `crates/refine/src/session.rs` | Add `unmanaged`, `repoless-packages` to export allowlist; add source-tarball extraction for payload files; add `upload_dir` to `RefineSession` |
 | `crates/refine/src/classify.rs` | Add classification for repo-less RPMs (pre-excluded) and unmanaged files |
-| `crates/refine/tests/export_contract_test.rs` | Add contract tests for `unmanaged/` and `repoless-packages/` roots |
+| `crates/refine-web/src/lib.rs` | Add `/api/upload-rpm` route |
+| `docs/reference/output-artifacts.md` | Document `unmanaged/` and `repoless-packages/` roots |
 
 ### New files
 
@@ -48,7 +53,9 @@
 | `crates/pipeline/src/render/unmanaged.rs` | Containerfile rendering for unmanaged file COPY directives |
 | `crates/pipeline/src/render/repoless.rs` | Containerfile rendering for repo-less RPM `dnf localinstall` directives |
 | `crates/collect/tests/unmanaged_scan_test.rs` | Integration tests for unmanaged file cataloging |
-| `crates/collect/tests/repoless_rpm_test.rs` | Integration tests for dnf cache scanning |
+| `crates/collect/tests/repoless_rpm_test.rs` | Integration tests for dnf cache scanning and repo-disabled detection |
+| `crates/refine-web/src/upload.rs` | RPM upload endpoint handler |
+| `crates/refine/tests/export_parity_test.rs` | Preview/export parity tests for unmanaged and repoless COPY paths |
 
 ---
 
@@ -62,7 +69,7 @@
 
 **Interfaces:**
 - Produces: `UnmanagedFile`, `UnmanagedFileSection`, `FileType`, `ProvenanceSignals`, `ItemId::UnmanagedFile`
-- Consumed by: Tasks 2-9
+- Consumed by: Tasks 2-12
 
 - [ ] **Step 1: Add FileType enum**
 
@@ -85,6 +92,9 @@ pub enum FileType {
 
 - [ ] **Step 2: Add ProvenanceSignals struct**
 
+This struct carries both raw metadata and the three derived signals
+the spec requires (mutability, writable mount, service working directory).
+
 ```rust
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceSignals {
@@ -102,9 +112,25 @@ pub struct ProvenanceSignals {
     /// Octal file permissions (e.g., "0755")
     #[serde(default)]
     pub permissions: String,
-    /// Whether the path is under a writable mount
+
+    // --- Derived signals (spec-required) ---
+
+    /// True when the file's mtime is newer than the system install date.
+    /// System install date is derived from `/etc/machine-id` ctime or
+    /// the install time of a baseos RPM (e.g., `filesystem` package).
+    /// Newer files are likely runtime-generated data, not deployed payload.
+    #[serde(default)]
+    pub mutable: bool,
+    /// True when the file lives on a read-write mount point.
+    /// Determined by parsing `/proc/mounts` and matching the file's
+    /// path to the longest-prefix mount that has the `rw` option.
     #[serde(default)]
     pub writable_mount: bool,
+    /// True when the file path is under any systemd service's
+    /// `WorkingDirectory=` (parsed from `/etc/systemd/system/*.service`
+    /// and `/usr/lib/systemd/system/*.service` unit files).
+    #[serde(default)]
+    pub service_working_dir: bool,
 }
 ```
 
@@ -122,7 +148,7 @@ pub struct UnmanagedFile {
     /// Detected file type
     #[serde(default)]
     pub file_type: FileType,
-    /// Provenance signals for review
+    /// Provenance signals for review (raw metadata + derived signals)
     #[serde(default)]
     pub provenance: ProvenanceSignals,
     /// Include in export (default true — user toggles in refine)
@@ -132,7 +158,12 @@ pub struct UnmanagedFile {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
-    /// True if path is under /var (needs bootc persistence warning)
+    /// True if path is under /var (needs bootc persistence warning).
+    /// Note: /var is NOT a scan root — this flag is only set when an
+    /// unmanaged file under /opt, /srv, or /usr/local has a symlink
+    /// target or runtime-generated path that resolves under /var.
+    /// The /var WARNING in the spec is advisory guidance for the refine
+    /// UI, not a scan-scope directive.
     #[serde(default)]
     pub under_var: bool,
     /// Aggregate prevalence (populated in aggregate mode)
@@ -182,7 +213,7 @@ In `crates/refine/src/types.rs`, add to the `ItemId` enum:
     },
 ```
 
-- [ ] **Step 7: Write roundtrip test**
+- [ ] **Step 7: Write roundtrip tests**
 
 In the `#[cfg(test)]` module of `crates/core/src/types/nonrpm.rs`, add:
 
@@ -199,7 +230,9 @@ fn test_unmanaged_file_roundtrip() {
             uid: 0,
             gid: 0,
             permissions: "0755".into(),
+            mutable: false,
             writable_mount: false,
+            service_working_dir: false,
         },
         include: true,
         under_var: false,
@@ -208,6 +241,23 @@ fn test_unmanaged_file_roundtrip() {
     let json = serde_json::to_string(&file).unwrap();
     let deser: UnmanagedFile = serde_json::from_str(&json).unwrap();
     assert_eq!(file, deser);
+}
+
+#[test]
+fn test_provenance_signals_derived_fields_roundtrip() {
+    let signals = ProvenanceSignals {
+        file_type: FileType::DataFile,
+        last_modified: 1700000000,
+        uid: 1000,
+        gid: 1000,
+        permissions: "0644".into(),
+        mutable: true,
+        writable_mount: true,
+        service_working_dir: true,
+    };
+    let json = serde_json::to_string(&signals).unwrap();
+    let deser: ProvenanceSignals = serde_json::from_str(&json).unwrap();
+    assert_eq!(signals, deser);
 }
 
 #[test]
@@ -235,23 +285,32 @@ fn test_unmanaged_file_defaults_from_empty_json() {
     assert_eq!(deser.file_type, FileType::Other);
     assert!(deser.include); // default_true
     assert!(!deser.under_var);
+    assert!(!deser.provenance.mutable);
+    assert!(!deser.provenance.writable_mount);
+    assert!(!deser.provenance.service_working_dir);
 }
 ```
 
-- [ ] **Step 8: Run tests**
+- [ ] **Step 8: Run tests + lint**
 
-Run: `cargo test -p inspectah-core -p inspectah-refine`
-Expected: all pass, zero clippy warnings.
+Run:
+```
+cargo test -p inspectah-core -p inspectah-refine
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass, zero clippy warnings, format clean.
 
 - [ ] **Step 9: Commit**
 
 ```
-feat(core): add unmanaged file data model and ItemId variant
+feat(core): add unmanaged file data model with derived provenance signals
 
 Add UnmanagedFile, UnmanagedFileSection, FileType, ProvenanceSignals
-types. Add unmanaged_files field to InspectionSnapshot. Add
-ItemId::UnmanagedFile variant for refine toggle operations. All new
-fields use serde(default) for backward compatibility.
+types with spec-required derived signals (mutable, writable_mount,
+service_working_dir). Add unmanaged_files field to InspectionSnapshot.
+Add ItemId::UnmanagedFile variant for refine toggle operations.
+All new fields use serde(default) for backward compatibility.
 ```
 
 ---
@@ -271,20 +330,9 @@ fields use serde(default) for backward compatibility.
 In `crates/cli/src/main.rs`, add to the `Cli` struct:
 
 ```rust
-#[derive(Parser)]
-#[command(name = "inspectah", version = LONG_VERSION, about)]
-struct Cli {
-    /// Print full CLI reference in markdown format
-    #[arg(long, hide = true)]
-    markdown_help: bool,
-
     /// Assume yes to all interactive prompts (for CI/automation)
     #[arg(short = 'y', long = "yes", global = true)]
     pub yes: bool,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
 ```
 
 - [ ] **Step 2: Add --include-unmanaged and --exclude-path to ScanArgs**
@@ -304,11 +352,6 @@ In `crates/cli/src/commands/scan.rs`, add to the `ScanArgs` struct:
 
 - [ ] **Step 3: Thread yes flag to scan command**
 
-In the scan command's `run()` function (or wherever ScanArgs is consumed),
-the `yes` flag comes from the parent `Cli` struct. Ensure the scan
-function receives both `args: ScanArgs` and `yes: bool` (or accesses
-`cli.yes` from the call site in `main.rs`).
-
 In `crates/cli/src/main.rs`, at the `Commands::Scan(args)` match arm,
 pass `cli.yes` to the scan runner:
 
@@ -322,9 +365,14 @@ Update the `run` function signature in `scan.rs`:
 pub fn run(args: ScanArgs, assume_yes: bool) -> Result<()> {
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests + lint**
 
-Run: `cargo test -p inspectah-cli`
+Run:
+```
+cargo test -p inspectah-cli
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass. Verify `inspectah scan --help` shows the new flags.
 
 - [ ] **Step 5: Commit**
@@ -347,10 +395,15 @@ prompts for CI/automation use.
 - Create: `crates/collect/tests/unmanaged_scan_test.rs`
 
 **Interfaces:**
-- Consumes: `Executor.list_dir()`, `Executor.file_metadata()`, `Executor.read_file()` for file classification; `NonRpmSoftwareSection.items` to exclude Tier 1 language environments
-- Produces: `UnmanagedFileSection` with cataloged files, provenance signals, and Tier 1 exclusion
+- Consumes: `Executor.execute()` for find/stat/file commands; `RpmState.owned_paths` for RPM-ownership exclusion; `NonRpmSoftwareSection.items` to exclude Tier 1 language environments
+- Produces: `UnmanagedFileSection` with cataloged files, provenance signals (raw + derived), RPM and Tier 1 exclusion applied
 
-- [ ] **Step 1: Write failing test for unmanaged file scan**
+**Data flow:** The collector runs on the source host. It has direct
+access to the filesystem, `/proc/mounts`, systemd unit files, and
+`/etc/machine-id`. All provenance signal computation happens here at
+scan time — the refine session only consumes the pre-computed booleans.
+
+- [ ] **Step 1: Write failing tests for unmanaged file scan**
 
 Create `crates/collect/tests/unmanaged_scan_test.rs`:
 
@@ -370,6 +423,15 @@ fn scan_unmanaged_catalogs_elf_binaries() {
 }
 
 #[test]
+fn scan_unmanaged_excludes_rpm_owned_paths() {
+    // MockExecutor with:
+    //   /opt/rh/httpd24/root/usr/sbin/httpd (RPM-owned)
+    //   /opt/myapp/server (not RPM-owned)
+    // RpmState.owned_paths includes /opt/rh/httpd24/root/usr/sbin/httpd.
+    // Assert: only /opt/myapp/server appears in unmanaged results.
+}
+
+#[test]
 fn scan_unmanaged_excludes_tier1_language_paths() {
     // MockExecutor with:
     //   /opt/myapp/venv/bin/python (venv — claimed by Tier 1)
@@ -386,15 +448,38 @@ fn scan_unmanaged_applies_exclude_paths() {
 }
 
 #[test]
-fn scan_unmanaged_detects_var_paths() {
+fn scan_unmanaged_does_not_scan_var() {
     // MockExecutor with /var/lib/myapp/data.db.
-    // Assert: UnmanagedFile.under_var == true.
+    // Assert: file is NOT cataloged — /var is not a scan root.
+    // The spec's /var guidance is advisory for the UI, not a scan directive.
 }
 
 #[test]
 fn scan_unmanaged_classifies_scripts() {
     // MockExecutor with /opt/app/run.sh containing "#!/bin/bash".
     // Assert: file_type == FileType::Script.
+}
+
+#[test]
+fn scan_unmanaged_computes_mutability_signal() {
+    // MockExecutor returns:
+    //   file mtime = 1700000000 (recent)
+    //   /etc/machine-id ctime = 1600000000 (older install date)
+    // Assert: provenance.mutable == true (file is newer than install).
+}
+
+#[test]
+fn scan_unmanaged_computes_writable_mount_signal() {
+    // MockExecutor returns /proc/mounts with /opt mounted rw.
+    // File at /opt/app/server.
+    // Assert: provenance.writable_mount == true.
+}
+
+#[test]
+fn scan_unmanaged_computes_service_working_dir_signal() {
+    // MockExecutor returns systemd unit file with WorkingDirectory=/opt/myapp.
+    // File at /opt/myapp/data.log.
+    // Assert: provenance.service_working_dir == true.
 }
 ```
 
@@ -403,34 +488,159 @@ fn scan_unmanaged_classifies_scripts() {
 Run: `cargo test -p inspectah-collect --test unmanaged_scan_test`
 Expected: FAIL — function does not exist.
 
-- [ ] **Step 3: Implement scan_unmanaged_files()**
+- [ ] **Step 3: Implement system-install-date detection**
 
 In `crates/collect/src/inspectors/nonrpm.rs`, add:
+
+```rust
+/// Determine the system install date (seconds since epoch).
+///
+/// Strategy: use the ctime of `/etc/machine-id` (created at OS install).
+/// Fallback: query RPM install time of the `filesystem` package
+/// (a baseos package present on every RHEL system).
+fn detect_system_install_date(exec: &dyn Executor) -> u64 {
+    // Try /etc/machine-id ctime first
+    let result = exec.execute("stat", &["-c", "%Z", "/etc/machine-id"]);
+    if let Ok(r) = result {
+        if r.exit_code == 0 {
+            if let Ok(ts) = r.stdout.trim().parse::<u64>() {
+                return ts;
+            }
+        }
+    }
+    // Fallback: RPM install time of `filesystem` package
+    let result = exec.execute("rpm", &["-q", "--qf", "%{INSTALLTIME}", "filesystem"]);
+    if let Ok(r) = result {
+        if r.exit_code == 0 {
+            if let Ok(ts) = r.stdout.trim().parse::<u64>() {
+                return ts;
+            }
+        }
+    }
+    0 // Unknown — all files will be marked as not mutable
+}
+```
+
+- [ ] **Step 4: Implement mount-point read-write detection**
+
+```rust
+use std::collections::HashMap;
+
+/// Parse /proc/mounts and return a map of mount_point -> is_rw.
+fn parse_mount_rw_flags(exec: &dyn Executor) -> HashMap<String, bool> {
+    let mut mounts = HashMap::new();
+    let result = exec.execute("cat", &["/proc/mounts"]);
+    let output = match result {
+        Ok(r) if r.exit_code == 0 => r.stdout,
+        _ => return mounts,
+    };
+    for line in output.lines() {
+        // Format: device mount_point fs_type options ...
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4 {
+            let mount_point = parts[1].to_string();
+            let options = parts[3];
+            let is_rw = options.split(',').any(|opt| opt == "rw");
+            mounts.insert(mount_point, is_rw);
+        }
+    }
+    mounts
+}
+
+/// Check if a file path is on a writable mount by finding the
+/// longest-prefix mount point match.
+fn is_on_writable_mount(path: &str, mounts: &HashMap<String, bool>) -> bool {
+    let mut best_match = "";
+    let mut best_rw = false;
+    for (mount_point, is_rw) in mounts {
+        if path.starts_with(mount_point.as_str()) && mount_point.len() > best_match.len() {
+            best_match = mount_point;
+            best_rw = *is_rw;
+        }
+    }
+    best_rw
+}
+```
+
+- [ ] **Step 5: Implement service working directory detection**
+
+```rust
+/// Collect all WorkingDirectory= values from systemd unit files.
+fn collect_service_working_dirs(exec: &dyn Executor) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for unit_dir in &["/etc/systemd/system", "/usr/lib/systemd/system"] {
+        let result = exec.execute(
+            "grep",
+            &["-rh", "WorkingDirectory=", unit_dir],
+        );
+        if let Ok(r) = result {
+            if r.exit_code == 0 {
+                for line in r.stdout.lines() {
+                    let value = line
+                        .trim()
+                        .strip_prefix("WorkingDirectory=")
+                        .unwrap_or("")
+                        .trim();
+                    if !value.is_empty() && value.starts_with('/') {
+                        dirs.push(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Check if a file path is under any service's WorkingDirectory.
+fn is_under_service_workdir(path: &str, workdirs: &[String]) -> bool {
+    workdirs.iter().any(|wd| path.starts_with(wd.as_str()))
+}
+```
+
+- [ ] **Step 6: Implement scan_unmanaged_files()**
 
 ```rust
 use inspectah_core::types::nonrpm::{
     FileType, ProvenanceSignals, UnmanagedFile, UnmanagedFileSection,
 };
-use std::os::unix::fs::MetadataExt;
+use inspectah_core::traits::inspector::RpmState;
 
-/// Directories to scan for unmanaged files.
-const UNMANAGED_SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local", "/var"];
+/// Scan roots for unmanaged files per spec: /opt, /srv, /usr/local ONLY.
+/// /var is NOT a scan root — the spec's /var guidance is advisory for
+/// the refine UI, not a scan-scope directive.
+const UNMANAGED_SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local"];
 
 /// Scan for unmanaged files not claimed by RPM or Tier 1 language packages.
+///
+/// Exclusion layers (applied in order):
+/// 1. `--exclude-path` user-specified filters
+/// 2. RPM-owned paths via `RpmState.owned_paths` (same mechanism Plan 1
+///    uses for pip filtering)
+/// 3. Tier 1 language environment paths (no double-counting with Plan 1)
 pub fn scan_unmanaged_files(
     exec: &dyn Executor,
+    rpm_state: Option<&RpmState>,
     language_env_paths: &[String],
     exclude_paths: &[String],
 ) -> UnmanagedFileSection {
     let mut items = Vec::new();
     let mut total_size: u64 = 0;
 
+    // Pre-compute derived signal inputs once
+    let install_date = detect_system_install_date(exec);
+    let mounts = parse_mount_rw_flags(exec);
+    let service_workdirs = collect_service_working_dirs(exec);
+
     for root in UNMANAGED_SCAN_ROOTS {
         walk_for_unmanaged(
             exec,
             root,
+            rpm_state,
             language_env_paths,
             exclude_paths,
+            install_date,
+            &mounts,
+            &service_workdirs,
             &mut items,
             &mut total_size,
         );
@@ -447,14 +657,21 @@ pub fn scan_unmanaged_files(
 fn walk_for_unmanaged(
     exec: &dyn Executor,
     root: &str,
+    rpm_state: Option<&RpmState>,
     language_env_paths: &[String],
     exclude_paths: &[String],
+    install_date: u64,
+    mounts: &HashMap<String, bool>,
+    service_workdirs: &[String],
     items: &mut Vec<UnmanagedFile>,
     total_size: &mut u64,
 ) {
-    // Use find command to list all regular files under root
+    // Use find to list all regular files under root, respecting PRUNE_DIRS
     let args = vec![root.to_string(), "-type".into(), "f".into()];
-    let result = match exec.execute("find", &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+    let result = match exec.execute(
+        "find",
+        &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    ) {
         Ok(r) if r.exit_code == 0 => r,
         _ => return,
     };
@@ -465,12 +682,19 @@ fn walk_for_unmanaged(
             continue;
         }
 
-        // Apply exclude-path filters
+        // Layer 1: User-specified exclusions
         if exclude_paths.iter().any(|ep| path.starts_with(ep)) {
             continue;
         }
 
-        // Exclude Tier 1 language environment paths (no double-counting)
+        // Layer 2: RPM-owned path exclusion
+        if let Some(state) = rpm_state {
+            if state.is_owned(std::path::Path::new(path)) {
+                continue;
+            }
+        }
+
+        // Layer 3: Tier 1 language environment exclusion
         if language_env_paths.iter().any(|lp| path.starts_with(lp)) {
             continue;
         }
@@ -480,7 +704,11 @@ fn walk_for_unmanaged(
             get_file_metadata(exec, path);
 
         let file_type = classify_file_type(exec, path);
-        let under_var = path.starts_with("/var/");
+
+        // Compute derived provenance signals
+        let mutable = install_date > 0 && last_modified > install_date;
+        let writable_mount = is_on_writable_mount(path, mounts);
+        let service_working_dir = is_under_service_workdir(path, service_workdirs);
 
         *total_size += size;
         items.push(UnmanagedFile {
@@ -493,18 +721,23 @@ fn walk_for_unmanaged(
                 uid,
                 gid,
                 permissions,
-                writable_mount: false, // Conservative default
+                mutable,
+                writable_mount,
+                service_working_dir,
             },
             include: true,
-            under_var,
+            under_var: false, // Not possible — /var is not a scan root
             ..Default::default()
         });
     }
 }
+```
 
+- [ ] **Step 7: Implement classify_file_type() and get_file_metadata()**
+
+```rust
 /// Classify a file's type by reading its magic bytes / shebang.
 fn classify_file_type(exec: &dyn Executor, path: &str) -> FileType {
-    // Use `file -b` for classification
     let result = exec.execute("file", &["-b", path]);
     match result {
         Ok(r) if r.exit_code == 0 => {
@@ -557,62 +790,28 @@ fn get_file_metadata(exec: &dyn Executor, path: &str) -> (u64, u64, u32, u32, St
 }
 ```
 
-- [ ] **Step 4: Wire scan_unmanaged_files into the inspector**
+- [ ] **Step 8: Run tests + lint**
 
-In the `NonRpmInspector::inspect()` method, after scanning language
-packages, conditionally scan for unmanaged files. The inspector needs
-a signal for whether `--include-unmanaged` was requested. Add a field
-to the inspector context or pass it via the snapshot's `meta` map.
-
-Option: store the flag in `InspectionSnapshot.meta` under key
-`"include_unmanaged"` (set by the CLI before calling the pipeline).
-In the inspector:
-
-```rust
-let include_unmanaged = ctx
-    .snapshot_meta
-    .as_ref()
-    .and_then(|m| m.get("include_unmanaged"))
-    .and_then(|v| v.as_bool())
-    .unwrap_or(false);
-
-if include_unmanaged {
-    let language_paths: Vec<String> = section
-        .items
-        .iter()
-        .filter(|i| is_language_env(i))
-        .map(|i| format!("/{}", i.path))
-        .collect();
-    let exclude_paths: Vec<String> = ctx
-        .snapshot_meta
-        .as_ref()
-        .and_then(|m| m.get("exclude_paths"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    // Return unmanaged section separately — caller stores on snapshot
-}
+Run:
 ```
-
-The exact wiring depends on how the inspector returns data. If the
-inspector only returns `NonRpmSoftwareSection`, add the unmanaged
-section to the snapshot in the pipeline orchestrator after the
-inspector runs.
-
-- [ ] **Step 5: Run tests**
-
-Run: `cargo test -p inspectah-collect`
+cargo test -p inspectah-collect
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass including new unmanaged scan tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```
-feat(collect): catalog unmanaged files from /opt, /srv, /usr/local, /var
+feat(collect): catalog unmanaged files from /opt, /srv, /usr/local
 
-Scan for files not owned by RPM or Tier 1 language packages.
-Classify file types (ELF, JAR, script, config, data, symlink),
-collect provenance signals (size, mtime, uid, gid, permissions),
-flag /var paths for bootc persistence warning. Respects
---exclude-path filters and Tier 1 exclusion to avoid double-counting.
+Scan for files not owned by RPM (via RpmState.owned_paths) or Tier 1
+language packages. Classify file types (ELF, JAR, script, config,
+data, symlink), collect raw provenance metadata (size, mtime, uid,
+gid, permissions) and three derived signals: mutability relative to
+system install date, writable-mount detection via /proc/mounts, and
+service WorkingDirectory= detection from systemd units. Respects
+--exclude-path filters. /var is not a scan root per spec.
 ```
 
 **Thorn checkpoint: review Tasks 1-3 before proceeding.**
@@ -626,7 +825,12 @@ flag /var paths for bootc persistence warning. Respects
 
 **Interfaces:**
 - Consumes: `UnmanagedFileSection` (from Task 3), `ScanArgs.include_unmanaged`, `assume_yes: bool`
-- Produces: Unmanaged files copied into the render directory under `unmanaged/`
+- Produces: Unmanaged files copied into the render directory under `unmanaged/` (bundled into the scan tarball)
+
+**Data flow:** Files are bundled at scan time because the tarball may be
+transferred to a different machine for refine — the original files
+won't be available later. The scan tarball is the single vehicle that
+carries payload files from collector to refine.
 
 - [ ] **Step 1: Add size prompt after unmanaged scan**
 
@@ -680,7 +884,7 @@ fn format_size(bytes: u64) -> String {
 fn describe_scan_roots(items: &[UnmanagedFile]) -> String {
     let mut roots: Vec<&str> = Vec::new();
     for item in items {
-        for root in &["/opt", "/srv", "/usr/local", "/var"] {
+        for root in &["/opt", "/srv", "/usr/local"] {
             if item.path.starts_with(root) && !roots.contains(root) {
                 roots.push(root);
             }
@@ -726,11 +930,15 @@ fn bundle_unmanaged_files(
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests + lint**
 
-Run: `cargo test -p inspectah-cli`
-Expected: all pass. Manual test: verify `--include-unmanaged` prompts
-and `--yes` suppresses.
+Run:
+```
+cargo test -p inspectah-cli
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -740,7 +948,7 @@ feat(cli): prompt and bundle unmanaged files at scan time
 Display file count and total size, prompt for confirmation before
 bundling. -y/--yes suppresses the prompt. Files copied into render
 directory under unmanaged/ preserving directory structure for
-tarball inclusion.
+tarball inclusion. Scan roots limited to /opt, /srv, /usr/local.
 ```
 
 ---
@@ -749,159 +957,20 @@ tarball inclusion.
 
 **Files:**
 - Modify: `crates/collect/src/inspectors/nonrpm.rs` (or new function in rpm inspector area)
+- Modify: `crates/core/src/types/rpm.rs`
 - Create: `crates/collect/tests/repoless_rpm_test.rs`
 
 **Interfaces:**
-- Consumes: `RpmSection.packages` with `source_repo == ""`, `Executor.execute()` for dnf cache listing
-- Produces: RPM entries annotated with `repoless_cached: bool`, cached RPM files bundled into render dir under `repoless-packages/`
+- Consumes: `RpmSection.packages`, `Executor.execute()` for dnf cache listing and `dnf repolist --enabled`
+- Produces: RPM entries annotated with `repoless_cached: bool`, `repoless_annotation: String`, `cache_path: Option<String>` on `PackageEntry`; cached RPM files bundled into render dir under `repoless-packages/`
 
-- [ ] **Step 1: Write failing test for dnf cache scan**
+**Detection contract:** A package is repo-less when EITHER:
+1. `source_repo` is empty (no repo recorded), OR
+2. `source_repo` points to a repo name not in the output of `dnf repolist --enabled`
 
-Create `crates/collect/tests/repoless_rpm_test.rs`:
+Both cases trigger the same scan/bundle flow.
 
-```rust
-#[test]
-fn repoless_rpm_found_in_cache() {
-    // MockExecutor with:
-    //   PackageEntry { name: "custom-tool", source_repo: "", arch: "x86_64",
-    //                  version: "1.2.3", release: "1.el9" }
-    //   dnf cache listing includes custom-tool-1.2.3-1.el9.x86_64.rpm
-    // Assert: RPM is flagged as repoless_cached = true.
-}
-
-#[test]
-fn repoless_rpm_not_in_cache() {
-    // Same PackageEntry but dnf cache listing is empty.
-    // Assert: RPM is flagged as repoless_cached = false.
-    // Assert: method annotation says "manual resolution needed".
-}
-
-#[test]
-fn rpm_with_source_repo_not_flagged() {
-    // PackageEntry with source_repo = "appstream".
-    // Assert: not treated as repo-less.
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cargo test -p inspectah-collect --test repoless_rpm_test`
-Expected: FAIL
-
-- [ ] **Step 3: Implement scan_dnf_cache_for_repoless()**
-
-In `crates/collect/src/inspectors/nonrpm.rs` (or a new module — the
-function operates on RPM data but is part of the non-RPM replication
-feature), add:
-
-```rust
-use inspectah_core::types::rpm::PackageEntry;
-
-/// Metadata for a repo-less RPM package.
-pub struct RepolessRpm {
-    /// NEVRA of the package
-    pub nevra: String,
-    /// Package name
-    pub name: String,
-    /// Package architecture
-    pub arch: String,
-    /// True if the RPM file was found in /var/cache/dnf/
-    pub cached: bool,
-    /// Filename of the cached RPM (if found)
-    pub cache_filename: Option<String>,
-    /// Full path to the cached RPM (if found)
-    pub cache_path: Option<String>,
-}
-
-/// Scan /var/cache/dnf/ for cached RPMs matching repo-less packages.
-pub fn scan_dnf_cache_for_repoless(
-    exec: &dyn Executor,
-    packages: &[PackageEntry],
-) -> Vec<RepolessRpm> {
-    let repoless: Vec<&PackageEntry> = packages
-        .iter()
-        .filter(|p| p.source_repo.is_empty())
-        .collect();
-
-    if repoless.is_empty() {
-        return Vec::new();
-    }
-
-    // List all .rpm files in the dnf cache
-    let cache_result = exec.execute(
-        "find",
-        &["/var/cache/dnf", "-name", "*.rpm", "-type", "f"],
-    );
-    let cache_files: Vec<String> = match cache_result {
-        Ok(r) if r.exit_code == 0 => {
-            r.stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
-        }
-        _ => Vec::new(),
-    };
-
-    repoless
-        .iter()
-        .map(|pkg| {
-            let nevra = format!(
-                "{}-{}-{}.{}",
-                pkg.name, pkg.version, pkg.release, pkg.arch
-            );
-            let expected_filename = format!("{nevra}.rpm");
-
-            // Check if cached RPM matches
-            let cache_match = cache_files.iter().find(|f| {
-                f.ends_with(&expected_filename)
-                    || f.contains(&format!("/{expected_filename}"))
-            });
-
-            RepolessRpm {
-                nevra: nevra.clone(),
-                name: pkg.name.clone(),
-                arch: pkg.arch.clone(),
-                cached: cache_match.is_some(),
-                cache_filename: cache_match.map(|f| {
-                    std::path::Path::new(f)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string()
-                }),
-                cache_path: cache_match.cloned(),
-            }
-        })
-        .collect()
-}
-```
-
-- [ ] **Step 4: Bundle cached RPMs into render directory**
-
-In the scan command (same area as Task 4's bundling), after the pipeline
-runs:
-
-```rust
-fn bundle_repoless_rpms(
-    repoless: &[RepolessRpm],
-    render_dir: &Path,
-) -> Result<()> {
-    let dest_dir = render_dir.join("repoless-packages");
-    for rpm in repoless {
-        if let Some(ref cache_path) = rpm.cache_path {
-            std::fs::create_dir_all(&dest_dir)
-                .context("failed to create repoless-packages dir")?;
-            let filename = rpm.cache_filename.as_deref().unwrap_or(&rpm.nevra);
-            let dest = dest_dir.join(filename);
-            std::fs::copy(cache_path, &dest)
-                .context(format!("failed to copy cached RPM {cache_path}"))?;
-        }
-    }
-    Ok(())
-}
-```
-
-- [ ] **Step 5: Store repoless metadata on snapshot**
-
-Add triage annotation metadata to the `PackageEntry` or snapshot `meta`
-so the refine UI can distinguish repo-less RPMs:
+- [ ] **Step 1: Add fields to PackageEntry**
 
 In `crates/core/src/types/rpm.rs`, add to `PackageEntry`:
 
@@ -913,39 +982,233 @@ In `crates/core/src/types/rpm.rs`, add to `PackageEntry`:
     /// True if cached RPM was found in /var/cache/dnf/
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub repoless_cached: bool,
+
+    /// Path to the cached RPM file in /var/cache/dnf/.
+    /// Survives serialization into the snapshot so the CLI bundler
+    /// can read it when creating the tarball. Consumed by the scan
+    /// command's bundle step (Task 4) to copy the file into
+    /// repoless-packages/ in the render directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
 ```
 
-Set these during the scan:
+- [ ] **Step 2: Write failing tests for repo-less detection**
+
+Create `crates/collect/tests/repoless_rpm_test.rs`:
 
 ```rust
-for rpm in &repoless_results {
-    if let Some(pkg) = packages.iter_mut().find(|p| {
-        p.name == rpm.name && p.arch == rpm.arch && p.source_repo.is_empty()
-    }) {
-        pkg.repoless_cached = rpm.cached;
-        pkg.repoless_annotation = if rpm.cached {
-            "No repo source — cached RPM bundled (pre-excluded, no GPG verification)".into()
-        } else {
-            "No repo source — manual resolution needed".into()
-        };
+#[test]
+fn repoless_rpm_found_in_cache() {
+    // MockExecutor with:
+    //   PackageEntry { name: "custom-tool", source_repo: "", arch: "x86_64",
+    //                  version: "1.2.3", release: "1.el9" }
+    //   dnf cache listing includes custom-tool-1.2.3-1.el9.x86_64.rpm
+    // Assert: repoless_cached == true.
+    // Assert: cache_path == Some("/var/cache/dnf/.../custom-tool-1.2.3-1.el9.x86_64.rpm").
+}
+
+#[test]
+fn repoless_rpm_not_in_cache() {
+    // Same PackageEntry but dnf cache listing is empty.
+    // Assert: repoless_cached == false.
+    // Assert: repoless_annotation contains "manual resolution needed".
+    // Assert: cache_path == None.
+}
+
+#[test]
+fn rpm_with_source_repo_not_flagged() {
+    // PackageEntry with source_repo = "appstream".
+    // dnf repolist --enabled includes "appstream".
+    // Assert: not treated as repo-less (no annotation, no cache_path).
+}
+
+#[test]
+fn rpm_with_disabled_repo_detected_as_repoless() {
+    // PackageEntry with source_repo = "internal-tools" (non-empty).
+    // dnf repolist --enabled does NOT include "internal-tools".
+    // Assert: treated as repo-less.
+    // Assert: repoless_annotation mentions disabled/removed repo.
+}
+
+#[test]
+fn cache_path_survives_json_roundtrip() {
+    // PackageEntry with cache_path = Some("/var/cache/dnf/.../foo.rpm").
+    // Serialize to JSON, deserialize back.
+    // Assert: cache_path is preserved.
+}
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `cargo test -p inspectah-collect --test repoless_rpm_test`
+Expected: FAIL
+
+- [ ] **Step 4: Implement get_enabled_repos()**
+
+```rust
+/// Fetch the list of enabled repo IDs from dnf.
+fn get_enabled_repos(exec: &dyn Executor) -> Vec<String> {
+    let result = exec.execute("dnf", &["repolist", "--enabled", "-q"]);
+    match result {
+        Ok(r) if r.exit_code == 0 => {
+            r.stdout
+                .lines()
+                .skip(1) // Skip header line
+                .filter_map(|line| {
+                    let id = line.split_whitespace().next()?;
+                    if id.is_empty() { None } else { Some(id.to_string()) }
+                })
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 5: Implement scan_dnf_cache_for_repoless()**
 
-Run: `cargo test -p inspectah-collect -p inspectah-core`
+```rust
+use inspectah_core::types::rpm::PackageEntry;
+
+/// Identify repo-less packages and scan /var/cache/dnf/ for cached RPMs.
+///
+/// A package is repo-less when:
+/// 1. source_repo is empty, OR
+/// 2. source_repo names a repo not in `dnf repolist --enabled`
+pub fn scan_dnf_cache_for_repoless(
+    exec: &dyn Executor,
+    packages: &mut [PackageEntry],
+) {
+    let enabled_repos = get_enabled_repos(exec);
+
+    // Identify which packages are repo-less
+    let repoless_indices: Vec<usize> = packages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            p.source_repo.is_empty()
+                || (!p.source_repo.is_empty()
+                    && !enabled_repos.iter().any(|r| r == &p.source_repo))
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    if repoless_indices.is_empty() {
+        return;
+    }
+
+    // List all .rpm files in the dnf cache
+    let cache_result = exec.execute(
+        "find",
+        &["/var/cache/dnf", "-name", "*.rpm", "-type", "f"],
+    );
+    let cache_files: Vec<String> = match cache_result {
+        Ok(r) if r.exit_code == 0 => {
+            r.stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+
+    for idx in repoless_indices {
+        let pkg = &mut packages[idx];
+        let nevra = format!(
+            "{}-{}-{}.{}",
+            pkg.name, pkg.version, pkg.release, pkg.arch
+        );
+        let expected_filename = format!("{nevra}.rpm");
+
+        let cache_match = cache_files.iter().find(|f| {
+            f.ends_with(&expected_filename)
+                || f.contains(&format!("/{expected_filename}"))
+        });
+
+        let is_disabled_repo = !pkg.source_repo.is_empty();
+        let reason = if is_disabled_repo {
+            format!(
+                "No repo source — repo '{}' not in enabled repos",
+                pkg.source_repo
+            )
+        } else {
+            "No repo source".to_string()
+        };
+
+        if let Some(path) = cache_match {
+            pkg.repoless_cached = true;
+            pkg.cache_path = Some(path.clone());
+            pkg.repoless_annotation = format!(
+                "{reason} — cached RPM bundled (pre-excluded, no GPG verification)"
+            );
+        } else {
+            pkg.repoless_cached = false;
+            pkg.cache_path = None;
+            pkg.repoless_annotation = format!(
+                "{reason} — manual resolution needed"
+            );
+        }
+    }
+}
+```
+
+- [ ] **Step 6: Bundle cached RPMs into render directory**
+
+In the scan command (same area as Task 4's bundling), after the
+pipeline runs:
+
+```rust
+fn bundle_repoless_rpms(
+    packages: &[PackageEntry],
+    render_dir: &Path,
+) -> Result<()> {
+    let dest_dir = render_dir.join("repoless-packages");
+    for pkg in packages {
+        if let Some(ref cache_path) = pkg.cache_path {
+            std::fs::create_dir_all(&dest_dir)
+                .context("failed to create repoless-packages dir")?;
+            let nevra = format!(
+                "{}-{}-{}.{}",
+                pkg.name, pkg.version, pkg.release, pkg.arch
+            );
+            let filename = format!("{nevra}.rpm");
+            let dest = dest_dir.join(&filename);
+            std::fs::copy(cache_path, &dest)
+                .context(format!("failed to copy cached RPM {cache_path}"))?;
+        }
+    }
+    Ok(())
+}
+```
+
+Note the data-flow boundary: `cache_path` is set by the collector on
+`PackageEntry`, serialized into the snapshot JSON, and consumed by the
+scan command's bundle step. After bundling, the RPM files live in
+`repoless-packages/` inside the tarball. At refine export time, the
+export function extracts them from the source tarball (see Task 9).
+
+- [ ] **Step 7: Run tests + lint**
+
+Run:
+```
+cargo test -p inspectah-collect -p inspectah-core
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```
 feat(collect): scan dnf cache for repo-less RPM packages
 
-For packages with no source_repo, check /var/cache/dnf/ for cached
-.rpm files. Found RPMs are bundled under repoless-packages/ in the
-tarball. Missing RPMs get "manual resolution needed" annotation.
-Triage annotation and repoless_cached fields added to PackageEntry.
+Detect packages with empty source_repo or source_repo pointing to
+a disabled/removed repo (not in `dnf repolist --enabled`). For
+each, check /var/cache/dnf/ for cached .rpm files. Found RPMs are
+bundled under repoless-packages/. Missing RPMs get "manual
+resolution needed" annotation. cache_path field on PackageEntry
+survives serialization for the bundler to consume.
 ```
 
 ---
@@ -973,7 +1236,7 @@ use std::collections::BTreeMap;
 /// Render Containerfile lines for unmanaged files.
 ///
 /// Groups files by parent directory for readability.
-/// Includes warning block per spec. /var paths get extra persistence note.
+/// Includes warning block per spec.
 pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let section = match &snap.unmanaged_files {
         Some(s) if !s.items.is_empty() => s,
@@ -1011,17 +1274,9 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     for (dir, files) in &groups {
-        // Check if all files in this group share the same parent —
-        // if so, use a single directory COPY
         let rel_dir = dir.trim_start_matches('/');
         if files.len() > 1 {
             // Directory-level COPY
-            let has_var = dir.starts_with("/var");
-            if has_var {
-                lines.push(format!(
-                    "# NOTE: /var is persistent — files under this path can drift from the image after boot."
-                ));
-            }
             lines.push(format!(
                 "COPY unmanaged/{rel_dir}/ /{rel_dir}/"
             ));
@@ -1029,11 +1284,6 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
             // Single file COPY
             for file in files {
                 let rel_path = file.path.trim_start_matches('/');
-                if file.under_var {
-                    lines.push(format!(
-                        "# NOTE: /var is persistent — this file can drift from the image after boot."
-                    ));
-                }
                 lines.push(format!(
                     "COPY unmanaged/{rel_path} {}",
                     file.path
@@ -1049,7 +1299,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
 mod tests {
     use super::*;
     use inspectah_core::types::nonrpm::{
-        FileType, ProvenanceSignals, UnmanagedFile, UnmanagedFileSection,
+        FileType, UnmanagedFile, UnmanagedFileSection,
     };
 
     fn test_snapshot_with_unmanaged(items: Vec<UnmanagedFile>) -> InspectionSnapshot {
@@ -1082,22 +1332,6 @@ mod tests {
     }
 
     #[test]
-    fn var_path_gets_persistence_note() {
-        let snap = test_snapshot_with_unmanaged(vec![
-            UnmanagedFile {
-                path: "/var/lib/myapp/data.db".into(),
-                size: 512,
-                file_type: FileType::DataFile,
-                include: true,
-                under_var: true,
-                ..Default::default()
-            },
-        ]);
-        let lines = unmanaged_file_lines(&snap);
-        assert!(lines.iter().any(|l| l.contains("/var is persistent")));
-    }
-
-    #[test]
     fn excluded_files_not_rendered() {
         let snap = test_snapshot_with_unmanaged(vec![
             UnmanagedFile {
@@ -1125,7 +1359,6 @@ mod tests {
             },
         ]);
         let lines = unmanaged_file_lines(&snap);
-        // Should use directory-level COPY for /opt/splunk/bin/
         assert!(lines.iter().any(|l| l.contains("COPY unmanaged/opt/splunk/bin/ /opt/splunk/bin/")));
     }
 }
@@ -1150,9 +1383,14 @@ after `non_rpm_section_lines()`:
 lines.extend(unmanaged::unmanaged_file_lines(snap));
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests + lint**
 
-Run: `cargo test -p inspectah-pipeline`
+Run:
+```
+cargo test -p inspectah-pipeline
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1161,11 +1399,8 @@ Expected: all pass.
 feat(pipeline): add unmanaged file Containerfile rendering
 
 Render COPY directives for unmanaged files with warning block.
-Files grouped by parent directory. /var paths get persistence
-warning per bootc guidance. Excluded files are not rendered.
+Files grouped by parent directory. Excluded files are not rendered.
 ```
-
-**Thorn checkpoint: review Tasks 4-6 before proceeding.**
 
 ---
 
@@ -1201,7 +1436,7 @@ pub fn repoless_rpm_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let repoless: Vec<_> = rpm_section
         .packages
         .iter()
-        .filter(|p| p.source_repo.is_empty() && !p.repoless_annotation.is_empty())
+        .filter(|p| !p.repoless_annotation.is_empty())
         .collect();
 
     if repoless.is_empty() {
@@ -1361,6 +1596,25 @@ mod tests {
         let lines = repoless_rpm_lines(&snap);
         assert!(lines.is_empty());
     }
+
+    #[test]
+    fn disabled_repo_package_renders_as_repoless() {
+        let snap = test_snapshot_with_repoless(vec![PackageEntry {
+            name: "internal-tool".into(),
+            version: "2.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            source_repo: "internal-tools".into(), // non-empty but disabled
+            include: false,
+            repoless_cached: true,
+            repoless_annotation:
+                "No repo source — repo 'internal-tools' not in enabled repos — cached RPM bundled"
+                    .into(),
+            ..Default::default()
+        }]);
+        let lines = repoless_rpm_lines(&snap);
+        assert!(lines.iter().any(|l| l.contains("Repo-less package")));
+    }
 }
 ```
 
@@ -1381,9 +1635,14 @@ In `render_containerfile_inner()`, add after the unmanaged section:
 lines.extend(repoless::repoless_rpm_lines(snap));
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests + lint**
 
-Run: `cargo test -p inspectah-pipeline`
+Run:
+```
+cargo test -p inspectah-pipeline
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1394,178 +1653,21 @@ feat(pipeline): add repo-less RPM Containerfile rendering
 Render dnf localinstall directives for cached repo-less RPMs.
 Pre-excluded packages render as commented-out with provenance
 warnings. Missing RPMs get MANUAL comment blocks with fallback
-dnf install suggestion. Uses dnf localinstall (not rpm -i) to
-preserve dependency resolution.
+dnf install suggestion. Handles both empty source_repo and
+disabled-repo cases.
 ```
+
+**Thorn checkpoint: review Tasks 4-7 before proceeding.**
 
 ---
 
-### Task 8: Export Contract — unmanaged/ and repoless-packages/ Roots
-
-**Files:**
-- Modify: `crates/refine/src/session.rs` (export allowlist + materialization)
-- Modify: `crates/refine/tests/export_contract_test.rs`
-
-**Interfaces:**
-- Consumes: `InspectionSnapshot.unmanaged_files`, `RepolessRpm` data
-- Produces: `unmanaged/` and `repoless-packages/` directories in export tarball
-
-- [ ] **Step 1: Add roots to export allowlist**
-
-In `crates/refine/src/session.rs`, find the `allowed_top_level` HashSet
-(currently contains `"config"`, `"drop-ins"`, `"flatpak"`, etc.). Add:
-
-```rust
-"unmanaged",
-"repoless-packages",
-```
-
-Note: Plan 1 adds `"language-packages"` — these entries are additive.
-
-- [ ] **Step 2: Add unmanaged file materialization to export**
-
-In the export function (near the language-packages materialization from
-Plan 1), add:
-
-```rust
-write_unmanaged_files(snap, out)?;
-```
-
-Implement:
-
-```rust
-fn write_unmanaged_files(
-    snap: &InspectionSnapshot,
-    out: &Path,
-) -> Result<(), RefineError> {
-    let section = match &snap.unmanaged_files {
-        Some(s) => s,
-        None => return Ok(()),
-    };
-
-    for file in &section.items {
-        if !file.include {
-            continue;
-        }
-        let rel_path = file.path.trim_start_matches('/');
-        let dest = out.join("unmanaged").join(rel_path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| RefineError::ExportFailed(
-                    format!("mkdir {}: {e}", parent.display()),
-                ))?;
-        }
-        // The actual file content was bundled into the tarball at scan time.
-        // During export from refine, we copy from the loaded tarball's
-        // unmanaged/ directory. The file should already exist in the
-        // session's working directory if the tarball was extracted.
-        let source = out.join("unmanaged").join(rel_path);
-        if !source.exists() {
-            // File was in the original tarball but may need re-extraction.
-            // Log a warning rather than failing — the file is only available
-            // if the original tarball's unmanaged/ was preserved.
-            continue;
-        }
-    }
-    Ok(())
-}
-```
-
-Note: The unmanaged files are bundled at scan time into the tarball. At
-refine export time, the tarball has already been extracted, so the files
-exist under `unmanaged/` in the working directory. The allowlist ensures
-they survive the cleanup pass. Files with `include: false` are removed
-by the cleanup pass (they're not in the allowlist and we don't
-re-materialize them).
-
-The actual implementation may need to selectively remove excluded files:
-
-```rust
-fn prune_excluded_unmanaged(
-    snap: &InspectionSnapshot,
-    out: &Path,
-) -> Result<(), RefineError> {
-    let section = match &snap.unmanaged_files {
-        Some(s) => s,
-        None => return Ok(()),
-    };
-
-    let unmanaged_dir = out.join("unmanaged");
-    if !unmanaged_dir.exists() {
-        return Ok(());
-    }
-
-    for file in &section.items {
-        if !file.include {
-            let rel_path = file.path.trim_start_matches('/');
-            let file_path = unmanaged_dir.join(rel_path);
-            if file_path.exists() {
-                std::fs::remove_file(&file_path).ok();
-            }
-        }
-    }
-
-    // Clean up empty directories
-    remove_empty_dirs(&unmanaged_dir).ok();
-    Ok(())
-}
-```
-
-- [ ] **Step 3: Write export contract tests**
-
-In `crates/refine/tests/export_contract_test.rs`, add:
-
-```rust
-#[test]
-fn export_allowlist_includes_unmanaged_root() {
-    // Build a snapshot with unmanaged files.
-    // Create unmanaged/opt/app/server in the export dir.
-    // Run the export cleanup pass.
-    // Assert: unmanaged/ directory survives cleanup.
-}
-
-#[test]
-fn export_prunes_excluded_unmanaged_files() {
-    // Build a snapshot with two unmanaged files, one include:false.
-    // Create both in unmanaged/ dir.
-    // Run export.
-    // Assert: included file present, excluded file removed.
-}
-
-#[test]
-fn export_allowlist_includes_repoless_packages_root() {
-    // Build a snapshot with repo-less RPM data.
-    // Create repoless-packages/custom-tool-1.2.3.x86_64.rpm in export dir.
-    // Run export cleanup.
-    // Assert: repoless-packages/ survives cleanup.
-}
-```
-
-- [ ] **Step 4: Run tests**
-
-Run: `cargo test -p inspectah-refine`
-Expected: all pass.
-
-- [ ] **Step 5: Commit**
-
-```
-feat(refine): add unmanaged/ and repoless-packages/ export roots
-
-Extend export allowlist with unmanaged and repoless-packages
-directories. Excluded unmanaged files are pruned from the export.
-Export contract tests verify presence and exclusion rules for
-both roots.
-```
-
----
-
-### Task 9: Refine Classification — Pre-exclude Repo-less RPMs
+### Task 8: Refine Classification — Pre-exclude Repo-less RPMs
 
 **Files:**
 - Modify: `crates/refine/src/classify.rs`
 
 **Interfaces:**
-- Consumes: `PackageEntry.source_repo`, `PackageEntry.repoless_cached`
+- Consumes: `PackageEntry.repoless_annotation`
 - Produces: `include: false` on repo-less RPMs (provenance trust gate)
 
 - [ ] **Step 1: Write failing test**
@@ -1579,10 +1681,13 @@ fn repoless_rpms_pre_excluded_by_classifier() {
     // Snapshot with:
     //   PackageEntry { name: "httpd", source_repo: "appstream", include: true }
     //   PackageEntry { name: "custom-tool", source_repo: "", repoless_cached: true,
-    //                  include: true }
+    //                  repoless_annotation: "...", include: true }
+    //   PackageEntry { name: "internal-tool", source_repo: "internal-tools",
+    //                  repoless_annotation: "...", include: true }
     // Run classify_packages.
     // Assert: httpd.include == true (normal package).
-    // Assert: custom-tool.include == false (pre-excluded by provenance gate).
+    // Assert: custom-tool.include == false (pre-excluded, empty repo).
+    // Assert: internal-tool.include == false (pre-excluded, disabled repo).
 }
 ```
 
@@ -1597,20 +1702,23 @@ the relevant classification function), add a rule:
 
 ```rust
 // Repo-less RPMs are pre-excluded — user must explicitly include.
-// This is the provenance trust gate per spec.
+// This is the provenance trust gate per spec. Applies to both
+// empty source_repo and packages from disabled/removed repos.
 for pkg in &mut packages {
-    if pkg.source_repo.is_empty() && !pkg.repoless_annotation.is_empty() {
+    if !pkg.repoless_annotation.is_empty() {
         pkg.include = false;
     }
 }
 ```
 
-This runs after normal classification so it overrides the default
-`include: true` on these packages.
+- [ ] **Step 4: Run tests + lint**
 
-- [ ] **Step 4: Run tests**
-
-Run: `cargo test -p inspectah-refine`
+Run:
+```
+cargo test -p inspectah-refine
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1618,13 +1726,556 @@ Expected: all pass.
 ```
 feat(refine): pre-exclude repo-less RPMs by default
 
-Repo-less packages (empty source_repo with repoless annotation)
-are set to include: false during classification. This is the
-provenance trust gate — users must explicitly include packages
-with no upstream repo verification.
+Repo-less packages (those with a repoless_annotation) are set to
+include: false during classification. This is the provenance trust
+gate — users must explicitly include packages with no upstream repo
+verification. Covers both empty source_repo and disabled-repo cases.
 ```
 
-**Thorn checkpoint: review Tasks 7-9 before proceeding to Plan 3.**
+---
+
+### Task 9: Export Contract — Source Tarball Extraction + Allowlist
+
+**Files:**
+- Modify: `crates/refine/src/session.rs` (export allowlist + source tarball extraction)
+
+**Interfaces:**
+- Consumes: `InspectionSnapshot.unmanaged_files`, `PackageEntry.repoless_cached`, source tarball at `self.tarball_path`
+- Produces: `unmanaged/` and `repoless-packages/` directories in export tarball
+
+**Data flow — this is the critical path the original plan left underspecified:**
+
+```
+Collector (scan time)
+  → bundles payload files into scan tarball
+    → unmanaged/opt/splunk/bin/splunkd
+    → repoless-packages/custom-tool-1.2.3.x86_64.rpm
+
+RefineSession (refine time)
+  → self.tarball_path points to the scan tarball on disk
+  → snapshot JSON has metadata (paths, provenance, include flags)
+  → user toggles include/exclude in the refine UI
+
+Export (render_refine_export)
+  → creates a fresh tempdir
+  → materializes config tree, Containerfile, etc. (existing flow)
+  → NEW: extracts payload files from source tarball into tempdir
+    → reads unmanaged/ and repoless-packages/ entries from source tarball
+    → only extracts files where include == true (after user toggling)
+  → allowlist permits unmanaged/ and repoless-packages/ to survive cleanup
+  → creates the export tarball from the tempdir
+```
+
+The source tarball is the single vehicle. Payload files do NOT appear
+magically in the export tempdir — they must be explicitly extracted
+from the source tarball. `RefineSession.tarball_path` provides the
+path to read from.
+
+- [ ] **Step 1: Add roots to export allowlist**
+
+In `crates/refine/src/session.rs`, find the `allowed_top_level` HashSet.
+Add:
+
+```rust
+"unmanaged",
+"repoless-packages",
+```
+
+Note: Plan 1 adds `"language-packages"` — these entries are additive.
+
+- [ ] **Step 2: Add source tarball payload extraction to render_refine_export**
+
+Extend `render_refine_export()` to accept the source tarball path and
+extract payload directories. The function signature gains an optional
+parameter:
+
+```rust
+pub fn render_refine_export(
+    snap: &InspectionSnapshot,
+    tarball_path: &Path,
+    original_includes: Option<&std::collections::HashMap<String, bool>>,
+    render_ctx: Option<&RenderContext>,
+    source_tarball: Option<&Path>,  // NEW — path to the scan tarball
+    upload_dir: Option<&Path>,      // NEW — path to uploaded RPMs dir
+) -> Result<(), RefineError> {
+```
+
+After materializing config tree and before the allowlist cleanup, add:
+
+```rust
+// Extract payload files from source tarball for Tier 2 and Tier 3.
+// These files were bundled at scan time and must be re-extracted
+// into the export tempdir for the export tarball to include them.
+if let Some(source) = source_tarball {
+    extract_payload_dirs_from_tarball(source, snap, out)?;
+}
+
+// Copy uploaded RPMs (from refine UI upload endpoint) alongside
+// cached RPMs from the source tarball.
+if let Some(uploads) = upload_dir {
+    copy_uploaded_rpms(uploads, out)?;
+}
+```
+
+Implement:
+
+```rust
+/// Extract unmanaged/ and repoless-packages/ from the source tarball
+/// into the export directory, filtering by include flags.
+fn extract_payload_dirs_from_tarball(
+    source_tarball: &Path,
+    snap: &InspectionSnapshot,
+    out: &Path,
+) -> Result<(), RefineError> {
+    let file = std::fs::File::open(source_tarball)
+        .map_err(|e| RefineError::TarballError(format!("open source tarball: {e}")))?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+
+    // Build set of included unmanaged paths for filtering
+    let included_unmanaged: std::collections::HashSet<String> = snap
+        .unmanaged_files
+        .as_ref()
+        .map(|s| {
+            s.items
+                .iter()
+                .filter(|f| f.include)
+                .map(|f| f.path.trim_start_matches('/').to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Build set of included repoless RPM NEVRAs
+    let included_repoless: std::collections::HashSet<String> = snap
+        .rpm
+        .as_ref()
+        .map(|r| {
+            r.packages
+                .iter()
+                .filter(|p| p.include && p.repoless_cached)
+                .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for entry in archive.entries().map_err(|e| RefineError::TarballError(e.to_string()))? {
+        let mut entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let path = entry.path().map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let path_str = path.to_string_lossy();
+
+        // Strip the top-level directory prefix from the tarball entry
+        let rel = path_str
+            .find('/')
+            .map(|i| &path_str[i + 1..])
+            .unwrap_or(&path_str);
+
+        if rel.starts_with("unmanaged/") {
+            let file_rel = rel.strip_prefix("unmanaged/").unwrap_or("");
+            if included_unmanaged.contains(file_rel) {
+                let dest = out.join(rel);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                }
+                let mut outfile = std::fs::File::create(&dest)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                std::io::copy(&mut entry, &mut outfile)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
+        } else if rel.starts_with("repoless-packages/") {
+            let filename = rel.strip_prefix("repoless-packages/").unwrap_or("");
+            if included_repoless.contains(filename) {
+                let dest = out.join(rel);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                }
+                let mut outfile = std::fs::File::create(&dest)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                std::io::copy(&mut entry, &mut outfile)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy uploaded RPMs from the upload staging directory into
+/// repoless-packages/ in the export directory.
+fn copy_uploaded_rpms(upload_dir: &Path, out: &Path) -> Result<(), RefineError> {
+    if !upload_dir.exists() {
+        return Ok(());
+    }
+    let dest_dir = out.join("repoless-packages");
+    for entry in std::fs::read_dir(upload_dir)
+        .map_err(|e| RefineError::TarballError(e.to_string()))?
+    {
+        let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().ends_with(".rpm") {
+            std::fs::create_dir_all(&dest_dir)
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            std::fs::copy(entry.path(), dest_dir.join(&name))
+                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+```
+
+- [ ] **Step 3: Update export_tarball() to pass source tarball path**
+
+In `RefineSession::export_tarball()`, pass `self.tarball_path` and
+`self.upload_dir` (new field, see Task 11) to `render_refine_export()`:
+
+```rust
+pub fn export_tarball(&self, path: &Path, expected_generation: u64) -> Result<(), RefineError> {
+    // ... existing generation check ...
+    render_refine_export(
+        &projected,
+        path,
+        Some(&orig_inc),
+        self.cached_render_context.as_ref(),
+        self.tarball_path.as_deref(),  // source tarball for payload extraction
+        self.upload_dir.as_deref(),    // uploaded RPMs directory
+    )
+}
+```
+
+- [ ] **Step 4: Run tests + lint**
+
+Run:
+```
+cargo test -p inspectah-refine
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```
+feat(refine): extract payload files from source tarball during export
+
+Export now extracts unmanaged/ and repoless-packages/ entries from
+the source scan tarball, filtering by include flags. Only included
+files appear in the export tarball. Uploaded RPMs from the refine
+UI are merged into repoless-packages/ alongside cached RPMs.
+Allowlist extended with both new roots.
+```
+
+---
+
+### Task 10: Preview/Export Parity Tests
+
+**Files:**
+- Create: `crates/refine/tests/export_parity_test.rs`
+
+**Interfaces:**
+- Consumes: Containerfile rendering output, export tarball contents
+- Produces: Tests that verify every `COPY unmanaged/...` and `COPY repoless-packages/...` path in the generated Containerfile has a corresponding file in the export tarball
+
+- [ ] **Step 1: Write parity test for unmanaged files**
+
+```rust
+#[test]
+fn containerfile_unmanaged_copy_paths_match_export_layout() {
+    // Build a snapshot with unmanaged files (include: true).
+    // Create a source tarball with those files under unmanaged/.
+    // Render Containerfile lines.
+    // Run render_refine_export with the source tarball.
+    // Extract all COPY source paths from the Containerfile that
+    // start with "unmanaged/".
+    // Assert: every COPY source path exists in the export tarball.
+}
+```
+
+- [ ] **Step 2: Write parity test for repoless RPMs**
+
+```rust
+#[test]
+fn containerfile_repoless_copy_paths_match_export_layout() {
+    // Build a snapshot with a repoless RPM (include: true, cached: true).
+    // Create a source tarball with the RPM under repoless-packages/.
+    // Render Containerfile lines.
+    // Run render_refine_export with the source tarball.
+    // Extract all COPY source paths that start with "repoless-packages/".
+    // Assert: every COPY source path exists in the export tarball.
+}
+```
+
+- [ ] **Step 3: Write parity test for excluded items**
+
+```rust
+#[test]
+fn excluded_items_absent_from_both_containerfile_and_export() {
+    // Build a snapshot with an unmanaged file (include: false) and
+    // a repoless RPM (include: false).
+    // Render Containerfile lines.
+    // Run export.
+    // Assert: no COPY lines reference these items.
+    // Assert: items are not present in the export directory.
+}
+```
+
+- [ ] **Step 4: Run tests + lint**
+
+Run:
+```
+cargo test -p inspectah-refine --test export_parity_test
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```
+test(refine): add preview/export parity tests for Tier 2 and Tier 3
+
+Verify that Containerfile COPY source paths for unmanaged/ and
+repoless-packages/ match actual files in the export tarball.
+Verify excluded items appear in neither the Containerfile nor
+the export.
+```
+
+---
+
+### Task 11: RPM Upload API Endpoint
+
+**Files:**
+- Create: `crates/refine-web/src/upload.rs`
+- Modify: `crates/refine-web/src/lib.rs` (add route)
+- Modify: `crates/refine/src/session.rs` (add `upload_dir` field)
+
+**Interfaces:**
+- Consumes: multipart/form-data RPM file upload from the refine UI
+- Produces: RPM files staged in a session-specific temp directory; export reads from this directory alongside the source tarball
+
+**Data flow:**
+
+```
+Refine UI (Plan 3)
+  → POST /api/upload-rpm with .rpm file
+  → Backend stores file in session-specific upload_dir (tempdir)
+  → RefineSession.upload_dir tracks the staging directory
+  → Export reads from both:
+    1. Source tarball (cached RPMs from scan time)
+    2. upload_dir (user-uploaded RPMs from refine UI)
+  → Both sources merge into repoless-packages/ in the export tarball
+```
+
+- [ ] **Step 1: Add upload_dir field to RefineSession**
+
+In `crates/refine/src/session.rs`, add to `RefineSession`:
+
+```rust
+    /// Directory for user-uploaded RPM files (from refine UI).
+    /// Created on first upload. Export reads from here alongside
+    /// the source tarball's repoless-packages/.
+    upload_dir: Option<PathBuf>,
+```
+
+Add a method:
+
+```rust
+/// Ensure the upload directory exists and return its path.
+pub fn ensure_upload_dir(&mut self) -> Result<&Path, RefineError> {
+    if self.upload_dir.is_none() {
+        let dir = tempfile::tempdir()
+            .map_err(|e| RefineError::TarballError(format!("create upload dir: {e}")))?;
+        self.upload_dir = Some(dir.into_path());
+    }
+    Ok(self.upload_dir.as_deref().unwrap())
+}
+
+pub fn upload_dir(&self) -> Option<&Path> {
+    self.upload_dir.as_deref()
+}
+```
+
+- [ ] **Step 2: Create upload handler**
+
+Create `crates/refine-web/src/upload.rs`:
+
+```rust
+use axum::extract::{Multipart, State};
+use axum::response::Json;
+use crate::AppState;
+use crate::AppError;
+
+/// Accept an uploaded RPM file and stage it for export.
+///
+/// The uploaded file is stored in the session's upload directory.
+/// Export merges these files into repoless-packages/ alongside
+/// cached RPMs from the source tarball.
+pub async fn upload_rpm(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut uploaded_count = 0u32;
+
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| AppError(inspectah_refine::types::RefineError::BadRequest(
+            format!("multipart error: {e}")
+        )))?
+    {
+        let filename = field
+            .file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown.rpm".to_string());
+
+        if !filename.ends_with(".rpm") {
+            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                format!("only .rpm files accepted, got: {filename}")
+            )));
+        }
+
+        let data = field.bytes().await
+            .map_err(|e| AppError(inspectah_refine::types::RefineError::BadRequest(
+                format!("failed to read upload: {e}")
+            )))?;
+
+        let mut session = state.session.lock().unwrap();
+        let upload_dir = session.ensure_upload_dir()
+            .map_err(AppError)?;
+        let dest = upload_dir.join(&filename);
+        std::fs::write(&dest, &data)
+            .map_err(|e| AppError(inspectah_refine::types::RefineError::TarballError(
+                format!("write uploaded RPM: {e}")
+            )))?;
+
+        uploaded_count += 1;
+    }
+
+    Ok(Json(serde_json::json!({
+        "uploaded": uploaded_count,
+        "status": "staged"
+    })))
+}
+```
+
+- [ ] **Step 3: Add route to router**
+
+In `crates/refine-web/src/lib.rs`, add the route:
+
+```rust
+.route("/api/upload-rpm", post(upload::upload_rpm))
+```
+
+Add `pub mod upload;` to the module declarations.
+
+- [ ] **Step 4: Run tests + lint**
+
+Run:
+```
+cargo test -p inspectah-refine-web
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```
+feat(refine-web): add RPM upload endpoint for repo-less packages
+
+POST /api/upload-rpm accepts multipart .rpm file uploads and
+stages them in a session-specific temp directory. Export reads
+from both the source tarball (cached RPMs) and the upload
+directory (user-provided RPMs), merging both into
+repoless-packages/ in the export tarball.
+```
+
+---
+
+### Task 12: Docs Update + Export Contract Tests
+
+**Files:**
+- Modify: `docs/reference/output-artifacts.md`
+- Modify or create: `crates/refine/tests/export_contract_test.rs`
+
+**Interfaces:**
+- This is the final task — no downstream dependencies within this plan.
+
+- [ ] **Step 1: Update output artifacts docs**
+
+In `docs/reference/output-artifacts.md`, add `unmanaged/` and
+`repoless-packages/` to the artifact root table:
+
+| Root | Purpose | Gate |
+|------|---------|------|
+| `unmanaged/` | Copied unmanaged files, directory structure preserved | `--include-unmanaged` |
+| `repoless-packages/` | Cached and uploaded RPM files for repo-less packages | Automatic |
+
+- [ ] **Step 2: Write export contract tests**
+
+In `crates/refine/tests/export_contract_test.rs`, add:
+
+```rust
+#[test]
+fn export_allowlist_includes_unmanaged_root() {
+    // Build a snapshot with unmanaged files.
+    // Create a source tarball with files under unmanaged/.
+    // Run render_refine_export with source tarball.
+    // Assert: unmanaged/ directory present in output.
+}
+
+#[test]
+fn export_prunes_excluded_unmanaged_files() {
+    // Build a snapshot with two unmanaged files, one include:false.
+    // Create source tarball with both.
+    // Run export.
+    // Assert: included file present, excluded file absent.
+}
+
+#[test]
+fn export_allowlist_includes_repoless_packages_root() {
+    // Build a snapshot with repo-less RPM data (include: true).
+    // Create source tarball with RPM under repoless-packages/.
+    // Run export.
+    // Assert: repoless-packages/ present in output.
+}
+
+#[test]
+fn export_includes_uploaded_rpms() {
+    // Create upload_dir with an uploaded RPM.
+    // Run export with upload_dir.
+    // Assert: uploaded RPM appears in repoless-packages/ output.
+}
+
+#[test]
+fn export_merges_cached_and_uploaded_rpms() {
+    // Source tarball has cached-tool.rpm under repoless-packages/.
+    // Upload dir has uploaded-tool.rpm.
+    // Run export.
+    // Assert: both RPMs present in repoless-packages/ output.
+}
+```
+
+- [ ] **Step 3: Run full test suite + lint**
+
+Run:
+```
+cargo test
+cargo clippy -- -W clippy::all
+cargo fmt --check
+```
+Expected: all tests pass. Some snapshot tests may need updating due to
+new Containerfile sections — update insta snapshots with
+`cargo insta review`.
+
+- [ ] **Step 4: Commit**
+
+```
+docs(reference): document unmanaged/ and repoless-packages/ export roots
+
+Add new artifact roots to output-artifacts.md. Add export contract
+tests verifying payload extraction from source tarball, exclusion
+pruning, uploaded RPM handling, and cached+uploaded RPM merging.
+```
+
+**Thorn checkpoint: review Tasks 8-12 before proceeding to Plan 3.**
 
 ---
 
@@ -1638,12 +2289,18 @@ Task 2 (CLI flags) ──┘                                       ├──→ 
                      ┌──→ Task 5 (repoless scan) ────────────┤
                      │                                       ├──→ Task 7 (repoless render)
                      │                                       │
-                     └──→ Task 8 (export contract) ──────────┘
+                     │                                Task 8 (classify)
+                     │                                       │
+                     └──→ Task 9 (export contract) ──────────┤
                                                              │
-                                                     Task 9 (classify)
+                                                     Task 10 (parity tests)
+                                                             │
+                                                     Task 11 (upload endpoint)
+                                                             │
+                                                     Task 12 (docs + final tests)
 ```
 
-Tasks 1-2 can run in parallel. Tasks 3-5 depend on Task 1. Tasks 6-7 depend on Tasks 3-5. Task 8 depends on Tasks 6-7. Task 9 depends on Task 5.
+Tasks 1-2 can run in parallel. Tasks 3-5 depend on Task 1. Tasks 6-7 depend on Tasks 3-5. Task 8 depends on Task 5. Task 9 depends on Tasks 6-7. Tasks 10-12 depend on Task 9.
 
 ## Shared Contracts Consumed from Plan 1
 
