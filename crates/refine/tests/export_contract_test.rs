@@ -58,6 +58,38 @@ fn test_snapshot() -> InspectionSnapshot {
     snap
 }
 
+/// Read a single file's content from a tarball, returning None if not found.
+/// The tarball prefix directory is stripped (same as `tarball_file_set`).
+fn tarball_read_file(tarball_path: &std::path::Path, target: &str) -> Option<String> {
+    let file = std::fs::File::open(tarball_path).unwrap();
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+
+    let stem = tarball_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = stem
+        .strip_suffix(".tar.gz")
+        .or_else(|| stem.strip_suffix(".tgz"))
+        .unwrap_or(&stem);
+    let prefix_slash = format!("{prefix}/");
+
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        if entry.header().entry_type() == tar::EntryType::Regular {
+            let raw = entry.path().unwrap().to_string_lossy().to_string();
+            let stripped = raw.strip_prefix(&prefix_slash).unwrap_or(&raw).to_string();
+            if stripped == target {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut entry, &mut buf).unwrap();
+                return Some(buf);
+            }
+        }
+    }
+    None
+}
+
 /// Collect all file entries from a tarball as a sorted set of paths.
 /// Directories are excluded — only regular file paths.
 /// The tarball prefix directory (derived from the archive filename stem)
@@ -693,5 +725,196 @@ fn export_excludes_language_packages_when_none_included() {
     assert!(
         !has_lang_pkg,
         "tarball must not contain language-packages/ when no items are included, got: {actual:?}"
+    );
+}
+
+#[test]
+fn export_redacts_manifest_files_when_snapshot_redacted() {
+    let mut snap = test_snapshot();
+    let mut manifests = HashMap::new();
+    manifests.insert(
+        "requirements.txt".to_string(),
+        "--index-url https://token:s3cret@private.pypi.org/simple/\nflask==2.3.3\n".to_string(),
+    );
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/venv".into(),
+            name: "venv".into(),
+            method: "pip".into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    // test_snapshot() already sets FullyRedacted — confirm it's active.
+    assert!(
+        snap.redaction_state.is_some(),
+        "fixture must have redaction_state set"
+    );
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-manifest-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let hash = env_hash("/opt/venv");
+    let req_path = format!("language-packages/pip/{hash}/requirements.txt");
+    let content =
+        tarball_read_file(&tarball_path, &req_path).expect("requirements.txt must exist in export");
+
+    // Auth token must be scrubbed.
+    assert!(
+        !content.contains("s3cret"),
+        "auth token must be scrubbed from requirements.txt, got:\n{content}"
+    );
+    assert!(
+        content.contains("REDACTED"),
+        "scrubbed URL must contain REDACTED placeholder, got:\n{content}"
+    );
+    // Non-secret lines must be preserved.
+    assert!(
+        content.contains("flask==2.3.3"),
+        "package lines must be preserved, got:\n{content}"
+    );
+}
+
+#[test]
+fn export_preserves_manifest_files_when_unredacted() {
+    let mut snap = test_snapshot();
+    // Clear redaction state to simulate an unredacted snapshot.
+    snap.redaction_state = None;
+
+    let raw_content =
+        "--index-url https://token:s3cret@private.pypi.org/simple/\nflask==2.3.3\n".to_string();
+    let mut manifests = HashMap::new();
+    manifests.insert("requirements.txt".to_string(), raw_content.clone());
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/venv".into(),
+            name: "venv".into(),
+            method: "pip".into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("no-redact-manifest-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let hash = env_hash("/opt/venv");
+    let req_path = format!("language-packages/pip/{hash}/requirements.txt");
+    let content =
+        tarball_read_file(&tarball_path, &req_path).expect("requirements.txt must exist in export");
+
+    // Content must be verbatim — no scrubbing.
+    assert_eq!(
+        content, raw_content,
+        "unredacted export must preserve manifest content verbatim"
+    );
+}
+
+#[test]
+fn export_redacts_package_json_registry_auth() {
+    let mut snap = test_snapshot();
+    let raw = r#"{
+  "name": "myapp",
+  "dependencies": {},
+  "publishConfig": {
+    "registry": "https://deploy:tok3n@npm.example.com/repo/"
+  }
+}"#
+    .to_string();
+    let mut manifests = HashMap::new();
+    manifests.insert("package.json".to_string(), raw);
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/myapp".into(),
+            name: "myapp".into(),
+            method: "npm lockfile".into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-npm-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let hash = env_hash("/opt/myapp");
+    let pkg_path = format!("language-packages/npm/{hash}/package.json");
+    let content =
+        tarball_read_file(&tarball_path, &pkg_path).expect("package.json must exist in export");
+
+    assert!(
+        !content.contains("tok3n"),
+        "auth token must be scrubbed from package.json, got:\n{content}"
+    );
+    assert!(
+        content.contains("REDACTED@npm.example.com"),
+        "scrubbed URL must contain REDACTED@host, got:\n{content}"
+    );
+}
+
+#[test]
+fn export_redacts_gemfile_source_auth() {
+    let mut snap = test_snapshot();
+    let raw =
+        "source \"https://user:p4ss@gems.example.com\"\n\ngem 'rails', '~> 7.0'\n".to_string();
+    let mut manifests = HashMap::new();
+    manifests.insert("Gemfile".to_string(), raw);
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/railsapp".into(),
+            name: "railsapp".into(),
+            method: "gem lockfile".into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-gem-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let hash = env_hash("/opt/railsapp");
+    let gemfile_path = format!("language-packages/gem/{hash}/Gemfile");
+    let content =
+        tarball_read_file(&tarball_path, &gemfile_path).expect("Gemfile must exist in export");
+
+    assert!(
+        !content.contains("p4ss"),
+        "auth token must be scrubbed from Gemfile, got:\n{content}"
+    );
+    assert!(
+        content.contains("REDACTED@gems.example.com"),
+        "scrubbed URL must contain REDACTED@host, got:\n{content}"
+    );
+    assert!(
+        content.contains("gem 'rails'"),
+        "non-source lines must be preserved, got:\n{content}"
     );
 }

@@ -2434,6 +2434,160 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
 /// `language-packages/<ecosystem>/<hash>/`. Only included items with
 /// non-empty manifest_files are materialized — excluded items use
 /// commented-out inline installs in the Containerfile, not COPY paths.
+/// Returns `true` when the snapshot has an active redaction state that
+/// warrants scrubbing secrets from exported content.
+fn is_redaction_active(snap: &InspectionSnapshot) -> bool {
+    matches!(
+        &snap.redaction_state,
+        Some(
+            RedactionState::FullyRedacted { .. }
+                | RedactionState::PartiallyRedacted { .. }
+                | RedactionState::SensitiveRetained { .. }
+        )
+    )
+}
+
+/// Scrub embedded auth credentials from a URL string.
+/// Replaces `://user:pass@host` with `://REDACTED@host` and
+/// `://token@host` with `://REDACTED@host`.
+fn scrub_url_auth(url: &str) -> String {
+    // Find the authority section: everything between :// and the next @.
+    // If there's no ://, or no @ after it, the URL has no embedded auth.
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let rest = &url[authority_start..];
+
+    let Some(at_pos) = rest.find('@') else {
+        return url.to_string();
+    };
+
+    // Verify this @ is in the authority (before any /), not in a path or query.
+    let slash_pos = rest.find('/').unwrap_or(rest.len());
+    if at_pos > slash_pos {
+        return url.to_string();
+    }
+
+    format!("{}://REDACTED@{}", &url[..scheme_end], &rest[at_pos + 1..])
+}
+
+/// Scrub auth tokens from manifest file content based on the filename.
+///
+/// - `requirements.txt`: `--index-url` / `--extra-index-url` lines with auth
+/// - `package.json`: `"registry"` URLs with embedded auth
+/// - `Gemfile`: `source` URLs with embedded auth
+fn scrub_manifest_auth(filename: &str, content: &str) -> String {
+    match filename {
+        "requirements.txt" => scrub_requirements_txt(content),
+        "package.json" => scrub_package_json(content),
+        "Gemfile" => scrub_gemfile(content),
+        _ => content.to_string(),
+    }
+}
+
+/// Scrub `--index-url` and `--extra-index-url` lines in requirements.txt.
+fn scrub_requirements_txt(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("--index-url") || trimmed.starts_with("--extra-index-url") {
+                // Split on whitespace: directive + URL
+                let mut parts = trimmed.splitn(2, char::is_whitespace);
+                let directive = parts.next().unwrap_or(trimmed);
+                match parts.next() {
+                    Some(url) => format!("{} {}", directive, scrub_url_auth(url.trim())),
+                    None => line.to_string(),
+                }
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub `"registry"` URLs with embedded auth in package.json.
+/// Operates on raw text to avoid pulling in a JSON library dependency
+/// for a simple find-and-replace in URL values.
+fn scrub_package_json(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            // Match lines like: "registry": "https://user:pass@host/..."
+            if trimmed.contains("\"registry\"") {
+                scrub_json_url_value(line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub the URL value in a JSON key-value line.
+fn scrub_json_url_value(line: &str) -> String {
+    // Find the value portion after the colon that follows "registry".
+    // The value is a quoted string containing a URL.
+    let Some(colon_pos) = line.find(':') else {
+        return line.to_string();
+    };
+    let after_colon = &line[colon_pos + 1..];
+
+    // Find the opening and closing quotes of the value.
+    let Some(open_quote) = after_colon.find('"') else {
+        return line.to_string();
+    };
+    let value_start = colon_pos + 1 + open_quote + 1;
+    let value_slice = &line[value_start..];
+    let Some(close_quote) = value_slice.find('"') else {
+        return line.to_string();
+    };
+
+    let url = &value_slice[..close_quote];
+    let scrubbed = scrub_url_auth(url);
+    format!(
+        "{}\"{}\"{}",
+        &line[..value_start],
+        scrubbed,
+        &line[value_start + close_quote..]
+    )
+}
+
+/// Scrub `source` URLs with embedded auth in Gemfile.
+fn scrub_gemfile(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("source") {
+                // source "https://user:pass@gems.example.com"
+                // source 'https://user:pass@gems.example.com'
+                let quote_chars = ['"', '\''];
+                let mut result = line.to_string();
+                for q in &quote_chars {
+                    if let Some(open) = trimmed.find(*q)
+                        && let Some(close) = trimmed[open + 1..].find(*q)
+                    {
+                        let url = &trimmed[open + 1..open + 1 + close];
+                        let scrubbed = scrub_url_auth(url);
+                        // Reconstruct preserving original indentation.
+                        let indent = &line[..line.len() - trimmed.len()];
+                        result = format!("{}{}", indent, trimmed.replace(url, &scrubbed));
+                        break;
+                    }
+                }
+                result
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn write_language_package_manifests(
     snap: &InspectionSnapshot,
     out: &Path,
@@ -2442,6 +2596,8 @@ fn write_language_package_manifests(
         Some(n) => n,
         None => return Ok(()),
     };
+
+    let redact = is_redaction_active(snap);
 
     for item in &nrs.items {
         if !item.include || item.manifest_files.is_empty() {
@@ -2466,8 +2622,13 @@ fn write_language_package_manifests(
             .map_err(|e| RefineError::RenderFailed(format!("mkdir {}: {e}", dir.display())))?;
 
         for (filename, content) in &item.manifest_files {
+            let output = if redact {
+                scrub_manifest_auth(filename, content)
+            } else {
+                content.clone()
+            };
             let file_path = dir.join(filename);
-            std::fs::write(&file_path, content).map_err(|e| {
+            std::fs::write(&file_path, output).map_err(|e| {
                 RefineError::RenderFailed(format!("write {}: {e}", file_path.display()))
             })?;
         }
