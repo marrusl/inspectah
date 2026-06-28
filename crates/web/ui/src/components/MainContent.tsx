@@ -124,7 +124,9 @@ export function MainContent({
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
-  const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
+  const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(
+    null,
+  );
 
   // Clear stale filter when switching sections or when global search navigates within same section
   useEffect(() => {
@@ -138,7 +140,15 @@ export function MainContent({
     if (!pendingFocusTarget) return;
     // Use exact-match selectors for each known RPM arch to avoid prefix collisions.
     // Example: "python3" should match "python3.x86_64" but NOT "python3.11.x86_64".
-    const RPM_ARCHES = ['x86_64', 'noarch', 'i686', 'aarch64', 's390x', 'ppc64le', 'src'];
+    const RPM_ARCHES = [
+      "x86_64",
+      "noarch",
+      "i686",
+      "aarch64",
+      "s390x",
+      "ppc64le",
+      "src",
+    ];
     let focused = false;
     for (const arch of RPM_ARCHES) {
       const selector = `[data-testid="package-row-${CSS.escape(pendingFocusTarget)}.${arch}"]`;
@@ -328,11 +338,28 @@ export function MainContent({
   );
 
   const handleArrowDown = useCallback(() => {
-    // Focus the first decision item in the list
-    const firstItem = document.querySelector(
+    // Focus the first focusable item in the active section.
+    // Tries decision items first, then group headers, then any element with tabindex=-1.
+    const firstDecisionItem = document.querySelector(
       "[data-testid^='decision-item-']",
     ) as HTMLElement | null;
-    firstItem?.focus();
+    if (firstDecisionItem) {
+      firstDecisionItem.focus();
+      return;
+    }
+
+    const firstGroup = document.querySelector(
+      "[role='button'][aria-expanded]",
+    ) as HTMLElement | null;
+    if (firstGroup) {
+      firstGroup.focus();
+      return;
+    }
+
+    const firstFocusable = document.querySelector(
+      "[tabindex='-1']",
+    ) as HTMLElement | null;
+    firstFocusable?.focus();
   }, []);
 
   if (loading) {
@@ -400,7 +427,9 @@ export function MainContent({
                 variant={toast.variant}
                 title={toast.message}
                 actionClose={
-                  <AlertActionCloseButton onClose={() => dismissToast(toast.id)} />
+                  <AlertActionCloseButton
+                    onClose={() => dismissToast(toast.id)}
+                  />
                 }
               />
             ))}

@@ -305,12 +305,64 @@ describe("MainContent — Unmanaged Files section", () => {
       />,
     );
     const user = userEvent.setup();
-    const checkbox = screen.getByLabelText(
-      "Toggle /opt/splunk/bin/splunkd",
-    );
+    const checkbox = screen.getByLabelText("Toggle /opt/splunk/bin/splunkd");
     await user.click(checkbox);
     expect(onToggleUnmanagedFile).toHaveBeenCalledWith(
       "/opt/splunk/bin/splunkd",
     );
+  });
+});
+
+describe("MainContent — Focus management", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("ArrowDown from SectionSearch focuses first group header in language_packages", async () => {
+    render(
+      <MainContent
+        activeSection="language_packages"
+        viewData={
+          makeViewData({
+            language_packages: langPkgFixture,
+          }) as ViewResponse
+        }
+        {...defaultProps}
+        sectionSearchOpen={true}
+      />,
+    );
+    const user = userEvent.setup();
+    const searchInput = screen.getByPlaceholderText("Filter items...");
+    searchInput.focus();
+    await user.keyboard("{ArrowDown}");
+
+    // Should focus the first language package environment row
+    const firstRow = screen.getByTestId("lang-env-row-pip:/opt/myapp/venv");
+    expect(document.activeElement).toBe(firstRow);
+  });
+
+  it("ArrowDown from SectionSearch focuses first group header in unmanaged_files", async () => {
+    render(
+      <MainContent
+        activeSection="unmanaged_files"
+        viewData={
+          makeViewData({
+            unmanaged_files: unmanagedFixture,
+          }) as ViewResponse
+        }
+        {...defaultProps}
+        sectionSearchOpen={true}
+      />,
+    );
+    const user = userEvent.setup();
+    const searchInput = screen.getByPlaceholderText("Filter items...");
+    searchInput.focus();
+    await user.keyboard("{ArrowDown}");
+
+    // Should focus the first group header (the directory group button)
+    const firstGroupHeader = screen.getByRole("button", {
+      name: /\/opt\/splunk/,
+    });
+    expect(document.activeElement).toBe(firstGroupHeader);
   });
 });
