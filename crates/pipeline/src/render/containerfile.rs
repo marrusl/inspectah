@@ -24,6 +24,7 @@ use inspectah_core::types::rpm::PackageEntry;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
+use super::language_packages;
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 
@@ -1104,6 +1105,15 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut lines = Vec::new();
+
+    // Language package sections (executable, not advisory).
+    let lang_lines = language_packages::language_package_lines(snap);
+    if !lang_lines.is_empty() {
+        lines.extend(section("Language Packages", lang_lines));
+    }
+
+    // Remaining non-RPM items that aren't language packages
+    // (ELF binaries, .env files, git repos — still advisory).
     let nrs = match &snap.non_rpm_software {
         Some(n) => n,
         None => return lines,
@@ -1112,7 +1122,9 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let migration_items: Vec<_> = nrs
         .items
         .iter()
-        .filter(|item| item.review_status == "migration_planned")
+        .filter(|item| {
+            item.review_status == "migration_planned" && !language_packages::is_language_env(item)
+        })
         .collect();
 
     if migration_items.is_empty() {
@@ -1133,18 +1145,7 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             format!(" — {}", item.notes)
         };
 
-        if item.method == "pip dist-info" && item.has_c_extensions {
-            body.push(format!(
-                "# {}=={} — pip package with native extensions, rebuild required{}",
-                item.name, item.version, note
-            ));
-        } else if item.method == "pip dist-info" {
-            body.push(format!(
-                "# {}=={} — pip package{}",
-                item.name, item.version, note
-            ));
-            body.push(format!("# RUN pip install {}=={}", item.name, item.version));
-        } else if (item.lang == "go" || item.method == "go binary") && item.r#static {
+        if (item.lang == "go" || item.method == "go binary") && item.r#static {
             let dest = std::path::Path::new(&item.path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())

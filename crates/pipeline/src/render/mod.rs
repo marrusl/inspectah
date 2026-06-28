@@ -26,6 +26,7 @@ pub mod users;
 pub mod baseline_fmt;
 pub mod report_data;
 
+pub mod language_packages;
 pub mod service_intent;
 
 use inspectah_core::snapshot::InspectionSnapshot;

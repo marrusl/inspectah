@@ -267,8 +267,9 @@ fn smoke_containerfile_selinux() {
 
 #[test]
 fn smoke_containerfile_nonrpm() {
-    // The containerfile renderer only emits non-RPM items with
-    // review_status == "migration_planned". Build a snapshot with that status.
+    // Non-language items with review_status == "migration_planned" get advisory
+    // stubs. Language env items (pip/npm/gem) are rendered by the language
+    // packages renderer regardless of review_status.
     let mut snap = InspectionSnapshot::new();
     snap.non_rpm_software = Some(NonRpmSoftwareSection {
         items: vec![
@@ -283,29 +284,36 @@ fn smoke_containerfile_nonrpm() {
                 ..Default::default()
             },
             NonRpmItem {
-                path: "/usr/local/lib/python3.9/site-packages/flask".into(),
-                name: "flask".into(),
+                path: "/usr/local/lib/python3.9/site-packages".into(),
+                name: "system-pip".into(),
                 method: "pip dist-info".into(),
-                confidence: "high".into(),
-                include: true,
+                confidence: "medium".into(),
+                include: false,
                 locked: false,
-                review_status: "migration_planned".into(),
                 version: "2.3.0".into(),
+                packages: vec![inspectah_core::types::nonrpm::LanguagePackage {
+                    name: "flask".into(),
+                    version: "2.3.0".into(),
+                }],
                 ..Default::default()
             },
         ],
         env_files: vec![],
     });
     let output = containerfile::render_containerfile(&snap, None, None);
-    // Non-RPM migration stubs
+    // Non-RPM advisory stubs for non-language items
     assert!(
         output.contains("Non-RPM Software"),
-        "must contain Non-RPM Software header"
+        "must contain Non-RPM Software header for binary item"
     );
-    // pip provisioning
+    // Language package rendering for pip (commented out for system pip)
+    assert!(
+        output.contains("Language Packages"),
+        "must contain Language Packages header"
+    );
     assert!(
         output.contains("pip install flask"),
-        "must reference pip install for migration_planned pip packages"
+        "must reference pip install for system pip packages"
     );
 }
 
