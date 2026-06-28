@@ -3222,9 +3222,43 @@ AppShell owns shell-level focus management (line 68: `activeSection` prop, line 
 If the existing code already handles this generically (likely, since it uses `activeSection` without section-specific branching), document that in a test:
 
 ```typescript
-// In AppShell tests or SectionPlumbing.test.tsx:
-it("ArrowDown from sidebar moves focus to first item in language_packages section", () => {
-  // This tests the existing generic behavior works for new section IDs.
+// In AppShell.test.tsx (or SectionPlumbing.test.tsx):
+it("ArrowDown from sidebar moves focus to first item in language_packages section", async () => {
+  render(
+    <AppShell
+      activeSection="language_packages"
+      viewData={{ ...defaultViewData, language_packages: langPkgFixture }}
+      {...defaultAppShellProps}
+    />,
+  );
+  const user = userEvent.setup();
+  // Focus a sidebar nav item first
+  const sidebarItem = screen.getByRole("link", { name: /Language Packages/ });
+  sidebarItem.focus();
+  await user.keyboard("{ArrowDown}");
+  // Focus should have moved into the main content area's first item
+  const firstItem = screen
+    .getByTestId("section-language_packages")
+    .querySelector("[tabindex='-1']");
+  expect(document.activeElement).toBe(firstItem);
+});
+
+it("ArrowDown from sidebar moves focus to first group header in unmanaged_files section", async () => {
+  render(
+    <AppShell
+      activeSection="unmanaged_files"
+      viewData={{ ...defaultViewData, unmanaged_files: unmanagedFixture }}
+      {...defaultAppShellProps}
+    />,
+  );
+  const user = userEvent.setup();
+  const sidebarItem = screen.getByRole("link", { name: /Unmanaged Files/ });
+  sidebarItem.focus();
+  await user.keyboard("{ArrowDown}");
+  const firstGroup = screen
+    .getByTestId("section-unmanaged_files")
+    .querySelector("[role='button']");
+  expect(document.activeElement).toBe(firstGroup);
 });
 ```
 
@@ -3368,6 +3402,86 @@ Append to `GlobalSearch.test.tsx`:
     const input = screen.getByRole("searchbox");
     await user.type(input, "splunkd");
     expect(screen.getByText("/opt/splunk/bin/splunkd")).toBeInTheDocument();
+  });
+
+  // --- Search result selection navigates and reveals ---
+
+  it("selecting a language package search result navigates to section and sets reveal state", async () => {
+    const onNavigate = vi.fn();
+    const langEnvs = [
+      {
+        ecosystem: "pip" as const,
+        path: "/opt/myapp/venv",
+        method: "pip list",
+        packages: ["flask", "requests"],
+        confidence: "high" as const,
+        manifest_basis: "requirements.txt",
+        include: true,
+      },
+    ];
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        referenceSections={[]}
+        languagePackageEnvs={langEnvs}
+        onNavigate={onNavigate}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "myapp");
+    const result = screen.getByText("/opt/myapp/venv");
+    await user.click(result);
+    expect(onNavigate).toHaveBeenCalledWith(
+      "language_packages",
+      "pip:/opt/myapp/venv",
+    );
+  });
+
+  it("selecting an unmanaged file search result navigates to section with reveal", async () => {
+    const onNavigate = vi.fn();
+    const unmanagedGroups = [
+      {
+        directory: "/opt/splunk",
+        items: [
+          {
+            path: "/opt/splunk/bin/splunkd",
+            size: 1024,
+            is_var_path: false,
+            include: true,
+            provenance: {
+              file_type: "elf_binary" as const,
+              last_modified: 1700000000,
+              uid: 0,
+              gid: 0,
+              permissions: "0755",
+              mutability: false,
+              writable_mount: false,
+              service_working_dir: false,
+            },
+          },
+        ],
+      },
+    ];
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        referenceSections={[]}
+        unmanagedFileGroups={unmanagedGroups}
+        onNavigate={onNavigate}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "splunkd");
+    const result = screen.getByText("/opt/splunk/bin/splunkd");
+    await user.click(result);
+    expect(onNavigate).toHaveBeenCalledWith(
+      "unmanaged_files",
+      "/opt/splunk/bin/splunkd",
+    );
   });
 ```
 
