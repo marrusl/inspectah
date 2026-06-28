@@ -7,7 +7,12 @@ import { ShortcutOverlay } from "./ShortcutOverlay";
 import { GlobalSearch } from "./GlobalSearch";
 import type { GlobalSearchHandle } from "./GlobalSearch";
 import { ExportDialog } from "./ExportDialog";
-import type { RefineStats, ReferenceSection } from "../api/types";
+import type {
+  RefineStats,
+  ReferenceSection,
+  LanguagePackageEnv,
+  UnmanagedFileGroup,
+} from "../api/types";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
 import type { AggregateSummary } from "./StatsBar";
@@ -73,6 +78,10 @@ export interface AppShellProps {
   searchConfigItems: DecisionItemKind[];
   searchUserDecisions?: UserDecision[];
   searchContextSections: ReferenceSection[] | null;
+  /** Language package environments for GlobalSearch. */
+  searchLanguagePackageEnvs?: LanguagePackageEnv[];
+  /** Unmanaged file groups for GlobalSearch. */
+  searchUnmanagedFileGroups?: UnmanagedFileGroup[];
   /** GlobalSearch result navigation. */
   onSearchNavigate: (sectionId: string, itemId: string) => void;
   /** Extra shortcuts appended to the overlay. */
@@ -119,6 +128,8 @@ export function AppShell({
   searchConfigItems,
   searchUserDecisions,
   searchContextSections,
+  searchLanguagePackageEnvs,
+  searchUnmanagedFileGroups,
   onSearchNavigate,
   extraShortcuts,
   toolbarExtra,
@@ -200,6 +211,8 @@ export function AppShell({
       configItems={searchConfigItems}
       userDecisions={searchUserDecisions}
       contextSections={searchContextSections}
+      languagePackageEnvs={searchLanguagePackageEnvs}
+      unmanagedFileGroups={searchUnmanagedFileGroups}
       onNavigate={handleSearchNavigate}
     />
   );

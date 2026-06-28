@@ -79,6 +79,10 @@ export interface MainContentProps {
   onUnmanagedResetAll?: () => void;
   /** True while an optimistic mutation is in flight. */
   isPending?: boolean;
+  /** Per-package RPM upload row states for repo-less packages. */
+  rpmRowStates?: Record<string, import("../api/types").RpmUploadRowState>;
+  /** Called when user clicks the upload button on a repo-less package row. */
+  onUploadClick?: (packageName: string) => void;
 }
 
 interface ToastEntry {
@@ -120,6 +124,8 @@ export function MainContent({
   onUnmanagedIncludeNone,
   onUnmanagedResetAll,
   isPending = false,
+  rpmRowStates,
+  onUploadClick,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -418,6 +424,8 @@ export function MainContent({
           onRepoToggle={handleRepoToggle}
           onGroupToggle={handleGroupToggle}
           onGroupUngroup={handleGroupUngroup}
+          rpmRowStates={rpmRowStates}
+          onUploadClick={onUploadClick}
         />
         {toasts.length > 0 && (
           <AlertGroup isToast isLiveRegion>

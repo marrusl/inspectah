@@ -661,6 +661,16 @@ export interface ItemIdGroup {
   key: { name: string };
 }
 
+export interface ItemIdLanguageEnv {
+  kind: "LanguageEnv";
+  key: { ecosystem: string; path: string };
+}
+
+export interface ItemIdUnmanagedFile {
+  kind: "UnmanagedFile";
+  key: { path: string };
+}
+
 /**
  * A language package environment (pip venv, npm project, gem project).
  * Identity contract: matches Plan 1's ItemId::LanguageEnv { ecosystem, path }.
@@ -770,7 +780,9 @@ export type ItemId =
   | ItemIdSelinuxPort
   | ItemIdFstab
   | ItemIdNonRpm
-  | ItemIdGroup;
+  | ItemIdGroup
+  | ItemIdLanguageEnv
+  | ItemIdUnmanagedFile;
 
 export interface ActionableVariantItem {
   item_id: ItemId;

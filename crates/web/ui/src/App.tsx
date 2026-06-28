@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Page,
   PageSection,
@@ -6,18 +6,23 @@ import {
   EmptyStateBody,
   EmptyStateFooter,
   Button,
+  ToolbarItem,
 } from "@patternfly/react-core";
-import type { ViewResponse } from "./api/types";
+import { UploadIcon } from "@patternfly/react-icons";
+import type { ViewResponse, RpmUploadRowState } from "./api/types";
 import { fetchOps } from "./api/client";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
+import { useRpmUpload } from "./hooks/useRpmUpload";
 import { Sidebar } from "./components/Sidebar";
 import { MainContent } from "./components/MainContent";
 import { AppShell } from "./components/AppShell";
 import { AggregateApp } from "./components/AggregateApp";
+import { RpmUploadModal } from "./components/RpmUploadModal";
+import { RpmBatchUploadModal } from "./components/RpmBatchUploadModal";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -166,6 +171,144 @@ function SingleHostApp({
   );
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
+
+  // --- RPM upload ---
+  const rpmUpload = useRpmUpload();
+  const [uploadTarget, setUploadTarget] = useState<string | null>(null);
+  const [batchUploadOpen, setBatchUploadOpen] = useState(false);
+  const uploadTriggerRef = useRef<HTMLElement | null>(null);
+
+  // Initialize rpmUpload from backend repoless_annotation fields
+  useEffect(() => {
+    if (view.data?.packages) {
+      const repolessEntries = view.data.packages
+        .filter((p) => p.repoless_annotation)
+        .map((p) => ({
+          name: p.name,
+          arch: p.arch,
+          repoless_annotation: p.repoless_annotation!,
+          repoless_cached: p.repoless_cached ?? false,
+        }));
+      if (repolessEntries.length > 0) {
+        rpmUpload.initFromBackend(repolessEntries);
+      }
+    }
+  }, [view.data?.packages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Derive per-row RPM upload states, merging hook state with view include state
+  const rpmRowStates = useMemo(() => {
+    const states: Record<string, RpmUploadRowState> = {};
+    for (const pkg of view.data?.packages ?? []) {
+      const state = rpmUpload.getRowState(pkg.name);
+      if (state) {
+        if (state === "cached_excluded" && pkg.include) {
+          states[pkg.name] = "cached_included";
+        } else if (state === "uploaded_excluded" && pkg.include) {
+          states[pkg.name] = "uploaded_included";
+        } else {
+          states[pkg.name] = state;
+        }
+      }
+    }
+    return states;
+  }, [view.data?.packages, rpmUpload]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Language package + unmanaged file toggle callbacks ---
+  const handleToggleLangEnv = useCallback(
+    (ecosystem: string, path: string) => {
+      const env = view.data?.language_packages?.find(
+        (e) => e.ecosystem === ecosystem && e.path === path,
+      );
+      if (env) {
+        mutation.mutate({
+          op: "SetInclude",
+          target: {
+            item_id: { kind: "LanguageEnv", key: { ecosystem, path } },
+            include: !env.include,
+          },
+        });
+      }
+    },
+    [view.data?.language_packages, mutation],
+  );
+
+  const handleToggleUnmanagedFile = useCallback(
+    (filePath: string) => {
+      const allItems =
+        view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+      const item = allItems.find((i) => i.path === filePath);
+      if (item) {
+        mutation.mutate({
+          op: "SetInclude",
+          target: {
+            item_id: { kind: "UnmanagedFile", key: { path: filePath } },
+            include: !item.include,
+          },
+        });
+      }
+    },
+    [view.data?.unmanaged_files, mutation],
+  );
+
+  const handleToggleUnmanagedGroup = useCallback(
+    (directory: string, include: boolean) => {
+      const group = view.data?.unmanaged_files?.find(
+        (g) => g.directory === directory,
+      );
+      if (group) {
+        for (const item of group.items) {
+          mutation.mutate({
+            op: "SetInclude",
+            target: {
+              item_id: { kind: "UnmanagedFile", key: { path: item.path } },
+              include,
+            },
+          });
+        }
+      }
+    },
+    [view.data?.unmanaged_files, mutation],
+  );
+
+  const handleUnmanagedIncludeNone = useCallback(() => {
+    const allItems =
+      view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+    for (const item of allItems) {
+      if (item.include) {
+        mutation.mutate({
+          op: "SetInclude",
+          target: {
+            item_id: { kind: "UnmanagedFile", key: { path: item.path } },
+            include: false,
+          },
+        });
+      }
+    }
+  }, [view.data?.unmanaged_files, mutation]);
+
+  const handleUnmanagedResetAll = useCallback(() => {
+    const allItems =
+      view.data?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+    for (const item of allItems) {
+      if (!item.include) {
+        mutation.mutate({
+          op: "SetInclude",
+          target: {
+            item_id: { kind: "UnmanagedFile", key: { path: item.path } },
+            include: true,
+          },
+        });
+      }
+    }
+  }, [view.data?.unmanaged_files, mutation]);
+
+  const handleUploadClick = useCallback((name: string) => {
+    const triggerEl = document.querySelector(
+      `[aria-label="Upload RPM for ${name}"]`,
+    ) as HTMLElement | null;
+    uploadTriggerRef.current = triggerEl;
+    setUploadTarget(name);
+  }, []);
 
   function getItemTestIdFromEntry(entry: AnnotatedTimelineEntry): string | null {
     if (entry.kind === "View") {
@@ -372,7 +515,22 @@ function SingleHostApp({
         searchConfigItems={configItems}
         searchUserDecisions={view.data?.users_groups_decisions}
         searchContextSections={sections.data}
+        searchLanguagePackageEnvs={view.data?.language_packages}
+        searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}
+        toolbarExtra={
+          rpmUpload.needsUploadCount > 0 ? (
+            <ToolbarItem>
+              <Button
+                variant="secondary"
+                onClick={() => setBatchUploadOpen(true)}
+                icon={<UploadIcon />}
+              >
+                Upload RPMs ({rpmUpload.needsUploadCount})
+              </Button>
+            </ToolbarItem>
+          ) : undefined
+        }
         hamburger={
           isMobile ? (
             <button
@@ -408,6 +566,9 @@ function SingleHostApp({
                   health={health.data}
                   viewData={view.data}
                   userDecisionCount={view.data?.users_groups_decisions?.length}
+                  hasLanguagePackages={!!view.data?.language_packages?.length}
+                  hasUnmanagedFiles={!!view.data?.unmanaged_files?.length}
+                  hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                   searchSlot={searchSlot}
                 />
               </div>
@@ -431,6 +592,13 @@ function SingleHostApp({
                 filterClearCounter={filterClearCounter}
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}
+                onToggleLangEnv={handleToggleLangEnv}
+                onToggleUnmanagedFile={handleToggleUnmanagedFile}
+                onToggleUnmanagedGroup={handleToggleUnmanagedGroup}
+                onUnmanagedIncludeNone={handleUnmanagedIncludeNone}
+                onUnmanagedResetAll={handleUnmanagedResetAll}
+                rpmRowStates={rpmRowStates}
+                onUploadClick={handleUploadClick}
               />
             </div>
             {isMobile && sidebarOverlayOpen && (
@@ -442,6 +610,9 @@ function SingleHostApp({
                 health={health.data}
                 viewData={view.data}
                 userDecisionCount={view.data?.users_groups_decisions?.length}
+                hasLanguagePackages={!!view.data?.language_packages?.length}
+                hasUnmanagedFiles={!!view.data?.unmanaged_files?.length}
+                hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                 overlay
                 onClose={closeSidebarOverlay}
                 searchSlot={searchSlot}
@@ -450,6 +621,34 @@ function SingleHostApp({
           </>
         )}
       </AppShell>
+
+      <RpmUploadModal
+        isOpen={uploadTarget !== null}
+        packageName={uploadTarget ?? ""}
+        packageArch={
+          view.data?.packages?.find((p) => p.name === uploadTarget)?.arch ??
+          "x86_64"
+        }
+        onUpload={(name, file) => {
+          rpmUpload.uploadRpm(name, file).catch((err) => {
+            console.error("RPM upload failed:", err);
+          });
+        }}
+        onClose={() => setUploadTarget(null)}
+        triggerRef={uploadTriggerRef}
+      />
+
+      <RpmBatchUploadModal
+        isOpen={batchUploadOpen}
+        needsUploadPackages={rpmUpload.needsUploadPackages}
+        onBatchUpload={(matched) => {
+          rpmUpload.applyBatchMatch(matched).catch((err) => {
+            console.error("Batch RPM upload failed:", err);
+          });
+          setBatchUploadOpen(false);
+        }}
+        onClose={() => setBatchUploadOpen(false)}
+      />
     </>
   );
 }
