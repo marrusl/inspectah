@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { PackageList } from "../PackageList";
 import type { RepoGroupInfo, GroupInfo } from "../../api/types";
@@ -1599,5 +1600,249 @@ describe("PackageList", () => {
     const summary = screen.getByTestId("package-list-summary");
     expect(summary).toHaveTextContent("1 group (2 packages)");
     expect(summary).not.toHaveTextContent("from base");
+  });
+
+  // --- RPM upload row states (full 5-state contract) ---
+
+  describe("RPM upload rows", () => {
+    it("renders upload icon instead of checkbox for needs_upload packages", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
+      expect(
+        within(row).getByLabelText("Upload RPM for custom-agent"),
+      ).toBeInTheDocument();
+    });
+
+    it("shows orange 'RPM needed' label for needs_upload state", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      expect(screen.getByText("RPM needed")).toBeInTheDocument();
+    });
+
+    it("shows 'none' as repo text for needs_upload state", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).getByText("none")).toBeInTheDocument();
+    });
+
+    it("shows checkbox and green label after upload (uploaded_excluded)", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).getByRole("checkbox")).toBeInTheDocument();
+      expect(screen.getByText("RPM provided")).toBeInTheDocument();
+    });
+
+    it("shows 'uploaded' as repo text for uploaded state", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).getByText("uploaded")).toBeInTheDocument();
+    });
+
+    it("shows orange 'No repo' label for cached_excluded state", () => {
+      const pkgs = [makePkg("custom-tool", "disabled-repo", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-tool": "cached_excluded" }}
+        />,
+      );
+      expect(screen.getByText("No repo")).toBeInTheDocument();
+      const row = screen.getByTestId("package-row-custom-tool");
+      expect(within(row).getByRole("checkbox")).toBeInTheDocument();
+    });
+
+    it("mutes row opacity for needs_upload state", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(row.className).toContain("--blocked");
+    });
+
+    it("row has aria-live region for state transition announcements", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    });
+
+    // --- Upload success: focus returns to new checkbox ---
+
+    it("focuses checkbox after upload success replaces upload trigger", async () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      // Simulate upload success — row transitions to uploaded_excluded
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const checkbox = within(row).getByRole("checkbox");
+      // Wait for rAF focus handoff
+      await new Promise((r) => requestAnimationFrame(r));
+      expect(document.activeElement).toBe(checkbox);
+    });
+
+    it("announces upload success via aria-live", async () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion.textContent).toMatch(
+        /RPM provided for custom-agent/,
+      );
+    });
+
+    // --- Upload removal: focus and announcement ---
+
+    it("announces RPM removal and returns to blocked state", async () => {
+      const onRemoveUpload = vi.fn();
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      const { rerender } = render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+          onRemoveRpmUpload={onRemoveUpload}
+        />,
+      );
+      const user = userEvent.setup();
+      // Click the remove button on the "RPM provided" label
+      const removeBtn = screen.getByLabelText("Remove uploaded RPM for custom-agent");
+      await user.click(removeBtn);
+      expect(onRemoveUpload).toHaveBeenCalledWith("custom-agent");
+
+      // Simulate state reverting to needs_upload
+      rerender(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+          onRemoveRpmUpload={onRemoveUpload}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion.textContent).toMatch(
+        /RPM removed for custom-agent.*upload required/,
+      );
+      // Checkbox should be hidden again, upload icon back
+      expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
+      expect(
+        within(row).getByLabelText("Upload RPM for custom-agent"),
+      ).toBeInTheDocument();
+    });
   });
 });

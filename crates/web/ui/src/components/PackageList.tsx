@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Label } from "@patternfly/react-core";
+import { UploadIcon } from "@patternfly/react-icons";
 import { SortHeader } from "./SortHeader";
 import { ExcludedZone } from "./ExcludedZone";
 import { GroupRow } from "./GroupRow";
@@ -9,6 +11,7 @@ import type {
   PackageProvenance,
   RepoGroupInfo,
   RepoTier,
+  RpmUploadRowState,
 } from "../api/types";
 
 // --- Types ---
@@ -40,6 +43,12 @@ export interface PackageListProps {
   onDismissedCountChange?: (count: number) => void;
   /** When toggled from false to true, clears all dismissed conflicts. */
   onRestoreDismissed?: boolean;
+  /** Per-package RPM row state derived from backend + upload state. */
+  rpmRowStates?: Record<string, RpmUploadRowState>;
+  /** Callback when upload icon is clicked on a blocked row. */
+  onUploadClick?: (packageName: string) => void;
+  /** Callback when remove button is clicked on an uploaded row. */
+  onRemoveRpmUpload?: (packageName: string) => void;
 }
 
 // --- Tier ordering for sort ---
@@ -85,6 +94,9 @@ export function PackageList({
   onGroupUngroup,
   onDismissedCountChange,
   onRestoreDismissed,
+  rpmRowStates,
+  onUploadClick,
+  onRemoveRpmUpload,
 }: PackageListProps) {
   // Sort state: defaults differ by mode
   const [activeColumn, setActiveColumn] = useState<"left" | "right">(
@@ -525,6 +537,9 @@ export function PackageList({
             packageProvenances={packageProvenances}
             onToggle={onToggle}
             onDismiss={handleDismiss}
+            rowState={rpmRowStates?.[pkg.name]}
+            onUploadClick={onUploadClick}
+            onRemoveRpmUpload={onRemoveRpmUpload}
           />
         ))}
       </div>
@@ -547,6 +562,9 @@ interface PackageRowProps {
   packageProvenances?: Record<string, PackageProvenance>;
   onToggle: (name: string) => void;
   onDismiss: (key: string) => void;
+  rowState?: RpmUploadRowState;
+  onUploadClick?: (packageName: string) => void;
+  onRemoveRpmUpload?: (packageName: string) => void;
 }
 
 function PackageRow({
@@ -557,9 +575,51 @@ function PackageRow({
   packageProvenances,
   onToggle,
   onDismiss,
+  rowState,
+  onUploadClick,
+  onRemoveRpmUpload,
 }: PackageRowProps) {
   const style = repoStyles[tier] ?? repoStyles.distro;
   const checkboxRef = useRef<HTMLInputElement>(null);
+
+  // RPM upload row state derivations
+  const isBlocked = rowState === "needs_upload";
+  const isUploaded =
+    rowState === "uploaded_excluded" || rowState === "uploaded_included";
+  const isCached =
+    rowState === "cached_excluded" || rowState === "cached_included";
+
+  // Repo text transitions per spec
+  const repoText = isBlocked
+    ? "none"
+    : isUploaded
+      ? "uploaded"
+      : pkg.source_repo;
+
+  // Track previous rowState for transition announcements
+  const prevRowStateRef = useRef(rowState);
+  const [liveAnnouncement, setLiveAnnouncement] = useState("");
+
+  useEffect(() => {
+    const prev = prevRowStateRef.current;
+    prevRowStateRef.current = rowState;
+
+    if (
+      prev === "needs_upload" &&
+      (rowState === "uploaded_excluded" || rowState === "uploaded_included")
+    ) {
+      setLiveAnnouncement(
+        `RPM provided for ${pkg.name}, now available for inclusion`,
+      );
+      // Focus the new checkbox after the upload trigger is replaced
+      requestAnimationFrame(() => checkboxRef.current?.focus());
+    } else if (
+      (prev === "uploaded_excluded" || prev === "uploaded_included") &&
+      rowState === "needs_upload"
+    ) {
+      setLiveAnnouncement(`RPM removed for ${pkg.name}, upload required`);
+    }
+  }, [rowState, pkg.name]);
 
   // Look up provenance for this package.  The map is keyed by "name.arch"
   // but PackageListPackage carries only name, so do a direct lookup with a
@@ -587,22 +647,37 @@ function PackageRow({
     }
   })();
 
+  const rowClassName = `inspectah-package-row${isBlocked ? " inspectah-package-row--blocked" : ""}`;
+
   return (
     <div
       role="listitem"
       tabIndex={-1}
       data-testid={`package-row-${pkg.name}`}
-      className="inspectah-package-row"
+      className={rowClassName}
     >
       <div data-testid="left-column" className="inspectah-package-row__left">
-        <input
-          ref={checkboxRef}
-          type="checkbox"
-          role="checkbox"
-          checked={pkg.include}
-          aria-label={pkg.name}
-          onChange={() => onToggle(pkg.name)}
-        />
+        {isBlocked ? (
+          <Button
+            variant="plain"
+            aria-label={`Upload RPM for ${pkg.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onUploadClick?.(pkg.name);
+            }}
+            icon={<UploadIcon />}
+            className="inspectah-package-row__upload-btn"
+          />
+        ) : (
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            role="checkbox"
+            checked={pkg.include}
+            aria-label={pkg.name}
+            onChange={() => onToggle(pkg.name)}
+          />
+        )}
         <div className="inspectah-package-row__name-container">
           <span className="inspectah-package-row__name">{pkg.name}</span>
           {provenanceBadge && (
@@ -614,6 +689,32 @@ function PackageRow({
             </span>
           )}
         </div>
+        {isBlocked && (
+          <Label color="orange" isCompact>
+            RPM needed
+          </Label>
+        )}
+        {isUploaded && (
+          <Label color="green" isCompact>
+            RPM provided
+            <Button
+              variant="plain"
+              size="sm"
+              aria-label={`Remove uploaded RPM for ${pkg.name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemoveRpmUpload?.(pkg.name);
+              }}
+            >
+              x
+            </Button>
+          </Label>
+        )}
+        {isCached && (
+          <Label color="orange" isCompact>
+            No repo
+          </Label>
+        )}
         {mode === "aggregate" && (
           <>
             <span
@@ -621,7 +722,7 @@ function PackageRow({
               className="inspectah-package-row__repo"
               style={style}
             >
-              {pkg.source_repo}
+              {repoText}
             </span>
             {pkg.repo_conflict && pkg.repo_conflict.length > 0 && (
               <RepoConflictPopover
@@ -640,7 +741,7 @@ function PackageRow({
       <div data-testid="right-column" className="inspectah-package-row__right">
         {mode === "single" ? (
           <span data-testid="repo-text" style={style}>
-            {pkg.source_repo}
+            {repoText}
           </span>
         ) : pkg.prevalence ? (
             <PrevalenceBadge
@@ -651,6 +752,17 @@ function PackageRow({
             <span>—</span>
         )}
       </div>
+
+      {/* Row-level aria-live for RPM upload state transitions */}
+      {rowState && (
+        <span
+          role="status"
+          aria-live="polite"
+          className="inspectah-package-row__live"
+        >
+          {liveAnnouncement}
+        </span>
+      )}
     </div>
   );
 }
