@@ -786,6 +786,59 @@ fn export_redacts_manifest_files_when_snapshot_redacted() {
 }
 
 #[test]
+fn export_redacts_manifest_files_in_snapshot_json() {
+    let mut snap = test_snapshot();
+    let mut manifests = HashMap::new();
+    manifests.insert(
+        "requirements.txt".to_string(),
+        "--index-url https://token:s3cret@private.pypi.org/simple/\nflask==2.3.3\n".to_string(),
+    );
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/venv".into(),
+            name: "venv".into(),
+            method: METHOD_PYTHON_VENV.into(),
+            confidence: "high".into(),
+            include: true,
+            manifest_files: manifests,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    // test_snapshot() sets FullyRedacted.
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("redact-snapshot-json-test.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let snap_json = tarball_read_file(&tarball_path, "inspection-snapshot.json")
+        .expect("inspection-snapshot.json must exist");
+    let exported: InspectionSnapshot = serde_json::from_str(&snap_json).unwrap();
+
+    let item = &exported.non_rpm_software.as_ref().unwrap().items[0];
+    let req_content = item
+        .manifest_files
+        .get("requirements.txt")
+        .expect("manifest_files must still have requirements.txt key");
+
+    assert!(
+        !req_content.contains("s3cret"),
+        "snapshot JSON manifest_files must have auth tokens scrubbed, got:\n{req_content}"
+    );
+    assert!(
+        req_content.contains("REDACTED"),
+        "snapshot JSON manifest_files must contain REDACTED placeholder, got:\n{req_content}"
+    );
+    assert!(
+        req_content.contains("flask==2.3.3"),
+        "snapshot JSON manifest_files must preserve package lines, got:\n{req_content}"
+    );
+}
+
+#[test]
 fn export_preserves_manifest_files_when_unredacted() {
     let mut snap = test_snapshot();
     // Clear redaction state to simulate an unredacted snapshot.

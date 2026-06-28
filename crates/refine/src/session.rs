@@ -2736,8 +2736,24 @@ pub fn render_refine_export(
     std::fs::write(out.join("audit-report.md"), audit)?;
 
     // 5. inspection-snapshot.json (projected)
-    let snap_json =
-        serde_json::to_string_pretty(snap).map_err(|e| RefineError::TarballError(e.to_string()))?;
+    //    When redaction is active, scrub manifest_files from NonRpmItems
+    //    so the exported JSON doesn't leak registry URLs and auth tokens
+    //    that were already scrubbed from the sidecar files above.
+    let snap_for_json = if is_redaction_active(snap) {
+        let mut redacted = snap.clone();
+        if let Some(ref mut nrs) = redacted.non_rpm_software {
+            for item in &mut nrs.items {
+                for (filename, content) in item.manifest_files.iter_mut() {
+                    *content = scrub_manifest_auth(filename, content);
+                }
+            }
+        }
+        redacted
+    } else {
+        snap.clone()
+    };
+    let snap_json = serde_json::to_string_pretty(&snap_for_json)
+        .map_err(|e| RefineError::TarballError(e.to_string()))?;
     std::fs::write(out.join("inspection-snapshot.json"), snap_json)?;
 
     // 6. schema/snapshot.schema.json (placeholder -- same as scan.rs)
