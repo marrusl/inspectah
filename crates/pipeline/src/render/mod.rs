@@ -29,6 +29,9 @@ pub mod report_data;
 pub mod language_packages;
 pub mod service_intent;
 
+pub mod repoless;
+pub mod unmanaged;
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::{RenderContext, RenderError};
 use std::path::Path;

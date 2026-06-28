@@ -1112,6 +1112,12 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         lines.extend(section("Language Packages", lang_lines));
     }
 
+    // Unmanaged files section (opt-in via --include-unmanaged)
+    lines.extend(super::unmanaged::unmanaged_file_lines(snap));
+
+    // Repo-less RPM packages
+    lines.extend(super::repoless::repoless_rpm_lines(snap));
+
     // Remaining non-RPM items that aren't language packages
     // (ELF binaries, .env files, git repos — still advisory).
     let nrs = match &snap.non_rpm_software {
