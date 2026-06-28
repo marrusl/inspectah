@@ -653,6 +653,14 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Produces: `_inspectah_safe_extra_args` fact (list with reserved flags stripped) consumed by scan.yml (Task 6)
 
 - [ ] **Step 1: Write tasks/preflight.yml**
+
+Platform enforcement follows the approved spec Section 8 tiered matrix:
+- **Hard reject:** non-RedHat families, unsupported architectures, EL8 and below, Fedora < 40
+- **Advisory warn (non-blocking):** best-effort platforms (AlmaLinux, Rocky, Fedora aarch64, EL10)
+- **Silent pass:** release-blocking and smoke-tested platforms (CentOS Stream 9 x86_64, RHEL 9 x86_64, CentOS Stream 9 aarch64)
+
+The tiers are about CI coverage claims, not runtime rejection. Best-effort platforms work but are not CI-gated.
+
 ```yaml
 ---
 - name: Check inspectah binary exists
@@ -772,6 +780,46 @@ Assisted-by: Claude Code (Opus 4.6)"
     - ansible_distribution == 'Fedora'
     - ansible_distribution_major_version | int < 40
 
+# --- Tiered platform advisory warnings ---
+# The hard rejections above enforce the outer boundary (non-RedHat,
+# unsupported arch, EL8, old Fedora). The warnings below inform
+# operators when they are running on a best-effort platform that is
+# NOT CI-gated. The role still runs — tiers are about CI coverage
+# claims, not runtime rejection.
+
+- name: Warn on Fedora aarch64 (best-effort, not CI-gated)
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: Fedora on aarch64 is best-effort. The CI matrix only covers
+      Fedora on x86_64. The role should work, but this platform is not
+      validated in CI. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution == 'Fedora'
+    - ansible_architecture == 'aarch64'
+
+- name: Warn on AlmaLinux / Rocky (best-effort, not CI-gated)
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: {{ ansible_distribution }} is best-effort. The CI matrix
+      covers CentOS Stream and RHEL. As a RHEL rebuild,
+      {{ ansible_distribution }} should work, but it is not validated
+      in CI. Detected: {{ ansible_distribution }}
+      {{ ansible_distribution_version }} on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution in ['AlmaLinux', 'Rocky']
+
+- name: Warn on EL10 (smoke-tested, limited CI coverage)
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: EL10 is smoke-tested tier. COPR builds are available but
+      real-host validation is limited. Detected:
+      {{ ansible_distribution }} {{ ansible_distribution_version }}
+      on {{ ansible_architecture }}.
+  when:
+    - ansible_distribution in ['RedHat', 'CentOS', 'AlmaLinux', 'Rocky', 'OracleLinux']
+    - ansible_distribution_major_version | int == 10
+
 - name: Validate inspectah_base_image format when set
   ansible.builtin.fail:
     msg: >-
@@ -890,6 +938,7 @@ Assisted-by: Claude Code (Opus 4.6)"
     - name: Record COPR enablement for cleanup tracking
       ansible.builtin.set_fact:
         _inspectah_copr_enabled: true
+      when: _inspectah_copr_result is changed
 
   rescue:
     - name: Enable COPR repository (fallback without community.general)
@@ -902,10 +951,12 @@ Assisted-by: Claude Code (Opus 4.6)"
           - --yes
         creates: "/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:{{ inspectah_copr_repo | replace('/', ':') }}.repo"
       become: true
+      register: _inspectah_copr_fallback_result
 
     - name: Record COPR enablement for cleanup tracking (fallback)
       ansible.builtin.set_fact:
         _inspectah_copr_enabled: true
+      when: _inspectah_copr_fallback_result is changed
 
 - name: Install inspectah package via dnf (COPR, versioned)
   ansible.builtin.dnf:
@@ -1692,12 +1743,13 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Files:**
 - Create: `molecule/air_gapped/molecule.yml`
+- Create: `molecule/air_gapped/prepare.yml`
 - Create: `molecule/air_gapped/converge.yml`
 - Create: `molecule/air_gapped/verify.yml`
 
 **Interfaces:**
 - Consumes: role public API; `inspectah_install_method: rpm` path from install.yml (Task 5)
-- Produces: passing Molecule air_gapped scenario; used by CI molecule workflow (Task 13)
+- Produces: passing Molecule air_gapped scenario with a real RPM built via rpmbuild; used by CI molecule workflow (Task 13)
 
 - [ ] **Step 1: Write molecule/air_gapped/molecule.yml**
 ```yaml
@@ -1718,32 +1770,34 @@ verifier:
   name: ansible
 ```
 
-- [ ] **Step 2: Write molecule/air_gapped/converge.yml**
+- [ ] **Step 2: Write molecule/air_gapped/prepare.yml**
+
+Build a minimal valid RPM using rpmbuild so that `dnf install` can
+process it. The RPM installs a stub inspectah binary at
+`/usr/local/bin/inspectah` that responds to `--version` and `scan`.
+This proves the RPM install path end-to-end without network access.
+
 ```yaml
 ---
-- name: Prepare stub RPM
+- name: Build stub RPM on localhost
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Create dummy RPM for air-gapped test
-      ansible.builtin.command:
-        cmd: "touch {{ playbook_dir }}/inspectah-stub.rpm"
-        creates: "{{ playbook_dir }}/inspectah-stub.rpm"
+    - name: Create rpmbuild directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ playbook_dir }}/rpmbuild/SPECS"
+        - "{{ playbook_dir }}/rpmbuild/SOURCES"
+        - "{{ playbook_dir }}/rpmbuild/BUILD"
+        - "{{ playbook_dir }}/rpmbuild/RPMS"
+        - "{{ playbook_dir }}/rpmbuild/SRPMS"
 
-- name: Prepare target with stub binary
-  hosts: all
-  become: true
-  tasks:
-    - name: Install test dependencies
-      ansible.builtin.dnf:
-        name:
-          - util-linux
-          - podman
-        state: present
-
-    - name: Create stub inspectah binary
+    - name: Create stub inspectah script for RPM
       ansible.builtin.copy:
-        dest: /usr/local/bin/inspectah
+        dest: "{{ playbook_dir }}/rpmbuild/SOURCES/inspectah"
         mode: "0755"
         content: |
           #!/bin/bash
@@ -1771,6 +1825,67 @@ verifier:
             *) exit 1 ;;
           esac
 
+    - name: Create RPM spec file
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/rpmbuild/SPECS/inspectah.spec"
+        mode: "0644"
+        content: |
+          Name:    inspectah
+          Version: 0.8.6
+          Release: 1.molecule%{?dist}
+          Summary: Stub inspectah for Molecule testing
+          License: MIT
+          Source0: inspectah
+
+          %description
+          Minimal stub RPM for Molecule air-gapped scenario testing.
+
+          %install
+          mkdir -p %{buildroot}/usr/local/bin
+          cp %{SOURCE0} %{buildroot}/usr/local/bin/inspectah
+
+          %files
+          %attr(0755,root,root) /usr/local/bin/inspectah
+
+    - name: Build the stub RPM
+      ansible.builtin.command:
+        argv:
+          - rpmbuild
+          - -bb
+          - --define
+          - "_topdir {{ playbook_dir }}/rpmbuild"
+          - "{{ playbook_dir }}/rpmbuild/SPECS/inspectah.spec"
+      register: _rpmbuild_result
+
+    - name: Find built RPM
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/rpmbuild/RPMS"
+        patterns: "inspectah-*.rpm"
+        recurse: true
+      register: _built_rpms
+
+    - name: Copy RPM to scenario directory
+      ansible.builtin.copy:
+        src: "{{ _built_rpms.files[0].path }}"
+        dest: "{{ playbook_dir }}/inspectah-stub.rpm"
+        mode: "0644"
+        remote_src: true
+
+- name: Prepare target with test dependencies
+  hosts: all
+  become: true
+  tasks:
+    - name: Install test dependencies
+      ansible.builtin.dnf:
+        name:
+          - util-linux
+          - podman
+        state: present
+```
+
+- [ ] **Step 3: Write molecule/air_gapped/converge.yml**
+```yaml
+---
 - name: Converge (RPM install path)
   hosts: all
   become: false
@@ -1783,7 +1898,7 @@ verifier:
         inspectah_cleanup_host: true
 ```
 
-- [ ] **Step 3: Write molecule/air_gapped/verify.yml**
+- [ ] **Step 4: Write molecule/air_gapped/verify.yml**
 ```yaml
 ---
 - name: Verify air-gapped scenario
@@ -1810,24 +1925,25 @@ verifier:
         fail_msg: "Scan result not registered or failed in air-gapped scenario"
 ```
 
-- [ ] **Step 4: Lint air-gapped scenario files**
+- [ ] **Step 5: Lint air-gapped scenario files**
 ```bash
 cd /Users/mrussell/Work/bootc-migration/ansible-role-inspectah
-yamllint molecule/air_gapped/molecule.yml molecule/air_gapped/converge.yml molecule/air_gapped/verify.yml
+yamllint molecule/air_gapped/molecule.yml molecule/air_gapped/prepare.yml molecule/air_gapped/converge.yml molecule/air_gapped/verify.yml
 ```
 Expected: exit 0.
 
-- [ ] **Step 4.5: Run Molecule air-gapped scenario**
+- [ ] **Step 5.5: Run Molecule air-gapped scenario**
 ```bash
 cd /Users/mrussell/Work/bootc-migration/ansible-role-inspectah
 molecule test --scenario-name air_gapped
 ```
 Expected: converge, verify, and destroy all pass. The RPM install path
-is exercised with `inspectah_install: true` and
-`inspectah_install_method: rpm`. Host cleanup removes the package
-and staged RPM after the scan.
+is exercised end-to-end: prepare builds a real RPM with rpmbuild,
+converge installs it via `inspectah_install_method: rpm`, the scan
+runs using the stub binary from the RPM, and host cleanup removes the
+package and staged RPM.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 git add molecule/air_gapped/
 git commit -m "feat(molecule): add air-gapped scenario for RPM install path
@@ -1992,10 +2108,12 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Files:**
 - Create: `.github/workflows/lint.yml`
 - Create: `.github/workflows/molecule.yml`
+- Create: `.github/workflows/smoke.yml`
+- Create: `tests/smoke.yml`
 
 **Interfaces:**
-- Consumes: `.ansible-lint`, `.yamllint` from Task 1; example playbooks from Task 10; Molecule scenarios from Tasks 11-12
-- Produces: PR-blocking lint and test gates
+- Consumes: `.ansible-lint`, `.yamllint` from Task 1; example playbooks from Task 10; Molecule scenarios from Tasks 11-12.5
+- Produces: PR-blocking lint and Molecule gates; weekly/manual real-host smoke gate (requires self-hosted CentOS Stream 9 runner)
 
 - [ ] **Step 1: Write .github/workflows/lint.yml**
 ```yaml
@@ -2085,7 +2203,12 @@ jobs:
                       ansible-lint yamllint
 
       - name: Install collection dependencies
+        if: matrix.scenario != 'fallback'
         run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Install rpmbuild (air_gapped scenario)
+        if: matrix.scenario == 'air_gapped'
+        run: sudo apt-get update && sudo apt-get install -y rpm
 
       - name: Install podman
         run: |
@@ -2100,19 +2223,44 @@ jobs:
 ```
 
 - [ ] **Step 3: Write .github/workflows/smoke.yml**
+
+This is a real-host smoke test, not a Molecule re-run. It requires a
+self-hosted runner with access to a CentOS Stream 9 x86_64 VM (or
+bare-metal host). The job installs inspectah from COPR, runs a real
+scan, and validates the tarball output. It is triggered via
+`workflow_dispatch` and nightly schedule -- not on every PR.
+
+This job will fail if run on GitHub-hosted runners (no CentOS Stream 9
+VM access). That is intentional: it is gated on self-hosted runner
+availability. The CI README should document the self-hosted runner
+requirements.
+
 ```yaml
 ---
 name: Real-host smoke test
 
 "on":
   schedule:
-    # Nightly at 03:00 UTC
-    - cron: "0 3 * * *"
+    # Weekly on Sundays at 03:00 UTC
+    - cron: "0 3 * * 0"
   workflow_dispatch: {}
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    # Requires a self-hosted runner with:
+    #   - CentOS Stream 9 x86_64 (VM or bare-metal, not a container)
+    #   - podman >= 4.4 installed
+    #   - nsenter (util-linux) installed
+    #   - Network access to COPR (copr.fedorainfracloud.org)
+    #   - Root access (sudo without password)
+    #
+    # This job CANNOT run on GitHub-hosted Ubuntu runners.
+    # It validates gaps that Molecule container tests cannot cover:
+    #   - Real inspectah scan execution (not a stub)
+    #   - Real tarball content (not a dummy)
+    #   - Real container lifecycle (podman storage, base image pull)
+    #   - End-to-end COPR install -> scan -> fetch -> cleanup pipeline
+    runs-on: [self-hosted, centos-stream-9, x86_64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -2122,55 +2270,144 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install Ansible dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ansible-core ansible-lint molecule molecule-plugins[podman]
+          pip install ansible-core
 
       - name: Install collection dependencies
         run: ansible-galaxy collection install -r requirements.yml
 
-      - name: Install podman
+      - name: Verify prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
+          echo "--- OS ---"
+          cat /etc/os-release
+          echo "--- Architecture ---"
+          uname -m
+          echo "--- podman ---"
+          podman --version
+          echo "--- nsenter ---"
+          which nsenter
 
-      # Real-host smoke: runs the full scan-fetch pipeline with a
-      # real inspectah binary (installed via COPR) inside a privileged
-      # container. This covers gaps Molecule stubs cannot: actual scan
-      # execution, real tarball content, container lifecycle.
-      #
-      # NOTE: This is a best-effort smoke test. Full real-host validation
-      # (bare metal VM, real podman storage, real base image pull) requires
-      # infrastructure not yet available in CI. This job exercises the
-      # install-scan-fetch-cleanup lifecycle end-to-end in a container
-      # with real binaries.
-      - name: Run smoke test (default scenario, real binary)
+      - name: Run smoke test playbook
         run: |
-          echo "Real-host smoke test placeholder"
-          echo "TODO: Replace stub with real inspectah binary when CI infra supports it"
-          molecule test --scenario-name default
+          ansible-playbook tests/smoke.yml \
+            -i "localhost," \
+            -c local \
+            --become \
+            -e inspectah_install=true \
+            -e inspectah_install_method=copr \
+            -e inspectah_cleanup_host=true
         env:
           ANSIBLE_FORCE_COLOR: "true"
 ```
 
-- [ ] **Step 4: Lint CI files**
+- [ ] **Step 3.5: Write tests/smoke.yml**
+
+A minimal playbook that exercises the real end-to-end pipeline on
+a CentOS Stream 9 host: install from COPR, scan, verify tarball,
+clean up. This is NOT a Molecule scenario -- it runs directly via
+`ansible-playbook` on the self-hosted runner.
+
+```yaml
+---
+- name: Real-host smoke test
+  hosts: all
+  become: false
+  vars:
+    _smoke_scan_output: "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
+    _smoke_fetch_dest: "/tmp/inspectah-smoke-results"
+  roles:
+    - role: ansible-role-inspectah
+      vars:
+        inspectah_scan_output: "{{ _smoke_scan_output }}"
+        inspectah_fetch_dest: "{{ _smoke_fetch_dest }}"
+        inspectah_cleanup_host_tarball: false
+
+- name: Verify smoke test results
+  hosts: all
+  become: true
+  tasks:
+    - name: Verify tarball exists on target
+      ansible.builtin.stat:
+        path: "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
+      register: _smoke_tarball
+
+    - name: Assert tarball was produced
+      ansible.builtin.assert:
+        that:
+          - _smoke_tarball.stat.exists
+          - _smoke_tarball.stat.size > 0
+        fail_msg: >-
+          Smoke test failed: scan tarball not found or empty at
+          /tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz
+
+    - name: Verify tarball is a valid gzip archive
+      ansible.builtin.command:
+        argv:
+          - tar
+          - tzf
+          - "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
+      register: _smoke_tarball_contents
+      changed_when: false
+
+    - name: Assert tarball contains expected files
+      ansible.builtin.assert:
+        that:
+          - _smoke_tarball_contents.stdout_lines | length > 0
+        fail_msg: >-
+          Smoke test failed: tarball appears empty or corrupt.
+
+    - name: Verify fetched tarball on control node
+      ansible.builtin.stat:
+        path: "/tmp/inspectah-smoke-results/{{ ansible_hostname }}.tar.gz"
+      delegate_to: localhost
+      register: _smoke_fetched
+
+    - name: Assert fetched tarball exists
+      ansible.builtin.assert:
+        that:
+          - _smoke_fetched.stat.exists
+        fail_msg: >-
+          Smoke test failed: fetched tarball not found on control node.
+
+    - name: Clean up smoke test artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/inspectah-smoke-{{ ansible_hostname }}.tar.gz"
+      become: true
+
+- name: Clean up control node artifacts
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Remove fetched smoke test results
+      ansible.builtin.file:
+        path: "/tmp/inspectah-smoke-results"
+        state: absent
+```
+
+- [ ] **Step 4: Lint CI files and smoke playbook**
 ```bash
 cd /Users/mrussell/Work/bootc-migration/ansible-role-inspectah
-yamllint .github/workflows/lint.yml .github/workflows/molecule.yml .github/workflows/smoke.yml
+yamllint .github/workflows/lint.yml .github/workflows/molecule.yml .github/workflows/smoke.yml tests/smoke.yml
 ```
 Expected: exit 0.
 
 - [ ] **Step 5: Commit**
 ```bash
-git add .github/
-git commit -m "ci: add lint, Molecule, and nightly smoke test workflows
+git add .github/ tests/smoke.yml
+git commit -m "ci: add lint, Molecule, and real-host smoke test workflows
 
 Lint workflow runs yamllint, ansible-lint (production), and
 syntax-check on all example playbooks. Molecule workflow runs
 default, air_gapped, and fallback scenarios across ansible-core
-2.14, 2.15, 2.16, and 2.17 with podman driver. Nightly smoke
-test runs on schedule and manual dispatch for real-host validation.
+2.14-2.17 with podman driver. Fallback job skips community.general
+install to prove the no-collection rescue path. Real-host smoke
+test runs weekly and on manual dispatch against a self-hosted
+CentOS Stream 9 x86_64 runner with real inspectah from COPR.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2463,7 +2700,7 @@ Cross-reference each spec section against the implementation:
 | 9. Failure Handling | Tasks 4-8 | Covered |
 | 10. Fleet-Scale | Task 14 (README) | Covered |
 | 11. Galaxy Graduation | Task 1 (CHANGELOG), Task 2 (meta) | Covered |
-| 12. Testing | Tasks 11-12, 12.5 | Covered |
+| 12. Testing | Tasks 11-12, 12.5, 13 (smoke) | Covered |
 | 13. Collection Deps | Task 1 (requirements.yml) | Covered |
 | 14. Security | Tasks 4-7, Task 14 | Covered |
 
