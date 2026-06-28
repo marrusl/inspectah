@@ -2,17 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Language Packages and Unmanaged Files decision sections to both single-host and aggregate refine UIs, implement the RPM upload modal for repo-less packages, update keyboard navigation, and extend global search to cover the new sections.
+**Goal:** Add Language Packages and Unmanaged Files decision sections to the single-host refine UI, implement the RPM upload modal for repo-less packages wired to Plan 2's backend upload endpoint, update sidebar/keyboard navigation, and extend global search and focus plumbing to cover the new sections.
 
-**Architecture:** Four layers change: (1) TypeScript types gain new section/item interfaces, (2) new React components render the Language Packages and Unmanaged Files decision sections with per-environment and per-item toggles, (3) the RPM upload modal adds a file-upload workflow to blocked package rows, (4) keyboard navigation, global search, and aggregate mode extend to cover the new sections.
+**Scope boundary — single-host only.** This plan covers single-host refine UI exclusively. Aggregate UI for the new sections (searchable aggregate metadata, detail-pane coverage, variant comparison for language environments and unmanaged files) is Plan 4's responsibility. Plan 3 builds the components and interaction contracts; Plan 4 wires them into aggregate mode. The aggregate tasks (Task 12) from the prior revision are removed. See "Aggregate Handoff" section at the end.
+
+**Architecture:** Four layers change: (1) TypeScript types gain new section/item interfaces including Plan 2's `ProvenanceSignals` and repo-less RPM backend fields, (2) new React components render the Language Packages and Unmanaged Files decision sections with per-environment and per-item toggles, (3) the RPM upload modal adds a file-upload workflow that calls Plan 2's `POST /api/upload-rpm` endpoint so uploads are durable and exportable, (4) `MainContent.tsx` gains section rendering and search/reveal plumbing, `AppShell.tsx` gains focus management, and `useKeyboard.ts` gains shortcut remapping for the new sections.
 
 **Tech Stack:** React 18, TypeScript, PatternFly v6 (components + icons), Vitest, React Testing Library. CSS follows existing `App.css` BEM conventions.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers the "Refine UI: Section Topology" spec section and the per-tier Refine UI subsections.
+**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers the "Refine UI: Section Topology" spec section and the per-tier Refine UI subsections, single-host mode only.
 
-**Plan 1 Contracts:** This plan consumes the shared contracts defined in Plan 1's "Shared Contracts for Plans 2-4" section. Use `ItemId::LanguageEnv`, `ItemId::UnmanagedFile`, the `method` string table, and the confidence rendering gate exactly as specified there.
+**Plan 1 Contracts:** This plan consumes the shared contracts defined in Plan 1's "Shared Contracts for Plans 2-4" section. Use `ItemId::LanguageEnv { ecosystem, path }`, `ItemId::UnmanagedFile { path }`, the `method` string table, and the confidence rendering gate exactly as specified there.
 
-**Thorn Checkpoints:** After Tasks 4, 8, 12.
+**Plan 2 Contracts:** This plan consumes Plan 2's backend contracts:
+- `PackageEntry.repoless_annotation` and `PackageEntry.repoless_cached` fields for deriving RPM row states
+- `POST /api/upload-rpm` endpoint for durable RPM upload (not just UI hook state)
+- `ProvenanceSignals` struct fields (`mutability`, `writable_mount`, `service_working_dir`, `last_modified`, `uid`, `gid`, `permissions`) carried through the DTO for Unmanaged Files reviewability
+
+**Thorn Checkpoints:** After Tasks 4, 8, 13.
 
 ## Global Constraints
 
@@ -33,16 +40,16 @@
 
 | File | What changes |
 |------|-------------|
-| `crates/web/ui/src/api/types.ts` | New `LanguagePackageEnv`, `UnmanagedFileItem`, `UnmanagedFileGroup` interfaces; extend `ViewResponse` |
-| `crates/web/ui/src/components/Sidebar.tsx` | Add Language Packages + Unmanaged Files to `REVIEW_SECTIONS`; move System Tuning to reference; discoverability hint |
+| `crates/web/ui/src/api/types.ts` | New `LanguagePackageEnv`, `UnmanagedFileItem`, `UnmanagedFileGroup`, `ProvenanceSignals` interfaces; `RpmUploadRowState` type; extend `PackageEntry` with `repoless_annotation`, `repoless_cached`; extend `ViewResponse` |
+| `crates/web/ui/src/components/Sidebar.tsx` | Add Language Packages + Unmanaged Files to review sections; move System Tuning to reference; discoverability hint |
 | `crates/web/ui/src/hooks/useKeyboard.ts` | Update `SINGLE_HOST_SECTION_IDS` with new sections after `containers` |
 | `crates/web/ui/src/components/GlobalSearch.tsx` | Add `SECTION_LABELS` entries; accept + search new section items |
-| `crates/web/ui/src/components/PackageList.tsx` | RPM upload icon in blocked rows; muted styling; post-upload transition |
+| `crates/web/ui/src/components/PackageList.tsx` | RPM upload icon in blocked rows; muted styling; post-upload transition; repo-text changes; row-level `aria-live` |
 | `crates/web/ui/src/components/StatsBar.tsx` | Upload RPMs toolbar button when blocked packages exist |
-| `crates/web/ui/src/App.tsx` | Wire new sections into `MainContent` rendering; pass data to `GlobalSearch` |
-| `crates/web/ui/src/components/aggregate/AggregateSidebar.tsx` | No code change needed — data-driven via `sections` prop |
-| `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx` | Render ecosystem/confidence metadata for language packages; type/size/var-warning for unmanaged files |
-| `crates/web/ui/src/App.css` | New styles for upload rows, unmanaged file groups, language package rows, `/var` warning |
+| `crates/web/ui/src/components/MainContent.tsx` | Render Language Packages and Unmanaged Files sections; SectionSearch integration; first-item focus; reveal highlighting |
+| `crates/web/ui/src/components/AppShell.tsx` | Shell-level focus management for new sections; ArrowDown-to-first-item; section search state |
+| `crates/web/ui/src/App.tsx` | Wire new components, pass data to MainContent/Sidebar/GlobalSearch; RPM upload backend calls |
+| `crates/web/ui/src/App.css` | New styles for upload rows, unmanaged file groups, language package rows, `/var` warning, provenance badges |
 
 ### New files
 
@@ -51,12 +58,13 @@
 | `crates/web/ui/src/components/LanguagePackageList.tsx` | Language Packages decision section component |
 | `crates/web/ui/src/components/UnmanagedFileList.tsx` | Unmanaged Files decision section with directory grouping |
 | `crates/web/ui/src/components/RpmUploadModal.tsx` | Single-RPM upload modal with NEVRA validation |
-| `crates/web/ui/src/components/RpmBatchUploadModal.tsx` | Multi-RPM batch upload modal with auto-matching |
-| `crates/web/ui/src/hooks/useRpmUpload.ts` | Upload state machine hook (5 row states) |
+| `crates/web/ui/src/components/RpmBatchUploadModal.tsx` | Multi-RPM batch upload modal with auto-matching and conflicts view |
+| `crates/web/ui/src/hooks/useRpmUpload.ts` | Upload state machine hook (5 row states) wired to `POST /api/upload-rpm` |
 | `crates/web/ui/src/components/__tests__/LanguagePackageList.test.tsx` | Tests for Language Packages section |
-| `crates/web/ui/src/components/__tests__/UnmanagedFileList.test.tsx` | Tests for Unmanaged Files section |
-| `crates/web/ui/src/components/__tests__/RpmUploadModal.test.tsx` | Tests for single + batch upload modals |
+| `crates/web/ui/src/components/__tests__/UnmanagedFileList.test.tsx` | Tests for Unmanaged Files section including grouped accessibility |
+| `crates/web/ui/src/components/__tests__/RpmUploadModal.test.tsx` | Tests for single + batch upload modals including focus trap and conflicts |
 | `crates/web/ui/src/components/__tests__/useRpmUpload.test.ts` | Tests for upload state machine hook |
+| `crates/web/ui/src/components/__tests__/SectionPlumbing.test.tsx` | Tests for MainContent/AppShell search/focus/reveal plumbing |
 
 ---
 
@@ -67,19 +75,20 @@
 - Test: `crates/web/ui/src/components/__tests__/LanguagePackageList.test.tsx` (type import verification)
 
 **Interfaces:**
-- Produces: `LanguagePackageEnv`, `UnmanagedFileItem`, `UnmanagedFileGroup`, `RpmUploadState`, extended `ViewResponse`
-- Consumed by: Tasks 2-12
+- Produces: `LanguagePackageEnv`, `ProvenanceSignals`, `UnmanagedFileItem`, `UnmanagedFileGroup`, `RpmUploadRowState`, extended `PackageEntry`, extended `ViewResponse`
+- Consumed by: Tasks 2-13
 
 - [ ] **Step 1: Add LanguagePackageEnv interface**
 
 In `crates/web/ui/src/api/types.ts`, add after the existing `NonRpmItem` interface (or at the end of the decision item types section):
 
 ```typescript
-/** A language package environment (pip venv, npm project, gem project). */
+/**
+ * A language package environment (pip venv, npm project, gem project).
+ * Identity contract: matches Plan 1's ItemId::LanguageEnv { ecosystem, path }.
+ */
 export interface LanguagePackageEnv {
-  /** Canonical ID: "ecosystem:path" (e.g., "pip:/opt/myapp/venv"). */
-  id: string;
-  /** Ecosystem: "pip" | "npm" | "gem". */
+  /** Ecosystem identifier: "pip" | "npm" | "gem". */
   ecosystem: "pip" | "npm" | "gem";
   /** Absolute path to the environment root. */
   path: string;
@@ -96,25 +105,53 @@ export interface LanguagePackageEnv {
 }
 ```
 
-- [ ] **Step 2: Add UnmanagedFileItem and UnmanagedFileGroup interfaces**
+- [ ] **Step 2: Add ProvenanceSignals interface**
 
-Below `LanguagePackageEnv`, add:
+Below `LanguagePackageEnv`, add the provenance signals that Plan 2's backend provides:
+
+```typescript
+/**
+ * Provenance signals for an unmanaged file.
+ * Matches Plan 2's ProvenanceSignals struct — carry through for
+ * reviewability, don't narrow at the DTO layer.
+ */
+export interface ProvenanceSignals {
+  /** File type classification. */
+  file_type: "elf_binary" | "jar" | "script" | "data_file" | "config" | "symlink" | "other";
+  /** Last-modified timestamp (seconds since epoch). */
+  last_modified: number;
+  /** Filesystem UID. */
+  uid: number;
+  /** Filesystem GID. */
+  gid: number;
+  /** Octal file permissions (e.g., "0755"). */
+  permissions: string;
+  /** True when file's mtime is newer than system install date. */
+  mutability: boolean;
+  /** True when file lives on a read-write mount point. */
+  writable_mount: boolean;
+  /** True when file is under a systemd service's WorkingDirectory. */
+  service_working_dir: boolean;
+}
+```
+
+- [ ] **Step 3: Add UnmanagedFileItem and UnmanagedFileGroup interfaces**
+
+Below `ProvenanceSignals`, add:
 
 ```typescript
 /** A single unmanaged file discovered by --include-unmanaged. */
 export interface UnmanagedFileItem {
-  /** Canonical ID: absolute file path (e.g., "/opt/splunk/bin/splunkd"). */
-  id: string;
-  /** Absolute file path. */
+  /** Absolute file path (matches Plan 1's ItemId::UnmanagedFile { path }). */
   path: string;
   /** File size in bytes. */
   size: number;
-  /** File type: "elf_binary" | "jar" | "script" | "data" | "config" | "symlink" | "other". */
-  file_type: string;
   /** Whether path is under /var. */
   is_var_path: boolean;
   /** Whether to include in export. */
   include: boolean;
+  /** Provenance signals from Plan 2's backend. */
+  provenance: ProvenanceSignals;
 }
 
 /** Directory group for unmanaged files. */
@@ -126,24 +163,35 @@ export interface UnmanagedFileGroup {
 }
 ```
 
-- [ ] **Step 3: Add RpmUploadState type**
+- [ ] **Step 4: Add RpmUploadRowState type and extend PackageEntry**
 
 Below the unmanaged file types, add:
 
 ```typescript
 /**
  * Row state for repo-less RPM packages.
- * See spec "RPM Upload Row Contract" for the 5-state machine.
+ * Derived from Plan 2's backend fields (repoless_annotation, repoless_cached)
+ * combined with local upload state. See spec "RPM Upload Row Contract".
  */
-export type RpmUploadState =
-  | "cached_excluded"    // Cached RPM, pre-excluded
-  | "cached_included"    // Cached RPM, user-included
-  | "needs_upload"       // No RPM, needs upload
-  | "uploaded_excluded"  // RPM uploaded, pre-excluded
+export type RpmUploadRowState =
+  | "cached_excluded"    // Cached RPM found, pre-excluded (no GPG)
+  | "cached_included"    // Cached RPM found, user-included
+  | "needs_upload"       // No RPM anywhere, needs user upload
+  | "uploaded_excluded"  // RPM uploaded via POST /api/upload-rpm, pre-excluded
   | "uploaded_included"; // RPM uploaded, user-included
 ```
 
-- [ ] **Step 4: Extend ViewResponse with new section data**
+Extend `PackageEntry` (or the relevant package type) with Plan 2's backend fields:
+
+```typescript
+// Add to the existing PackageEntry / package item interface:
+  /** Triage annotation for repo-less packages (from Plan 2 backend). */
+  repoless_annotation?: string;
+  /** True if cached RPM was found in /var/cache/dnf/ (from Plan 2 backend). */
+  repoless_cached?: boolean;
+```
+
+- [ ] **Step 5: Extend ViewResponse with new section data**
 
 Find the `ViewResponse` interface and add these optional fields:
 
@@ -156,7 +204,7 @@ Find the `ViewResponse` interface and add these optional fields:
   has_unmanaged_scan?: boolean;
 ```
 
-- [ ] **Step 5: Write type import verification test**
+- [ ] **Step 6: Write type import verification test**
 
 Create `crates/web/ui/src/components/__tests__/LanguagePackageList.test.tsx` with an initial scaffold:
 
@@ -166,10 +214,22 @@ import type {
   LanguagePackageEnv,
   UnmanagedFileItem,
   UnmanagedFileGroup,
-  RpmUploadState,
+  ProvenanceSignals,
+  RpmUploadRowState,
 } from "../../api/types";
 
 // --- Test data factories ---
+
+const DEFAULT_PROVENANCE: ProvenanceSignals = {
+  file_type: "elf_binary",
+  last_modified: 1700000000,
+  uid: 0,
+  gid: 0,
+  permissions: "0755",
+  mutability: false,
+  writable_mount: false,
+  service_working_dir: false,
+};
 
 function makeLangEnv(
   ecosystem: LanguagePackageEnv["ecosystem"],
@@ -178,7 +238,6 @@ function makeLangEnv(
   overrides?: Partial<LanguagePackageEnv>,
 ): LanguagePackageEnv {
   return {
-    id: `${ecosystem}:${path}`,
     ecosystem,
     path,
     method: ecosystem === "pip" ? "pip list" : ecosystem === "npm" ? "npm lockfile" : "gem lockfile",
@@ -195,12 +254,11 @@ function makeUnmanagedFile(
   overrides?: Partial<UnmanagedFileItem>,
 ): UnmanagedFileItem {
   return {
-    id: path,
     path,
     size: 1024,
-    file_type: "elf_binary",
     is_var_path: path.startsWith("/var/"),
     include: true,
+    provenance: { ...DEFAULT_PROVENANCE },
     ...overrides,
   };
 }
@@ -208,22 +266,31 @@ function makeUnmanagedFile(
 describe("Type contracts", () => {
   it("LanguagePackageEnv factory produces valid shape", () => {
     const env = makeLangEnv("pip", "/opt/myapp/venv", ["flask", "requests"]);
-    expect(env.id).toBe("pip:/opt/myapp/venv");
     expect(env.ecosystem).toBe("pip");
+    expect(env.path).toBe("/opt/myapp/venv");
     expect(env.packages).toHaveLength(2);
     expect(env.confidence).toBe("high");
   });
 
-  it("UnmanagedFileItem factory detects /var paths", () => {
-    const regular = makeUnmanagedFile("/opt/splunk/bin/splunkd");
+  it("UnmanagedFileItem factory carries provenance signals", () => {
+    const regular = makeUnmanagedFile("/opt/splunk/bin/splunkd", {
+      provenance: {
+        ...DEFAULT_PROVENANCE,
+        mutability: true,
+        writable_mount: true,
+      },
+    });
     expect(regular.is_var_path).toBe(false);
+    expect(regular.provenance.mutability).toBe(true);
+    expect(regular.provenance.writable_mount).toBe(true);
+    expect(regular.provenance.service_working_dir).toBe(false);
 
     const varFile = makeUnmanagedFile("/var/lib/myapp/data.db");
     expect(varFile.is_var_path).toBe(true);
   });
 
-  it("RpmUploadState covers all 5 states", () => {
-    const states: RpmUploadState[] = [
+  it("RpmUploadRowState covers all 5 states", () => {
+    const states: RpmUploadRowState[] = [
       "cached_excluded",
       "cached_included",
       "needs_upload",
@@ -235,11 +302,14 @@ describe("Type contracts", () => {
 });
 ```
 
-- [ ] **Step 6: Run tests, verify pass, commit**
+- [ ] **Step 7: Run tests, verify pass, commit**
 
 ```bash
 cd crates/web/ui && npm test -- --run
 git add -A && git commit -m "feat(web): add TypeScript types for language packages, unmanaged files, and RPM upload states
+
+Includes ProvenanceSignals matching Plan 2's backend struct and
+repoless_annotation/repoless_cached fields on PackageEntry.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -312,10 +382,8 @@ describe("LanguagePackageList", () => {
         isPending={false}
       />,
     );
-    // High confidence = green-ish label
     const highBadges = screen.getAllByText("high");
     expect(highBadges.length).toBeGreaterThanOrEqual(2);
-    // Medium confidence = orange-ish label
     expect(screen.getByText("medium")).toBeInTheDocument();
   });
 
@@ -368,25 +436,11 @@ const MANIFEST_LABELS: Record<string, string> = {
 
 export interface LanguagePackageListProps {
   environments: LanguagePackageEnv[];
-  onToggle: (envId: string) => void;
+  /** Toggle callback. Receives { ecosystem, path } matching ItemId::LanguageEnv. */
+  onToggle: (ecosystem: string, path: string) => void;
   isPending: boolean;
-  /** Item ID to scroll into view (from global search). */
+  /** Item to scroll into view (from global search). Format: "ecosystem:path". */
   revealItemId?: string;
-  /** Whether section search filter is active. */
-  filterActive?: boolean;
-  /** Current section search query for highlighting. */
-  filterQuery?: string;
-}
-
-function matchesFilter(env: LanguagePackageEnv, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return (
-    env.path.toLowerCase().includes(q) ||
-    env.ecosystem.toLowerCase().includes(q) ||
-    env.packages.some((p) => p.toLowerCase().includes(q)) ||
-    env.manifest_basis.toLowerCase().includes(q)
-  );
 }
 
 export function LanguagePackageList({
@@ -394,32 +448,13 @@ export function LanguagePackageList({
   onToggle,
   isPending,
   revealItemId,
-  filterActive = false,
-  filterQuery = "",
 }: LanguagePackageListProps) {
   const handleToggle = useCallback(
-    (envId: string) => {
-      if (!isPending) onToggle(envId);
+    (ecosystem: string, path: string) => {
+      if (!isPending) onToggle(ecosystem, path);
     },
     [onToggle, isPending],
   );
-
-  const filtered = filterActive && filterQuery
-    ? environments.filter((env) => matchesFilter(env, filterQuery))
-    : environments;
-
-  if (filtered.length === 0 && filterActive) {
-    return (
-      <div
-        className="inspectah-lang-pkg-list"
-        data-testid="language-package-list"
-      >
-        <p className="inspectah-lang-pkg-list__empty">
-          No environments match the current filter.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -428,56 +463,59 @@ export function LanguagePackageList({
       aria-label="Language package environments"
       data-testid="language-package-list"
     >
-      {filtered.map((env) => (
-        <div
-          key={env.id}
-          role="listitem"
-          tabIndex={-1}
-          data-testid={`lang-env-row-${env.id}`}
-          className="inspectah-lang-pkg-row"
-          data-revealed={revealItemId === env.id ? "true" : undefined}
-        >
-          <div className="inspectah-lang-pkg-row__main">
-            <div className="inspectah-lang-pkg-row__toggle">
-              <input
-                type="checkbox"
-                role="checkbox"
-                checked={env.include}
-                disabled={isPending}
-                aria-label={`Toggle ${env.ecosystem} environment at ${env.path}`}
-                onChange={() => handleToggle(env.id)}
-              />
-            </div>
-            <div className="inspectah-lang-pkg-row__info">
-              <div className="inspectah-lang-pkg-row__header">
-                <Label
-                  className="inspectah-lang-pkg-row__ecosystem"
-                  isCompact
-                >
-                  {env.ecosystem}
-                </Label>
-                <span className="inspectah-lang-pkg-row__path">
-                  {env.path}
-                </span>
+      {environments.map((env) => {
+        const itemKey = `${env.ecosystem}:${env.path}`;
+        return (
+          <div
+            key={itemKey}
+            role="listitem"
+            tabIndex={-1}
+            data-testid={`lang-env-row-${itemKey}`}
+            className="inspectah-lang-pkg-row"
+            data-revealed={revealItemId === itemKey ? "true" : undefined}
+          >
+            <div className="inspectah-lang-pkg-row__main">
+              <div className="inspectah-lang-pkg-row__toggle">
+                <input
+                  type="checkbox"
+                  role="checkbox"
+                  checked={env.include}
+                  disabled={isPending}
+                  aria-label={`Toggle ${env.ecosystem} environment at ${env.path}`}
+                  onChange={() => handleToggle(env.ecosystem, env.path)}
+                />
               </div>
-              <div className="inspectah-lang-pkg-row__meta">
-                <Badge isRead>
-                  {env.packages.length} package{env.packages.length !== 1 ? "s" : ""}
-                </Badge>
-                <Label
-                  color={CONFIDENCE_COLOR[env.confidence] ?? "grey"}
-                  isCompact
-                >
-                  {env.confidence}
-                </Label>
-                <span className="inspectah-lang-pkg-row__basis">
-                  {MANIFEST_LABELS[env.manifest_basis] ?? env.manifest_basis}
-                </span>
+              <div className="inspectah-lang-pkg-row__info">
+                <div className="inspectah-lang-pkg-row__header">
+                  <Label
+                    className="inspectah-lang-pkg-row__ecosystem"
+                    isCompact
+                  >
+                    {env.ecosystem}
+                  </Label>
+                  <span className="inspectah-lang-pkg-row__path">
+                    {env.path}
+                  </span>
+                </div>
+                <div className="inspectah-lang-pkg-row__meta">
+                  <Badge isRead>
+                    {env.packages.length} package{env.packages.length !== 1 ? "s" : ""}
+                  </Badge>
+                  <Label
+                    color={CONFIDENCE_COLOR[env.confidence] ?? "grey"}
+                    isCompact
+                  >
+                    {env.confidence}
+                  </Label>
+                  <span className="inspectah-lang-pkg-row__basis">
+                    {MANIFEST_LABELS[env.manifest_basis] ?? env.manifest_basis}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -489,12 +527,12 @@ export function LanguagePackageList({
 cd crates/web/ui && npm test -- --run LanguagePackageList
 ```
 
-- [ ] **Step 5: Write failing test — toggle calls onToggle with env ID**
+- [ ] **Step 5: Write failing test — toggle calls onToggle with ecosystem + path**
 
 Append to the `LanguagePackageList` describe block:
 
 ```typescript
-  it("calls onToggle with env ID when checkbox is clicked", async () => {
+  it("calls onToggle with ecosystem and path when checkbox is clicked", async () => {
     const onToggle = vi.fn();
     render(
       <LanguagePackageList
@@ -506,7 +544,7 @@ Append to the `LanguagePackageList` describe block:
     const user = userEvent.setup();
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes[1]); // npm env
-    expect(onToggle).toHaveBeenCalledWith("npm:/srv/webapp");
+    expect(onToggle).toHaveBeenCalledWith("npm", "/srv/webapp");
   });
 
   it("disables toggles when isPending is true", () => {
@@ -528,8 +566,9 @@ Append to the `LanguagePackageList` describe block:
 cd crates/web/ui && npm test -- --run LanguagePackageList
 git add -A && git commit -m "feat(web): add LanguagePackageList decision section component
 
-Per-environment toggles for pip/npm/gem environments with confidence
-labels and package count badges.
+Per-environment toggles for pip/npm/gem environments. onToggle
+emits { ecosystem, path } matching Plan 1's ItemId::LanguageEnv
+contract. Confidence labels and package count badges.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -543,10 +582,10 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: `crates/web/ui/src/components/__tests__/UnmanagedFileList.test.tsx`
 
 **Interfaces:**
-- Consumes: `UnmanagedFileGroup`, `UnmanagedFileItem` from types.ts
-- Produces: `UnmanagedFileList` component with directory grouping, per-item toggles, size rollup
+- Consumes: `UnmanagedFileGroup`, `UnmanagedFileItem`, `ProvenanceSignals` from types.ts
+- Produces: `UnmanagedFileList` component with directory grouping, per-item toggles, size rollup, provenance signal rendering
 
-- [ ] **Step 1: Write failing test — renders grouped files with directory headers**
+- [ ] **Step 1: Write failing test — renders grouped files with provenance signals**
 
 Create `crates/web/ui/src/components/__tests__/UnmanagedFileList.test.tsx`:
 
@@ -555,21 +594,31 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnmanagedFileList } from "../UnmanagedFileList";
-import type { UnmanagedFileGroup, UnmanagedFileItem } from "../../api/types";
+import type { UnmanagedFileGroup, UnmanagedFileItem, ProvenanceSignals } from "../../api/types";
 
 // --- Test data factories ---
+
+const DEFAULT_PROVENANCE: ProvenanceSignals = {
+  file_type: "elf_binary",
+  last_modified: 1700000000,
+  uid: 0,
+  gid: 0,
+  permissions: "0755",
+  mutability: false,
+  writable_mount: false,
+  service_working_dir: false,
+};
 
 function makeFile(
   path: string,
   overrides?: Partial<UnmanagedFileItem>,
 ): UnmanagedFileItem {
   return {
-    id: path,
     path,
-    size: 1024 * 100, // 100 KB
-    file_type: "elf_binary",
+    size: 1024 * 100,
     is_var_path: path.startsWith("/var/"),
     include: true,
+    provenance: { ...DEFAULT_PROVENANCE },
     ...overrides,
   };
 }
@@ -578,10 +627,13 @@ const groups: UnmanagedFileGroup[] = [
   {
     directory: "/opt/splunk",
     items: [
-      makeFile("/opt/splunk/bin/splunkd", { size: 50 * 1024 * 1024 }),
+      makeFile("/opt/splunk/bin/splunkd", {
+        size: 50 * 1024 * 1024,
+        provenance: { ...DEFAULT_PROVENANCE, mutability: true },
+      }),
       makeFile("/opt/splunk/etc/system.conf", {
         size: 2048,
-        file_type: "config",
+        provenance: { ...DEFAULT_PROVENANCE, file_type: "config" },
       }),
       makeFile("/opt/splunk/lib/libcrypto.so", { size: 5 * 1024 * 1024 }),
     ],
@@ -591,9 +643,16 @@ const groups: UnmanagedFileGroup[] = [
     items: [
       makeFile("/srv/myapp/app.jar", {
         size: 120 * 1024 * 1024,
-        file_type: "jar",
+        provenance: {
+          ...DEFAULT_PROVENANCE,
+          file_type: "jar",
+          service_working_dir: true,
+        },
       }),
-      makeFile("/srv/myapp/start.sh", { size: 512, file_type: "script" }),
+      makeFile("/srv/myapp/start.sh", {
+        size: 512,
+        provenance: { ...DEFAULT_PROVENANCE, file_type: "script" },
+      }),
     ],
   },
   {
@@ -601,7 +660,12 @@ const groups: UnmanagedFileGroup[] = [
     items: [
       makeFile("/var/lib/custom/data.db", {
         size: 200 * 1024 * 1024,
-        file_type: "data",
+        provenance: {
+          ...DEFAULT_PROVENANCE,
+          file_type: "data_file",
+          writable_mount: true,
+          mutability: true,
+        },
       }),
     ],
   },
@@ -649,6 +713,23 @@ describe("UnmanagedFileList", () => {
       screen.getByText(/persistent, mutable/),
     ).toBeInTheDocument();
   });
+
+  it("renders provenance signals on file rows", () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    // /srv/myapp/app.jar has service_working_dir: true
+    expect(screen.getByText(/service workdir/i)).toBeInTheDocument();
+    // /var/lib/custom/data.db has writable_mount: true
+    expect(screen.getByText(/writable mount/i)).toBeInTheDocument();
+    // /opt/splunk/bin/splunkd has mutability: true
+    expect(screen.getByText(/modified since install/i)).toBeInTheDocument();
+  });
 });
 ```
 
@@ -664,12 +745,12 @@ Create `crates/web/ui/src/components/UnmanagedFileList.tsx`:
 
 ```tsx
 import { useState, useCallback, useMemo } from "react";
-import { Badge, Button, Content } from "@patternfly/react-core";
+import { Badge, Button, Content, Label } from "@patternfly/react-core";
 import {
   AngleRightIcon,
   AngleDownIcon,
 } from "@patternfly/react-icons";
-import type { UnmanagedFileGroup, UnmanagedFileItem } from "../api/types";
+import type { UnmanagedFileGroup, UnmanagedFileItem, ProvenanceSignals } from "../api/types";
 
 /** Format bytes into human-readable size. */
 function formatSize(bytes: number): string {
@@ -680,30 +761,33 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-export interface UnmanagedFileListProps {
-  groups: UnmanagedFileGroup[];
-  onToggleItem: (itemId: string) => void;
-  onToggleGroup: (directory: string, include: boolean) => void;
-  isPending: boolean;
-  /** Bulk action: exclude all items. */
-  onIncludeNone?: () => void;
-  /** Bulk action: reset all items to included. */
-  onResetAll?: () => void;
-  /** Item ID to scroll into view (from global search). */
-  revealItemId?: string;
-  /** Whether section search filter is active. */
-  filterActive?: boolean;
-  /** Current section search query. */
-  filterQuery?: string;
+/** Render provenance signal badges for a file. */
+function ProvenanceBadges({ signals }: { signals: ProvenanceSignals }) {
+  return (
+    <span className="inspectah-unmanaged-row__provenance">
+      {signals.mutability && (
+        <Label color="orange" isCompact>modified since install</Label>
+      )}
+      {signals.writable_mount && (
+        <Label color="orange" isCompact>writable mount</Label>
+      )}
+      {signals.service_working_dir && (
+        <Label color="blue" isCompact>service workdir</Label>
+      )}
+    </span>
+  );
 }
 
-function itemMatchesFilter(item: UnmanagedFileItem, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return (
-    item.path.toLowerCase().includes(q) ||
-    item.file_type.toLowerCase().includes(q)
-  );
+export interface UnmanagedFileListProps {
+  groups: UnmanagedFileGroup[];
+  /** Toggle callback. Receives absolute file path matching ItemId::UnmanagedFile { path }. */
+  onToggleItem: (path: string) => void;
+  onToggleGroup: (directory: string, include: boolean) => void;
+  isPending: boolean;
+  onIncludeNone?: () => void;
+  onResetAll?: () => void;
+  /** Item path to scroll into view (from global search). */
+  revealItemId?: string;
 }
 
 function FileRow({
@@ -713,16 +797,18 @@ function FileRow({
   isRevealed,
 }: {
   item: UnmanagedFileItem;
-  onToggle: (id: string) => void;
+  onToggle: (path: string) => void;
   isPending: boolean;
   isRevealed: boolean;
 }) {
   return (
     <div
       className="inspectah-unmanaged-row"
-      data-testid={`unmanaged-file-${item.id}`}
+      data-testid={`unmanaged-file-${item.path}`}
       data-revealed={isRevealed ? "true" : undefined}
       role="listitem"
+      tabIndex={-1}
+      aria-label={item.path}
     >
       <input
         type="checkbox"
@@ -730,15 +816,16 @@ function FileRow({
         checked={item.include}
         disabled={isPending}
         aria-label={`Toggle ${item.path}`}
-        onChange={() => onToggle(item.id)}
+        onChange={() => onToggle(item.path)}
       />
       <span className="inspectah-unmanaged-row__path">
         {item.path.split("/").pop()}
       </span>
-      <span className="inspectah-unmanaged-row__type">{item.file_type}</span>
+      <span className="inspectah-unmanaged-row__type">{item.provenance.file_type}</span>
       <span className="inspectah-unmanaged-row__size">
         {formatSize(item.size)}
       </span>
+      <ProvenanceBadges signals={item.provenance} />
       {item.is_var_path && (
         <span
           className="inspectah-unmanaged-row__var-warning"
@@ -757,25 +844,16 @@ function DirectoryGroup({
   onToggleGroup,
   isPending,
   revealItemId,
-  forceExpanded,
-  matchingItemIds,
 }: {
   group: UnmanagedFileGroup;
-  onToggleItem: (id: string) => void;
+  onToggleItem: (path: string) => void;
   onToggleGroup: (directory: string, include: boolean) => void;
   isPending: boolean;
   revealItemId?: string;
-  forceExpanded: boolean;
-  matchingItemIds?: Set<string>;
 }) {
-  const hasRevealedChild = group.items.some((i) => i.id === revealItemId);
-  const hasMatchingChildren =
-    matchingItemIds && group.items.some((i) => matchingItemIds.has(i.id));
+  const hasRevealedChild = group.items.some((i) => i.path === revealItemId);
   const [isExpanded, setIsExpanded] = useState(true);
-
-  // Auto-expand when search matches children or reveal targets a child
-  const shouldExpand =
-    isExpanded || forceExpanded || hasRevealedChild || !!hasMatchingChildren;
+  const shouldExpand = isExpanded || hasRevealedChild;
 
   const allIncluded = group.items.every((i) => i.include);
   const noneIncluded = group.items.every((i) => !i.include);
@@ -786,31 +864,44 @@ function DirectoryGroup({
     .reduce((sum, i) => sum + i.size, 0);
 
   const handleGroupToggle = useCallback(() => {
-    // Toggle to the opposite of majority state
     onToggleGroup(group.directory, noneIncluded || !allIncluded);
   }, [group.directory, allIncluded, noneIncluded, onToggleGroup]);
 
-  const isVarGroup = group.directory.startsWith("/var/");
+  const handleExpandCollapse = useCallback(() => {
+    setIsExpanded((prev) => !prev);
+  }, []);
 
-  const items = matchingItemIds
-    ? group.items.filter((i) => matchingItemIds.has(i.id))
-    : group.items;
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handleExpandCollapse();
+      }
+      if (e.key === "ArrowRight" && !shouldExpand) {
+        e.preventDefault();
+        setIsExpanded(true);
+      }
+      if (e.key === "ArrowLeft" && shouldExpand) {
+        e.preventDefault();
+        setIsExpanded(false);
+      }
+    },
+    [shouldExpand, handleExpandCollapse],
+  );
+
+  const isVarGroup = group.directory.startsWith("/var/");
 
   return (
     <div
       className={`inspectah-unmanaged-group${isVarGroup ? " inspectah-unmanaged-group--var" : ""}`}
       data-testid={`unmanaged-group-${group.directory}`}
+      role="group"
       aria-label={`${group.directory} file group`}
     >
       <div
         className="inspectah-unmanaged-group__header"
-        onClick={() => setIsExpanded(!shouldExpand)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setIsExpanded(!shouldExpand);
-          }
-        }}
+        onClick={handleExpandCollapse}
+        onKeyDown={handleKeyDown}
         tabIndex={0}
         role="button"
         aria-expanded={shouldExpand}
@@ -836,7 +927,7 @@ function DirectoryGroup({
         <Badge isRead>
           {group.items.length} item{group.items.length !== 1 ? "s" : ""}
         </Badge>
-        <span className="inspectah-unmanaged-group__rollup">
+        <span className="inspectah-unmanaged-group__rollup" aria-live="polite">
           {groupIncludedCount} of {group.items.length} included, ~{formatSize(includedSize)} of ~{formatSize(groupSize)}
         </span>
         {isVarGroup && (
@@ -851,17 +942,22 @@ function DirectoryGroup({
           role="list"
           aria-label={`Files in ${group.directory}`}
         >
-          {items.map((item) => (
+          {group.items.map((item) => (
             <FileRow
-              key={item.id}
+              key={item.path}
               item={item}
               onToggle={onToggleItem}
               isPending={isPending}
-              isRevealed={revealItemId === item.id}
+              isRevealed={revealItemId === item.path}
             />
           ))}
         </div>
       )}
+      <div
+        className="inspectah-unmanaged-group__toggle-announce"
+        aria-live="polite"
+        role="status"
+      />
     </div>
   );
 }
@@ -874,8 +970,6 @@ export function UnmanagedFileList({
   onIncludeNone,
   onResetAll,
   revealItemId,
-  filterActive = false,
-  filterQuery = "",
 }: UnmanagedFileListProps) {
   const allItems = useMemo(
     () => groups.flatMap((g) => g.items),
@@ -889,35 +983,13 @@ export function UnmanagedFileList({
     .filter((i) => i.include)
     .reduce((sum, i) => sum + i.size, 0);
 
-  // Build set of matching item IDs for search filtering
-  const matchingItemIds = useMemo(() => {
-    if (!filterActive || !filterQuery) return undefined;
-    const ids = new Set<string>();
-    for (const group of groups) {
-      for (const item of group.items) {
-        if (itemMatchesFilter(item, filterQuery)) {
-          ids.add(item.id);
-        }
-      }
-    }
-    return ids;
-  }, [groups, filterActive, filterQuery]);
-
-  // Filter groups to those with matching items
-  const visibleGroups = matchingItemIds
-    ? groups.filter((g) => g.items.some((i) => matchingItemIds.has(i.id)))
-    : groups;
-
   return (
     <div
       className="inspectah-unmanaged-list"
       data-testid="unmanaged-file-list"
     >
-      <div
-        className="inspectah-unmanaged-list__header"
-        aria-live="polite"
-      >
-        <Content component="small" data-testid="unmanaged-rollup">
+      <div className="inspectah-unmanaged-list__header">
+        <Content component="small" data-testid="unmanaged-rollup" aria-live="polite">
           {includedCount} of {totalCount} items included, ~{formatSize(includedSize)} of ~{formatSize(totalSize)}
         </Content>
         <div className="inspectah-unmanaged-list__actions">
@@ -943,7 +1015,7 @@ export function UnmanagedFileList({
           )}
         </div>
       </div>
-      {visibleGroups.map((group) => (
+      {groups.map((group) => (
         <DirectoryGroup
           key={group.directory}
           group={group}
@@ -951,8 +1023,6 @@ export function UnmanagedFileList({
           onToggleGroup={onToggleGroup}
           isPending={isPending}
           revealItemId={revealItemId}
-          forceExpanded={filterActive && !!filterQuery}
-          matchingItemIds={matchingItemIds}
         />
       ))}
     </div>
@@ -966,7 +1036,7 @@ export function UnmanagedFileList({
 cd crates/web/ui && npm test -- --run UnmanagedFileList
 ```
 
-- [ ] **Step 5: Write failing test — group toggle and size rollup**
+- [ ] **Step 5: Write failing tests — group toggle, size rollup, grouped accessibility**
 
 Append to `UnmanagedFileList.test.tsx`:
 
@@ -982,7 +1052,6 @@ Append to `UnmanagedFileList.test.tsx`:
       />,
     );
     const user = userEvent.setup();
-    // Group checkboxes have aria-label "Toggle all files in ..."
     const groupCb = screen.getByLabelText("Toggle all files in /opt/splunk");
     await user.click(groupCb);
     expect(onToggleGroup).toHaveBeenCalledWith("/opt/splunk", expect.any(Boolean));
@@ -1001,7 +1070,7 @@ Append to `UnmanagedFileList.test.tsx`:
     expect(rollup.textContent).toMatch(/6 of 6 items included/);
   });
 
-  it("calls onToggleItem when individual file checkbox is clicked", async () => {
+  it("calls onToggleItem with file path when individual file checkbox is clicked", async () => {
     const onToggleItem = vi.fn();
     render(
       <UnmanagedFileList
@@ -1033,17 +1102,86 @@ Append to `UnmanagedFileList.test.tsx`:
     await user.click(screen.getByText("Include None"));
     expect(onIncludeNone).toHaveBeenCalled();
   });
+
+  // --- Grouped accessibility ---
+
+  it("group header has role='button' and aria-expanded", () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")!;
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("group rollup has aria-live='polite' for debounced size announcements", () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const rollup = screen.getByTestId("unmanaged-rollup");
+    expect(rollup).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("ArrowRight on collapsed group expands it", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    // First collapse a group by clicking the header
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    await user.click(groupHeader);
+    expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+    // ArrowRight should expand it
+    groupHeader.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("ArrowLeft on expanded group collapses it", async () => {
+    render(
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const user = userEvent.setup();
+    const groupHeader = screen.getByLabelText("/opt/splunk file group")
+      .querySelector("[role='button']")! as HTMLElement;
+    expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+    groupHeader.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  });
 ```
 
 - [ ] **Step 6: Verify tests pass, commit**
 
 ```bash
 cd crates/web/ui && npm test -- --run UnmanagedFileList
-git add -A && git commit -m "feat(web): add UnmanagedFileList decision section with directory grouping
+git add -A && git commit -m "feat(web): add UnmanagedFileList with directory grouping and provenance signals
 
 Grouped by parent directory with per-item and per-group toggles,
-running size rollup, /var path warnings, and Include None/Reset All
-bulk actions.
+running size rollup, /var path warnings, provenance signal badges
+(mutability, writable mount, service workdir), Include None/Reset
+All bulk actions, and ArrowLeft/ArrowRight keyboard expand/collapse.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -1057,55 +1195,103 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: `crates/web/ui/src/components/__tests__/useRpmUpload.test.ts`
 
 **Interfaces:**
-- Consumes: `RpmUploadState` from types.ts
-- Produces: `useRpmUpload` hook managing the 5-state row machine per spec's RPM Upload Row Contract
+- Consumes: `RpmUploadRowState` from types.ts, `PackageEntry.repoless_annotation`, `PackageEntry.repoless_cached` from Plan 2
+- Produces: `useRpmUpload` hook managing the 5-state row machine. Uploads call `POST /api/upload-rpm`, not just local state.
 
-- [ ] **Step 1: Write failing test — state machine transitions**
+Row state derivation contract (from Plan 2 backend fields):
+
+| `repoless_annotation` | `repoless_cached` | Local upload? | Row State |
+|------------------------|-------------------|---------------|-----------|
+| non-empty | `true` | no | `cached_excluded` (toggleable) |
+| non-empty | `true` | no, user-included | `cached_included` |
+| non-empty | `false` | no | `needs_upload` |
+| non-empty | `false` | yes | `uploaded_excluded` |
+| non-empty | `false` | yes, user-included | `uploaded_included` |
+
+- [ ] **Step 1: Write failing test — state machine transitions with backend integration**
 
 Create `crates/web/ui/src/components/__tests__/useRpmUpload.test.ts`:
 
 ```typescript
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useRpmUpload } from "../../hooks/useRpmUpload";
 
+// Mock fetch for POST /api/upload-rpm
+const mockFetch = vi.fn();
+globalThis.fetch = mockFetch;
+
+beforeEach(() => {
+  mockFetch.mockReset();
+  mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+});
+
 describe("useRpmUpload", () => {
-  it("initializes with empty uploads map", () => {
+  it("derives cached_excluded state from backend fields", () => {
     const { result } = renderHook(() => useRpmUpload());
-    expect(result.current.uploads).toEqual(new Map());
+    act(() => {
+      result.current.initFromBackend([
+        { name: "custom-tool", arch: "x86_64", repoless_annotation: "No repo source — cached RPM bundled", repoless_cached: true },
+      ]);
+    });
+    expect(result.current.getRowState("custom-tool")).toBe("cached_excluded");
   });
 
-  it("getState returns 'needs_upload' for unknown package", () => {
+  it("derives needs_upload state from backend fields when not cached", () => {
     const { result } = renderHook(() => useRpmUpload());
-    expect(result.current.getState("unknown-pkg")).toBe("needs_upload");
+    act(() => {
+      result.current.initFromBackend([
+        { name: "my-agent", arch: "x86_64", repoless_annotation: "No repo source — manual resolution needed", repoless_cached: false },
+      ]);
+    });
+    expect(result.current.getRowState("my-agent")).toBe("needs_upload");
   });
 
-  it("uploadRpm transitions from needs_upload to uploaded_excluded", () => {
+  it("returns undefined for non-repoless packages", () => {
     const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([]);
+    });
+    expect(result.current.getRowState("normal-package")).toBeUndefined();
+  });
+
+  it("uploadRpm calls POST /api/upload-rpm and transitions state", async () => {
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        { name: "nginx", arch: "x86_64", repoless_annotation: "manual resolution", repoless_cached: false },
+      ]);
+    });
     const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm", {
       type: "application/x-rpm",
     });
-    act(() => {
-      result.current.uploadRpm("nginx", mockFile);
+    await act(async () => {
+      await result.current.uploadRpm("nginx", mockFile);
     });
-    expect(result.current.getState("nginx")).toBe("uploaded_excluded");
-    expect(result.current.getFile("nginx")).toBe(mockFile);
+    // Verify POST was called
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/upload-rpm",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.current.getRowState("nginx")).toBe("uploaded_excluded");
   });
 
-  it("removeUpload transitions back to needs_upload", () => {
+  it("removeUpload transitions back to needs_upload", async () => {
     const { result } = renderHook(() => useRpmUpload());
-    const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm", {
-      type: "application/x-rpm",
-    });
     act(() => {
-      result.current.uploadRpm("nginx", mockFile);
+      result.current.initFromBackend([
+        { name: "nginx", arch: "x86_64", repoless_annotation: "manual resolution", repoless_cached: false },
+      ]);
     });
-    expect(result.current.getState("nginx")).toBe("uploaded_excluded");
+    const mockFile = new File(["rpm-content"], "nginx-1.24-1.el9.x86_64.rpm");
+    await act(async () => {
+      await result.current.uploadRpm("nginx", mockFile);
+    });
+    expect(result.current.getRowState("nginx")).toBe("uploaded_excluded");
     act(() => {
       result.current.removeUpload("nginx");
     });
-    expect(result.current.getState("nginx")).toBe("needs_upload");
-    expect(result.current.getFile("nginx")).toBeUndefined();
+    expect(result.current.getRowState("nginx")).toBe("needs_upload");
   });
 
   it("validateFilename accepts matching NEVRA", () => {
@@ -1137,25 +1323,30 @@ describe("useRpmUpload", () => {
     expect(validation.error).toContain(".rpm");
   });
 
-  it("needsUploadCount returns correct count", () => {
+  it("needsUploadCount counts packages still needing uploads", async () => {
     const { result } = renderHook(() => useRpmUpload());
-    // Register packages that need uploads
     act(() => {
-      result.current.registerNeedsUpload(["nginx", "custom-agent", "my-tool"]);
+      result.current.initFromBackend([
+        { name: "nginx", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+        { name: "custom-agent", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+        { name: "my-tool", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+      ]);
     });
     expect(result.current.needsUploadCount).toBe(3);
-    // Upload one
     const mockFile = new File(["rpm"], "nginx-1.0-1.el9.x86_64.rpm");
-    act(() => {
-      result.current.uploadRpm("nginx", mockFile);
+    await act(async () => {
+      await result.current.uploadRpm("nginx", mockFile);
     });
     expect(result.current.needsUploadCount).toBe(2);
   });
 
-  it("batchUpload matches files to packages by name prefix", () => {
+  it("batchMatch matches files to packages by name prefix", () => {
     const { result } = renderHook(() => useRpmUpload());
     act(() => {
-      result.current.registerNeedsUpload(["nginx", "custom-agent"]);
+      result.current.initFromBackend([
+        { name: "nginx", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+        { name: "custom-agent", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+      ]);
     });
     const files = [
       new File(["rpm1"], "nginx-1.24-1.el9.x86_64.rpm"),
@@ -1168,6 +1359,27 @@ describe("useRpmUpload", () => {
     });
     expect(matchResult!.matched).toHaveLength(2);
     expect(matchResult!.unmatched).toHaveLength(1);
+    expect(matchResult!.conflicts).toHaveLength(0);
+  });
+
+  it("batchMatch detects conflicts when multiple files match same package", () => {
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        { name: "nginx", arch: "x86_64", repoless_annotation: "manual", repoless_cached: false },
+      ]);
+    });
+    const files = [
+      new File(["rpm1"], "nginx-1.24-1.el9.x86_64.rpm"),
+      new File(["rpm2"], "nginx-1.25-1.el9.x86_64.rpm"),
+    ];
+    let matchResult: ReturnType<typeof result.current.batchMatch>;
+    act(() => {
+      matchResult = result.current.batchMatch(files);
+    });
+    expect(matchResult!.conflicts).toHaveLength(1);
+    expect(matchResult!.conflicts[0].packageName).toBe("nginx");
+    expect(matchResult!.conflicts[0].files).toHaveLength(2);
   });
 });
 ```
@@ -1184,10 +1396,13 @@ Create `crates/web/ui/src/hooks/useRpmUpload.ts`:
 
 ```typescript
 import { useState, useCallback, useMemo } from "react";
+import type { RpmUploadRowState } from "../api/types";
 
-interface UploadEntry {
-  file: File;
-  state: "uploaded_excluded" | "uploaded_included";
+interface RepolessEntry {
+  name: string;
+  arch: string;
+  repoless_annotation: string;
+  repoless_cached: boolean;
 }
 
 interface ValidationResult {
@@ -1202,69 +1417,81 @@ interface BatchMatchResult {
 }
 
 export interface UseRpmUploadResult {
-  /** Map of package name → upload entry. */
-  uploads: Map<string, UploadEntry>;
-  /** Get the current state for a package. Returns "needs_upload" if no upload exists. */
-  getState: (packageName: string) => string;
-  /** Get the uploaded file for a package. */
-  getFile: (packageName: string) => File | undefined;
-  /** Upload an RPM for a specific package. Transitions to uploaded_excluded. */
-  uploadRpm: (packageName: string, file: File) => void;
-  /** Remove an upload, reverting to needs_upload. */
+  /** Initialize from backend PackageEntry fields. */
+  initFromBackend: (entries: RepolessEntry[]) => void;
+  /** Get the current row state for a package. Returns undefined for non-repoless packages. */
+  getRowState: (packageName: string) => RpmUploadRowState | undefined;
+  /** Upload an RPM via POST /api/upload-rpm. Transitions to uploaded_excluded on success. */
+  uploadRpm: (packageName: string, file: File) => Promise<void>;
+  /** Remove a local upload, reverting to needs_upload. */
   removeUpload: (packageName: string) => void;
   /** Validate a filename against expected NEVRA. */
-  validateFilename: (
-    packageName: string,
-    arch: string,
-    filename: string,
-  ) => ValidationResult;
-  /** Register packages that need uploads. */
-  registerNeedsUpload: (packageNames: string[]) => void;
+  validateFilename: (packageName: string, arch: string, filename: string) => ValidationResult;
   /** Number of packages still needing uploads. */
   needsUploadCount: number;
   /** Match multiple files to registered packages by name prefix. */
   batchMatch: (files: File[]) => BatchMatchResult;
-  /** Apply a batch match result — upload all matched files. */
-  applyBatchMatch: (matched: BatchMatchResult["matched"]) => void;
+  /** Apply a batch match result — upload all matched files via backend. */
+  applyBatchMatch: (matched: BatchMatchResult["matched"]) => Promise<void>;
+  /** Get names of packages that need RPM uploads. */
+  needsUploadPackages: string[];
 }
 
 /** Extract the package name prefix from an RPM filename (before first hyphen followed by a digit). */
 function extractPackageName(filename: string): string | null {
-  // RPM naming: name-version-release.arch.rpm
-  // Package name can contain hyphens, so find first hyphen followed by a digit
   const match = filename.match(/^(.+?)-\d/);
   return match ? match[1] : null;
 }
 
 export function useRpmUpload(): UseRpmUploadResult {
-  const [uploads, setUploads] = useState<Map<string, UploadEntry>>(
+  const [repolessMap, setRepolessMap] = useState<Map<string, RepolessEntry>>(
     () => new Map(),
   );
-  const [needsUploadSet, setNeedsUploadSet] = useState<Set<string>>(
+  const [uploadedSet, setUploadedSet] = useState<Set<string>>(
     () => new Set(),
   );
 
-  const getState = useCallback(
-    (packageName: string): string => {
-      const entry = uploads.get(packageName);
-      if (entry) return entry.state;
+  const initFromBackend = useCallback((entries: RepolessEntry[]) => {
+    const map = new Map<string, RepolessEntry>();
+    for (const e of entries) {
+      map.set(e.name, e);
+    }
+    setRepolessMap(map);
+  }, []);
+
+  const getRowState = useCallback(
+    (packageName: string): RpmUploadRowState | undefined => {
+      const entry = repolessMap.get(packageName);
+      if (!entry) return undefined;
+
+      if (uploadedSet.has(packageName)) {
+        return "uploaded_excluded";
+      }
+      if (entry.repoless_cached) {
+        return "cached_excluded";
+      }
       return "needs_upload";
     },
-    [uploads],
-  );
-
-  const getFile = useCallback(
-    (packageName: string): File | undefined => {
-      return uploads.get(packageName)?.file;
-    },
-    [uploads],
+    [repolessMap, uploadedSet],
   );
 
   const uploadRpm = useCallback(
-    (packageName: string, file: File) => {
-      setUploads((prev) => {
-        const next = new Map(prev);
-        next.set(packageName, { file, state: "uploaded_excluded" });
+    async (packageName: string, file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/upload-rpm", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`);
+      }
+
+      setUploadedSet((prev) => {
+        const next = new Set(prev);
+        next.add(packageName);
         return next;
       });
     },
@@ -1273,8 +1500,8 @@ export function useRpmUpload(): UseRpmUploadResult {
 
   const removeUpload = useCallback(
     (packageName: string) => {
-      setUploads((prev) => {
-        const next = new Map(prev);
+      setUploadedSet((prev) => {
+        const next = new Set(prev);
         next.delete(packageName);
         return next;
       });
@@ -1283,11 +1510,7 @@ export function useRpmUpload(): UseRpmUploadResult {
   );
 
   const validateFilename = useCallback(
-    (
-      packageName: string,
-      arch: string,
-      filename: string,
-    ): ValidationResult => {
+    (packageName: string, arch: string, filename: string): ValidationResult => {
       if (!filename.endsWith(".rpm")) {
         return {
           valid: false,
@@ -1303,7 +1526,6 @@ export function useRpmUpload(): UseRpmUploadResult {
         };
       }
 
-      // Check architecture
       const archPattern = `.${arch}.rpm`;
       if (!filename.endsWith(archPattern) && !filename.endsWith(".noarch.rpm")) {
         return {
@@ -1317,41 +1539,45 @@ export function useRpmUpload(): UseRpmUploadResult {
     [],
   );
 
-  const registerNeedsUpload = useCallback(
-    (packageNames: string[]) => {
-      setNeedsUploadSet(new Set(packageNames));
-    },
-    [],
-  );
-
   const needsUploadCount = useMemo(() => {
     let count = 0;
-    for (const name of needsUploadSet) {
-      if (!uploads.has(name)) count++;
+    for (const [name, entry] of repolessMap) {
+      if (!entry.repoless_cached && !uploadedSet.has(name)) {
+        count++;
+      }
     }
     return count;
-  }, [needsUploadSet, uploads]);
+  }, [repolessMap, uploadedSet]);
+
+  const needsUploadPackages = useMemo(() => {
+    const pkgs: string[] = [];
+    for (const [name, entry] of repolessMap) {
+      if (!entry.repoless_cached && !uploadedSet.has(name)) {
+        pkgs.push(name);
+      }
+    }
+    return pkgs;
+  }, [repolessMap, uploadedSet]);
 
   const batchMatch = useCallback(
     (files: File[]): BatchMatchResult => {
       const matched: BatchMatchResult["matched"] = [];
       const unmatched: File[] = [];
-      const conflicts = new Map<string, File[]>();
+      const conflictMap = new Map<string, File[]>();
 
       for (const file of files) {
         const extractedName = extractPackageName(file.name);
-        if (!extractedName || !needsUploadSet.has(extractedName)) {
+        if (!extractedName || !repolessMap.has(extractedName)) {
           unmatched.push(file);
           continue;
         }
 
-        const existing = conflicts.get(extractedName);
+        const existing = conflictMap.get(extractedName);
         if (existing) {
           existing.push(file);
         } else if (matched.some((m) => m.packageName === extractedName)) {
-          // Move from matched to conflicts
           const prev = matched.find((m) => m.packageName === extractedName)!;
-          conflicts.set(extractedName, [prev.file, file]);
+          conflictMap.set(extractedName, [prev.file, file]);
           matched.splice(matched.indexOf(prev), 1);
         } else {
           matched.push({ packageName: extractedName, file });
@@ -1361,7 +1587,7 @@ export function useRpmUpload(): UseRpmUploadResult {
       return {
         matched,
         unmatched,
-        conflicts: Array.from(conflicts.entries()).map(
+        conflicts: Array.from(conflictMap.entries()).map(
           ([packageName, conflictFiles]) => ({
             packageName,
             files: conflictFiles,
@@ -1369,33 +1595,28 @@ export function useRpmUpload(): UseRpmUploadResult {
         ),
       };
     },
-    [needsUploadSet],
+    [repolessMap],
   );
 
   const applyBatchMatch = useCallback(
-    (matched: BatchMatchResult["matched"]) => {
-      setUploads((prev) => {
-        const next = new Map(prev);
-        for (const { packageName, file } of matched) {
-          next.set(packageName, { file, state: "uploaded_excluded" });
-        }
-        return next;
-      });
+    async (matched: BatchMatchResult["matched"]) => {
+      for (const { packageName, file } of matched) {
+        await uploadRpm(packageName, file);
+      }
     },
-    [],
+    [uploadRpm],
   );
 
   return {
-    uploads,
-    getState,
-    getFile,
+    initFromBackend,
+    getRowState,
     uploadRpm,
     removeUpload,
     validateFilename,
-    registerNeedsUpload,
     needsUploadCount,
     batchMatch,
     applyBatchMatch,
+    needsUploadPackages,
   };
 }
 ```
@@ -1404,16 +1625,17 @@ export function useRpmUpload(): UseRpmUploadResult {
 
 ```bash
 cd crates/web/ui && npm test -- --run useRpmUpload
-git add -A && git commit -m "feat(web): add useRpmUpload hook for RPM upload state machine
+git add -A && git commit -m "feat(web): add useRpmUpload hook wired to POST /api/upload-rpm
 
-Five-state row machine (cached_excluded, cached_included, needs_upload,
-uploaded_excluded, uploaded_included) with NEVRA validation and batch
-matching for multi-file uploads.
+Row states derived from Plan 2's repoless_annotation/repoless_cached
+backend fields. Uploads call POST /api/upload-rpm so RPMs are durable
+and exportable, not just held in UI hook state. Batch matching with
+conflict detection for multi-file uploads.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-**Thorn Checkpoint: Tasks 1-4** — Types, LanguagePackageList, UnmanagedFileList, and useRpmUpload hook are complete. Verify all tests pass with `npm test -- --run`.
+**Thorn Checkpoint: Tasks 1-4** — Types (including ProvenanceSignals and repoless backend fields), LanguagePackageList (with ecosystem+path toggle contract), UnmanagedFileList (with provenance signals, grouped accessibility), and useRpmUpload (wired to backend). Verify all tests pass with `npm test -- --run`. Verify: LanguagePackageList onToggle emits `(ecosystem, path)` not opaque `id`; UnmanagedFileList renders provenance badges; useRpmUpload calls `fetch("/api/upload-rpm")`.
 
 ---
 
@@ -1425,9 +1647,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Interfaces:**
 - Consumes: `useRpmUpload` hook, PatternFly `Modal`, `FileUpload`
-- Produces: `RpmUploadModal` component for single-package RPM upload
+- Produces: `RpmUploadModal` component with focus trap, focus return, tab order per spec
 
-- [ ] **Step 1: Write failing test — modal renders with expected NEVRA**
+- [ ] **Step 1: Write failing test — modal with focus and accessibility**
 
 Create `crates/web/ui/src/components/__tests__/RpmUploadModal.test.tsx`:
 
@@ -1444,6 +1666,7 @@ describe("RpmUploadModal", () => {
     packageArch: "x86_64",
     onUpload: vi.fn(),
     onClose: vi.fn(),
+    triggerRef: { current: null } as React.RefObject<HTMLElement | null>,
   };
 
   it("renders modal with package name in title", () => {
@@ -1470,6 +1693,13 @@ describe("RpmUploadModal", () => {
     render(<RpmUploadModal {...defaultProps} isOpen={false} />);
     expect(screen.queryByText(/Upload RPM/)).not.toBeInTheDocument();
   });
+
+  it("has accessible modal label", () => {
+    render(<RpmUploadModal {...defaultProps} />);
+    expect(
+      screen.getByRole("dialog", { name: /Upload RPM for custom-agent/ }),
+    ).toBeInTheDocument();
+  });
 });
 ```
 
@@ -1479,12 +1709,12 @@ describe("RpmUploadModal", () => {
 cd crates/web/ui && npm test -- --run RpmUploadModal
 ```
 
-- [ ] **Step 3: Implement RpmUploadModal component**
+- [ ] **Step 3: Implement RpmUploadModal with focus management**
 
 Create `crates/web/ui/src/components/RpmUploadModal.tsx`:
 
 ```tsx
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Modal,
   ModalVariant,
@@ -1502,9 +1732,10 @@ export interface RpmUploadModalProps {
   packageArch: string;
   onUpload: (packageName: string, file: File) => void;
   onClose: () => void;
+  /** Ref to the trigger element for focus return on close. */
+  triggerRef: React.RefObject<HTMLElement | null>;
 }
 
-/** Validate RPM filename against expected package name and architecture. */
 function validateRpmFile(
   packageName: string,
   arch: string,
@@ -1513,26 +1744,18 @@ function validateRpmFile(
   if (!filename.endsWith(".rpm")) {
     return { valid: false, error: "File must be an .rpm package" };
   }
-
-  // Extract package name from NEVRA: name-version-release.arch.rpm
   const match = filename.match(/^(.+?)-\d/);
   const extractedName = match ? match[1] : null;
-
   if (!extractedName || extractedName !== packageName) {
     return {
       valid: false,
       error: `Expected package "${packageName}", filename suggests "${extractedName ?? "unknown"}"`,
     };
   }
-
   const validArch = filename.endsWith(`.${arch}.rpm`) || filename.endsWith(".noarch.rpm");
   if (!validArch) {
-    return {
-      valid: false,
-      error: `Expected architecture "${arch}" or "noarch"`,
-    };
+    return { valid: false, error: `Expected architecture "${arch}" or "noarch"` };
   }
-
   return { valid: true };
 }
 
@@ -1542,6 +1765,7 @@ export function RpmUploadModal({
   packageArch,
   onUpload,
   onClose,
+  triggerRef,
 }: RpmUploadModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [filename, setFilename] = useState("");
@@ -1549,6 +1773,18 @@ export function RpmUploadModal({
     valid: boolean;
     error?: string;
   } | null>(null);
+  const uploadAreaRef = useRef<HTMLDivElement>(null);
+
+  // Focus the upload area on open
+  useEffect(() => {
+    if (isOpen) {
+      // Defer to let modal mount
+      const timer = setTimeout(() => {
+        uploadAreaRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
 
   const handleFileChange = useCallback(
     (_event: unknown, selectedFile: File | undefined) => {
@@ -1576,13 +1812,17 @@ export function RpmUploadModal({
       onUpload(packageName, file);
       handleClear();
       onClose();
+      // Return focus to trigger element
+      triggerRef.current?.focus();
     }
-  }, [file, validation, packageName, onUpload, onClose, handleClear]);
+  }, [file, validation, packageName, onUpload, onClose, handleClear, triggerRef]);
 
   const handleClose = useCallback(() => {
     handleClear();
     onClose();
-  }, [onClose, handleClear]);
+    // Return focus to trigger element
+    triggerRef.current?.focus();
+  }, [onClose, handleClear, triggerRef]);
 
   if (!isOpen) return null;
 
@@ -1614,18 +1854,20 @@ export function RpmUploadModal({
           {packageName}-*-*.{packageArch}.rpm
         </code>
       </Content>
-      <FileUpload
-        id={`rpm-upload-${packageName}`}
-        value={file ?? undefined}
-        filename={filename}
-        onChange={handleFileChange}
-        onClearClick={handleClear}
-        browseButtonText="Choose RPM"
-        dropzoneProps={{
-          accept: { "application/x-rpm": [".rpm"] },
-        }}
-        aria-label={`Upload RPM for ${packageName}`}
-      />
+      <div ref={uploadAreaRef} tabIndex={-1}>
+        <FileUpload
+          id={`rpm-upload-${packageName}`}
+          value={file ?? undefined}
+          filename={filename}
+          onChange={handleFileChange}
+          onClearClick={handleClear}
+          browseButtonText="Choose RPM"
+          dropzoneProps={{
+            accept: { "application/x-rpm": [".rpm"] },
+          }}
+          aria-label={`Upload RPM for ${packageName}`}
+        />
+      </div>
       {validation && (
         <HelperText>
           <HelperTextItem
@@ -1649,17 +1891,18 @@ export function RpmUploadModal({
 
 ```bash
 cd crates/web/ui && npm test -- --run RpmUploadModal
-git add -A && git commit -m "feat(web): add RpmUploadModal with NEVRA validation
+git add -A && git commit -m "feat(web): add RpmUploadModal with NEVRA validation and focus management
 
-Single-file RPM upload modal with drag-and-drop, filename validation
-against expected NEVRA pattern, and accessible focus management.
+Focus moves to upload area on open, returns to trigger element on
+close (success or cancel). Tab order: upload area -> file picker
+button -> cancel -> confirm per spec.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
 ---
 
-## Task 6: RPM Batch Upload Modal
+## Task 6: RPM Batch Upload Modal with Conflicts View
 
 **Files:**
 - Create: `crates/web/ui/src/components/RpmBatchUploadModal.tsx`
@@ -1667,9 +1910,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Interfaces:**
 - Consumes: `useRpmUpload.batchMatch`, PatternFly `Modal`, `MultipleFileUpload`
-- Produces: `RpmBatchUploadModal` component for multi-package RPM upload
+- Produces: `RpmBatchUploadModal` with matched/unmatched/conflicts view before confirm
 
-- [ ] **Step 1: Write failing test — batch modal renders match table**
+- [ ] **Step 1: Write failing test — batch modal renders with conflicts view**
 
 Append to `RpmUploadModal.test.tsx`:
 
@@ -1701,6 +1944,13 @@ describe("RpmBatchUploadModal", () => {
     render(<RpmBatchUploadModal {...defaultBatchProps} isOpen={false} />);
     expect(screen.queryByText(/Upload RPMs/)).not.toBeInTheDocument();
   });
+
+  it("has accessible modal label", () => {
+    render(<RpmBatchUploadModal {...defaultBatchProps} />);
+    expect(
+      screen.getByRole("dialog", { name: /Upload RPMs/i }),
+    ).toBeInTheDocument();
+  });
 });
 ```
 
@@ -1710,7 +1960,7 @@ describe("RpmBatchUploadModal", () => {
 cd crates/web/ui && npm test -- --run RpmUploadModal
 ```
 
-- [ ] **Step 3: Implement RpmBatchUploadModal component**
+- [ ] **Step 3: Implement RpmBatchUploadModal with conflicts view**
 
 Create `crates/web/ui/src/components/RpmBatchUploadModal.tsx`:
 
@@ -1726,8 +1976,14 @@ import {
   MultipleFileUploadStatus,
   Content,
   Label,
+  Alert,
 } from "@patternfly/react-core";
-import { CheckCircleIcon, ExclamationCircleIcon, InProgressIcon } from "@patternfly/react-icons";
+import {
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  InProgressIcon,
+} from "@patternfly/react-icons";
 
 /** Extract the package name prefix from an RPM filename. */
 function extractPackageName(filename: string): string | null {
@@ -1738,6 +1994,7 @@ function extractPackageName(filename: string): string | null {
 interface MatchResult {
   matched: Array<{ packageName: string; file: File }>;
   unmatched: File[];
+  conflicts: Array<{ packageName: string; files: File[] }>;
 }
 
 export interface RpmBatchUploadModalProps {
@@ -1762,6 +2019,7 @@ export function RpmBatchUploadModal({
   const matchResult: MatchResult = useMemo(() => {
     const matched: MatchResult["matched"] = [];
     const unmatched: File[] = [];
+    const conflictMap = new Map<string, File[]>();
 
     for (const file of files) {
       if (!file.name.endsWith(".rpm")) {
@@ -1769,13 +2027,33 @@ export function RpmBatchUploadModal({
         continue;
       }
       const name = extractPackageName(file.name);
-      if (name && packageSet.has(name) && !matched.some((m) => m.packageName === name)) {
-        matched.push({ packageName: name, file });
-      } else {
+      if (!name || !packageSet.has(name)) {
         unmatched.push(file);
+        continue;
+      }
+
+      const existing = conflictMap.get(name);
+      if (existing) {
+        existing.push(file);
+      } else if (matched.some((m) => m.packageName === name)) {
+        const prev = matched.find((m) => m.packageName === name)!;
+        conflictMap.set(name, [prev.file, file]);
+        matched.splice(matched.indexOf(prev), 1);
+      } else {
+        matched.push({ packageName: name, file });
       }
     }
-    return { matched, unmatched };
+
+    return {
+      matched,
+      unmatched,
+      conflicts: Array.from(conflictMap.entries()).map(
+        ([packageName, conflictFiles]) => ({
+          packageName,
+          files: conflictFiles,
+        }),
+      ),
+    };
   }, [files, packageSet]);
 
   const handleFileDrop = useCallback((_event: unknown, droppedFiles: File[]) => {
@@ -1873,6 +2151,24 @@ export function RpmBatchUploadModal({
           </MultipleFileUploadStatus>
         )}
       </MultipleFileUpload>
+      {/* Conflicts view — shown before confirm when multiple files match the same package */}
+      {matchResult.conflicts.length > 0 && (
+        <Alert
+          variant="warning"
+          isInline
+          title="Conflicting uploads"
+          className="inspectah-batch-upload__conflicts"
+        >
+          <Content component="small">
+            {matchResult.conflicts.map((c) => (
+              <div key={c.packageName}>
+                <ExclamationTriangleIcon /> <strong>{c.packageName}</strong>: {c.files.length} files match.
+                Remove duplicates to resolve: {c.files.map((f) => f.name).join(", ")}
+              </div>
+            ))}
+          </Content>
+        </Alert>
+      )}
       <Content component="small" aria-live="polite">
         {files.length > 0 && summary}
       </Content>
@@ -1885,10 +2181,11 @@ export function RpmBatchUploadModal({
 
 ```bash
 cd crates/web/ui && npm test -- --run RpmUploadModal
-git add -A && git commit -m "feat(web): add RpmBatchUploadModal for multi-RPM upload
+git add -A && git commit -m "feat(web): add RpmBatchUploadModal with conflicts view
 
-PatternFly MultipleFileUpload with auto-matching of dropped RPM files
-to expected packages. Shows matched/unmatched status per file.
+Batch upload with auto-matching, matched/unmatched/conflicts
+breakdown shown before confirm. Conflicts alert with per-package
+duplicate file listing prevents ambiguous uploads.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -1903,21 +2200,19 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: `crates/web/ui/src/components/__tests__/PackageList.test.tsx` (append)
 
 **Interfaces:**
-- Consumes: `useRpmUpload` hook, `RpmUploadModal`, spec's RPM Upload Row Contract
-- Produces: Modified package rows with 5-state upload behavior
+- Consumes: `useRpmUpload` hook, `RpmUploadModal`, spec's RPM Upload Row Contract (all 5 states)
+- Produces: Modified package rows with 5-state upload behavior, repo-text transitions, row-level `aria-live`
 
-- [ ] **Step 1: Write failing test — blocked row hides checkbox and shows upload icon**
+- [ ] **Step 1: Write failing tests — full 5-state row contract**
 
 Append to `PackageList.test.tsx`:
 
 ```typescript
-  // --- RPM upload row states ---
+  // --- RPM upload row states (full 5-state contract) ---
 
   describe("RPM upload rows", () => {
     it("renders upload icon instead of checkbox for needs_upload packages", () => {
-      const pkgs = [
-        makePkg("custom-agent", "none", false),
-      ];
+      const pkgs = [makePkg("custom-agent", "none", false)];
       render(
         <PackageList
           mode="single"
@@ -1925,13 +2220,11 @@ Append to `PackageList.test.tsx`:
           repoGroups={allRepos}
           onToggle={vi.fn()}
           onRepoToggle={vi.fn()}
-          rpmUploadState={{ "custom-agent": "needs_upload" }}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
         />,
       );
       const row = screen.getByTestId("package-row-custom-agent");
-      // Checkbox should be hidden
       expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
-      // Upload icon button should be present
       expect(
         within(row).getByLabelText("Upload RPM for custom-agent"),
       ).toBeInTheDocument();
@@ -1946,13 +2239,13 @@ Append to `PackageList.test.tsx`:
           repoGroups={allRepos}
           onToggle={vi.fn()}
           onRepoToggle={vi.fn()}
-          rpmUploadState={{ "custom-agent": "needs_upload" }}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
         />,
       );
       expect(screen.getByText("RPM needed")).toBeInTheDocument();
     });
 
-    it("shows checkbox and green label after upload", () => {
+    it("shows 'none' as repo text for needs_upload state", () => {
       const pkgs = [makePkg("custom-agent", "none", false)];
       render(
         <PackageList
@@ -1961,12 +2254,61 @@ Append to `PackageList.test.tsx`:
           repoGroups={allRepos}
           onToggle={vi.fn()}
           onRepoToggle={vi.fn()}
-          rpmUploadState={{ "custom-agent": "uploaded_excluded" }}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).getByText("none")).toBeInTheDocument();
+    });
+
+    it("shows checkbox and green label after upload (uploaded_excluded)", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
         />,
       );
       const row = screen.getByTestId("package-row-custom-agent");
       expect(within(row).getByRole("checkbox")).toBeInTheDocument();
       expect(screen.getByText("RPM provided")).toBeInTheDocument();
+    });
+
+    it("shows 'uploaded' as repo text for uploaded state", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      expect(within(row).getByText("uploaded")).toBeInTheDocument();
+    });
+
+    it("shows orange 'No repo' label for cached_excluded state", () => {
+      const pkgs = [makePkg("custom-tool", "disabled-repo", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-tool": "cached_excluded" }}
+        />,
+      );
+      expect(screen.getByText("No repo")).toBeInTheDocument();
+      const row = screen.getByTestId("package-row-custom-tool");
+      expect(within(row).getByRole("checkbox")).toBeInTheDocument();
     });
 
     it("mutes row opacity for needs_upload state", () => {
@@ -1978,41 +2320,69 @@ Append to `PackageList.test.tsx`:
           repoGroups={allRepos}
           onToggle={vi.fn()}
           onRepoToggle={vi.fn()}
-          rpmUploadState={{ "custom-agent": "needs_upload" }}
+          rpmRowStates={{ "custom-agent": "needs_upload" }}
         />,
       );
       const row = screen.getByTestId("package-row-custom-agent");
       expect(row.className).toContain("--blocked");
     });
+
+    it("row has aria-live region for state transition announcements", () => {
+      const pkgs = [makePkg("custom-agent", "none", false)];
+      render(
+        <PackageList
+          mode="single"
+          packages={pkgs}
+          repoGroups={allRepos}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+          rpmRowStates={{ "custom-agent": "uploaded_excluded" }}
+        />,
+      );
+      const row = screen.getByTestId("package-row-custom-agent");
+      const liveRegion = within(row).getByRole("status");
+      expect(liveRegion).toHaveAttribute("aria-live", "polite");
+    });
   });
 ```
 
-- [ ] **Step 2: Verify test fails**
+- [ ] **Step 2: Verify tests fail**
 
 ```bash
 cd crates/web/ui && npm test -- --run PackageList
 ```
 
-- [ ] **Step 3: Add rpmUploadState prop to PackageList and modify row rendering**
+- [ ] **Step 3: Add rpmRowStates prop to PackageList and implement full row contract**
 
-In `PackageList.tsx`, add the `rpmUploadState` optional prop to the component's props interface:
+In `PackageList.tsx`, add the new props:
 
 ```typescript
-  /** Per-package RPM upload state. Keys are package names, values are RpmUploadState strings. */
-  rpmUploadState?: Record<string, string>;
+  /** Per-package RPM row state derived from backend + upload state. */
+  rpmRowStates?: Record<string, RpmUploadRowState>;
   /** Callback when upload icon is clicked on a blocked row. */
   onUploadClick?: (packageName: string) => void;
+  /** Callback when remove button is clicked on an uploaded row. */
+  onRemoveUpload?: (packageName: string) => void;
 ```
 
-In the row rendering, before the checkbox, add upload-state branching:
+In the row rendering, add state derivation and the full 5-state contract:
 
 ```typescript
-const uploadState = rpmUploadState?.[pkg.name];
-const isBlocked = uploadState === "needs_upload";
-const isUploaded = uploadState === "uploaded_excluded" || uploadState === "uploaded_included";
+const rowState = rpmRowStates?.[pkg.name];
+const isBlocked = rowState === "needs_upload";
+const isUploaded = rowState === "uploaded_excluded" || rowState === "uploaded_included";
+const isCached = rowState === "cached_excluded" || rowState === "cached_included";
+
+// Repo text transitions
+const repoText = isBlocked ? "none" : isUploaded ? "uploaded" : pkg.source_repo;
+
+// Row-level aria-live announcement
+const liveAnnouncement = isUploaded
+  ? `RPM provided for ${pkg.name}, now available for inclusion`
+  : undefined;
 ```
 
-Replace the checkbox rendering with conditional logic:
+Replace the checkbox with conditional rendering per spec's blocked-row layout:
 
 ```tsx
 {isBlocked ? (
@@ -2038,7 +2408,7 @@ Replace the checkbox rendering with conditional logic:
 )}
 ```
 
-Replace the provenance badge with upload-state labels when applicable:
+Add upload-state badges:
 
 ```tsx
 {isBlocked && (
@@ -2060,15 +2430,26 @@ Replace the provenance badge with upload-state labels when applicable:
     </Button>
   </Label>
 )}
+{isCached && (
+  <Label color="orange" isCompact>No repo</Label>
+)}
 ```
 
-Add the `--blocked` class modifier to the row:
+Add row-level `aria-live` region inside the row:
+
+```tsx
+<span role="status" aria-live="polite" className="inspectah-package-row__live">
+  {liveAnnouncement}
+</span>
+```
+
+Add blocked class modifier:
 
 ```tsx
 className={`inspectah-package-row${isBlocked ? " inspectah-package-row--blocked" : ""}`}
 ```
 
-Import `Button`, `Label` from PatternFly and `UploadIcon` from `@patternfly/react-icons` (use `OutlinedUploadIcon` or `UploadIcon`).
+Import `Button`, `Label` from PatternFly and `UploadIcon` from `@patternfly/react-icons`.
 
 - [ ] **Step 4: Add CSS for blocked row state**
 
@@ -2085,17 +2466,26 @@ Append to `App.css`:
   flex-shrink: 0;
   padding: 2px;
 }
+
+.inspectah-package-row__live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
 ```
 
 - [ ] **Step 5: Verify tests pass, commit**
 
 ```bash
 cd crates/web/ui && npm test -- --run PackageList
-git add -A && git commit -m "feat(web): integrate RPM upload states into PackageList rows
+git add -A && git commit -m "feat(web): integrate full 5-state RPM upload contract into PackageList
 
-Blocked rows hide checkbox and show upload icon. Post-upload rows
-show green 'RPM provided' label with remove button. Muted opacity
-for needs_upload state per spec's RPM Upload Row Contract.
+All 5 row states from spec: cached_excluded/included, needs_upload,
+uploaded_excluded/included. Repo-text transitions (none -> uploaded).
+Row-level aria-live for upload/remove announcements. Blocked rows
+hide checkbox and show upload icon.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2107,8 +2497,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Files:**
 - Modify: `crates/web/ui/src/components/Sidebar.tsx`
 - Modify: `crates/web/ui/src/hooks/useKeyboard.ts`
-- Modify: `crates/web/ui/src/components/AppShell.tsx`
-- Test: `crates/web/ui/src/components/__tests__/DecisionSections.test.tsx` (append sidebar tests) or new `Sidebar.test.tsx`
+- Test: new `crates/web/ui/src/components/__tests__/Sidebar.test.tsx` or append to existing
 
 **Interfaces:**
 - Consumes: `ViewResponse.language_packages`, `ViewResponse.has_unmanaged_scan`, `ViewResponse.unmanaged_files`
@@ -2116,7 +2505,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 - [ ] **Step 1: Write failing test — sidebar shows Language Packages section**
 
-Create or append to a sidebar test file:
+Create sidebar tests:
 
 ```typescript
 import { describe, it, expect, vi } from "vitest";
@@ -2125,7 +2514,6 @@ import { Sidebar } from "../Sidebar";
 
 describe("Sidebar section ordering", () => {
   it("shows Language Packages in review group after Containers", () => {
-    // Render Sidebar with hasLanguagePackages=true
     render(
       <Sidebar
         activeSection="packages"
@@ -2179,21 +2567,15 @@ cd crates/web/ui && npm test -- --run Sidebar
 
 - [ ] **Step 3: Update Sidebar.tsx — add new review sections**
 
-In `Sidebar.tsx`, modify `REVIEW_SECTIONS` to make language packages and unmanaged files conditional. Add new props:
+Add new props to `SidebarProps`:
 
 ```typescript
-export interface SidebarProps {
-  // ... existing props ...
-  /** Whether language package environments exist in the data. */
   hasLanguagePackages?: boolean;
-  /** Whether unmanaged file data exists. */
   hasUnmanagedFiles?: boolean;
-  /** Whether --include-unmanaged was used at scan time. */
   hasUnmanagedScan?: boolean;
-}
 ```
 
-Build the review sections list dynamically:
+Build the review sections list dynamically. The new sections go after `containers`:
 
 ```typescript
 const reviewSections = useMemo(() => {
@@ -2210,14 +2592,11 @@ const reviewSections = useMemo(() => {
   if (hasUnmanagedFiles) {
     base.push({ id: "unmanaged_files", label: "Unmanaged Files" });
   }
-  // System Tuning moves to reference (was review)
   return base;
 }, [hasLanguagePackages, hasUnmanagedFiles]);
 ```
 
-Move `system_tuning` from `REVIEW_SECTIONS` to `REFERENCE_SECTIONS` (it was already in reference per the spec's sidebar inventory — verify current placement and adjust if needed).
-
-Add discoverability hint below the review NavGroup when `hasUnmanagedScan === false`:
+Add discoverability hint when `hasUnmanagedScan === false`:
 
 ```tsx
 {!hasUnmanagedScan && (
@@ -2232,9 +2611,9 @@ Add discoverability hint below the review NavGroup when `hasUnmanagedScan === fa
 )}
 ```
 
-- [ ] **Step 4: Update useKeyboard.ts — insert new section IDs**
+- [ ] **Step 4: Update useKeyboard.ts — insert new section IDs per spec shortcut map**
 
-In `useKeyboard.ts`, update `SINGLE_HOST_SECTION_IDS`:
+In `useKeyboard.ts`, update `SINGLE_HOST_SECTION_IDS` to match the spec's full shortcut map:
 
 ```typescript
 const SINGLE_HOST_SECTION_IDS = [
@@ -2243,19 +2622,15 @@ const SINGLE_HOST_SECTION_IDS = [
   "users_groups",       // 3
   "services",           // 4
   "containers",         // 5
-  "language_packages",  // 6 (new)
-  "unmanaged_files",    // 7 (new)
-  "version_changes",    // 8 (was 6)
-  "compose",            // 9 (was 7)
-  // network, storage — no longer have shortcuts (were 8, 9)
-  "scheduled_tasks",
-  "non_rpm_software",
-  "kernel_boot",
-  "selinux",
+  "language_packages",  // 6 (new — was: version_changes)
+  "unmanaged_files",    // 7 (new — was: compose)
+  "version_changes",    // 8 (was 6 → now 8)
+  "compose",            // 9 (was 7 → now 9)
+  // network, storage lose shortcuts (were 8, 9)
 ];
 ```
 
-Key 7 (`unmanaged_files`) is a no-op when the section is not visible — the `onSectionChange` callback already handles missing sections gracefully (no element to scroll to).
+Key 7 (`unmanaged_files`) is a no-op when the section is not visible — the `onSectionChange` callback handles missing sections gracefully.
 
 - [ ] **Step 5: Verify tests pass, commit**
 
@@ -2265,16 +2640,263 @@ git add -A && git commit -m "feat(web): add Language Packages and Unmanaged File
 
 New review sections after Containers with keyboard shortcuts 6-7.
 Discoverability hint when --include-unmanaged was not used.
-Keys 6-9 remapped per spec's shortcut table.
+Keys 6-9 remapped per spec shortcut map: Language Packages=6,
+Unmanaged Files=7, Version Changes=8, Compose=9. Network and
+Storage lose shortcuts.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-**Thorn Checkpoint: Tasks 5-8** — Upload modals, PackageList integration, and sidebar/keyboard changes complete. Run `npm test -- --run` and verify all existing tests still pass. Check keyboard shortcuts 1-9 against the spec's shortcut map.
+**Thorn Checkpoint: Tasks 5-8** — Upload modals (with focus trap and conflicts view), PackageList integration (all 5 row states, repo-text transitions, aria-live), and sidebar/keyboard changes complete. Run `npm test -- --run` and verify all existing tests still pass. Check keyboard shortcuts 1-9 against the spec's shortcut map.
 
 ---
 
-## Task 9: Global Search Integration
+## Task 9: MainContent Section Rendering + Search/Focus Plumbing
+
+**Files:**
+- Modify: `crates/web/ui/src/components/MainContent.tsx`
+- Test: `crates/web/ui/src/components/__tests__/SectionPlumbing.test.tsx` (new)
+
+**Interfaces:**
+- Consumes: `LanguagePackageList`, `UnmanagedFileList`, `SectionSearch`, `ViewResponse`
+- Produces: Section rendering in MainContent with search filtering, match counts, first-item focus, reveal highlighting
+
+This task addresses the review finding that search/focus plumbing belongs to MainContent.tsx (which owns section rendering, SectionSearch integration, and the `revealItemId` prop) — not to the list components themselves.
+
+- [ ] **Step 1: Write failing tests for section plumbing**
+
+Create `crates/web/ui/src/components/__tests__/SectionPlumbing.test.tsx`:
+
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+// These test the integration of new sections into MainContent's
+// existing search/focus plumbing. They verify:
+// 1. Section renders when activeSection matches
+// 2. SectionSearch filters items and shows match count
+// 3. First item receives focus when section is selected
+// 4. Reveal highlighting works via revealItemId prop
+
+describe("MainContent — Language Packages section", () => {
+  it("renders LanguagePackageList when activeSection is language_packages", () => {
+    // Render MainContent with activeSection="language_packages" and
+    // viewData containing language_packages array.
+    // Assert: language-package-list test ID is in the document.
+    // Implementation: MainContent adds an `if (activeSection === "language_packages")` block.
+  });
+
+  it("renders SectionSearch for language_packages section", () => {
+    // Render MainContent with activeSection="language_packages",
+    // sectionSearchOpen=true.
+    // Assert: SectionSearch component is rendered.
+  });
+
+  it("focuses first language package row when section is selected", () => {
+    // Render MainContent with activeSection="language_packages".
+    // Assert: document.querySelector('[data-testid^="lang-env-row-"]')
+    //   receives focus (matching existing firstItem focus pattern at line ~286).
+  });
+});
+
+describe("MainContent — Unmanaged Files section", () => {
+  it("renders UnmanagedFileList when activeSection is unmanaged_files", () => {
+    // Same pattern as above.
+  });
+
+  it("renders SectionSearch for unmanaged_files section", () => {
+    // Same pattern as above.
+  });
+
+  it("focuses first unmanaged file group when section is selected", () => {
+    // Same pattern as above.
+  });
+});
+```
+
+Note: These tests follow the same pattern as MainContent's existing section tests (lines 304-509 in the current file). The exact test implementation depends on MainContent's test harness — adapt to match the existing `MainContent.test.tsx` patterns for rendering with mock ViewResponse data.
+
+- [ ] **Step 2: Add SECTION_LABELS entries to MainContent**
+
+In `MainContent.tsx`, add to the existing `SECTION_LABELS` record:
+
+```typescript
+const SECTION_LABELS: Record<string, string> = {
+  // ... existing entries ...
+  language_packages: "Language Packages",
+  unmanaged_files: "Unmanaged Files",
+};
+```
+
+- [ ] **Step 3: Add Language Packages section rendering**
+
+Add a new `if (activeSection === "language_packages")` block following the pattern of existing sections (e.g., the `configs` block around line 367). This block:
+
+1. Renders a section header with the label
+2. Renders `SectionSearch` when `sectionSearchOpen` is true (matching existing pattern)
+3. Renders `LanguagePackageList` with `revealItemId` prop from MainContent's existing reveal plumbing
+4. Focuses the first item when the section mounts (matching the existing `firstItem?.focus()` pattern at line ~286)
+
+```typescript
+if (activeSection === "language_packages") {
+  const langPkgs = viewData?.language_packages ?? [];
+  return (
+    <div className="inspectah-main-content" data-testid="section-language-packages">
+      <h2 className="inspectah-main-content__heading">
+        {SECTION_LABELS.language_packages}
+      </h2>
+      {sectionSearchOpen && (
+        <SectionSearch
+          // ... match existing SectionSearch pattern from configs section
+        />
+      )}
+      <LanguagePackageList
+        environments={langPkgs}
+        onToggle={(ecosystem, path) => {
+          onToggleLangEnv?.(ecosystem, path);
+        }}
+        isPending={isPending}
+        revealItemId={revealItemId}
+      />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Add Unmanaged Files section rendering**
+
+Same pattern. Add a new `if (activeSection === "unmanaged_files")` block:
+
+```typescript
+if (activeSection === "unmanaged_files") {
+  const groups = viewData?.unmanaged_files ?? [];
+  return (
+    <div className="inspectah-main-content" data-testid="section-unmanaged-files">
+      <h2 className="inspectah-main-content__heading">
+        {SECTION_LABELS.unmanaged_files}
+      </h2>
+      {sectionSearchOpen && (
+        <SectionSearch
+          // ... match existing SectionSearch pattern
+        />
+      )}
+      <UnmanagedFileList
+        groups={groups}
+        onToggleItem={onToggleUnmanagedFile}
+        onToggleGroup={onToggleUnmanagedGroup}
+        isPending={isPending}
+        onIncludeNone={onUnmanagedIncludeNone}
+        onResetAll={onUnmanagedResetAll}
+        revealItemId={revealItemId}
+      />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 5: Add first-item focus for new sections**
+
+In MainContent's existing focus effect (around line 286), extend the query selector to handle the new sections:
+
+```typescript
+// Existing pattern:
+const firstItem = document.querySelector(
+  `[data-testid="section-${activeSection}"] [tabindex="-1"], [data-testid="section-${activeSection}"] [role="listitem"]`,
+) as HTMLElement | null;
+firstItem?.focus();
+```
+
+This already works generically if the section test IDs follow the `section-{id}` pattern and list items have `tabIndex={-1}`.
+
+- [ ] **Step 6: Add MainContent props for new section callbacks**
+
+Add to `MainContentProps`:
+
+```typescript
+  onToggleLangEnv?: (ecosystem: string, path: string) => void;
+  onToggleUnmanagedFile?: (path: string) => void;
+  onToggleUnmanagedGroup?: (directory: string, include: boolean) => void;
+  onUnmanagedIncludeNone?: () => void;
+  onUnmanagedResetAll?: () => void;
+  isPending?: boolean;
+```
+
+- [ ] **Step 7: Verify tests pass, commit**
+
+```bash
+cd crates/web/ui && npm test -- --run
+git add -A && git commit -m "feat(web): add Language Packages and Unmanaged Files to MainContent
+
+Section rendering, SectionSearch integration, first-item focus,
+and reveal highlighting for new sections. Follows existing
+MainContent section rendering pattern.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+---
+
+## Task 10: AppShell Focus Management + Shortcut Help
+
+**Files:**
+- Modify: `crates/web/ui/src/components/AppShell.tsx`
+- Modify: `crates/web/ui/src/hooks/useKeyboard.ts` (shortcut help overlay data)
+
+**Interfaces:**
+- Consumes: section IDs from Sidebar, `onSectionChange` callback
+- Produces: ArrowDown-to-first-item behavior for new sections, shortcut help overlay updates
+
+- [ ] **Step 1: Verify AppShell's existing focus contract extends to new sections**
+
+AppShell owns shell-level focus management (line 68: `activeSection` prop, line 142: useEffect on `activeSection`). The existing `onSectionChange` callback already handles arbitrary section IDs. Verify:
+
+1. When `activeSection` changes to `"language_packages"` or `"unmanaged_files"`, the shell-level focus effect fires correctly (it should, since it's generic)
+2. ArrowDown from the sidebar navigates to the first item in the active section (line ~189: `onSectionChange` callback)
+
+If the existing code already handles this generically (likely, since it uses `activeSection` without section-specific branching), document that in a test:
+
+```typescript
+// In AppShell tests or SectionPlumbing.test.tsx:
+it("ArrowDown from sidebar moves focus to first item in language_packages section", () => {
+  // This tests the existing generic behavior works for new section IDs.
+});
+```
+
+- [ ] **Step 2: Update shortcut help overlay data**
+
+In `useKeyboard.ts`, if there is a shortcut help mapping (for the `?` overlay), update it to reflect the new key assignments:
+
+```typescript
+const SHORTCUT_HELP = [
+  { key: "1", section: "Packages" },
+  { key: "2", section: "Config Files" },
+  { key: "3", section: "Users & Groups" },
+  { key: "4", section: "Services" },
+  { key: "5", section: "Containers" },
+  { key: "6", section: "Language Packages" },   // new
+  { key: "7", section: "Unmanaged Files" },      // new
+  { key: "8", section: "Version Changes" },      // was 6
+  { key: "9", section: "Compose" },              // was 7
+];
+```
+
+- [ ] **Step 3: Verify tests pass, commit**
+
+```bash
+cd crates/web/ui && npm test -- --run
+git add -A && git commit -m "feat(web): extend AppShell focus management and shortcut help for new sections
+
+ArrowDown-to-first-item behavior works generically for new section
+IDs. Shortcut help overlay updated to show new key assignments
+(6=Language Packages, 7=Unmanaged Files).
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+---
+
+## Task 11: Global Search Integration
 
 **Files:**
 - Modify: `crates/web/ui/src/components/GlobalSearch.tsx`
@@ -2282,18 +2904,16 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Interfaces:**
 - Consumes: `LanguagePackageEnv[]`, `UnmanagedFileGroup[]` from ViewResponse
-- Produces: Search results for new sections in global search
+- Produces: Search results for new sections in global search, with navigation to correct section and reveal highlighting
 
-- [ ] **Step 1: Write failing test — global search finds language package environments**
+- [ ] **Step 1: Write failing tests — global search finds new section items**
 
 Append to `GlobalSearch.test.tsx`:
 
 ```typescript
   it("finds language package environments by path", async () => {
-    // Add language package items to the search props
     const langEnvs = [
       {
-        id: "pip:/opt/myapp/venv",
         ecosystem: "pip" as const,
         path: "/opt/myapp/venv",
         method: "pip list",
@@ -2318,18 +2938,54 @@ Append to `GlobalSearch.test.tsx`:
     expect(screen.getByText("/opt/myapp/venv")).toBeInTheDocument();
   });
 
+  it("finds language package environments by package name", async () => {
+    const langEnvs = [
+      {
+        ecosystem: "pip" as const,
+        path: "/opt/myapp/venv",
+        method: "pip list",
+        packages: ["flask", "requests"],
+        confidence: "high" as const,
+        manifest_basis: "requirements.txt",
+        include: true,
+      },
+    ];
+    render(
+      <GlobalSearch
+        packageItems={[]}
+        configItems={[]}
+        referenceSections={[]}
+        languagePackageEnvs={langEnvs}
+        onNavigate={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "flask");
+    // Should match the environment that contains flask
+    expect(screen.getByText(/flask.*pip.*\/opt\/myapp\/venv/)).toBeInTheDocument();
+  });
+
   it("finds unmanaged files by path", async () => {
     const unmanagedGroups = [
       {
         directory: "/opt/splunk",
         items: [
           {
-            id: "/opt/splunk/bin/splunkd",
             path: "/opt/splunk/bin/splunkd",
             size: 1024,
-            file_type: "elf_binary",
             is_var_path: false,
             include: true,
+            provenance: {
+              file_type: "elf_binary" as const,
+              last_modified: 1700000000,
+              uid: 0,
+              gid: 0,
+              permissions: "0755",
+              mutability: false,
+              writable_mount: false,
+              service_working_dir: false,
+            },
           },
         ],
       },
@@ -2350,7 +3006,7 @@ Append to `GlobalSearch.test.tsx`:
   });
 ```
 
-- [ ] **Step 2: Verify test fails**
+- [ ] **Step 2: Verify tests fail**
 
 ```bash
 cd crates/web/ui && npm test -- --run GlobalSearch
@@ -2371,34 +3027,29 @@ const SECTION_LABELS: Record<string, string> = {
 Add new props:
 
 ```typescript
-export interface GlobalSearchProps {
-  // ... existing props ...
-  /** Language package environments for search. */
   languagePackageEnvs?: LanguagePackageEnv[];
-  /** Unmanaged file groups for search. */
   unmanagedFileGroups?: UnmanagedFileGroup[];
-}
 ```
 
-In the `searchableItems` useMemo, add entries for language packages and unmanaged files:
+In the `searchableItems` useMemo, add entries. Language package search matches on environment path, individual package names, and ecosystem:
 
 ```typescript
 // Language package environments
 if (languagePackageEnvs) {
   for (const env of languagePackageEnvs) {
+    const itemId = `${env.ecosystem}:${env.path}`;
     items.push({
       sectionId: "language_packages",
       sectionLabel: "Language Packages",
       title: env.path,
-      itemId: env.id,
+      itemId,
     });
-    // Also index individual package names for deep search
     for (const pkg of env.packages) {
       items.push({
         sectionId: "language_packages",
         sectionLabel: "Language Packages",
         title: `${pkg} (${env.ecosystem} in ${env.path})`,
-        itemId: env.id,
+        itemId,
       });
     }
   }
@@ -2412,7 +3063,7 @@ if (unmanagedFileGroups) {
         sectionId: "unmanaged_files",
         sectionLabel: "Unmanaged Files",
         title: file.path,
-        itemId: file.id,
+        itemId: file.path,
       });
     }
   }
@@ -2426,198 +3077,166 @@ cd crates/web/ui && npm test -- --run GlobalSearch
 git add -A && git commit -m "feat(web): extend global search to language packages and unmanaged files
 
 Search matches on environment paths, package names within environments,
-and unmanaged file paths. Results navigate to the correct section.
+ecosystem type, and unmanaged file paths. Results navigate to the
+correct section with reveal highlighting.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
 ---
 
-## Task 10: App.tsx Wiring — Single-Host Mode
+## Task 12: App.tsx Wiring — Single-Host Mode
 
 **Files:**
 - Modify: `crates/web/ui/src/App.tsx`
-- Test: `crates/web/ui/src/__tests__/App.routing.test.tsx` (append) or visual verification
 
 **Interfaces:**
-- Consumes: `ViewResponse` with new fields, `LanguagePackageList`, `UnmanagedFileList`, `RpmUploadModal`, `RpmBatchUploadModal`, `useRpmUpload`
-- Produces: New sections rendered in single-host main content area
+- Consumes: `ViewResponse` with new fields, `MainContent`, `Sidebar`, `GlobalSearch`, `RpmUploadModal`, `RpmBatchUploadModal`, `useRpmUpload`
+- Produces: Full single-host wiring: data flow from ViewResponse through components, RPM upload backend calls, ItemId contract compliance
 
 - [ ] **Step 1: Import new components and hook**
 
-In `App.tsx`, add imports:
+In `App.tsx` (likely in `SingleHostApp`), add imports:
 
 ```typescript
-import { LanguagePackageList } from "./components/LanguagePackageList";
-import { UnmanagedFileList } from "./components/UnmanagedFileList";
 import { RpmUploadModal } from "./components/RpmUploadModal";
 import { RpmBatchUploadModal } from "./components/RpmBatchUploadModal";
 import { useRpmUpload } from "./hooks/useRpmUpload";
 ```
 
-- [ ] **Step 2: Initialize useRpmUpload hook**
+- [ ] **Step 2: Initialize useRpmUpload from backend data**
 
-In the App component body, add:
+In the SingleHostApp component body, add:
 
 ```typescript
 const rpmUpload = useRpmUpload();
 ```
 
-Register repo-less packages that need uploads when view data loads (in a useEffect or after data fetch):
+Initialize from backend data when view loads. Use Plan 2's `repoless_annotation` field — a package is repo-less when `repoless_annotation` is non-empty:
 
 ```typescript
 useEffect(() => {
   if (view?.packages) {
-    const needsUpload = view.packages
-      .filter((p) => p.source_repo === "none" && !p.cached_rpm)
-      .map((p) => p.name);
-    if (needsUpload.length > 0) {
-      rpmUpload.registerNeedsUpload(needsUpload);
+    const repolessEntries = view.packages
+      .filter((p) => p.repoless_annotation)
+      .map((p) => ({
+        name: p.name,
+        arch: p.arch,
+        repoless_annotation: p.repoless_annotation!,
+        repoless_cached: p.repoless_cached ?? false,
+      }));
+    if (repolessEntries.length > 0) {
+      rpmUpload.initFromBackend(repolessEntries);
     }
   }
 }, [view?.packages]);
 ```
 
-- [ ] **Step 3: Add RPM upload state to PackageList**
+- [ ] **Step 3: Build rpmRowStates for PackageList**
 
-Pass `rpmUploadState` and callbacks to the existing `PackageList` render:
+Derive the row states record from the hook for passing to PackageList:
 
 ```typescript
-<PackageList
-  // ... existing props ...
-  rpmUploadState={Object.fromEntries(
-    Array.from(rpmUpload.uploads.entries()).map(([name, entry]) => [
-      name,
-      entry.state,
-    ]),
-  )}
-  onUploadClick={(name) => setUploadTarget(name)}
-  onRemoveUpload={(name) => rpmUpload.removeUpload(name)}
-/>
+const rpmRowStates = useMemo(() => {
+  const states: Record<string, RpmUploadRowState> = {};
+  for (const pkg of view?.packages ?? []) {
+    const state = rpmUpload.getRowState(pkg.name);
+    if (state) {
+      // Include/exclude state comes from the view data (refine toggle)
+      if (state === "cached_excluded" && pkg.include) {
+        states[pkg.name] = "cached_included";
+      } else if (state === "uploaded_excluded" && pkg.include) {
+        states[pkg.name] = "uploaded_included";
+      } else {
+        states[pkg.name] = state;
+      }
+    }
+  }
+  return states;
+}, [view?.packages, rpmUpload]);
 ```
 
-Add state for upload modal:
+- [ ] **Step 4: Add upload modal state and callbacks**
 
 ```typescript
 const [uploadTarget, setUploadTarget] = useState<string | null>(null);
 const [batchUploadOpen, setBatchUploadOpen] = useState(false);
+const uploadTriggerRef = useRef<HTMLElement | null>(null);
 ```
 
-- [ ] **Step 4: Render Language Packages section in main content**
+- [ ] **Step 5: Wire MainContent callbacks for new sections**
 
-In the section rendering logic (where `activeSection` determines what to show), add:
+Pass toggle callbacks that dispatch `SetInclude` ops with correct `ItemId` shapes:
 
 ```typescript
-{activeSection === "language_packages" && view?.language_packages && (
-  <LanguagePackageList
-    environments={view.language_packages}
-    onToggle={(envId) => {
-      // Dispatch SetInclude op for ItemId::LanguageEnv
+// Language Packages — uses ItemId::LanguageEnv { ecosystem, path }
+const handleToggleLangEnv = useCallback((ecosystem: string, path: string) => {
+  const env = view?.language_packages?.find(
+    (e) => e.ecosystem === ecosystem && e.path === path,
+  );
+  if (env) {
+    applyOp({
+      op: "SetInclude",
+      item_id: { LanguageEnv: { ecosystem, path } },
+      include: !env.include,
+    });
+  }
+}, [view?.language_packages, applyOp]);
+
+// Unmanaged Files — uses ItemId::UnmanagedFile { path }
+const handleToggleUnmanagedFile = useCallback((filePath: string) => {
+  const allItems = view?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+  const item = allItems.find((i) => i.path === filePath);
+  if (item) {
+    applyOp({
+      op: "SetInclude",
+      item_id: { UnmanagedFile: { path: filePath } },
+      include: !item.include,
+    });
+  }
+}, [view?.unmanaged_files, applyOp]);
+
+const handleToggleUnmanagedGroup = useCallback((directory: string, include: boolean) => {
+  const group = view?.unmanaged_files?.find((g) => g.directory === directory);
+  if (group) {
+    for (const item of group.items) {
       applyOp({
         op: "SetInclude",
-        item_id: { LanguageEnv: { id: envId } },
-        include: !view.language_packages!.find((e) => e.id === envId)?.include,
+        item_id: { UnmanagedFile: { path: item.path } },
+        include,
       });
-    }}
-    isPending={isPending}
-    revealItemId={revealItemId}
-    filterActive={sectionSearchOpen}
-    filterQuery={sectionSearchQuery}
-  />
-)}
-```
+    }
+  }
+}, [view?.unmanaged_files, applyOp]);
 
-- [ ] **Step 5: Render Unmanaged Files section in main content**
-
-```typescript
-{activeSection === "unmanaged_files" && view?.unmanaged_files && (
-  <UnmanagedFileList
-    groups={view.unmanaged_files}
-    onToggleItem={(itemId) => {
-      const allItems = view.unmanaged_files!.flatMap((g) => g.items);
-      const item = allItems.find((i) => i.id === itemId);
+const handleUnmanagedIncludeNone = useCallback(() => {
+  const allItems = view?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+  for (const item of allItems) {
+    if (item.include) {
       applyOp({
         op: "SetInclude",
-        item_id: { UnmanagedFile: { path: itemId } },
-        include: !item?.include,
+        item_id: { UnmanagedFile: { path: item.path } },
+        include: false,
       });
-    }}
-    onToggleGroup={(directory, include) => {
-      const group = view.unmanaged_files!.find((g) => g.directory === directory);
-      if (group) {
-        for (const item of group.items) {
-          applyOp({
-            op: "SetInclude",
-            item_id: { UnmanagedFile: { path: item.id } },
-            include,
-          });
-        }
-      }
-    }}
-    isPending={isPending}
-    onIncludeNone={() => {
-      const allItems = view.unmanaged_files!.flatMap((g) => g.items);
-      for (const item of allItems) {
-        if (item.include) {
-          applyOp({
-            op: "SetInclude",
-            item_id: { UnmanagedFile: { path: item.id } },
-            include: false,
-          });
-        }
-      }
-    }}
-    onResetAll={() => {
-      const allItems = view.unmanaged_files!.flatMap((g) => g.items);
-      for (const item of allItems) {
-        if (!item.include) {
-          applyOp({
-            op: "SetInclude",
-            item_id: { UnmanagedFile: { path: item.id } },
-            include: true,
-          });
-        }
-      }
-    }}
-    revealItemId={revealItemId}
-    filterActive={sectionSearchOpen}
-    filterQuery={sectionSearchQuery}
-  />
-)}
+    }
+  }
+}, [view?.unmanaged_files, applyOp]);
+
+const handleUnmanagedResetAll = useCallback(() => {
+  const allItems = view?.unmanaged_files?.flatMap((g) => g.items) ?? [];
+  for (const item of allItems) {
+    if (!item.include) {
+      applyOp({
+        op: "SetInclude",
+        item_id: { UnmanagedFile: { path: item.path } },
+        include: true,
+      });
+    }
+  }
+}, [view?.unmanaged_files, applyOp]);
 ```
 
-- [ ] **Step 6: Render upload modals**
-
-Add at the bottom of the App component JSX:
-
-```tsx
-<RpmUploadModal
-  isOpen={uploadTarget !== null}
-  packageName={uploadTarget ?? ""}
-  packageArch={view?.packages?.find((p) => p.name === uploadTarget)?.arch ?? "x86_64"}
-  onUpload={(name, file) => {
-    rpmUpload.uploadRpm(name, file);
-    setUploadTarget(null);
-  }}
-  onClose={() => setUploadTarget(null)}
-/>
-
-<RpmBatchUploadModal
-  isOpen={batchUploadOpen}
-  needsUploadPackages={Array.from(
-    view?.packages
-      ?.filter((p) => p.source_repo === "none" && !rpmUpload.uploads.has(p.name))
-      .map((p) => p.name) ?? [],
-  )}
-  onBatchUpload={(matched) => {
-    rpmUpload.applyBatchMatch(matched);
-    setBatchUploadOpen(false);
-  }}
-  onClose={() => setBatchUploadOpen(false)}
-/>
-```
-
-- [ ] **Step 7: Pass new data to Sidebar and GlobalSearch**
+- [ ] **Step 6: Pass props to MainContent, Sidebar, GlobalSearch**
 
 Update `Sidebar` props:
 
@@ -2630,6 +3249,35 @@ Update `Sidebar` props:
 />
 ```
 
+Update `MainContent` props with new callbacks:
+
+```typescript
+<MainContent
+  // ... existing props ...
+  onToggleLangEnv={handleToggleLangEnv}
+  onToggleUnmanagedFile={handleToggleUnmanagedFile}
+  onToggleUnmanagedGroup={handleToggleUnmanagedGroup}
+  onUnmanagedIncludeNone={handleUnmanagedIncludeNone}
+  onUnmanagedResetAll={handleUnmanagedResetAll}
+/>
+```
+
+Pass PackageList upload props through MainContent (or directly if MainContent passes them through):
+
+```typescript
+// PackageList receives these via MainContent's rendering:
+rpmRowStates={rpmRowStates}
+onUploadClick={(name) => {
+  // Capture trigger ref for focus return
+  const triggerEl = document.querySelector(
+    `[aria-label="Upload RPM for ${name}"]`,
+  ) as HTMLElement | null;
+  uploadTriggerRef.current = triggerEl;
+  setUploadTarget(name);
+}}
+onRemoveUpload={(name) => rpmUpload.removeUpload(name)}
+```
+
 Update `GlobalSearch` props:
 
 ```typescript
@@ -2640,9 +3288,37 @@ Update `GlobalSearch` props:
 />
 ```
 
-- [ ] **Step 8: Add Upload RPMs button to StatsBar when blocked packages exist**
+- [ ] **Step 7: Render upload modals**
 
-In the `StatsBar` or toolbar area, conditionally render:
+Add at the bottom of SingleHostApp JSX:
+
+```tsx
+<RpmUploadModal
+  isOpen={uploadTarget !== null}
+  packageName={uploadTarget ?? ""}
+  packageArch={view?.packages?.find((p) => p.name === uploadTarget)?.arch ?? "x86_64"}
+  onUpload={async (name, file) => {
+    await rpmUpload.uploadRpm(name, file);
+    setUploadTarget(null);
+  }}
+  onClose={() => setUploadTarget(null)}
+  triggerRef={uploadTriggerRef}
+/>
+
+<RpmBatchUploadModal
+  isOpen={batchUploadOpen}
+  needsUploadPackages={rpmUpload.needsUploadPackages}
+  onBatchUpload={async (matched) => {
+    await rpmUpload.applyBatchMatch(matched);
+    setBatchUploadOpen(false);
+  }}
+  onClose={() => setBatchUploadOpen(false)}
+/>
+```
+
+- [ ] **Step 8: Add Upload RPMs button to StatsBar/toolbar**
+
+Conditionally render when packages need uploads:
 
 ```tsx
 {rpmUpload.needsUploadCount > 0 && (
@@ -2664,23 +3340,24 @@ In the `StatsBar` or toolbar area, conditionally render:
 cd crates/web/ui && npm test -- --run
 git add -A && git commit -m "feat(web): wire language packages, unmanaged files, and RPM upload into App
 
-New decision sections render in single-host main content. RPM upload
-modal opens from blocked package rows. Batch upload button in toolbar
-when repo-less packages need RPMs. Sidebar and global search receive
-new section data.
+ItemId::LanguageEnv { ecosystem, path } for language package toggles.
+ItemId::UnmanagedFile { path } for unmanaged file toggles.
+RPM row states derived from Plan 2's repoless_annotation/repoless_cached.
+Upload modals call POST /api/upload-rpm via useRpmUpload hook.
+Batch upload button in toolbar when repo-less packages need RPMs.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
 ---
 
-## Task 11: CSS Styling for New Components
+## Task 13: CSS Styling for New Components
 
 **Files:**
 - Modify: `crates/web/ui/src/App.css`
 
 **Interfaces:**
-- Consumes: BEM class names from LanguagePackageList, UnmanagedFileList, Sidebar hint
+- Consumes: BEM class names from LanguagePackageList, UnmanagedFileList, Sidebar hint, provenance badges
 - Produces: Styled components matching existing design language
 
 - [ ] **Step 1: Add Language Package List styles**
@@ -2766,7 +3443,7 @@ Append to `App.css`:
 }
 ```
 
-- [ ] **Step 2: Add Unmanaged File List styles**
+- [ ] **Step 2: Add Unmanaged File List styles (including provenance badges)**
 
 ```css
 /* ─── Unmanaged file list (decision section) ─────────────────────────── */
@@ -2808,6 +3485,11 @@ Append to `App.css`:
   background: var(--pf-t--global--background--color--secondary--default);
 }
 
+.inspectah-unmanaged-group__header:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
+}
+
 .inspectah-unmanaged-group__chevron {
   background: none;
   border: none;
@@ -2845,12 +3527,25 @@ Append to `App.css`:
   padding-left: calc(var(--pf-t--global--spacer--md) + 22px);
 }
 
+.inspectah-unmanaged-group__toggle-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
 .inspectah-unmanaged-row {
   display: flex;
   align-items: center;
   gap: var(--pf-t--global--spacer--sm);
   padding: 2px 0;
   font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-unmanaged-row:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
 }
 
 .inspectah-unmanaged-row__path {
@@ -2870,6 +3565,12 @@ Append to `App.css`:
   flex-shrink: 0;
   min-width: 60px;
   text-align: right;
+}
+
+.inspectah-unmanaged-row__provenance {
+  display: flex;
+  gap: var(--pf-t--global--spacer--xs);
+  flex-shrink: 0;
 }
 
 .inspectah-unmanaged-row__var-warning {
@@ -2892,12 +3593,18 @@ Append to `App.css`:
   padding: 1px 4px;
   border-radius: var(--pf-t--global--border--radius--small);
 }
+
+/* ─── Batch upload conflicts ─────────────────────────────────────────── */
+
+.inspectah-batch-upload__conflicts {
+  margin-top: var(--pf-t--global--spacer--sm);
+}
 ```
 
-- [ ] **Step 3: Add dark mode overrides for /var warning**
+- [ ] **Step 3: Add dark mode overrides**
 
 ```css
-/* Dark mode: /var warning styles */
+/* Dark mode: /var warning and provenance badge contrast */
 .pf-v6-theme-dark .inspectah-unmanaged-group--var {
   border-left-color: var(--pf-t--global--color--status--warning--default);
 }
@@ -2911,263 +3618,43 @@ Append to `App.css`:
 
 ```bash
 cd crates/web/ui && npm test -- --run
-git add -A && git commit -m "style(web): add CSS for language packages, unmanaged files, and sidebar hint
+git add -A && git commit -m "style(web): add CSS for language packages, unmanaged files, and provenance
 
-BEM-scoped styles matching existing decision row patterns. /var path
-warning uses warning color. Dark mode overrides included.
-
-Assisted-by: Claude Code (Opus 4.6)"
-```
-
----
-
-## Task 12: Aggregate Mode Support
-
-**Files:**
-- Modify: `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx`
-- Modify: `crates/web/ui/src/App.css` (aggregate-specific styles)
-- Test: visual verification + existing aggregate tests should still pass
-
-**Interfaces:**
-- Consumes: `AggregateSection` with `language_packages` and `unmanaged_files` IDs from backend
-- Produces: Enriched aggregate rows for new section types
-
-The aggregate sidebar (`AggregateSidebar.tsx`) is fully data-driven — it renders whatever sections the backend provides via the `sections` prop, keyed by `is_decision_section`. No code changes needed there. The new sections will appear in the Review group automatically once the backend emits them.
-
-`AggregateSection.tsx` is also data-driven — it renders zones (consensus/near-consensus/divergent) using `AggregateItemRow` for each item. The zone layout works without modification.
-
-The work here is in `AggregateItemRow.tsx` — adding metadata rendering for the two new section types.
-
-- [ ] **Step 1: Write failing test — aggregate row shows ecosystem for language packages**
-
-Add to existing aggregate tests or create a new test:
-
-```typescript
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { AggregateItemRow } from "../aggregate/AggregateItemRow";
-
-describe("AggregateItemRow — language packages", () => {
-  it("renders ecosystem label and package count for language_packages section", () => {
-    render(
-      <AggregateItemRow
-        item={{
-          id: "pip:/opt/myapp/venv",
-          name: "/opt/myapp/venv",
-          include: true,
-          prevalence: { count: 8, total: 10 },
-          variants: 1,
-          metadata: {
-            ecosystem: "pip",
-            confidence: "high",
-            manifest_basis: "requirements.txt",
-            package_count: 12,
-          },
-        }}
-        sectionId="language_packages"
-        onToggle={vi.fn()}
-        onSelect={vi.fn()}
-        isSelected={false}
-        isPending={false}
-      />,
-    );
-    expect(screen.getByText("pip")).toBeInTheDocument();
-    expect(screen.getByText("12 packages")).toBeInTheDocument();
-  });
-});
-
-describe("AggregateItemRow — unmanaged files", () => {
-  it("renders file type and size for unmanaged_files section", () => {
-    render(
-      <AggregateItemRow
-        item={{
-          id: "/opt/splunk/bin/splunkd",
-          name: "/opt/splunk/bin/splunkd",
-          include: true,
-          prevalence: { count: 10, total: 10 },
-          variants: 1,
-          metadata: {
-            file_type: "elf_binary",
-            size: 52428800,
-            is_var_path: false,
-          },
-        }}
-        sectionId="unmanaged_files"
-        onToggle={vi.fn()}
-        onSelect={vi.fn()}
-        isSelected={false}
-        isPending={false}
-      />,
-    );
-    expect(screen.getByText("elf_binary")).toBeInTheDocument();
-    expect(screen.getByText(/50.*MB/)).toBeInTheDocument();
-  });
-
-  it("shows /var warning badge for var paths", () => {
-    render(
-      <AggregateItemRow
-        item={{
-          id: "/var/lib/custom/data.db",
-          name: "/var/lib/custom/data.db",
-          include: true,
-          prevalence: { count: 5, total: 10 },
-          variants: 2,
-          metadata: {
-            file_type: "data",
-            size: 209715200,
-            is_var_path: true,
-          },
-        }}
-        sectionId="unmanaged_files"
-        onToggle={vi.fn()}
-        onSelect={vi.fn()}
-        isSelected={false}
-        isPending={false}
-      />,
-    );
-    expect(screen.getByText("/var")).toBeInTheDocument();
-  });
-});
-```
-
-- [ ] **Step 2: Verify test fails**
-
-```bash
-cd crates/web/ui && npm test -- --run AggregateItemRow
-```
-
-- [ ] **Step 3: Add section-aware metadata rendering to AggregateItemRow**
-
-In `AggregateItemRow.tsx`, the component receives an `item` with generic fields. Add conditional metadata rendering based on `sectionId`:
-
-```typescript
-// Add sectionId to props if not already present
-export interface AggregateItemRowProps {
-  // ... existing props ...
-  /** Section ID — used for section-specific metadata rendering. */
-  sectionId?: string;
-}
-```
-
-Add a metadata rendering function:
-
-```tsx
-function SectionMetadata({
-  sectionId,
-  metadata,
-}: {
-  sectionId?: string;
-  metadata?: Record<string, unknown>;
-}) {
-  if (!metadata || !sectionId) return null;
-
-  if (sectionId === "language_packages") {
-    return (
-      <span className="aggregate-item-row__section-meta">
-        <Label isCompact>{metadata.ecosystem as string}</Label>
-        <Badge isRead>
-          {metadata.package_count as number} packages
-        </Badge>
-        <Label
-          color={
-            metadata.confidence === "high"
-              ? "green"
-              : metadata.confidence === "medium"
-                ? "orange"
-                : "grey"
-          }
-          isCompact
-        >
-          {metadata.confidence as string}
-        </Label>
-      </span>
-    );
-  }
-
-  if (sectionId === "unmanaged_files") {
-    const size = metadata.size as number;
-    const formattedSize =
-      size < 1024 * 1024
-        ? `${(size / 1024).toFixed(0)} KB`
-        : `${(size / (1024 * 1024)).toFixed(1)} MB`;
-
-    return (
-      <span className="aggregate-item-row__section-meta">
-        <span className="aggregate-item-row__file-type">
-          {metadata.file_type as string}
-        </span>
-        <span className="aggregate-item-row__file-size">
-          {formattedSize}
-        </span>
-        {metadata.is_var_path && (
-          <span className="aggregate-item-row__var-badge">/var</span>
-        )}
-      </span>
-    );
-  }
-
-  return null;
-}
-```
-
-Render `<SectionMetadata>` in the row layout, after the name area:
-
-```tsx
-<SectionMetadata sectionId={sectionId} metadata={item.metadata} />
-```
-
-- [ ] **Step 4: Add aggregate-specific CSS**
-
-Append to `App.css`:
-
-```css
-/* ─── Aggregate item row — section-specific metadata ─────────────────── */
-
-.aggregate-item-row__section-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--pf-t--global--spacer--xs);
-  margin-left: var(--pf-t--global--spacer--sm);
-}
-
-.aggregate-item-row__file-type {
-  font-size: var(--pf-t--global--font--size--body--sm);
-  color: var(--pf-t--global--text--color--subtle);
-}
-
-.aggregate-item-row__file-size {
-  font-size: var(--pf-t--global--font--size--body--sm);
-  color: var(--pf-t--global--text--color--subtle);
-}
-
-.aggregate-item-row__var-badge {
-  font-size: var(--pf-t--global--font--size--body--sm);
-  color: var(--pf-t--global--color--status--warning--default);
-  font-weight: var(--pf-t--global--font--weight--body--bold);
-}
-```
-
-- [ ] **Step 5: Verify tests pass, commit**
-
-```bash
-cd crates/web/ui && npm test -- --run
-git add -A && git commit -m "feat(web): add aggregate row metadata for language packages and unmanaged files
-
-Ecosystem, package count, and confidence for language packages.
-File type, size, and /var warning for unmanaged files. Zone-based
-layout works without modification via existing AggregateSection.
+BEM-scoped styles matching existing decision row patterns. Provenance
+signal badges for mutability, writable mount, service workdir. /var
+path warning uses warning color. Dark mode overrides included.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-**Thorn Checkpoint: Tasks 9-12** — Global search, App.tsx wiring, CSS styling, and aggregate support complete. Run full test suite with `npm test -- --run`. Verify:
+**Thorn Checkpoint: Tasks 9-13** — MainContent section rendering, AppShell focus management, global search, App.tsx wiring, and CSS styling complete. Run full test suite with `npm test -- --run`. Verify:
 1. All existing tests still pass
-2. Language Packages section appears in sidebar (single-host + aggregate)
+2. Language Packages section appears in sidebar (single-host only)
 3. Unmanaged Files section appears with flag gate and discoverability hint
 4. Keyboard shortcuts 1-9 match the spec's shortcut map
 5. Global search finds items in new sections
-6. RPM upload icon appears on blocked package rows
-7. Aggregate mode shows section-specific metadata
+6. RPM upload icon appears on blocked package rows; upload calls `POST /api/upload-rpm`
+7. Language package toggle sends `{ LanguageEnv: { ecosystem, path } }` (not opaque `{ id }`)
+8. Unmanaged file rows render provenance signal badges
+9. RPM batch upload modal shows conflicts before confirm
+10. Modal focus trap works: focus on open, return on close
+
+---
+
+## Aggregate Handoff to Plan 4
+
+Plan 3 is scoped to single-host mode only. The following aggregate UI work is explicitly handed off to Plan 4:
+
+| Aggregate requirement | Status in Plan 3 | Plan 4 responsibility |
+|----------------------|-------------------|----------------------|
+| Aggregate sections in sidebar | Not in scope | Wire `AggregateSidebar` (data-driven, may need no changes) |
+| Aggregate row metadata (ecosystem, confidence for lang pkgs; file type, size for unmanaged files) | Components built in Plan 3 | Add `sectionId`-aware rendering to `AggregateItemRow` |
+| Searchable aggregate metadata | Not in scope | Extend aggregate search to new sections |
+| Detail pane for new sections | Not in scope | Add detail pane coverage for language envs and unmanaged files |
+| Variant comparison (package-list diff for lang envs, content-hash comparison for unmanaged files) | Not in scope | Implement variant views per spec's aggregate decision-support contract |
+| Aggregate identity model (`ecosystem:path` for lang pkgs, `path` for unmanaged files) | Identity contracts established in Plan 1 | Wire aggregate identity using Plan 1's contracts |
+
+**Dependency note:** Plan 4's aggregate row work for new sections depends on backend aggregate metadata (aggregate sections, prevalence data) that Plan 4's backend tasks will establish. Plan 3 has no dependency on this data.
 
 ---
 
@@ -3175,11 +3662,11 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ### ItemId Variants Used
 
-| Plan 3 Context | ItemId Variant | Identity Key |
-|---------------|---------------|--------------|
-| Language Package toggle | `ItemId::LanguageEnv { ecosystem, path }` | `"pip:/opt/myapp/venv"` |
-| Unmanaged File toggle | `ItemId::UnmanagedFile { path }` | `"/opt/splunk/bin/splunkd"` |
-| RPM Package toggle | `ItemId::Package` (existing) | Package name |
+| Plan 3 Context | ItemId Variant | Identity Key | Toggle Payload Shape |
+|---------------|---------------|--------------|---------------------|
+| Language Package toggle | `ItemId::LanguageEnv { ecosystem, path }` | `"pip:/opt/myapp/venv"` | `{ LanguageEnv: { ecosystem: "pip", path: "/opt/myapp/venv" } }` |
+| Unmanaged File toggle | `ItemId::UnmanagedFile { path }` | `"/opt/splunk/bin/splunkd"` | `{ UnmanagedFile: { path: "/opt/splunk/bin/splunkd" } }` |
+| RPM Package toggle | `ItemId::Package` (existing) | Package name | Existing shape (unchanged) |
 
 ### Method Strings Referenced
 
@@ -3198,3 +3685,22 @@ Assisted-by: Claude Code (Opus 4.6)"
 | `"high"` | Green label, `include: true` default |
 | `"medium"` | Orange label, `include: false` default |
 | `"low"` | Grey label, `include: false` default |
+
+## Shared Contracts Consumed from Plan 2
+
+### Backend Fields for RPM Row State Derivation
+
+| Field | Source | Plan 3 Usage |
+|-------|--------|-------------|
+| `PackageEntry.repoless_annotation` | Plan 2 Task 5 | Non-empty = package is repo-less |
+| `PackageEntry.repoless_cached` | Plan 2 Task 5 | `true` = cached RPM found, row is cached_excluded |
+| `POST /api/upload-rpm` | Plan 2 Task 11 | Upload endpoint for durable RPM staging |
+
+### Provenance Signals for Unmanaged Files
+
+| Signal | Source | Plan 3 Rendering |
+|--------|--------|-----------------|
+| `mutability` | `ProvenanceSignals` (Plan 2 Task 1) | Orange "modified since install" badge |
+| `writable_mount` | `ProvenanceSignals` (Plan 2 Task 1) | Orange "writable mount" badge |
+| `service_working_dir` | `ProvenanceSignals` (Plan 2 Task 1) | Blue "service workdir" badge |
+| `last_modified`, `uid`, `gid`, `permissions` | `ProvenanceSignals` (Plan 2 Task 1) | Carried in DTO, available for detail rendering |
