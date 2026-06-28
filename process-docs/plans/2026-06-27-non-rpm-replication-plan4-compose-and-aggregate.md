@@ -1,6 +1,6 @@
 # Non-RPM Replication Plan 4: Compose Raw Content + Aggregate Support
 
-<!-- agentic: tang | model: opus | sdd: true | thorn-checkpoint: after T3, T6, T9 -->
+<!-- agentic: tang | model: opus | sdd: true | thorn-checkpoint: after T3, T5a, T8, T9a -->
 <!-- depends-on: plan1 (data model, shared contracts), plan2 (UnmanagedFile types, ItemId::UnmanagedFile), plan3 (LanguagePackageEnv UI types) -->
 
 ## Goal
@@ -16,33 +16,41 @@ Plans 1-3.
 2. Containerfile contains a compose comment block with Quadlet nudge and
    correct doc links (no COPY/RUN)
 3. `compose/` added to the export allowlist, export contract test passes
-4. Aggregate view returns `language_packages` and `unmanaged_files`
+4. `docs/reference/output-artifacts.md` documents the `compose/` root
+5. Aggregate view returns `language_packages` and `unmanaged_files`
    sections with zone-based layout
-5. Aggregate merge uses correct identity keys: ecosystem+path for language
+6. Aggregate merge uses correct identity keys: ecosystem+path for language
    envs, file path for unmanaged files
-6. Prevalence-based defaults: 100% = include, <100% = exclude
-7. Variant handling: package-list diff for language envs, content-hash
-   for unmanaged files
-8. All existing tests pass, new tests cover each task
-9. Clippy clean, `cargo fmt`, no warnings
+7. Prevalence-based defaults: 100% = include, <100% = exclude — verified
+   by explicit merge/handler tests per section
+8. Variant handling: package-list diff for language envs, content-hash
+   for unmanaged files — backed by declared backend payloads
+9. All existing tests pass, new tests cover each task
+10. Clippy clean, `cargo fmt`, no warnings
 
 ## Architecture
 
 ```
-Plan 4 has two independent tracks that share no code:
+Plan 4 has three tracks:
 
-Track A: Compose raw content (Tasks 1-4)
-  containers.rs → types/containers.rs → session.rs → containerfile.rs
-  collector        data model            export        rendering
+Track A: Compose raw content (Tasks 1-4a)
+  containers.rs → types/containers.rs → session.rs → containerfile.rs → docs
+  collector        data model            export        rendering        artifacts
 
-Track B: Aggregate sections (Tasks 5-9)
-  merge.rs → aggregate_handlers.rs → aggregate TS types
-  identity    section builder         frontend DTOs
+Track B: Aggregate sections (Tasks 5-9a)
+  nonrpm.rs → merge.rs → aggregate_handlers.rs → aggregate TS types → API/DTO contract
+  agg fields   identity    section builder         frontend DTOs        response shapes
+
+Track C: Aggregate UI (Tasks 10-14)
+  AggregateItemRow → ItemDetailPane → VariantView → Search → Sidebar
+  row metadata       detail content    variant diff   index    wiring
 ```
 
 Track A modifies the existing compose pipeline end-to-end. Track B adds
 new aggregate sections following the exact pattern used by packages,
-configs, services, sysctls, and containers.
+configs, services, sysctls, and containers. Track C wires Plan 3's
+single-host components into aggregate mode using the API contract from
+Task 9a.
 
 ## Tech Stack
 
@@ -69,10 +77,15 @@ Sections consumed by this plan:
 4. Attribution: `Assisted-by: Claude Code (Opus 4.6)`
 5. Consume Plan 1's shared contracts exactly — do not redefine ItemId
    variants, method strings, or confidence gates
-6. Compose stays reference-only: no include toggles, no Containerfile
+6. Consume Plan 2's `UnmanagedFileSection` contract exactly —
+   `items: Vec<UnmanagedFile>`, `total_size: u64`, `total_count: usize`.
+   Do not rename fields or omit section-level totals.
+7. Compose stays reference-only: no include toggles, no Containerfile
    COPY/RUN directives
-7. Aggregate sections use zone-based layout via `build_section()` — same
+8. Aggregate sections use zone-based layout via `build_section()` — same
    pattern as packages, configs, services, sysctls
+9. Compose secret scrubber lives in `inspectah-core` (shared utility) —
+   do not defer crate placement to implementation time
 
 ## Shared Contracts Consumed from Plan 1
 
@@ -99,6 +112,30 @@ Sections consumed by this plan:
 | `manifest_files` | Variant diff key for language envs |
 | `packages` | Unified package list (`Vec<LanguagePackage>`) for all ecosystems |
 
+### UnmanagedFile Contract from Plan 2
+
+Plan 2 Task 1 defines the shared contract. Plan 4 consumes it as-is:
+
+| Struct | Field | Type | Notes |
+|--------|-------|------|-------|
+| `UnmanagedFile` | `path` | `String` | Identity key |
+| | `size` | `u64` | File size in bytes |
+| | `file_type` | `FileType` | Detected file type |
+| | `provenance` | `ProvenanceSignals` | Raw metadata + derived signals |
+| | `include` | `bool` | Default true |
+| | `locked` | `bool` | |
+| | `acknowledged` | `bool` | |
+| | `under_var` | `bool` | `/var` persistence warning |
+| | `aggregate` | `Option<AggregatePrevalence>` | Populated in aggregate mode |
+| `UnmanagedFileSection` | `items` | `Vec<UnmanagedFile>` | **Not `files`** |
+| | `total_size` | `u64` | Sum of all file sizes |
+| | `total_count` | `usize` | Number of cataloged files |
+
+**Plan 4 additions** (Task 5a): `content_hash` and `variant_selection`
+are aggregate-only fields not present in Plan 2. Task 5a adds them with
+`serde(default)` for backward compatibility before any aggregate task
+uses them.
+
 ## File Map
 
 ### Track A: Compose Raw Content
@@ -106,19 +143,33 @@ Sections consumed by this plan:
 | Task | Files | Creates/Modifies |
 |------|-------|------------------|
 | T1 | `crates/core/src/types/containers.rs` | Modify: add `raw_content` field |
-| T2 | `crates/collect/src/inspectors/containers.rs` | Modify: retain raw YAML, add redaction scrub |
+| T2 | `crates/collect/src/inspectors/containers.rs`, `crates/core/src/redaction.rs` | Modify: retain raw YAML; Create: scrubber in core |
 | T3 | `crates/refine/src/session.rs`, `crates/refine/tests/export_contract_test.rs` | Modify: compose export + allowlist |
 | T4 | `crates/pipeline/src/render/containerfile.rs` | Modify: compose comment block |
+| T4a | `docs/reference/output-artifacts.md` | Modify: document `compose/` root |
 
 ### Track B: Aggregate Support
 
 | Task | Files | Creates/Modifies |
 |------|-------|------------------|
 | T5 | `crates/core/src/aggregate/merge.rs` | Modify: NonRpmItem identity key |
+| T5a | `crates/core/src/types/nonrpm.rs` | Modify: add aggregate-only fields to UnmanagedFile |
 | T6 | `crates/core/src/aggregate/merge.rs` | Modify: add UnmanagedFile merge |
 | T7 | `crates/web/src/aggregate_handlers.rs` | Modify: language_packages section |
 | T8 | `crates/web/src/aggregate_handlers.rs` | Modify: unmanaged_files section |
 | T9 | `crates/web/ui/src/api/types.ts` | Modify: aggregate TS DTOs |
+| T9a | `crates/web/src/aggregate_handlers.rs`, `crates/web/ui/src/api/types.ts` | Modify: per-section metadata + variant payloads in response |
+
+### Track C: Aggregate UI
+
+| Task | Files | Creates/Modifies |
+|------|-------|------------------|
+| T10 | `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx` | Modify: section-aware row metadata |
+| T11 | `crates/web/ui/src/components/aggregate/ItemDetailPane.tsx` | Modify: detail pane content |
+| T11a | `crates/web/src/aggregate_handlers.rs` | Modify: variant diff payloads for T12 |
+| T12 | `crates/web/ui/src/components/aggregate/VariantView.tsx` | Modify: variant comparison UI |
+| T13 | `crates/web/ui/src/components/aggregate/AggregateApp.tsx` | Modify: search scope |
+| T14 | `crates/web/ui/src/components/aggregate/AggregateSidebar.tsx` | Modify: sidebar wiring |
 
 ---
 
@@ -209,12 +260,21 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 **Files:**
 - Modify: `crates/collect/src/inspectors/containers.rs`
-- Test: new unit tests in same file
+- Create: `crates/core/src/redaction.rs` (scrubber utility)
+- Test: new unit tests in both files
 
 **Interfaces:**
 - Depends on: Task 1 (`ComposeFile.raw_content`)
 - Produces: populated `raw_content` during collection
 - Consumed by: Tasks 3, 4
+
+**Crate home decision:** The `scrub_compose_secrets` function lives in
+`inspectah-core` under `crates/core/src/redaction.rs`. Both
+`inspectah-collect` (which already depends on `inspectah-core`) and
+`inspectah-refine` (which already depends on `inspectah-core`) can reach
+it without adding new cross-crate dependencies. If `redaction.rs` already
+exists in core, add the function there. If not, create the module and add
+`pub mod redaction;` to `crates/core/src/lib.rs`.
 
 - [ ] **Step 1: Retain raw YAML in `find_compose_files`**
 
@@ -252,17 +312,25 @@ earlier, but that call completes before this point so the borrow is not
 active. If the borrow checker disagrees, move the clone before the scan
 call.
 
-- [ ] **Step 2: Add `scrub_compose_secrets` utility function**
+- [ ] **Step 2: Add `scrub_compose_secrets` in `inspectah-core`**
 
-Add a new function after `scan_compose_env_secrets`:
+Create or extend `crates/core/src/redaction.rs`:
 
 ```rust
 /// Scrubs secret-like values from compose YAML content.
 ///
 /// Replaces values of environment variables whose names match
-/// SECRET_PATTERNS with `<REDACTED>`. Handles both `KEY=VALUE` and
+/// secret patterns with `<REDACTED>`. Handles both `KEY=VALUE` and
 /// `KEY: value` patterns within `environment:` blocks.
-fn scrub_compose_secrets(content: &str) -> String {
+///
+/// Lives in inspectah-core so both inspectah-collect and
+/// inspectah-refine can use it without cross-crate dependency issues.
+pub fn scrub_compose_secrets(content: &str) -> String {
+    const SECRET_PATTERNS: &[&str] = &[
+        "PASSWORD", "PASSWD", "SECRET", "TOKEN", "API_KEY",
+        "PRIVATE_KEY", "AUTH", "CREDENTIAL",
+    ];
+
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
         let trimmed = line.trim();
@@ -310,6 +378,8 @@ fn scrub_compose_secrets(content: &str) -> String {
 
 - [ ] **Step 3: Add unit tests for `scrub_compose_secrets`**
 
+In `crates/core/src/redaction.rs` (or a test module):
+
 ```rust
     #[test]
     fn scrub_compose_secrets_redacts_eq_style() {
@@ -348,18 +418,18 @@ fn scrub_compose_secrets(content: &str) -> String {
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
+cargo test -p inspectah-core -- redaction
 cargo test -p inspectah-collect -- containers
-git add crates/collect/src/inspectors/containers.rs
+git add crates/core/src/redaction.rs crates/core/src/lib.rs \
+       crates/collect/src/inspectors/containers.rs
 git commit -m "feat(collect): retain raw compose YAML and add secret scrubber
 
 find_compose_files now populates ComposeFile.raw_content with the
-raw YAML. scrub_compose_secrets replaces secret-like env var values
-with <REDACTED> for use during redacted export.
+raw YAML. scrub_compose_secrets lives in inspectah-core::redaction
+so both collect and refine can use it without cross-crate issues.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
-
-**Thorn checkpoint: after T1-T3 complete (covers data model + collector + export).**
 
 ---
 
@@ -371,9 +441,10 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: export contract test
 
 **Interfaces:**
-- Depends on: Tasks 1-2 (`ComposeFile.raw_content` populated)
+- Depends on: Tasks 1-2 (`ComposeFile.raw_content` populated,
+  `inspectah_core::redaction::scrub_compose_secrets` available)
 - Produces: `compose/` directory in tarball
-- Consumed by: Task 4 (Containerfile references compose/)
+- Consumed by: Task 4 (Containerfile references compose/), Task 4a (docs)
 
 - [ ] **Step 1: Add `compose` to the export allowlist**
 
@@ -438,7 +509,7 @@ allowed_top_level cleanup, add compose file writing:
                         .map_err(|e| RefineError::TarballError(e.to_string()))?;
                 }
                 let content = if is_redacted {
-                    inspectah_collect::inspectors::containers::scrub_compose_secrets(
+                    inspectah_core::redaction::scrub_compose_secrets(
                         cf.raw_content.as_deref().unwrap_or(""),
                     )
                 } else {
@@ -450,16 +521,6 @@ allowed_top_level cleanup, add compose file writing:
         }
     }
 ```
-
-**Note on `scrub_compose_secrets` visibility:** The function is currently
-private in `containers.rs`. Make it `pub(crate)` — or better, since it is
-called cross-crate from `inspectah-refine`, make it `pub` and re-export
-from `inspectah_collect::inspectors::containers`. If `inspectah-refine`
-does not already depend on `inspectah-collect`, an alternative approach:
-move `scrub_compose_secrets` to a utility module in `inspectah-core`
-(e.g., `crates/core/src/redaction.rs`) where both crates can reach it.
-Evaluate the dependency graph at implementation time and pick the path
-that avoids circular dependencies.
 
 - [ ] **Step 3: Access redaction state**
 
@@ -581,16 +642,17 @@ fn export_redacts_compose_secrets() {
 cd /Users/mrussell/Work/bootc-migration/inspectah
 cargo test -p inspectah-refine -- export
 git add crates/refine/src/session.rs crates/refine/tests/export_contract_test.rs
-# Also add scrub_compose_secrets visibility change if applicable
 git commit -m "feat(refine): export compose files to tarball with redaction
 
 Writes compose files under compose/ in the export tarball, mirroring
 the source directory structure. Secret-like env var values are scrubbed
-when the snapshot is in redacted state. Adds compose to the export
-allowlist.
+via inspectah_core::redaction::scrub_compose_secrets when the snapshot
+is in redacted state. Adds compose to the export allowlist.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
+
+**Thorn checkpoint: after T1-T3 complete (covers data model + collector + export).**
 
 ---
 
@@ -786,7 +848,56 @@ docs, and RHEL 10 container guide. No COPY/RUN directives.
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-**Thorn checkpoint: after T4 complete (full compose pipeline end-to-end).**
+---
+
+## Task 4a: Compose Docs + Sensitivity Handoff
+
+**Files:**
+- Modify: `docs/reference/output-artifacts.md`
+
+**Interfaces:**
+- Depends on: Task 3 (compose/ export exists)
+- Produces: documented `compose/` root in output-artifacts reference
+
+This task closes two compose-side gaps flagged in review:
+
+1. **Output-artifacts documentation:** Add the `compose/` root to the
+   documented export contract in `docs/reference/output-artifacts.md`.
+
+2. **Compose sensitivity indicator handoff:** The spec requires the
+   refine UI to show a sensitivity indicator on compose entries when
+   secret-like patterns were detected (spec: "The refine UI shows a
+   sensitivity indicator on compose entries when secret-like patterns
+   were detected"). This is a **Plan 3 UI concern** — the compose sidebar
+   destination and its visual treatment are Plan 3 scope. **Named handoff
+   to Plan 3:** Plan 3 Task 8 (Sidebar Updates) should add a sensitivity
+   badge to the compose sidebar entry when `RedactionHint` entries exist
+   for compose files. If Plan 3 is already approved without this, file a
+   follow-up issue for a patch plan.
+
+- [ ] **Step 1: Add compose/ to output-artifacts.md**
+
+In `docs/reference/output-artifacts.md`, add a row to the export roots
+table:
+
+```markdown
+| `compose/` | Compose YAML files | Automatic when compose files detected | Raw YAML mirroring source directory structure. Subject to redaction: secret-like env var values replaced with `<REDACTED>` when snapshot is in redacted state. |
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add docs/reference/output-artifacts.md
+git commit -m "docs(reference): add compose/ root to output-artifacts
+
+Documents the compose/ export root added in Task 3. Subject to
+redaction rules when snapshot is in redacted state.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+**Thorn checkpoint: after T4a complete (full compose pipeline end-to-end + docs).**
 
 ---
 
@@ -855,7 +966,7 @@ in the same environment:
         use sha2::{Digest, Sha256};
         // Hash the unified package list to detect divergence across hosts.
         // All ecosystems use packages: Vec<LanguagePackage> (Plan 1 Task 1
-        // renames PipPackage → LanguagePackage and reuses the same field).
+        // renames PipPackage -> LanguagePackage and reuses the same field).
         let mut hasher = Sha256::new();
         hasher.update(self.method.as_bytes());
         hasher.update(b"\n");
@@ -866,7 +977,7 @@ in the same environment:
     }
 ```
 
-- [ ] **Step 3: Add unit test for composite identity key**
+- [ ] **Step 3: Add unit tests for composite identity key and prevalence defaults**
 
 ```rust
     #[test]
@@ -901,6 +1012,76 @@ in the same environment:
         };
         assert_eq!(item.identity_key().as_ref(), "custom-binary");
     }
+
+    #[test]
+    fn nonrpm_merge_100_pct_prevalence_includes() {
+        // Two hosts, same environment on both → 100% prevalence → include: true
+        let section_a = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+        let section_b = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+
+        let merged = merge_nonrpm_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let item = &merged.items[0];
+        let agg = item.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 2);
+        assert!(item.include, "100% prevalence should default to include: true");
+    }
+
+    #[test]
+    fn nonrpm_merge_partial_prevalence_excludes() {
+        // Two hosts, environment on only one → 50% prevalence → include: false
+        let section_a = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myapp-venv".to_string(),
+                path: "/opt/myapp/venv".to_string(),
+                method: "venv".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            env_files: vec![],
+        });
+        let section_b = Some(NonRpmSoftwareSection {
+            items: vec![],
+            env_files: vec![],
+        });
+
+        let merged = merge_nonrpm_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let item = &merged.items[0];
+        let agg = item.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.total, 2);
+        assert!(!item.include, "partial prevalence should default to include: false");
+    }
 ```
 
 - [ ] **Step 4: Verify tests pass, commit**
@@ -914,10 +1095,119 @@ git commit -m "fix(core): use composite identity key for NonRpmItem aggregate me
 Changes NonRpmItem identity from name-only to ecosystem:path format
 (e.g., pip:/opt/myapp/venv) to prevent collisions when the same
 package appears in multiple environments. Falls back to name for
-legacy items without a path.
+legacy items without a path. Adds prevalence-default tests proving
+100% = include, <100% = exclude.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
+
+---
+
+## Task 5a: Data Model — Aggregate-Only Fields for UnmanagedFile
+
+**Files:**
+- Modify: `crates/core/src/types/nonrpm.rs`
+- Test: serde roundtrip tests
+
+**Interfaces:**
+- Depends on: Plan 2 Task 1 (`UnmanagedFile` struct exists)
+- Produces: `content_hash` and `variant_selection` fields on `UnmanagedFile`
+- Consumed by: Tasks 6, 8, 9a, 11a
+
+Plan 2 defines `UnmanagedFile` without `content_hash` or
+`variant_selection` because those are aggregate-only concerns — the
+collector does not compute content hashes, and variant selection is a
+merge-layer output. This task adds them with `serde(default)` so
+existing single-host snapshots deserialize without breakage.
+
+- [ ] **Step 1: Add `content_hash` field to `UnmanagedFile`**
+
+In `crates/core/src/types/nonrpm.rs`, add after the `aggregate` field
+on `UnmanagedFile`:
+
+```rust
+    /// Content hash for aggregate variant detection.
+    /// Empty in single-host mode — populated by the aggregate merge layer
+    /// from file metadata (size + last-modified + path as hash input).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_hash: String,
+```
+
+- [ ] **Step 2: Add `variant_selection` field to `UnmanagedFile`**
+
+```rust
+    /// Variant selection state for aggregate mode.
+    /// Only meaningful when multiple hosts have the same file path but
+    /// different content hashes.
+    #[serde(default)]
+    pub variant_selection: VariantSelection,
+```
+
+Import `VariantSelection` from `crate::types::aggregate::VariantSelection`
+(or wherever it is defined — check the existing `VariantSelection` usage
+in `ComposeFile`, `ConfigFileEntry`, etc. for the canonical import path).
+
+- [ ] **Step 3: Add serde roundtrip tests**
+
+```rust
+    #[test]
+    fn unmanaged_file_aggregate_fields_roundtrip() {
+        use crate::types::aggregate::VariantSelection;
+
+        let uf = UnmanagedFile {
+            path: "/opt/splunk/bin/splunkd".to_string(),
+            size: 52_000_000,
+            content_hash: "abc123def456".to_string(),
+            variant_selection: VariantSelection::Selected,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&uf).unwrap();
+        assert!(json.contains("content_hash"));
+        assert!(json.contains("variant_selection"));
+        let parsed: UnmanagedFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(uf.content_hash, parsed.content_hash);
+        assert_eq!(uf.variant_selection, parsed.variant_selection);
+    }
+
+    #[test]
+    fn unmanaged_file_aggregate_fields_default_from_plan2_json() {
+        // Simulates deserializing a Plan 2 snapshot that lacks
+        // content_hash and variant_selection.
+        let json = r#"{"path":"/opt/app/bin","size":1000,"file_type":"elf_binary","include":true}"#;
+        let parsed: UnmanagedFile = serde_json::from_str(json).unwrap();
+        assert!(parsed.content_hash.is_empty());
+        assert_eq!(parsed.variant_selection, VariantSelection::default());
+    }
+
+    #[test]
+    fn unmanaged_file_empty_content_hash_omitted_in_json() {
+        let uf = UnmanagedFile {
+            path: "/opt/app/bin".to_string(),
+            content_hash: String::new(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&uf).unwrap();
+        assert!(!json.contains("content_hash"), "empty content_hash should be omitted");
+    }
+```
+
+- [ ] **Step 4: Verify tests pass, commit**
+
+```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah
+cargo test -p inspectah-core -- nonrpm
+git add crates/core/src/types/nonrpm.rs
+git commit -m "feat(core): add aggregate-only fields to UnmanagedFile
+
+Adds content_hash and variant_selection to UnmanagedFile for
+aggregate variant detection. Both use serde(default) for backward
+compatibility with Plan 2 single-host snapshots. The merge layer
+populates content_hash; variant_selection is a merge output.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+**Thorn checkpoint: after T5a complete (aggregate data model for both section types is finalized).**
 
 ---
 
@@ -928,7 +1218,8 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: new unit test in same file
 
 **Interfaces:**
-- Depends on: Plan 2 Task 1 (`UnmanagedFile`, `UnmanagedFileSection` types)
+- Depends on: Plan 2 Task 1 (`UnmanagedFile`, `UnmanagedFileSection` types),
+  Task 5a (`content_hash`, `variant_selection` fields)
 - Produces: `AggregateMergeable` impl for `UnmanagedFile`, merge function
 - Consumed by: Task 8
 
@@ -937,7 +1228,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 In `crates/core/src/aggregate/merge.rs`, add after the `NonRpmItem` impl:
 
 ```rust
-use crate::types::nonrpm::UnmanagedFile;
+use crate::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
 
 impl AggregateMergeable for UnmanagedFile {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -955,6 +1246,7 @@ impl AggregateMergeable for UnmanagedFile {
 
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
         // Use the content hash to detect divergent file content across hosts.
+        // content_hash is added by Task 5a — empty in single-host mode.
         if self.content_hash.is_empty() {
             None
         } else {
@@ -968,15 +1260,13 @@ impl AggregateMergeable for UnmanagedFile {
 }
 ```
 
-**Note:** This depends on Plan 2 Task 1 having added `UnmanagedFile` with
-fields `path`, `aggregate`, `include`, `content_hash`, and
-`variant_selection`. If the struct differs at implementation time, adjust
-field names to match.
-
 - [ ] **Step 2: Add `merge_unmanaged_file_sections` function**
 
 ```rust
 /// Merge unmanaged file sections from multiple hosts.
+///
+/// Uses Plan 2's UnmanagedFileSection contract: `items` (not `files`),
+/// with `total_size` and `total_count` recomputed from merged items.
 pub fn merge_unmanaged_file_sections(
     sections: Vec<Option<UnmanagedFileSection>>,
     total_hosts: usize,
@@ -986,18 +1276,23 @@ pub fn merge_unmanaged_file_sections(
         return None;
     }
 
-    let files = merge_items(
-        collect_items(&sections, |s| &s.files),
+    let items = merge_items(
+        collect_items(&sections, |s| &s.items),
         total_hosts,
         hostnames,
     );
 
-    Some(UnmanagedFileSection { files })
+    // Recompute totals from merged items.
+    let total_size: u64 = items.iter().map(|f| f.size).sum();
+    let total_count = items.len();
+
+    Some(UnmanagedFileSection {
+        items,
+        total_size,
+        total_count,
+    })
 }
 ```
-
-Add the corresponding import for `UnmanagedFileSection` at the top of the
-nonrpm import block.
 
 - [ ] **Step 3: Wire into the top-level merge function**
 
@@ -1006,30 +1301,32 @@ Find the function that calls `merge_nonrpm_sections` and
 `merge_unmanaged_file_sections` in the same pattern, assigning the
 result to `merged_snap.unmanaged_files`.
 
-**Note:** The `InspectionSnapshot` field for unmanaged files is added by
-Plan 2 Task 1 (likely `unmanaged_files: Option<UnmanagedFileSection>`).
-Follow the same pattern as `non_rpm_software`.
-
-- [ ] **Step 4: Add unit test**
+- [ ] **Step 4: Add unit tests including prevalence defaults**
 
 ```rust
     #[test]
     fn unmanaged_file_merge_by_path() {
         let section_a = Some(UnmanagedFileSection {
-            files: vec![UnmanagedFile {
+            items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
                 include: true,
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
+            total_size: 52_000_000,
+            total_count: 1,
         });
         let section_b = Some(UnmanagedFileSection {
-            files: vec![UnmanagedFile {
+            items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
                 include: true,
                 content_hash: "bbb222".to_string(),
                 ..Default::default()
             }],
+            total_size: 52_000_000,
+            total_count: 1,
         });
 
         let merged = merge_unmanaged_file_sections(
@@ -1039,12 +1336,86 @@ Follow the same pattern as `non_rpm_software`.
         )
         .unwrap();
 
-        // Same path → merged into one item with aggregate prevalence.
-        assert_eq!(merged.files.len(), 1);
-        let file = &merged.files[0];
+        // Same path -> merged into one item with aggregate prevalence.
+        assert_eq!(merged.items.len(), 1);
+        let file = &merged.items[0];
         assert_eq!(file.path, "/opt/splunk/bin/splunkd");
         let agg = file.aggregate.as_ref().unwrap();
         assert_eq!(agg.total, 2);
+        // Totals recomputed
+        assert_eq!(merged.total_count, 1);
+        assert_eq!(merged.total_size, 52_000_000);
+    }
+
+    #[test]
+    fn unmanaged_file_merge_100_pct_prevalence_includes() {
+        // File present on all hosts → 100% → include: true
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let file = &merged.items[0];
+        let agg = file.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 2);
+        assert!(file.include, "100% prevalence should default to include: true");
+    }
+
+    #[test]
+    fn unmanaged_file_merge_partial_prevalence_excludes() {
+        // File on 1 of 2 hosts → 50% → include: false
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![],
+            total_size: 0,
+            total_count: 0,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let file = &merged.items[0];
+        let agg = file.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.total, 2);
+        assert!(!file.include, "partial prevalence should default to include: false");
     }
 ```
 
@@ -1057,14 +1428,13 @@ git add crates/core/src/aggregate/merge.rs
 git commit -m "feat(core): add UnmanagedFile aggregate merge support
 
 Implements AggregateMergeable for UnmanagedFile using file path as
-identity key and content hash for variant detection. Adds
-merge_unmanaged_file_sections following the same pattern as other
-section merges.
+identity key and content hash for variant detection. Uses Plan 2's
+exact contract: UnmanagedFileSection.items with total_size and
+total_count recomputed from merged results. Prevalence tests verify
+100% = include, <100% = exclude.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
-
-**Thorn checkpoint: after T5-T6 complete (aggregate merge layer for both new sections).**
 
 ---
 
@@ -1078,7 +1448,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Depends on: Task 5 (NonRpmItem composite identity key), Plan 1 Task 1
   (`NonRpmItem` field extensions), Plan 3 Task 2 (UI types)
 - Produces: `language_packages` section in aggregate view response
-- Consumed by: Task 9 (TS types)
+- Consumed by: Task 9 (TS types), Task 9a (API/DTO contract)
 
 - [ ] **Step 1: Add language package classification helper**
 
@@ -1131,68 +1501,18 @@ After the containers section block in `build_aggregate_sections`, add:
     {
         let lang_envs = classify_language_envs(snap);
         if !lang_envs.is_empty() {
-            // Group by identity key for variant detection.
-            let mut env_groups: std::collections::BTreeMap<
-                String,
-                Vec<&NonRpmItem>,
-            > = std::collections::BTreeMap::new();
-            for (item, item_id) in &lang_envs {
-                let key = match item_id {
-                    ItemId::LanguageEnv { ecosystem, path } => {
-                        format!("{ecosystem}:{path}")
-                    }
-                    _ => continue,
-                };
-                env_groups.entry(key).or_default().push(item);
-            }
-
             let mut items: Vec<AggregateItem> = Vec::new();
-            for (key, group) in &env_groups {
-                // Pick representative: highest prevalence count, else first.
-                let representative = group
-                    .iter()
-                    .max_by_key(|item| {
-                        item.aggregate.as_ref().map(|a| a.count).unwrap_or(0)
-                    })
-                    .unwrap_or(&&group[0]);
-
-                let ecosystem = key.split(':').next().unwrap_or("other");
-                let env_path = key.split(':').skip(1).collect::<Vec<_>>().join(":");
-                let item_id = ItemId::LanguageEnv {
-                    ecosystem: ecosystem.to_string(),
-                    path: env_path,
-                };
-                let fp = representative.aggregate.as_ref();
-
-                // Variant detection: different package lists across hosts.
-                let variants = if group.len() >= 2 {
-                    // Use content_variant_key from the merge layer's
-                    // VariantSelection. Build variants from the aggregate
-                    // prevalence data.
-                    Some(build_content_variants(
-                        &group
-                            .iter()
-                            .map(|item| {
-                                (
-                                    &item.content,
-                                    item.variant_selection,
-                                    item.aggregate.as_ref(),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    ))
-                } else {
-                    None
-                };
+            for (item, item_id) in &lang_envs {
+                let fp = item.aggregate.as_ref();
 
                 items.push(AggregateItem {
-                    item_id,
-                    include: representative.include,
-                    locked: representative.locked,
+                    item_id: item_id.clone(),
+                    include: item.include,
+                    locked: item.locked,
                     attention_reason: None,
                     triage: build_triage_dto(
                         &Triage {
-                            bucket: if representative.include {
+                            bucket: if item.include {
                                 TriageBucket::Keep
                             } else {
                                 TriageBucket::Exclude
@@ -1213,7 +1533,7 @@ After the containers section block in `build_aggregate_sections`, add:
                         ctx,
                     ),
                     prevalence: aggregate_prevalence_dto(fp, ctx),
-                    variants,
+                    variants: None, // Variant payloads added by Task 9a
                     source_repo: String::new(),
                     repo_conflict: None,
                 });
@@ -1232,12 +1552,12 @@ After the containers section block in `build_aggregate_sections`, add:
     }
 ```
 
-**Note on `VariantSelection` and `content` fields:** NonRpmItem currently
-has a `content` field (String) and Plan 1 may add `variant_selection`.
-If `variant_selection` is not on NonRpmItem at implementation time, use
-`VariantSelection::Only` as default for all items (no variant detection
-until the merge layer populates it). Adjust to match Plan 1's actual
-implementation.
+**Note on variant payloads:** This task produces the section structure
+and zone-based layout. The variant payloads (package-list diffs) are
+added by Task 9a (API/DTO contract) and Task 11a (variant diff data),
+which extend the response shape. Setting `variants: None` here is
+intentional — it avoids coupling the section builder to variant data
+that has not been defined yet.
 
 - [ ] **Step 3: Add necessary imports**
 
@@ -1250,14 +1570,13 @@ use inspectah_core::types::nonrpm::NonRpmItem;
 If `ItemId::LanguageEnv` is not yet defined (depends on Plan 1 Task 1),
 this task is blocked until Plan 1 lands.
 
-- [ ] **Step 4: Add unit test**
+- [ ] **Step 4: Add unit test with prevalence-default verification**
 
 ```rust
     #[test]
     fn aggregate_language_packages_section_emitted() {
         use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
-        use inspectah_refine::session::RefineSession;
 
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -1281,7 +1600,6 @@ this task is blocked until Plan 1 lands.
             ..Default::default()
         };
 
-        let session = RefineSession::new(snap.clone());
         let ctx = AggregateContext {
             aggregate_meta: AggregateSnapshotMeta {
                 label: "test".to_string(),
@@ -1296,6 +1614,7 @@ this task is blocked until Plan 1 lands.
             repo_conflicts: BTreeMap::new(),
         };
 
+        let session = RefineSession::new(snap.clone());
         let sections = build_aggregate_sections(&session, &snap, &ctx);
         let lang_section = sections
             .iter()
@@ -1305,8 +1624,38 @@ this task is blocked until Plan 1 lands.
             lang_section.is_some(),
             "language_packages section should be present"
         );
+        let section = lang_section.unwrap();
+        assert!(section.is_decision_section);
+    }
+
+    #[test]
+    fn aggregate_language_packages_100_pct_includes() {
+        // 3/3 hosts → consensus zone, include: true
+        let snap = make_lang_pkg_snap(3, 3); // helper
+        let ctx = make_aggregate_ctx(3);
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections.iter().find(|s| s.id == "language_packages").unwrap();
+        let items = all_section_items(section);
+        assert!(items[0].include, "100% prevalence should be included");
+    }
+
+    #[test]
+    fn aggregate_language_packages_partial_excludes() {
+        // 1/3 hosts → divergent zone, include: false
+        let snap = make_lang_pkg_snap(1, 3); // helper
+        let ctx = make_aggregate_ctx(3);
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections.iter().find(|s| s.id == "language_packages").unwrap();
+        let items = all_section_items(section);
+        assert!(!items[0].include, "partial prevalence should be excluded");
     }
 ```
+
+**Note:** The `make_lang_pkg_snap` and `make_aggregate_ctx` helpers build
+test fixtures. If similar helpers already exist in the test module, reuse
+them. If not, add minimal constructors that take `count` and `total`.
 
 - [ ] **Step 5: Verify tests pass, commit**
 
@@ -1317,8 +1666,8 @@ git add crates/web/src/aggregate_handlers.rs
 git commit -m "feat(web): add language_packages section to aggregate view
 
 Groups non-RPM language environments by ecosystem:path identity key,
-applies zone-based layout, and supports variant detection via package
-list hashing. Prevalence-based defaults: 100% include, <100% exclude.
+applies zone-based layout. Prevalence tests verify 100% = include,
+<100% = exclude. Variant payloads deferred to Task 9a.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -1332,10 +1681,11 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Test: new test in same file
 
 **Interfaces:**
-- Depends on: Task 6 (UnmanagedFile merge), Plan 2 Task 1
+- Depends on: Task 6 (UnmanagedFile merge), Task 5a
+  (`content_hash`, `variant_selection` fields), Plan 2 Task 1
   (`UnmanagedFile`, `UnmanagedFileSection`, `ItemId::UnmanagedFile`)
 - Produces: `unmanaged_files` section in aggregate view response
-- Consumed by: Task 9 (TS types)
+- Consumed by: Task 9 (TS types), Task 9a (API/DTO contract)
 
 - [ ] **Step 1: Add unmanaged file section builder**
 
@@ -1345,84 +1695,45 @@ add:
 ```rust
     // Unmanaged Files — decision items with aggregate prevalence
     if let Some(ref unmanaged) = snap.unmanaged_files {
-        // Group by path for variant detection (different content hashes
-        // across hosts for the same file path).
-        let mut file_groups: std::collections::BTreeMap<
-            &str,
-            Vec<&UnmanagedFile>,
-        > = std::collections::BTreeMap::new();
-        for f in &unmanaged.files {
-            file_groups.entry(f.path.as_str()).or_default().push(f);
-        }
-
         let mut items: Vec<AggregateItem> = Vec::new();
-        for (path, group) in &file_groups {
-            let representative = group
-                .iter()
-                .find(|f| {
-                    matches!(
-                        f.variant_selection,
-                        VariantSelection::Selected | VariantSelection::Only
-                    )
-                })
-                .or_else(|| group.first());
+        for f in &unmanaged.items {
+            let item_id = ItemId::UnmanagedFile {
+                path: f.path.clone(),
+            };
+            let fp = f.aggregate.as_ref();
 
-            if let Some(f) = representative {
-                let item_id = ItemId::UnmanagedFile {
-                    path: path.to_string(),
-                };
-                let fp = f.aggregate.as_ref();
-
-                let variants = if group.len() >= 2 {
-                    Some(build_content_variants(
-                        &group
-                            .iter()
-                            .map(|f| {
-                                (
-                                    &f.content_hash as &str,
-                                    f.variant_selection,
-                                    f.aggregate.as_ref(),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    ))
-                } else {
-                    None
-                };
-
-                items.push(AggregateItem {
-                    item_id,
-                    include: f.include,
-                    locked: f.locked,
-                    attention_reason: None,
-                    triage: build_triage_dto(
-                        &Triage {
-                            bucket: if f.include {
-                                TriageBucket::Keep
-                            } else {
-                                TriageBucket::Exclude
-                            },
-                            reason: TriageReason::UserDecision,
-                            tags: vec![],
-                            zone: fp.map(|a| {
-                                if a.count == a.total {
-                                    PrevalenceZone::Consensus
-                                } else if a.count as f64 / a.total.max(1) as f64 >= 0.5 {
-                                    PrevalenceZone::NearConsensus
-                                } else {
-                                    PrevalenceZone::Divergent
-                                }
-                            }),
+            items.push(AggregateItem {
+                item_id,
+                include: f.include,
+                locked: f.locked,
+                attention_reason: None,
+                triage: build_triage_dto(
+                    &Triage {
+                        bucket: if f.include {
+                            TriageBucket::Keep
+                        } else {
+                            TriageBucket::Exclude
                         },
-                        fp,
-                        ctx,
-                    ),
-                    prevalence: aggregate_prevalence_dto(fp, ctx),
-                    variants,
-                    source_repo: String::new(),
-                    repo_conflict: None,
-                });
-            }
+                        reason: TriageReason::UserDecision,
+                        tags: vec![],
+                        zone: fp.map(|a| {
+                            if a.count == a.total {
+                                PrevalenceZone::Consensus
+                            } else if a.count as f64 / a.total.max(1) as f64 >= 0.5 {
+                                PrevalenceZone::NearConsensus
+                            } else {
+                                PrevalenceZone::Divergent
+                            }
+                        }),
+                    },
+                    fp,
+                    ctx,
+                ),
+                prevalence: aggregate_prevalence_dto(fp, ctx),
+                variants: None, // Variant payloads added by Task 9a
+                source_repo: String::new(),
+                repo_conflict: None,
+            });
         }
 
         if !items.is_empty() {
@@ -1437,62 +1748,33 @@ add:
     }
 ```
 
+**Note:** This uses `unmanaged.items` (not `.files`) matching Plan 2's
+contract. Variant payloads (content-hash metadata comparison) are added
+by Task 9a, not here.
+
 - [ ] **Step 2: Add necessary imports**
 
 ```rust
-use inspectah_core::types::nonrpm::UnmanagedFile;
+use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
 ```
 
 If `snap.unmanaged_files` field or `UnmanagedFileSection` doesn't exist
 yet (depends on Plan 2 Task 1), this task is blocked.
 
-- [ ] **Step 3: Handle `build_content_variants` type compatibility**
-
-The `build_content_variants` helper expects `(&str, VariantSelection,
-Option<&AggregatePrevalence>)` tuples. For unmanaged files, the
-"content" for variant comparison is the `content_hash` field (a String),
-not a full file body. Verify the type of `content_hash` — if it's
-`String`, use `f.content_hash.as_str()` in the map closure. If the
-`build_content_variants` function hashes its input internally, using
-the pre-hashed content_hash is fine (it produces a hash-of-hash, which
-is still a stable differentiator).
-
-If `build_content_variants` doesn't fit cleanly (it expects full content
-for re-hashing), write a simpler variant builder that uses the content
-hash directly:
-
-```rust
-fn build_hash_variants(
-    entries: &[(&str, VariantSelection, Option<&AggregatePrevalence>)],
-) -> Vec<AggregateVariant> {
-    entries
-        .iter()
-        .map(|(hash, selection, prevalence)| AggregateVariant {
-            content_hash: ContentHash(hash.to_string()),
-            variant_selection: *selection,
-            host_count: prevalence.map(|p| p.count as usize).unwrap_or(0),
-            hosts: prevalence
-                .map(|p| p.hosts.clone())
-                .unwrap_or_default(),
-        })
-        .collect()
-}
-```
-
-- [ ] **Step 4: Add unit test**
+- [ ] **Step 3: Add unit test with prevalence-default verification**
 
 ```rust
     #[test]
     fn aggregate_unmanaged_files_section_emitted() {
         use inspectah_core::types::aggregate::AggregateSnapshotMeta;
         use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
-        use inspectah_refine::session::RefineSession;
 
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
-                files: vec![UnmanagedFile {
+                items: vec![UnmanagedFile {
                     path: "/opt/splunk/bin/splunkd".to_string(),
+                    size: 52_000_000,
                     include: true,
                     content_hash: "abc123".to_string(),
                     aggregate: Some(AggregatePrevalence {
@@ -1503,11 +1785,12 @@ fn build_hash_variants(
                     }),
                     ..Default::default()
                 }],
+                total_size: 52_000_000,
+                total_count: 1,
             }),
             ..Default::default()
         };
 
-        let session = RefineSession::new(snap.clone());
         let ctx = AggregateContext {
             aggregate_meta: AggregateSnapshotMeta {
                 label: "test".to_string(),
@@ -1522,6 +1805,7 @@ fn build_hash_variants(
             repo_conflicts: BTreeMap::new(),
         };
 
+        let session = RefineSession::new(snap.clone());
         let sections = build_aggregate_sections(&session, &snap, &ctx);
         let unmanaged_section = sections
             .iter()
@@ -1531,10 +1815,74 @@ fn build_hash_variants(
             unmanaged_section.is_some(),
             "unmanaged_files section should be present"
         );
+        let section = unmanaged_section.unwrap();
+        assert!(section.is_decision_section);
+    }
+
+    #[test]
+    fn aggregate_unmanaged_files_100_pct_includes() {
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".to_string(),
+                    size: 10_000,
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 2,
+                        total: 2,
+                        hosts: vec!["a".into(), "b".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 10_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = make_aggregate_ctx(2);
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections.iter().find(|s| s.id == "unmanaged_files").unwrap();
+        let items = all_section_items(section);
+        assert!(items[0].include, "100% prevalence should be included");
+    }
+
+    #[test]
+    fn aggregate_unmanaged_files_partial_excludes() {
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".to_string(),
+                    size: 10_000,
+                    include: false,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 1,
+                        total: 3,
+                        hosts: vec!["a".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 10_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = make_aggregate_ctx(3);
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections.iter().find(|s| s.id == "unmanaged_files").unwrap();
+        let items = all_section_items(section);
+        assert!(!items[0].include, "partial prevalence should be excluded");
     }
 ```
 
-- [ ] **Step 5: Verify tests pass, commit**
+- [ ] **Step 4: Verify tests pass, commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
@@ -1542,12 +1890,14 @@ cargo test -p inspectah-web -- aggregate
 git add crates/web/src/aggregate_handlers.rs
 git commit -m "feat(web): add unmanaged_files section to aggregate view
 
-Groups unmanaged files by path with content-hash variant detection.
-Uses zone-based layout consistent with other aggregate sections.
-Prevalence-based defaults: 100% include, <100% exclude.
+Iterates UnmanagedFileSection.items (Plan 2 contract) with zone-based
+layout. Prevalence tests verify 100% = include, <100% = exclude.
+Variant payloads deferred to Task 9a.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
+
+**Thorn checkpoint: after T8 complete (aggregate sections for both types built).**
 
 ---
 
@@ -1560,7 +1910,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Interfaces:**
 - Depends on: Tasks 7-8 (new aggregate sections)
 - Produces: TS types for frontend consumption
-- Consumed by: Plan 3 aggregate UI components (if not already covered)
+- Consumed by: Task 9a (extended DTOs), Track C UI components
 
 - [ ] **Step 1: Verify `ItemId` union type includes new variants**
 
@@ -1571,54 +1921,307 @@ Verify they exist:
 ```typescript
 // Should already exist from Plan 1/2:
 export interface ItemIdLanguageEnv {
-  type: "LanguageEnv";
+  kind: "LanguageEnv";
   key: { ecosystem: string; path: string };
 }
 
 export interface ItemIdUnmanagedFile {
-  type: "UnmanagedFile";
+  kind: "UnmanagedFile";
   key: { path: string };
 }
 ```
 
 If missing, add them and include in the `ItemId` union type.
 
-- [ ] **Step 2: Add section IDs to aggregate sidebar**
-
-In the sidebar component or wherever aggregate section IDs are listed for
-navigation, ensure `"language_packages"` and `"unmanaged_files"` are
-included. Check `crates/web/ui/src/components/Sidebar.tsx` — the
-`REVIEW_SECTIONS` array likely needs these additions:
-
-```typescript
-  { id: "language_packages", label: "Language Packages" },
-  { id: "unmanaged_files", label: "Unmanaged Files" },
-```
-
-These should be added as decision sections (they have include/exclude
-toggles), not reference sections.
-
-- [ ] **Step 3: Verify TypeScript compiles**
+- [ ] **Step 2: Verify TypeScript compiles**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah/crates/web/ui
 npx tsc --noEmit
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
-git add crates/web/ui/src/api/types.ts crates/web/ui/src/components/Sidebar.tsx
-git commit -m "feat(web): add aggregate DTO types for language packages and unmanaged files
+git add crates/web/ui/src/api/types.ts
+git commit -m "feat(web): verify aggregate DTO types for language packages and unmanaged files
 
-Ensures TypeScript types and sidebar navigation include the new
-aggregate sections added by the backend.
+Confirms TypeScript ItemId union includes LanguageEnv and
+UnmanagedFile variants from Plans 1/2.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
-**Thorn checkpoint: after T9 complete (full aggregate pipeline end-to-end).**
+---
+
+## Task 9a: API/DTO Contract — Per-Section Metadata + Variant Payloads
+
+**Files:**
+- Modify: `crates/web/src/aggregate_handlers.rs`
+- Modify: `crates/web/ui/src/api/types.ts`
+- Test: Rust unit tests + TypeScript compiler
+
+**Interfaces:**
+- Depends on: Tasks 7-8 (sections exist), Task 9 (base TS types)
+- Produces: extended aggregate response with section-specific metadata
+  and variant payload structures
+- Consumed by: Tasks 10-14 (Track C UI)
+
+This task bridges Track B (backend sections) and Track C (UI). It defines
+the EXACT JSON response shapes the UI will consume, ensuring Track C tasks
+have declared backend data sources instead of implied future data.
+
+- [ ] **Step 1: Define per-item metadata DTOs (Rust)**
+
+In `crates/web/src/aggregate_handlers.rs`, add metadata structures:
+
+```rust
+/// Per-item metadata for language package aggregate rows.
+/// Carried in AggregateItem.section_metadata as a serde_json::Value.
+#[derive(Serialize)]
+pub struct LanguagePackageMetadata {
+    /// Ecosystem identifier (pip, npm, gem)
+    pub ecosystem: String,
+    /// Confidence level (high, medium, low)
+    pub confidence: String,
+    /// Number of packages in this environment
+    pub package_count: usize,
+    /// Manifest file basis (e.g., "requirements.txt", "package-lock.json")
+    pub manifest_basis: Option<String>,
+    /// Full package list for detail pane rendering
+    pub packages: Vec<LanguagePackageDto>,
+}
+
+#[derive(Serialize)]
+pub struct LanguagePackageDto {
+    pub name: String,
+    pub version: String,
+}
+
+/// Per-item metadata for unmanaged file aggregate rows.
+#[derive(Serialize)]
+pub struct UnmanagedFileMetadata {
+    /// Detected file type (elf_binary, jar, script, etc.)
+    pub file_type: String,
+    /// File size in bytes
+    pub size: u64,
+    /// True if path is under /var (persistence warning)
+    pub under_var: bool,
+    /// Provenance detail for the detail pane
+    pub provenance: UnmanagedFileProvenanceDto,
+}
+
+#[derive(Serialize)]
+pub struct UnmanagedFileProvenanceDto {
+    pub last_modified: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub permissions: String,
+    pub writable_mount: bool,
+}
+```
+
+- [ ] **Step 2: Add `section_metadata` field to `AggregateItem`**
+
+Extend `AggregateItem` with an optional metadata field:
+
+```rust
+#[derive(Serialize, Clone)]
+pub struct AggregateItem {
+    // ... existing fields ...
+
+    /// Section-specific metadata, serialized as JSON.
+    /// Language packages: LanguagePackageMetadata
+    /// Unmanaged files: UnmanagedFileMetadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_metadata: Option<serde_json::Value>,
+}
+```
+
+- [ ] **Step 3: Populate metadata in T7/T8 section builders**
+
+Update the language packages section builder (T7) to populate
+`section_metadata`:
+
+```rust
+    section_metadata: Some(serde_json::to_value(LanguagePackageMetadata {
+        ecosystem: ecosystem.to_string(),
+        confidence: item.confidence.clone(),
+        package_count: item.packages.len(),
+        manifest_basis: item.manifest_files.first().map(|mf| mf.path.clone()),
+        packages: item.packages.iter().map(|p| LanguagePackageDto {
+            name: p.name.clone(),
+            version: p.version.clone(),
+        }).collect(),
+    }).ok()),
+```
+
+Update the unmanaged files section builder (T8) to populate
+`section_metadata`:
+
+```rust
+    section_metadata: Some(serde_json::to_value(UnmanagedFileMetadata {
+        file_type: format!("{:?}", f.file_type),
+        size: f.size,
+        under_var: f.under_var,
+        provenance: UnmanagedFileProvenanceDto {
+            last_modified: f.provenance.last_modified,
+            uid: f.provenance.uid,
+            gid: f.provenance.gid,
+            permissions: f.provenance.permissions.clone(),
+            writable_mount: f.provenance.writable_mount,
+        },
+    }).ok()),
+```
+
+- [ ] **Step 4: Define variant payload DTOs (Rust)**
+
+```rust
+/// Variant payload for language packages — package-list diff inputs.
+#[derive(Serialize)]
+pub struct LanguagePackageVariantPayload {
+    /// Per-variant package lists for diff rendering
+    pub variant_packages: Vec<VariantPackageList>,
+}
+
+#[derive(Serialize)]
+pub struct VariantPackageList {
+    pub content_hash: String,
+    pub hosts: Vec<String>,
+    pub host_count: usize,
+    pub selected: bool,
+    pub packages: Vec<LanguagePackageDto>,
+}
+
+/// Variant payload for unmanaged files — metadata comparison inputs.
+#[derive(Serialize)]
+pub struct UnmanagedFileVariantPayload {
+    /// Per-variant metadata for comparison rendering
+    pub variant_metadata: Vec<VariantFileMetadata>,
+}
+
+#[derive(Serialize)]
+pub struct VariantFileMetadata {
+    pub content_hash: String,
+    pub hosts: Vec<String>,
+    pub host_count: usize,
+    pub selected: bool,
+    pub size: u64,
+    pub last_modified: u64,
+}
+```
+
+- [ ] **Step 5: Add TypeScript DTOs**
+
+In `crates/web/ui/src/api/types.ts`:
+
+```typescript
+/** Section-specific metadata — language packages */
+export interface LanguagePackageMetadata {
+  ecosystem: string;
+  confidence: string;
+  package_count: number;
+  manifest_basis: string | null;
+  packages: LanguagePackageDto[];
+}
+
+export interface LanguagePackageDto {
+  name: string;
+  version: string;
+}
+
+/** Section-specific metadata — unmanaged files */
+export interface UnmanagedFileMetadata {
+  file_type: string;
+  size: number;
+  under_var: boolean;
+  provenance: UnmanagedFileProvenanceDto;
+}
+
+export interface UnmanagedFileProvenanceDto {
+  last_modified: number;
+  uid: number;
+  gid: number;
+  permissions: string;
+  writable_mount: boolean;
+}
+
+/** Variant payload — language packages */
+export interface LanguagePackageVariantPayload {
+  variant_packages: VariantPackageList[];
+}
+
+export interface VariantPackageList {
+  content_hash: string;
+  hosts: string[];
+  host_count: number;
+  selected: boolean;
+  packages: LanguagePackageDto[];
+}
+
+/** Variant payload — unmanaged files */
+export interface UnmanagedFileVariantPayload {
+  variant_metadata: VariantFileMetadata[];
+}
+
+export interface VariantFileMetadata {
+  content_hash: string;
+  hosts: string[];
+  host_count: number;
+  selected: boolean;
+  size: number;
+  last_modified: number;
+}
+```
+
+Add `section_metadata` to the `AggregateItem` interface:
+
+```typescript
+export interface AggregateItem {
+  // ... existing fields ...
+  section_metadata?: Record<string, unknown>;
+}
+```
+
+- [ ] **Step 6: Add tests**
+
+```rust
+    #[test]
+    fn language_packages_section_metadata_populated() {
+        // Build aggregate with a pip environment that has 3 packages
+        // Assert: section_metadata is Some and contains ecosystem, confidence,
+        //   package_count, manifest_basis, and packages array
+    }
+
+    #[test]
+    fn unmanaged_files_section_metadata_populated() {
+        // Build aggregate with an ELF binary under /var
+        // Assert: section_metadata contains file_type, size, under_var: true,
+        //   and provenance with last_modified, uid, gid, permissions
+    }
+```
+
+- [ ] **Step 7: Verify tests + TS compile, commit**
+
+```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah
+cargo test -p inspectah-web -- aggregate
+cd crates/web/ui && npx tsc --noEmit
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add crates/web/src/aggregate_handlers.rs crates/web/ui/src/api/types.ts
+git commit -m "feat(web): add per-section metadata and variant payload DTOs
+
+Extends AggregateItem with section_metadata carrying per-item
+context (ecosystem/confidence/packages for lang pkgs, file type/
+size/provenance for unmanaged files). Adds variant payload types
+for package-list diffs and metadata comparison. TypeScript DTOs
+mirror the Rust structures.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+**Thorn checkpoint: after T9a complete (full backend API contract for Track C).**
 
 ---
 
@@ -1631,18 +2234,22 @@ Each task follows red-green-refactor:
 2. **Green:** Implement the minimum code to make the test pass.
 3. **Refactor:** Clean up, ensure Clippy/fmt compliance.
 
-For Tasks 1-4 (compose pipeline), tests verify:
+For Tasks 1-4a (compose pipeline), tests verify:
 - Serde roundtrip for `raw_content` (T1)
 - Secret scrubbing correctness (T2)
 - Tarball contains `compose/` entries, redaction applied (T3)
 - Containerfile output contains comment block, no COPY/RUN (T4)
+- Docs updated (T4a — manual verification)
 
-For Tasks 5-9 (aggregate), tests verify:
+For Tasks 5-9a (aggregate), tests verify:
 - Identity key produces `ecosystem:path` format (T5)
-- UnmanagedFile merges by path with prevalence (T6)
-- Aggregate view response contains `language_packages` section (T7)
-- Aggregate view response contains `unmanaged_files` section (T8)
+- Prevalence defaults: 100% = include, <100% = exclude (T5, T6)
+- Aggregate-only fields deserialize from Plan 2 JSON (T5a)
+- UnmanagedFile merges by path with prevalence + totals (T6)
+- Language packages section emitted with correct zone/prevalence (T7)
+- Unmanaged files section emitted with correct zone/prevalence (T8)
 - TypeScript compiles without errors (T9)
+- Section metadata populated, variant payload types defined (T9a)
 
 ---
 
@@ -1652,8 +2259,10 @@ These tasks implement the aggregate UI work deferred from Plan 3. Plan 3
 builds the single-host components and interaction contracts; this track
 wires them into aggregate mode with the required decision-support metadata.
 
-**Dependency:** Tasks 10-14 depend on Tasks 7-8 (aggregate backend
-sections) and Plan 3 (single-host components exist).
+**Dependency:** Tasks 10-14 depend on Task 9a (API/DTO contract defining
+section_metadata and variant payload shapes) and Plan 3 (single-host
+components exist). Task 9a is the explicit data source — Track C does not
+assume metadata from thin air.
 
 ### Task 10: AggregateItemRow — Section-Aware Metadata Rendering
 
@@ -1662,7 +2271,8 @@ sections) and Plan 3 (single-host components exist).
 - Test: `crates/web/ui/src/components/aggregate/__tests__/AggregateItemRow.test.tsx`
 
 **Interfaces:**
-- Consumes: Aggregate view response sections from Tasks 7-8
+- Consumes: `AggregateItem.section_metadata` from Task 9a
+  (`LanguagePackageMetadata` or `UnmanagedFileMetadata`)
 - Produces: Section-specific row metadata rendering
 
 Language Packages rows display: ecosystem icon/label, confidence badge
@@ -1676,21 +2286,34 @@ Unmanaged Files rows display: file type icon/label, size badge,
 ```typescript
 test("renders ecosystem label and confidence badge for language package items", () => {
   // Render AggregateItemRow with sectionId="language_packages"
-  // and item containing ecosystem="pip", confidence="high", package_count=12
+  // and item with section_metadata: { ecosystem: "pip", confidence: "high",
+  //   package_count: 12, manifest_basis: "requirements.txt", packages: [...] }
   // Assert: ecosystem label, green confidence badge, "12 packages" badge
 });
 ```
 
 - [ ] **Step 2: Implement section-aware rendering**
 
-In `AggregateItemRow`, branch on `sectionId` to render section-specific
-metadata alongside the standard prevalence badge.
+In `AggregateItemRow`, branch on `sectionId` to extract and render
+section-specific metadata from `item.section_metadata`:
+
+```typescript
+if (sectionId === "language_packages" && item.section_metadata) {
+  const meta = item.section_metadata as LanguagePackageMetadata;
+  // Render: ecosystem label, confidence badge, package count
+}
+if (sectionId === "unmanaged_files" && item.section_metadata) {
+  const meta = item.section_metadata as UnmanagedFileMetadata;
+  // Render: file type label, size badge, /var warning
+}
+```
 
 - [ ] **Step 3: Write test for unmanaged file row metadata**
 
 ```typescript
 test("renders file type and size for unmanaged file items", () => {
-  // item with file_type="ELF", size=2400000, var_path=true
+  // item with section_metadata: { file_type: "elf_binary", size: 2400000,
+  //   under_var: true, provenance: {...} }
   // Assert: "ELF" label, "2.3 MB" badge, /var warning icon
 });
 ```
@@ -1714,17 +2337,18 @@ feat(web): add section-aware aggregate row metadata for new sections
 - Test: `crates/web/ui/src/components/aggregate/__tests__/ItemDetailPane.test.tsx`
 
 **Interfaces:**
-- Consumes: Aggregate item detail data from backend
-- Produces: Detail pane content for language envs (full package list,
-  confidence level, manifest basis) and unmanaged files (full path, size,
-  type, provenance signals)
+- Consumes: `AggregateItem.section_metadata` from Task 9a
+  (`LanguagePackageMetadata.packages` for full list,
+  `UnmanagedFileMetadata.provenance` for detail signals)
+- Produces: Detail pane content for language envs and unmanaged files
 
 - [ ] **Step 1: Write failing test for language package detail pane**
 
 ```typescript
 test("renders full package list in detail pane for language_packages section", () => {
-  // Detail item with packages: [{name: "flask", version: "2.3.3"}, ...]
-  // Assert: each package name and version rendered
+  // Detail item with section_metadata.packages:
+  //   [{name: "flask", version: "2.3.3"}, {name: "requests", version: "2.31.0"}]
+  // Assert: each package name and version rendered in table
   // Assert: confidence level shown
   // Assert: manifest basis ("from requirements.txt") shown
 });
@@ -1733,9 +2357,9 @@ test("renders full package list in detail pane for language_packages section", (
 - [ ] **Step 2: Implement detail pane branches**
 
 Add `language_packages` and `unmanaged_files` section handlers to
-`ItemDetailPane`. Language packages show full package list table.
-Unmanaged files show provenance signals (mutability, writable mount,
-service working directory).
+`ItemDetailPane`. Language packages show full package list table
+from `section_metadata.packages`. Unmanaged files show provenance
+signals from `section_metadata.provenance`.
 
 - [ ] **Step 3: Write test for unmanaged file detail pane**
 
@@ -1745,6 +2369,106 @@ service working directory).
 feat(web): add aggregate detail pane for language packages and unmanaged files
 ```
 
+### Task 11a: Variant Diff Payloads — Backend Data for T12
+
+**Files:**
+- Modify: `crates/web/src/aggregate_handlers.rs`
+- Test: Rust unit tests
+
+**Interfaces:**
+- Depends on: Task 9a (variant payload DTOs defined),
+  Task 5a (`content_hash` on UnmanagedFile)
+- Produces: populated variant payloads in aggregate response
+- Consumed by: Task 12 (variant comparison UI)
+
+This task produces the actual variant data structures that Task 12's UI
+consumes. Without this, T12 has no declared backend data source.
+
+- [ ] **Step 1: Populate language package variant payloads**
+
+When the merge layer detects variants (different package lists for the
+same ecosystem:path), build `LanguagePackageVariantPayload` with
+per-variant package lists:
+
+```rust
+    // In the language packages section builder, when variants are detected:
+    let variant_payload = if has_variants {
+        Some(serde_json::to_value(LanguagePackageVariantPayload {
+            variant_packages: variant_items.iter().map(|vi| {
+                VariantPackageList {
+                    content_hash: vi.content_hash.clone(),
+                    hosts: vi.hosts.clone(),
+                    host_count: vi.host_count,
+                    selected: vi.selected,
+                    packages: vi.packages.iter().map(|p| LanguagePackageDto {
+                        name: p.name.clone(),
+                        version: p.version.clone(),
+                    }).collect(),
+                }
+            }).collect(),
+        }).ok())
+    } else {
+        None
+    };
+```
+
+- [ ] **Step 2: Populate unmanaged file variant payloads**
+
+When the merge layer detects variants (same path, different content
+hash), build `UnmanagedFileVariantPayload` with per-variant metadata:
+
+```rust
+    let variant_payload = if has_variants {
+        Some(serde_json::to_value(UnmanagedFileVariantPayload {
+            variant_metadata: variant_files.iter().map(|vf| {
+                VariantFileMetadata {
+                    content_hash: vf.content_hash.clone(),
+                    hosts: vf.hosts.clone(),
+                    host_count: vf.host_count,
+                    selected: vf.selected,
+                    size: vf.size,
+                    last_modified: vf.provenance.last_modified,
+                }
+            }).collect(),
+        }).ok())
+    } else {
+        None
+    };
+```
+
+- [ ] **Step 3: Add tests**
+
+```rust
+    #[test]
+    fn language_package_variant_payload_populated() {
+        // Two hosts with same pip:/opt/app/venv but different package lists
+        // Assert: variant_packages has 2 entries with distinct content_hash,
+        //   each containing the full package list for that variant
+    }
+
+    #[test]
+    fn unmanaged_file_variant_payload_populated() {
+        // Two hosts with /opt/app/server, different content_hash
+        // Assert: variant_metadata has 2 entries with size and last_modified
+    }
+```
+
+- [ ] **Step 4: Verify tests pass, commit**
+
+```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah
+cargo test -p inspectah-web -- aggregate
+git add crates/web/src/aggregate_handlers.rs
+git commit -m "feat(web): populate variant diff payloads for aggregate sections
+
+Language package variants carry per-variant package lists for
+package-list diff rendering. Unmanaged file variants carry size and
+last-modified for metadata comparison. Provides the backend data
+source Task 12's variant UI consumes.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
 ### Task 12: Aggregate Variant Views
 
 **Files:**
@@ -1752,31 +2476,47 @@ feat(web): add aggregate detail pane for language packages and unmanaged files
 - Test: matching test file
 
 **Interfaces:**
-- Consumes: Variant data from aggregate backend (package-list diffs for
-  language envs, content-hash metadata for unmanaged files)
+- Consumes: Variant payloads from Task 11a
+  (`LanguagePackageVariantPayload` and `UnmanagedFileVariantPayload`)
 - Produces: Variant comparison UI per spec's aggregate decision-support contract
 
 **Language Packages variant view:** When hosts diverge on the same
 environment path, show a structured diff: added packages, removed
 packages, version differences. NOT a text diff — a package-list diff
-with columns for each variant.
+with columns for each variant. Data source: `variant_packages` array
+from `LanguagePackageVariantPayload`.
 
 **Unmanaged Files variant view:** When hosts have the same path but
 different content hash, show metadata comparison: file size per variant,
 last-modified per variant, "content differs" indicator. No binary diff.
+Data source: `variant_metadata` array from
+`UnmanagedFileVariantPayload`.
 
 - [ ] **Step 1: Write failing test for package-list variant diff**
 
 ```typescript
 test("renders package-list diff between variants for language packages", () => {
-  // Two variants with overlapping but different package lists
-  // Assert: added/removed/changed packages shown
+  // Two variants from LanguagePackageVariantPayload.variant_packages:
+  //   Variant A: [flask 2.3.3, requests 2.31.0]
+  //   Variant B: [flask 2.3.3, requests 2.32.0, newpkg 1.0.0]
+  // Assert: "requests" shown as version change (2.31.0 -> 2.32.0)
+  // Assert: "newpkg" shown as added in variant B
 });
 ```
 
 - [ ] **Step 2: Implement variant views**
 
 - [ ] **Step 3: Write test for unmanaged file variant metadata**
+
+```typescript
+test("renders metadata comparison for unmanaged file variants", () => {
+  // Two variants from UnmanagedFileVariantPayload.variant_metadata:
+  //   Variant A: size=52MB, last_modified=1719500000
+  //   Variant B: size=53MB, last_modified=1719600000
+  // Assert: size and last-modified shown for each variant
+  // Assert: "content differs" indicator present
+});
+```
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -1792,7 +2532,7 @@ feat(web): add variant comparison views for aggregate language packages and unma
 - Test: matching test files
 
 **Interfaces:**
-- Consumes: Aggregate section items for language_packages and unmanaged_files
+- Consumes: Aggregate section items + `section_metadata` from Task 9a
 - Produces: Searchable aggregate items matching spec's searchable fields
 
 Per spec's aggregate decision-support contract:
@@ -1802,11 +2542,15 @@ Per spec's aggregate decision-support contract:
 | Language Packages | ecosystem, environment path, package names, manifest basis ("lockfile", "dist-info") |
 | Unmanaged Files | file path, file type |
 
+Search indexing uses `section_metadata` fields from Task 9a for
+section-specific searchable content.
+
 - [ ] **Step 1: Write failing test**
 
 ```typescript
 test("aggregate global search includes language package items", () => {
   // Search for "flask" — should match a language package env containing flask
+  // via section_metadata.packages[].name
 });
 ```
 
@@ -1837,11 +2581,16 @@ may appear automatically if the backend returns them with `is_decision_section: 
 Verify this works and add explicit tests. If not automatic, wire the new
 section IDs into the sidebar rendering.
 
+**Scope note:** This task covers **aggregate** sidebar only
+(`AggregateSidebar.tsx`). Single-host `Sidebar.tsx` is Plan 3 scope —
+Plan 3 Task 8 handles adding Language Packages and Unmanaged Files to
+the single-host sidebar. Do not modify `Sidebar.tsx` in this task.
+
 - [ ] **Step 1: Write test**
 
 ```typescript
 test("aggregate sidebar shows language_packages and unmanaged_files sections", () => {
-  // Mock aggregate view with both sections
+  // Mock aggregate view with both sections (is_decision_section: true)
   // Assert: both appear in Review group with zone-based counts
 });
 ```
@@ -1875,24 +2624,52 @@ aggregate during implementation, file a comms thread before proceeding.
 ## Execution Notes
 
 **Parallelism:** Tracks A, B, and C have the following dependencies:
-- Track A (compose, T1-T4): independent, can start immediately
-- Track B (aggregate backend, T5-T9): depends on Plans 1+2 landing
-- Track C (aggregate UI, T10-T14): depends on Track B AND Plan 3
+- Track A (compose, T1-T4a): independent, can start immediately
+- Track B (aggregate backend, T5-T9a): depends on Plans 1+2 landing
+- Track C (aggregate UI, T10-T14): depends on Task 9a AND Plan 3
 
 **Dependency ordering within tracks:**
-- Track A: T1 → T2 → T3 → T4 (strictly sequential)
-- Track B: T5 → T7, T6 → T8, T9 depends on T7+T8
-- Track C: T10-T14 are sequential (each builds on the previous)
+- Track A: T1 -> T2 -> T3 -> T4 -> T4a (strictly sequential)
+- Track B: T5 + T5a can run in parallel, then T6 -> T8, T7 depends
+  on T5, T9 depends on T7+T8, T9a depends on T9
+- Track C: T10 -> T11 -> T11a -> T12 -> T13 -> T14
 
 **Plan dependencies:** Tasks 5-8 depend on Plan 1 and Plan 2 landing
 first (they need the extended NonRpmItem fields, UnmanagedFile types,
 and ItemId variants). Tasks 10-14 depend on Plan 3 (single-host
-components exist). Tasks 1-4 can proceed independently — ComposeFile
-is in a different type module.
+components exist) AND Task 9a (API/DTO contract). Tasks 1-4a can
+proceed independently — ComposeFile is in a different type module.
 
-**Cross-crate visibility:** Task 3 needs `scrub_compose_secrets` from
-`inspectah-collect`, but `inspectah-refine` may not depend on
-`inspectah-collect`. Resolution options (decide at implementation time):
-1. Move scrub function to `inspectah-core` (cleanest)
-2. Add `inspectah-collect` as a dev/build dependency of `inspectah-refine`
-3. Duplicate the small function (acceptable given its simplicity)
+**Cross-crate visibility:** Task 2 places `scrub_compose_secrets` in
+`inspectah-core::redaction` (decision made, not deferred). Both
+`inspectah-collect` and `inspectah-refine` already depend on
+`inspectah-core`, so no new cross-crate dependency is introduced.
+
+## Compose Sensitivity Handoff
+
+The spec requires the refine UI to show a sensitivity indicator on
+compose entries when secret-like patterns were detected. This is a
+**Plan 3 UI concern** — the compose sidebar destination and its visual
+treatment are Plan 3 scope. Task 4a documents the handoff explicitly.
+If Plan 3 was approved without covering this, a follow-up patch plan
+is needed to add the sensitivity badge to the compose sidebar entry.
+
+## Revision History
+
+- **R1 (2026-06-28):** Revised per review checklist. Changes:
+  - Fixed `UnmanagedFileSection` contract drift: `items` (not `files`),
+    preserved `total_size` and `total_count` throughout
+  - Added Task 5a: aggregate-only fields (`content_hash`,
+    `variant_selection`) on `UnmanagedFile` with `serde(default)`
+  - Added Task 9a: API/DTO contract task defining `section_metadata`,
+    variant payload DTOs, and TypeScript mirrors — bridges Track B/C
+  - Added Task 11a: variant diff payload population — backend data
+    source for Task 12's variant comparison UI
+  - Added prevalence-default tests to T5, T6, T7, T8 proving
+    `100% = include`, `<100% = exclude` per section
+  - Removed T9 Step 2 (single-host `Sidebar.tsx`) — Plan 3 scope
+  - Added Task 4a: `docs/reference/output-artifacts.md` update +
+    named compose sensitivity handoff to Plan 3
+  - Pinned compose scrubber to `inspectah-core::redaction`
+  - Updated Track C dependency to reference Task 9a explicitly
+  - Aligned all code examples with Plan 2's actual field names
