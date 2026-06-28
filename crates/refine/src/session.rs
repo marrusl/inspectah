@@ -2489,7 +2489,8 @@ impl RefineSession {
 /// Required: inspection-snapshot.json, Containerfile, audit-report.md,
 ///           schema/snapshot.schema.json
 /// Conditional: config/ (when snapshot has included config files),
-///              env-files/ (when snapshot has env-file data)
+///              env-files/ (when snapshot has env-file data),
+///              compose/ (when snapshot has compose files with raw content)
 /// Excluded: report.html, README.md, secrets-review.md,
 ///           kickstart-suggestion.ks, original-inspection-snapshot.json
 ///
@@ -3020,7 +3021,43 @@ pub fn render_refine_export(
         copy_uploaded_rpms(uploads, out, snap)?;
     }
 
-    // 2g. Remove any top-level artifacts outside the approved export contract.
+    // 2g. Materialize compose files (conditional — only when compose files
+    //     have raw_content populated by the collector).
+    if let Some(ref containers) = snap.containers {
+        let compose_files: Vec<_> = containers
+            .compose_files
+            .iter()
+            .filter(|c| c.raw_content.is_some())
+            .collect();
+        if !compose_files.is_empty() {
+            let compose_root = out.join("compose");
+            let is_redacted = snap
+                .redaction_state
+                .as_ref()
+                .map(|r| !matches!(r, RedactionState::Raw))
+                .unwrap_or(false);
+
+            for cf in &compose_files {
+                // Mirror directory structure: compose/opt/myapp/docker-compose.yml
+                let dest = compose_root.join(&cf.path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                }
+                let content = if is_redacted {
+                    inspectah_core::redaction::scrub_compose_secrets(
+                        cf.raw_content.as_deref().unwrap_or(""),
+                    )
+                } else {
+                    cf.raw_content.clone().unwrap_or_default()
+                };
+                std::fs::write(&dest, content)
+                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
+        }
+    }
+
+    // 2h. Remove any top-level artifacts outside the approved export contract.
     //     "quadlet" is intentionally excluded — quadlet units are written by
     //     write_config_tree as a side effect but are NOT part of the refine
     //     export contract. The Containerfile references them via config/ paths.
@@ -3034,6 +3071,7 @@ pub fn render_refine_export(
         "aggregate",
         "schema",
         "users",
+        "compose",
         "inspection-snapshot.json",
         "Containerfile",
         "audit-report.md",

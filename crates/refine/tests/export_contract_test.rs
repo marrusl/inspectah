@@ -1,7 +1,7 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
+use inspectah_core::types::containers::{ComposeFile, ContainerSection, QuadletUnit};
 use inspectah_core::types::nonrpm::{
     FileType, NonRpmItem, NonRpmSoftwareSection, UnmanagedFile, UnmanagedFileSection,
 };
@@ -1397,5 +1397,73 @@ fn export_merges_cached_and_uploaded_rpms() {
     assert!(
         files.contains("repoless-packages/uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
         "export must contain uploaded RPM, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_includes_compose_files() {
+    let mut snap = test_snapshot();
+    snap.containers = Some(ContainerSection {
+        compose_files: vec![ComposeFile {
+            path: "opt/myapp/docker-compose.yml".to_string(),
+            raw_content: Some("services:\n  web:\n    image: nginx\n".to_string()),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    assert!(
+        files
+            .iter()
+            .any(|f| f.contains("compose/opt/myapp/docker-compose.yml")),
+        "compose file not found in tarball: {files:?}"
+    );
+}
+
+#[test]
+fn export_redacts_compose_secrets() {
+    let mut snap = test_snapshot();
+    let yaml = "services:\n  db:\n    environment:\n      DB_PASSWORD=hunter2\n      PORT=5432\n";
+    snap.containers = Some(ContainerSection {
+        compose_files: vec![ComposeFile {
+            path: "opt/db/docker-compose.yml".to_string(),
+            raw_content: Some(yaml.to_string()),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    // The test_snapshot() sets redaction_state to FullyRedacted,
+    // so compose secrets should be scrubbed.
+    let content = tarball_read_file(&tarball_path, "compose/opt/db/docker-compose.yml")
+        .expect("compose file must exist in tarball");
+    assert!(
+        content.contains("<REDACTED>"),
+        "secrets not redacted in compose export: {content}"
+    );
+    assert!(
+        !content.contains("hunter2"),
+        "secret value leaked in compose export: {content}"
+    );
+    assert!(
+        content.contains("PORT=5432"),
+        "non-secret was incorrectly redacted: {content}"
     );
 }
