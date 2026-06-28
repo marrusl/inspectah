@@ -7,7 +7,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::util::env_hash;
+use inspectah_core::util::{env_hash, METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV};
 use inspectah_pipeline::render::language_packages::language_package_lines;
 use inspectah_refine::session::RefineSession;
 use std::collections::{BTreeSet, HashMap};
@@ -98,7 +98,7 @@ fn containerfile_copy_paths_match_export_layout() {
     let pip_item = NonRpmItem {
         path: pip_path.into(),
         name: "venv".into(),
-        method: "python venv".into(), // Must match collector's actual output
+        method: METHOD_PYTHON_VENV.into(), // Must match collector's actual output
         confidence: "high".into(),
         include: true,
         manifest_files: pip_manifests,
@@ -124,7 +124,7 @@ fn containerfile_copy_paths_match_export_layout() {
     let npm_item = NonRpmItem {
         path: npm_path.into(),
         name: "webapp".into(),
-        method: "npm lockfile".into(),
+        method: METHOD_NPM_LOCKFILE.into(),
         confidence: "high".into(),
         include: true,
         manifest_files: npm_manifests,

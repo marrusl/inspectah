@@ -6,7 +6,9 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
-use inspectah_core::util::env_hash;
+use inspectah_core::util::{
+    env_hash, METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
+};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp, ViewDirective};
 use std::collections::{BTreeSet, HashMap};
@@ -663,7 +665,7 @@ fn export_includes_language_packages_root() {
         items: vec![NonRpmItem {
             path: "/opt/myapp".into(),
             name: "myapp".into(),
-            method: "npm lockfile".into(),
+            method: METHOD_NPM_LOCKFILE.into(),
             confidence: "high".into(),
             include: true,
             manifest_files: manifests,
@@ -704,7 +706,7 @@ fn export_excludes_language_packages_when_none_included() {
         items: vec![NonRpmItem {
             path: "/opt/venv".into(),
             name: "venv".into(),
-            method: "pip".into(),
+            method: METHOD_PYTHON_VENV.into(),
             confidence: "medium".into(),
             include: false,
             manifest_files: manifests,
@@ -740,7 +742,7 @@ fn export_redacts_manifest_files_when_snapshot_redacted() {
         items: vec![NonRpmItem {
             path: "/opt/venv".into(),
             name: "venv".into(),
-            method: "pip".into(),
+            method: METHOD_PYTHON_VENV.into(),
             confidence: "high".into(),
             include: true,
             manifest_files: manifests,
@@ -797,7 +799,7 @@ fn export_preserves_manifest_files_when_unredacted() {
         items: vec![NonRpmItem {
             path: "/opt/venv".into(),
             name: "venv".into(),
-            method: "pip".into(),
+            method: METHOD_PYTHON_VENV.into(),
             confidence: "high".into(),
             include: true,
             manifest_files: manifests,
@@ -842,7 +844,7 @@ fn export_redacts_package_json_registry_auth() {
         items: vec![NonRpmItem {
             path: "/opt/myapp".into(),
             name: "myapp".into(),
-            method: "npm lockfile".into(),
+            method: METHOD_NPM_LOCKFILE.into(),
             confidence: "high".into(),
             include: true,
             manifest_files: manifests,
@@ -884,7 +886,7 @@ fn export_redacts_gemfile_source_auth() {
         items: vec![NonRpmItem {
             path: "/opt/railsapp".into(),
             name: "railsapp".into(),
-            method: "gem lockfile".into(),
+            method: METHOD_GEM_LOCKFILE.into(),
             confidence: "high".into(),
             include: true,
             manifest_files: manifests,
