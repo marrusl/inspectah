@@ -1081,3 +1081,243 @@ html, body, #root {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
 }
+
+/* ─── Language package list (decision section) ───────────────────────── */
+
+.inspectah-lang-pkg-list {
+  padding: 0;
+}
+
+.inspectah-lang-pkg-list__empty {
+  padding: var(--pf-t--global--spacer--md);
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+.inspectah-lang-pkg-row {
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  transition: background-color 150ms ease;
+}
+
+.inspectah-lang-pkg-row:hover {
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-lang-pkg-row:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
+  border-radius: var(--pf-t--global--border--radius--small);
+}
+
+.inspectah-lang-pkg-row__main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-lang-pkg-row__toggle {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.inspectah-lang-pkg-row__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inspectah-lang-pkg-row__header {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-lang-pkg-row__ecosystem {
+  flex-shrink: 0;
+}
+
+.inspectah-lang-pkg-row__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-lang-pkg-row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-lang-pkg-row__basis {
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+/* ─── Unmanaged file list (decision section) ─────────────────────────── */
+
+.inspectah-unmanaged-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-unmanaged-list__actions {
+  display: flex;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-unmanaged-group {
+  border-left: 3px solid var(--pf-t--global--color--brand--default);
+  margin-bottom: var(--pf-t--global--spacer--xs);
+}
+
+.inspectah-unmanaged-group--var {
+  border-left-color: var(--pf-t--global--color--status--warning--default);
+}
+
+.inspectah-unmanaged-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.inspectah-unmanaged-group__header:hover {
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-unmanaged-group__header:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
+}
+
+.inspectah-unmanaged-group__chevron {
+  background: none;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  color: var(--pf-t--global--text--color--regular);
+  flex-shrink: 0;
+}
+
+.inspectah-unmanaged-group__name {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspectah-unmanaged-group__rollup {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.inspectah-unmanaged-group__var-badge {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--color--status--warning--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  flex-shrink: 0;
+}
+
+.inspectah-unmanaged-group__items {
+  padding-left: calc(var(--pf-t--global--spacer--md) + 22px);
+}
+
+.inspectah-unmanaged-group__toggle-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.inspectah-unmanaged-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: 2px 0;
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-unmanaged-row:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
+}
+
+.inspectah-unmanaged-row__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--pf-t--global--font--family--mono);
+}
+
+.inspectah-unmanaged-row__type {
+  color: var(--pf-t--global--text--color--subtle);
+  flex-shrink: 0;
+}
+
+.inspectah-unmanaged-row__size {
+  color: var(--pf-t--global--text--color--subtle);
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: right;
+}
+
+.inspectah-unmanaged-row__provenance {
+  display: flex;
+  gap: var(--pf-t--global--spacer--xs);
+  flex-shrink: 0;
+}
+
+.inspectah-unmanaged-row__var-warning {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--color--status--warning--default);
+  flex-shrink: 0;
+}
+
+/* ─── Sidebar hint ───────────────────────────────────────────────────── */
+
+.inspectah-sidebar__hint {
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+.inspectah-sidebar__hint code {
+  font-family: var(--pf-t--global--font--family--mono);
+  background: var(--pf-t--global--background--color--secondary--default);
+  padding: 1px 4px;
+  border-radius: var(--pf-t--global--border--radius--small);
+}
+
+/* ─── Batch upload conflicts ─────────────────────────────────────────── */
+
+.inspectah-batch-upload__conflicts {
+  margin-top: var(--pf-t--global--spacer--sm);
+}
+
+/* Dark mode: /var warning and provenance badge contrast */
+.pf-v6-theme-dark .inspectah-unmanaged-group--var {
+  border-left-color: var(--pf-t--global--color--status--warning--default);
+}
+
+.pf-v6-theme-dark .inspectah-unmanaged-row__var-warning {
+  color: var(--pf-t--global--color--status--warning--default);
+}
