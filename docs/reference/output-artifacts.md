@@ -144,6 +144,8 @@ Same conditions as scan:
 | `inspectah-users.ks` | Included users or custom groups exist. |
 | `inspectah-users.toml` | Included users or custom groups exist. |
 | `language-packages/` | Included language package manifests exist. |
+| `unmanaged/` | Unmanaged files with `include: true` exist. |
+| `repoless-packages/` | Repo-less RPMs detected (cached or uploaded). |
 
 ### Excluded from refine export
 

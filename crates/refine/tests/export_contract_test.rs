@@ -2,7 +2,9 @@ use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+use inspectah_core::types::nonrpm::{
+    FileType, NonRpmItem, NonRpmSoftwareSection, UnmanagedFile, UnmanagedFileSection,
+};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::users::UserGroupSection;
@@ -971,5 +973,308 @@ fn export_redacts_gemfile_source_auth() {
     assert!(
         content.contains("gem 'rails'"),
         "non-source lines must be preserved, got:\n{content}"
+    );
+}
+
+#[test]
+fn export_allowlist_includes_unmanaged_root() {
+    // Build a snapshot with unmanaged files
+    let mut snap = test_snapshot();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: vec![UnmanagedFile {
+            path: "/opt/myapp/server".into(),
+            size: 1024,
+            file_type: FileType::ElfBinary,
+            include: true,
+            ..Default::default()
+        }],
+        total_size: 1024,
+        total_count: 1,
+    });
+
+    // Create a source tarball with files under unmanaged/
+    let source_tempdir = tempfile::tempdir().unwrap();
+    let source_dir = source_tempdir.path();
+    let unmanaged_dir = source_dir.join("unmanaged/opt/myapp");
+    std::fs::create_dir_all(&unmanaged_dir).unwrap();
+    std::fs::write(unmanaged_dir.join("server"), b"binary content").unwrap();
+
+    let source_tarball_path = source_tempdir.path().join("source.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(source_dir, &source_tarball_path, "source")
+        .unwrap();
+
+    // Run render_refine_export with source tarball
+    let out_tempdir = tempfile::tempdir().unwrap();
+    let out_path = out_tempdir.path().join("export.tar.gz");
+    inspectah_refine::session::render_refine_export(
+        &snap,
+        &out_path,
+        None,
+        None,
+        Some(&source_tarball_path),
+        None,
+    )
+    .unwrap();
+
+    // Assert: unmanaged/ directory present in output
+    let files = tarball_file_set(&out_path);
+    assert!(
+        files.iter().any(|f| f.starts_with("unmanaged/")),
+        "export must contain unmanaged/ directory, got: {files:?}"
+    );
+    assert!(
+        files.contains("unmanaged/opt/myapp/server"),
+        "export must contain extracted unmanaged file, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_prunes_excluded_unmanaged_files() {
+    // Build a snapshot with two unmanaged files, one include:false
+    let mut snap = test_snapshot();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: vec![
+            UnmanagedFile {
+                path: "/opt/app/included".into(),
+                size: 512,
+                file_type: FileType::DataFile,
+                include: true,
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/opt/app/excluded".into(),
+                size: 256,
+                file_type: FileType::DataFile,
+                include: false,
+                ..Default::default()
+            },
+        ],
+        total_size: 768,
+        total_count: 2,
+    });
+
+    // Create source tarball with both files
+    let source_tempdir = tempfile::tempdir().unwrap();
+    let source_dir = source_tempdir.path();
+    let unmanaged_dir = source_dir.join("unmanaged/opt/app");
+    std::fs::create_dir_all(&unmanaged_dir).unwrap();
+    std::fs::write(unmanaged_dir.join("included"), b"included content").unwrap();
+    std::fs::write(unmanaged_dir.join("excluded"), b"excluded content").unwrap();
+
+    let source_tarball_path = source_tempdir.path().join("source.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(source_dir, &source_tarball_path, "source")
+        .unwrap();
+
+    // Run export
+    let out_tempdir = tempfile::tempdir().unwrap();
+    let out_path = out_tempdir.path().join("export.tar.gz");
+    inspectah_refine::session::render_refine_export(
+        &snap,
+        &out_path,
+        None,
+        None,
+        Some(&source_tarball_path),
+        None,
+    )
+    .unwrap();
+
+    // Assert: included file present, excluded file absent
+    let files = tarball_file_set(&out_path);
+    assert!(
+        files.contains("unmanaged/opt/app/included"),
+        "export must contain included file, got: {files:?}"
+    );
+    assert!(
+        !files.contains("unmanaged/opt/app/excluded"),
+        "export must NOT contain excluded file, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_allowlist_includes_repoless_packages_root() {
+    // Build a snapshot with repo-less RPM data (include: true)
+    let mut snap = test_snapshot();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "custom-tool".into(),
+            version: "1.2.3".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            source_repo: String::new(),
+            include: true,
+            repoless_cached: true,
+            repoless_annotation: "No repo source — cached RPM bundled".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    // Create source tarball with RPM under repoless-packages/
+    let source_tempdir = tempfile::tempdir().unwrap();
+    let source_dir = source_tempdir.path();
+    let repoless_dir = source_dir.join("repoless-packages");
+    std::fs::create_dir_all(&repoless_dir).unwrap();
+    std::fs::write(
+        repoless_dir.join("custom-tool-1.2.3-1.el9.x86_64.rpm"),
+        b"rpm data",
+    )
+    .unwrap();
+
+    let source_tarball_path = source_tempdir.path().join("source.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(source_dir, &source_tarball_path, "source")
+        .unwrap();
+
+    // Run export
+    let out_tempdir = tempfile::tempdir().unwrap();
+    let out_path = out_tempdir.path().join("export.tar.gz");
+    inspectah_refine::session::render_refine_export(
+        &snap,
+        &out_path,
+        None,
+        None,
+        Some(&source_tarball_path),
+        None,
+    )
+    .unwrap();
+
+    // Assert: repoless-packages/ present in output
+    let files = tarball_file_set(&out_path);
+    assert!(
+        files.iter().any(|f| f.starts_with("repoless-packages/")),
+        "export must contain repoless-packages/ directory, got: {files:?}"
+    );
+    assert!(
+        files.contains("repoless-packages/custom-tool-1.2.3-1.el9.x86_64.rpm"),
+        "export must contain cached RPM, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_includes_uploaded_rpms() {
+    // Build a snapshot with repo-less RPM that will be uploaded
+    let mut snap = test_snapshot();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "uploaded-tool".into(),
+            version: "2.0.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            source_repo: String::new(),
+            include: true,
+            repoless_cached: false,
+            repoless_annotation: "No repo source — upload required".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    // Create upload_dir with an uploaded RPM
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path();
+    std::fs::write(
+        upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
+        b"uploaded rpm data",
+    )
+    .unwrap();
+
+    // Run export with upload_dir (no source tarball)
+    let out_tempdir = tempfile::tempdir().unwrap();
+    let out_path = out_tempdir.path().join("export.tar.gz");
+    inspectah_refine::session::render_refine_export(
+        &snap,
+        &out_path,
+        None,
+        None,
+        None,
+        Some(upload_dir),
+    )
+    .unwrap();
+
+    // Assert: uploaded RPM appears in repoless-packages/ output
+    let files = tarball_file_set(&out_path);
+    assert!(
+        files.contains("repoless-packages/uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
+        "export must contain uploaded RPM, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_merges_cached_and_uploaded_rpms() {
+    // Build a snapshot with two repo-less RPMs: one cached, one uploaded
+    let mut snap = test_snapshot();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "cached-tool".into(),
+                version: "1.0.0".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+                source_repo: String::new(),
+                include: true,
+                repoless_cached: true,
+                repoless_annotation: "No repo source — cached RPM bundled".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "uploaded-tool".into(),
+                version: "2.0.0".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+                source_repo: String::new(),
+                include: true,
+                repoless_cached: false,
+                repoless_annotation: "No repo source — upload required".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+
+    // Source tarball has cached-tool.rpm under repoless-packages/
+    let source_tempdir = tempfile::tempdir().unwrap();
+    let source_dir = source_tempdir.path();
+    let repoless_dir = source_dir.join("repoless-packages");
+    std::fs::create_dir_all(&repoless_dir).unwrap();
+    std::fs::write(
+        repoless_dir.join("cached-tool-1.0.0-1.el9.x86_64.rpm"),
+        b"cached rpm data",
+    )
+    .unwrap();
+
+    let source_tarball_path = source_tempdir.path().join("source.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(source_dir, &source_tarball_path, "source")
+        .unwrap();
+
+    // Upload dir has uploaded-tool.rpm
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path();
+    std::fs::write(
+        upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
+        b"uploaded rpm data",
+    )
+    .unwrap();
+
+    // Run export with both source_tarball and upload_dir
+    let out_tempdir = tempfile::tempdir().unwrap();
+    let out_path = out_tempdir.path().join("export.tar.gz");
+    inspectah_refine::session::render_refine_export(
+        &snap,
+        &out_path,
+        None,
+        None,
+        Some(&source_tarball_path),
+        Some(upload_dir),
+    )
+    .unwrap();
+
+    // Assert: both RPMs present in repoless-packages/ output
+    let files = tarball_file_set(&out_path);
+    assert!(
+        files.contains("repoless-packages/cached-tool-1.0.0-1.el9.x86_64.rpm"),
+        "export must contain cached RPM, got: {files:?}"
+    );
+    assert!(
+        files.contains("repoless-packages/uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
+        "export must contain uploaded RPM, got: {files:?}"
     );
 }
