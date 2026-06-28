@@ -807,39 +807,47 @@ fn scan_pip_packages(
                 Err(_) => continue,
             };
 
+            let rel_path = sp_dir.trim_start_matches('/').to_string();
+            if is_ostree && rel_path.starts_with("var/") {
+                continue;
+            }
+
+            // Collect ALL user-managed packages from this site-packages
+            // directory into a single NonRpmItem. Emitting one item per
+            // dist-info caused dedup to collapse to a single package.
+            let mut packages = Vec::new();
             for sp_entry in &sp_entries {
                 if sp_entry.ends_with(".dist-info") {
                     let (name, version) =
                         parse_dist_info_name(sp_entry.trim_end_matches(".dist-info"));
-                    let rel_path = sp_dir.trim_start_matches('/').to_string();
-
-                    if is_ostree && rel_path.starts_with("var/") {
-                        continue;
-                    }
 
                     // Skip packages owned by an RPM (e.g., python3-requests).
                     if is_pip_rpm_owned(&name, rpm_state) {
                         continue;
                     }
 
-                    // Three-tier confidence:
-                    // - "high": requirements.txt collected AND rpm_filtered
-                    //   (wired in Task 3 — manifest_files populated there)
-                    // - "medium": dist-info detection AND rpm_filtered
-                    // - "low": no RPM filtering available
-                    let confidence = if !has_rpm_state { "low" } else { "medium" };
-
-                    section.items.push(NonRpmItem {
-                        path: rel_path.clone(),
-                        name: name.clone(),
-                        method: METHOD_PIP_DIST_INFO.to_string(),
-                        confidence: confidence.to_string(),
-                        packages: vec![PipPackage { name, version }],
-                        rpm_filtered: has_rpm_state,
-                        include: true,
-                        ..Default::default()
-                    });
+                    packages.push(PipPackage { name, version });
                 }
+            }
+
+            if !packages.is_empty() {
+                // Three-tier confidence:
+                // - "high": requirements.txt collected AND rpm_filtered
+                //   (wired in Task 3 — manifest_files populated there)
+                // - "medium": dist-info detection AND rpm_filtered
+                // - "low": no RPM filtering available
+                let confidence = if !has_rpm_state { "low" } else { "medium" };
+
+                section.items.push(NonRpmItem {
+                    path: rel_path,
+                    name: "system-pip".to_string(),
+                    method: METHOD_PIP_DIST_INFO.to_string(),
+                    confidence: confidence.to_string(),
+                    packages,
+                    rpm_filtered: has_rpm_state,
+                    include: true,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -1208,7 +1216,31 @@ fn filter_ostree_var_paths(section: &mut NonRpmSoftwareSection) {
     });
 }
 
-/// Deduplicate items by path, keeping the highest-confidence entry.
+/// Map a detection method to its ecosystem bucket for deduplication.
+///
+/// Language environments (pip, npm, gem) use distinct ecosystems so a
+/// directory containing both `package-lock.json` and `Gemfile.lock`
+/// produces two separate items. Binary detection methods all map to
+/// "binary" so the same file detected via `file scan` and `readelf`
+/// still collapses.
+fn dedup_ecosystem(method: &str) -> &str {
+    if method == METHOD_PIP_DIST_INFO || method == METHOD_PYTHON_VENV {
+        "pip"
+    } else if method == METHOD_NPM_LOCKFILE {
+        "npm"
+    } else if method == METHOD_GEM_LOCKFILE {
+        "gem"
+    } else {
+        "binary"
+    }
+}
+
+/// Deduplicate items by (ecosystem, path), keeping the highest-confidence entry.
+///
+/// Keying on ecosystem + path prevents cross-ecosystem collisions: a project
+/// directory containing both `package-lock.json` and `Gemfile.lock` produces
+/// two distinct environments that must not collapse into one. Binary detection
+/// methods all share the "binary" ecosystem so same-file duplicates still merge.
 fn deduplicate_items(section: &mut NonRpmSoftwareSection) {
     let confidence_rank = |c: &str| -> i32 {
         match c {
@@ -1218,19 +1250,22 @@ fn deduplicate_items(section: &mut NonRpmSoftwareSection) {
         }
     };
 
-    let mut seen: HashMap<String, (usize, i32)> = HashMap::new();
+    // Key: (ecosystem, path) — includes ecosystem to avoid cross-ecosystem collapse.
+    let mut seen: HashMap<(String, String), (usize, i32)> = HashMap::new();
     let mut order = Vec::new();
 
     for (i, item) in section.items.iter().enumerate() {
         let rank = confidence_rank(&item.confidence);
-        match seen.get(&item.path) {
+        let eco = dedup_ecosystem(&item.method).to_string();
+        let key = (eco, item.path.clone());
+        match seen.get(&key) {
             None => {
-                seen.insert(item.path.clone(), (i, rank));
-                order.push(item.path.clone());
+                order.push(key.clone());
+                seen.insert(key, (i, rank));
             }
             Some(&(_, existing_rank)) => {
                 if rank > existing_rank {
-                    seen.insert(item.path.clone(), (i, rank));
+                    seen.insert(key, (i, rank));
                 }
             }
         }
@@ -1239,7 +1274,7 @@ fn deduplicate_items(section: &mut NonRpmSoftwareSection) {
     let items = std::mem::take(&mut section.items);
     section.items = order
         .iter()
-        .filter_map(|path| seen.get(path).map(|&(idx, _)| items[idx].clone()))
+        .filter_map(|key| seen.get(key).map(|&(idx, _)| items[idx].clone()))
         .collect();
 }
 
@@ -2289,6 +2324,47 @@ mod tests {
             "should keep highest-confidence entry"
         );
         assert_eq!(myapp.method, "readelf (go)");
+    }
+
+    // ---- Test 20b: cross-ecosystem dedup preserves distinct environments ----
+
+    #[test]
+    fn test_cross_ecosystem_dedup_preserves_distinct_envs() {
+        let mut section = NonRpmSoftwareSection {
+            items: vec![
+                NonRpmItem {
+                    path: "opt/myapp".to_string(),
+                    name: "myapp".to_string(),
+                    confidence: "high".to_string(),
+                    method: METHOD_NPM_LOCKFILE.to_string(),
+                    ..Default::default()
+                },
+                NonRpmItem {
+                    path: "opt/myapp".to_string(),
+                    name: "myapp".to_string(),
+                    confidence: "high".to_string(),
+                    method: METHOD_GEM_LOCKFILE.to_string(),
+                    ..Default::default()
+                },
+            ],
+            env_files: Vec::new(),
+        };
+
+        deduplicate_items(&mut section);
+
+        assert_eq!(
+            section.items.len(),
+            2,
+            "same-path npm + gem must produce two items after dedup"
+        );
+        assert!(
+            section.items.iter().any(|i| i.method == METHOD_NPM_LOCKFILE),
+            "npm item must survive dedup"
+        );
+        assert!(
+            section.items.iter().any(|i| i.method == METHOD_GEM_LOCKFILE),
+            "gem item must survive dedup"
+        );
     }
 
     // ---- Test 21: test_nonrpm_emits_probe_events_all_empty ----
