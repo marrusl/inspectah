@@ -2,8 +2,8 @@
 
 **Author:** Pele (Automation & Fleet Configuration Engineer)
 **Date:** 2026-06-27
-**Revised:** 2026-06-27 (round 3 review — campaign ID scoping fix)
-**Status:** Proposed
+**Revised:** 2026-06-27 (round 4 — approved)
+**Status:** Approved
 **Scope:** Galaxy-publishable Ansible role for fleet-wide inspectah scan orchestration
 
 ---
@@ -718,7 +718,8 @@ Validates prerequisites before any scan work begins.
 3. `podman` is installed and >= 4.4
 4. `nsenter` (from util-linux) is present
 5. Target is a supported platform (RHEL/CentOS/Fedora family,
-   x86_64/aarch64)
+   x86_64/aarch64). EL8 hosts are valid scan targets -- the podman
+   version check (>= 4.4) is the actual gate, not the OS version.
 6. When `inspectah_install_method` is `"rpm"`:
    `inspectah_rpm_path` is set and the file exists on the control node
 7. Parent directory of `inspectah_scan_output` exists or is creatable
@@ -1293,6 +1294,7 @@ galaxy_info:
   platforms:
     - name: EL
       versions:
+        - "8"
         - "9"
         - "10"
     - name: Fedora
@@ -1334,9 +1336,11 @@ the role's response when running on that platform.
 | RHEL | 10 | x86_64, aarch64 | Smoke-tested | COPR builds available, needs real-host validation |
 | CentOS Stream | 9 | aarch64 | Smoke-tested | When aarch64 CI runner available |
 | CentOS Stream | 10 | x86_64 | Smoke-tested | Tracks RHEL 10 |
+| RHEL | 8 | x86_64, aarch64 | Best-effort | EL8 hosts are a primary migration target; podman >= 4.4 required (available via container-tools module stream) |
+| CentOS Stream | 8 | x86_64 | Best-effort | EL8 migration target |
+| AlmaLinux | 8, 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
+| Rocky Linux | 8, 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
 | Fedora | 40, 41 | x86_64 | Best-effort | Latest 2 releases, COPR builds available |
-| AlmaLinux | 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
-| Rocky Linux | 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
 
 **Release-blocking rationale:** Only CentOS Stream 9 x86_64 is
 release-blocking because that is what CI actually proves (Molecule
@@ -1345,10 +1349,13 @@ to release-blocking at Galaxy graduation when CI infrastructure for
 those platforms is in place. Claiming release-blocking status without
 CI enforcement is empty.
 
-**EL8 note:** EL8 is excluded from the support matrix. inspectah requires
-podman >= 4.4, which is not available in the default EL8 repos. EL8 is
-EOL (RHEL 8 Maintenance Support ends 2029 but active development has
-shifted to EL9+). The preflight check rejects EL8 with a clear message.
+**EL8 note:** EL8 is a primary use case for inspectah. These are the
+hosts migrating to EL9 bootc -- exactly the workload inspectah is built
+to assess. RHEL 8.6+ ships podman 4.x via the `container-tools` module
+stream, so inspectah can run on EL8 if podman >= 4.4 is available. The
+podman version preflight check (>= 4.4) is the actual gate; there is no
+separate OS version rejection for EL8. EL8 hosts without podman 4.4+
+fail the podman preflight with a clear error message.
 
 ### 8.3 Prerequisites on target hosts
 
@@ -1400,7 +1407,7 @@ Fail fast with a clear message. No partial state to clean up.
 | inspectah version too old | Below `_inspectah_min_version` | `ansible.builtin.fail` with installed vs. required versions |
 | podman < 4.4 | Version too old | `ansible.builtin.fail` with upgrade instructions |
 | nsenter missing | util-linux not installed | `ansible.builtin.fail` with package name |
-| Unsupported OS | Not RHEL/CentOS/Fedora family | `ansible.builtin.fail` with platform list |
+| Unsupported OS family | Not RHEL/CentOS/Fedora family | `ansible.builtin.fail` with platform list |
 | RPM path empty | Method is "rpm" but no path | `ansible.builtin.fail` with variable name |
 | Reserved flags in extra_args | Operator passed -o/--progress/etc. | Warning + strip (non-fatal) |
 
