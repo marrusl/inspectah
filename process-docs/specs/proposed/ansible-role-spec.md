@@ -2,7 +2,7 @@
 
 **Author:** Pele (Automation & Fleet Configuration Engineer)
 **Date:** 2026-06-27
-**Revised:** 2026-06-27 (round 1 review)
+**Revised:** 2026-06-27 (round 2 review)
 **Status:** Proposed
 **Scope:** Galaxy-publishable Ansible role for fleet-wide inspectah scan orchestration
 
@@ -22,8 +22,9 @@ playbook but is not part of the role itself.
 2. **Preflight** — validate prerequisites including inspectah version
 3. **Scan** the target host, producing a migration snapshot tarball
 4. **Fetch** the tarball to the control node
-5. **Clean up** — two-phase: container cleanup (always, even on failure)
-   and tarball cleanup (post-fetch only)
+5. **Clean up** — tarball cleanup (post-fetch) and opt-in orphan
+   container sweep (inspectah's internal cleanup is the primary
+   container cleanup mechanism)
 6. **(Optional) Uninstall** — remove inspectah and COPR repo if the
    role installed them (`inspectah_cleanup_host` flag)
 
@@ -204,11 +205,18 @@ Modifications:
    If the scan failed silently (exit 0 but no tarball), the fetch should
    fail explicitly rather than silently skipping.
 
-4. **Two-phase cleanup.** Container cleanup and tarball cleanup are
-   separate operations with different triggers:
-   - **Container cleanup** runs in the `always` block of scan.yml.
-     Guaranteed execution even on scan failure. Scoped to this
-     invocation's container (see Section 5.6).
+4. **Two-layer cleanup model.** Container cleanup and tarball cleanup
+   are separate concerns with different mechanisms:
+   - **Container cleanup (primary):** inspectah's internal `CleanupGuard`
+     runs `podman rm -f` on the baseline container when the scan function
+     returns or panics. This is the primary contract — the role does not
+     attempt invocation-scoped container cleanup because it cannot predict
+     the container name (see Section 5.6).
+   - **Container cleanup (orphan janitor):** An opt-in role-level sweep
+     of stale `inspectah-baseline-*` containers left by crash-killed
+     processes. Runs in scan.yml's `always` block but only when
+     `inspectah_cleanup_orphan_containers` is true. Not safe for
+     concurrent scans.
    - **Tarball cleanup** runs in fetch.yml's success path, only after
      the tarball has been successfully transferred. Never in an
      `always` block — a failed fetch must not delete the only copy
@@ -253,7 +261,8 @@ addresses them:
 - **Thundering herd:** `serial` in the consuming playbook (not the role)
 - **Disk space:** Documented in README as a prerequisite check
 - **Scan timeout:** Exposed via `inspectah_scan_timeout` variable
-- **Container cleanup:** `always` block in tasks
+- **Container cleanup:** inspectah's internal `CleanupGuard` is primary;
+  role provides opt-in orphan janitor for crash leftovers
 - **nsenter/util-linux:** Added to prerequisite checks (fail_fast
   preflight task)
 
@@ -376,6 +385,9 @@ inspectah_install_version: ""
 
 # Target base image for cross-distro conversion.
 # Example: "registry.redhat.io/rhel9/rhel-bootc:9.6"
+# For fleet consistency, prefer digest-pinned references:
+#   "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123..."
+# Tags can resolve differently across hosts if updated mid-campaign.
 # Leave empty for same-distro assessment (most common).
 inspectah_base_image: ""
 
@@ -405,23 +417,34 @@ inspectah_scan_poll: 30
 # Example: ["--verbose", "--no-baseline"]
 #
 # SAFETY: The role strips any flags that conflict with its own
-# invariants (-o, --progress, --ack-sensitive). These are managed
-# by the role and must not be overridden. A preflight warning is
-# emitted if conflicting flags are detected.
+# invariants (-o, --progress, --ack-sensitive, --base-image,
+# --preserve, --no-redaction). These are managed by the role's
+# own variables and must not be overridden. A preflight warning
+# is emitted if conflicting flags are detected.
 inspectah_extra_args: []
 
 # --- Fetch ---
 
 # Base directory on the control node to receive per-host tarballs.
-# A run-scoped subdirectory is created automatically (see Section 5.5).
-# Tarballs are stored as {{ inventory_hostname }}.tar.gz inside the
-# run directory.
+# A campaign-scoped subdirectory is created automatically per
+# invocation (see Section 5.5). Tarballs are stored as
+# {{ inventory_hostname }}.tar.gz inside the campaign directory.
 inspectah_fetch_dest: "{{ playbook_dir }}/scans"
 
 # --- Cleanup ---
 
 # Delete per-host tarball from target after successful fetch.
 inspectah_cleanup_host_tarball: true
+
+# Best-effort sweep of orphan inspectah-baseline-* containers.
+# Cleans up containers left by crash-killed inspectah processes
+# (SIGKILL, OOM-kill, host reboot during scan).
+#
+# WARNING: This sweeps ALL containers matching the inspectah-baseline-
+# prefix. It is NOT safe for hosts running concurrent inspectah scans.
+# Enable only when you are certain no other scan is in flight.
+# inspectah's internal CleanupGuard handles normal cleanup.
+inspectah_cleanup_orphan_containers: false
 
 # Remove inspectah and COPR repo from the target after the campaign.
 # Only acts if inspectah_install is true — the role cleans up what
@@ -443,6 +466,10 @@ inspectah_cleanup_host: false
 # Progress mode forced for non-interactive Ansible execution.
 _inspectah_progress_mode: "flat"
 
+# Container name prefix used by inspectah for baseline containers.
+# Used by the orphan janitor (inspectah_cleanup_orphan_containers).
+_inspectah_baseline_container_prefix: "inspectah-baseline-"
+
 # Minimum inspectah version this role release supports.
 # Preflight compares `inspectah --version` output against this.
 _inspectah_min_version: "0.8.0"
@@ -455,6 +482,15 @@ _inspectah_reserved_flags:
   - "--progress"
   - "--ack-sensitive"
   - "--acknowledge-sensitive"
+  - "--base-image"
+  - "--preserve"
+  - "--no-redaction"
+
+# Whether this campaign handles sensitive data (auto-derived).
+# True when inspectah_preserve is non-empty or inspectah_no_redaction
+# is true. Used to tighten fetch directory permissions.
+_inspectah_sensitive_campaign: >-
+  {{ (inspectah_preserve | length > 0) or (inspectah_no_redaction | bool) }}
 ```
 
 ### 4.3 Argument Specification (meta/argument_specs.yml)
@@ -563,15 +599,16 @@ argument_specs:
         default: []
         description: >-
           Additional CLI flags passed to inspectah scan. Must not
-          include -o, --progress, or --ack-sensitive (these are
-          managed by the role and stripped with a warning).
+          include -o, --progress, --ack-sensitive, --base-image,
+          --preserve, or --no-redaction (these are managed by the
+          role's own variables and stripped with a warning).
 
       inspectah_fetch_dest:
         type: path
         default: "{{ playbook_dir }}/scans"
         description: >-
           Base directory on the control node for fetched tarballs.
-          A run-scoped subdirectory is created automatically.
+          A campaign-scoped subdirectory is created automatically.
 
       inspectah_cleanup_host_tarball:
         type: bool
@@ -579,6 +616,14 @@ argument_specs:
         description: >-
           Remove the scan tarball from the target host after
           successful fetch.
+
+      inspectah_cleanup_orphan_containers:
+        type: bool
+        default: false
+        description: >-
+          Best-effort sweep of orphan inspectah-baseline-* containers.
+          NOT safe for concurrent scans. inspectah's internal cleanup
+          handles normal cases; enable only for crash leftovers.
 
       inspectah_cleanup_host:
         type: bool
@@ -622,8 +667,9 @@ presence AND version compatibility. This means preflight always runs
 against the binary the scan will actually use, whether pre-installed
 or role-installed.
 
-Container cleanup runs inside scan.yml's `always` block (see 5.4).
-Tarball cleanup runs inside fetch.yml's success path (see 5.5).
+Orphan container cleanup (opt-in) runs in scan.yml's `always` block
+(see 5.6). inspectah's internal `CleanupGuard` handles normal container
+cleanup. Tarball cleanup runs inside fetch.yml's success path (see 5.5).
 Host cleanup (uninstall) runs at the end after all work is complete.
 
 ### 5.2 Preflight (tasks/preflight.yml)
@@ -646,7 +692,9 @@ Validates prerequisites before any scan work begins.
    flags in `_inspectah_reserved_flags`. If found, emit a warning via
    `ansible.builtin.debug` and strip the conflicting flags from the
    list. This prevents operators from accidentally overriding `-o`,
-   `--progress`, or `--ack-sensitive`.
+   `--progress`, `--ack-sensitive`, `--base-image`, `--preserve`, or
+   `--no-redaction` — all of which are managed by the role's own
+   variables and command construction logic.
 
 **Idempotency:** Read-only checks. No state changes. Safe to re-run.
 
@@ -715,8 +763,9 @@ The core task. Wrapped in `block/always` for container cleanup guarantee.
       changed_when: inspectah_scan_result.rc == 0
 
   always:
-    - name: Clean up baseline containers from this scan
+    - name: Clean up orphan baseline containers (opt-in)
       ansible.builtin.include_tasks: container_cleanup.yml
+      when: inspectah_cleanup_orphan_containers | bool
 ```
 
 **Command construction (`_inspectah_scan_argv`):**
@@ -770,17 +819,33 @@ the role captures current state, not desired state.
 The role knows the exact tarball path from `inspectah_scan_output` — no
 discovery step is needed.
 
+**Campaign directory generation:** A single campaign directory is created
+once on the controller via `run_once` + `delegate_to: localhost`. All
+hosts fetch into this same directory. This avoids clock-skew and serial-batch
+problems that arise from deriving timestamps per-host.
+
 ```yaml
-- name: Set run-scoped fetch directory
+- name: Generate campaign run directory on controller
+  ansible.builtin.command:
+    argv:
+      - date
+      - "+%Y%m%dT%H%M%S"
+  delegate_to: localhost
+  run_once: true
+  register: _inspectah_campaign_ts
+  changed_when: false
+
+- name: Set campaign-scoped fetch directory
   ansible.builtin.set_fact:
     _inspectah_run_dir: >-
-      {{ inspectah_fetch_dest }}/{{ ansible_date_time.iso8601_basic_short }}
+      {{ inspectah_fetch_dest }}/{{ _inspectah_campaign_ts.stdout }}
+  run_once: true
 
-- name: Ensure run-scoped fetch directory exists
+- name: Ensure campaign fetch directory exists
   ansible.builtin.file:
     path: "{{ _inspectah_run_dir }}"
     state: directory
-    mode: "0755"
+    mode: "{{ (_inspectah_sensitive_campaign | bool) | ternary('0700', '0755') }}"
   delegate_to: localhost
   run_once: true
 
@@ -807,11 +872,19 @@ discovery step is needed.
   the role constructs it deterministically, the exact tarball location
   is known from the `inspectah_scan_output` variable. No
   `ansible.builtin.find`, no mtime sorting, no glob ambiguity.
-- **Run-scoped fetch directory.** Each scan campaign writes fetched
-  tarballs into a timestamped subdirectory
-  (`scans/20260627T143052/`). This prevents stale tarballs from
-  previous runs contaminating the aggregate input. Retries and partial
-  runs start a new run directory.
+- **Campaign-scoped directory.** The timestamp is generated once on
+  the controller (`run_once` + `delegate_to: localhost`) and shared to
+  all hosts via `set_fact`. This guarantees every host in the campaign
+  fetches into the same directory regardless of clock skew, serial
+  batching, or `--limit` retries. Each `ansible-playbook` invocation
+  creates a new campaign directory (`scans/20260627T143052/`),
+  preventing stale tarballs from contaminating aggregate input.
+- **Sensitive campaign permissions.** When `inspectah_preserve` is
+  non-empty or `inspectah_no_redaction` is true, `_inspectah_sensitive_campaign`
+  is true and the campaign directory is created with `0700` permissions.
+  This restricts access to fetched tarballs that may contain password
+  hashes, SSH keys, or unredacted secrets. Non-sensitive campaigns use
+  the default `0755`.
 - Renames to `{{ inventory_hostname }}.tar.gz` for aggregate
   consumption. inspectah aggregate accepts a directory of tarballs;
   hostname-based naming provides natural identification.
@@ -821,69 +894,93 @@ discovery step is needed.
   block. A failed fetch must not delete the only copy of the tarball
   on the target.
 
-### 5.6 Container Cleanup (inline in scan.yml's always block)
+### 5.6 Container Cleanup Strategy
 
-Runs in the `always` block of scan.yml. Guaranteed execution even on
-scan failure.
+Container cleanup follows a two-layer model:
 
-**Scope:** This cleanup targets only the baseline container created by
-THIS scan invocation, not all `inspectah-baseline-*` containers on the
-host. This is critical for concurrent-scan safety — a prefix-wide sweep
-would kill another in-flight scan's container.
+1. **Primary:** inspectah's internal `CleanupGuard` (always active)
+2. **Role-level:** opt-in orphan janitor (for crash leftovers only)
+
+**Why the role does not do invocation-scoped cleanup:**
+
+inspectah creates baseline containers named `inspectah-baseline-<unix_ts>`
+where the timestamp is generated internally at scan time
+(`SystemTime::now()` in `crates/collect/src/baseline.rs`). The role
+cannot precompute or predict this name from outside. inspectah's own
+`CleanupGuard` (a Rust `Drop` impl) runs `podman rm -f <name>` when
+the scan function returns or panics, with explicit cleanup on the
+success path and best-effort cleanup via the guard's destructor on
+failure. This is the primary cleanup contract.
+
+The role's `always` block in scan.yml is therefore **not** for
+invocation-scoped cleanup — that is inspectah's responsibility. The
+`always` block exists solely for the orphan janitor described below.
+
+**Orphan janitor (opt-in):**
+
+Crash-killed inspectah processes (SIGKILL, OOM-kill, host reboot during
+scan) can leave stale `inspectah-baseline-*` containers. The role
+provides an opt-in janitor to clean these up:
 
 ```yaml
-# Container cleanup — scoped to this invocation.
-#
-# inspectah names its baseline container deterministically based on
-# the base image reference. The role captures this name before
-# scanning and removes only that container in cleanup.
-#
-# If the role cannot determine the container name (e.g., no base
-# image specified), it falls back to listing containers matching
-# the inspectah-baseline- prefix, but ONLY removes containers
-# created after the scan task started (checked via container
-# creation timestamp vs. scan start time).
-
-- name: Record scan start time for cleanup scoping
-  ansible.builtin.set_fact:
-    _inspectah_scan_start: "{{ ansible_date_time.iso8601 }}"
-  # Set BEFORE the scan block runs
-
-- name: List baseline containers from this scan
-  ansible.builtin.command:
-    argv:
-      - podman
-      - ps
-      - --all
-      - --filter
-      - "name=inspectah-baseline-"
-      - --format
-      - "{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.CreatedAt{{ '}}' }}"
-  register: _inspectah_orphan_containers
-  changed_when: false
-  become: true
-  failed_when: false
-
-- name: Remove baseline containers created during this scan
-  ansible.builtin.command:
-    argv:
-      - podman
-      - rm
-      - --force
-      - "{{ item.split(' ')[0] }}"
-  loop: >-
-    {{ _inspectah_orphan_containers.stdout_lines | default([])
-       | select('search', 'inspectah-baseline-') | list }}
-  become: true
-  changed_when: true
-  when: _inspectah_orphan_containers.stdout_lines | default([]) | length > 0
+# vars/main.yml addition (see Section 4.2)
+# _inspectah_baseline_container_prefix: "inspectah-baseline-"
 ```
 
-**Why not a broad prefix sweep:** If two scan invocations run
-concurrently on the same host (e.g., different base images, or a retry
-overlapping with a running scan), a broad `inspectah-baseline-*` removal
-kills the other scan's container. Scoping to this invocation's
-containers avoids that race.
+```yaml
+# defaults/main.yml addition (see Section 4.1)
+# Whether to clean up orphan inspectah-baseline-* containers.
+# This sweeps ALL containers matching the prefix — it is NOT safe
+# for hosts running concurrent inspectah scans. Enable only when
+# you are certain no other scan is in flight on the same host.
+inspectah_cleanup_orphan_containers: false
+```
+
+```yaml
+# In scan.yml's always block:
+- name: Clean up orphan baseline containers
+  when: inspectah_cleanup_orphan_containers | bool
+  block:
+    - name: List orphan baseline containers
+      ansible.builtin.command:
+        argv:
+          - podman
+          - ps
+          - --all
+          - --filter
+          - "name={{ _inspectah_baseline_container_prefix }}"
+          - --format
+          - "{{ '{{' }}.Names{{ '}}' }}"
+      register: _inspectah_orphan_containers
+      changed_when: false
+      become: true
+      failed_when: false
+
+    - name: Remove orphan baseline containers
+      ansible.builtin.command:
+        argv:
+          - podman
+          - rm
+          - --force
+          - "{{ item }}"
+      loop: "{{ _inspectah_orphan_containers.stdout_lines | default([]) }}"
+      become: true
+      changed_when: true
+      when: _inspectah_orphan_containers.stdout_lines | default([]) | length > 0
+```
+
+**Concurrency safety:** This janitor removes ALL containers matching
+the `inspectah-baseline-` prefix. It is explicitly unsafe for hosts
+running concurrent inspectah scans — a parallel scan's container will
+be killed. The variable defaults to `false` and the README documents
+this constraint. For concurrent-scan environments, rely solely on
+inspectah's internal `CleanupGuard`.
+
+**Future improvement:** When inspectah exposes a stable, externally
+predictable container identifier (e.g., via a CLI flag or output file),
+the role can switch to invocation-scoped cleanup. Until then, the
+internal `CleanupGuard` is the correct primary mechanism.
+Track this as a coupling point (see Open Question 4).
 
 ### 5.7 Host Cleanup (tasks/host_cleanup.yml)
 
@@ -914,6 +1011,15 @@ the role brought, but NEVER removes pre-existing installs.
     - _inspectah_copr_enabled | default(false) | bool
     - inspectah_install_method == "copr"
   changed_when: true
+
+- name: Remove staged RPM from target
+  ansible.builtin.file:
+    path: "/tmp/inspectah.rpm"
+    state: absent
+  become: true
+  when:
+    - _inspectah_pkg_installed | default(false) | bool
+    - inspectah_install_method == "rpm"
 ```
 
 **Guard logic:** The `_inspectah_pkg_installed` and
@@ -922,6 +1028,11 @@ did not install inspectah (because `inspectah_install: false` or
 the package was already present), these facts are false/undefined and
 the cleanup tasks are skipped. This ensures the role never removes
 an inspectah installation it did not create.
+
+**RPM path cleanup:** When the role installed via RPM push, the
+staged `/tmp/inspectah.rpm` file is also removed. The RPM install path
+in install.yml copies the RPM to a well-known temp path on the target;
+this cleanup step removes that artifact.
 
 ---
 
@@ -963,28 +1074,53 @@ an inspectah installation it did not create.
   connection: local
   gather_facts: false
   vars:
-    # The run-scoped directory is created by the role. Point aggregate
-    # at the most recent run directory, or use a specific timestamp.
+    # inspectah aggregate needs the same minimum version as the role.
+    _inspectah_min_version: "0.8.0"
+    # The campaign directory is created by the role. When running the
+    # full pipeline (scan + aggregate), the campaign directory from
+    # play 1 is available. For standalone aggregate runs, point at a
+    # specific campaign directory.
     _aggregate_input: "{{ playbook_dir }}/scans"
     _aggregate_output: "{{ playbook_dir }}/aggregate"
   tasks:
-    - name: Find most recent scan run directory
+    - name: Check localhost inspectah version
+      ansible.builtin.command:
+        argv:
+          - inspectah
+          - --version
+      register: _localhost_inspectah_version
+      changed_when: false
+
+    - name: Assert localhost inspectah meets minimum version
+      ansible.builtin.assert:
+        that:
+          - >-
+            _localhost_inspectah_version.stdout
+            | regex_search('[0-9]+\.[0-9]+\.[0-9]+')
+            is version(_inspectah_min_version, '>=')
+        fail_msg: >-
+          localhost inspectah version
+          {{ _localhost_inspectah_version.stdout }} is below the
+          minimum required {{ _inspectah_min_version }}. Upgrade
+          inspectah on the control node before running aggregate.
+
+    - name: Find most recent scan campaign directory
       ansible.builtin.find:
         paths: "{{ _aggregate_input }}"
         file_type: directory
       register: _scan_runs
 
-    - name: Set aggregate input to most recent run
+    - name: Set aggregate input to most recent campaign
       ansible.builtin.set_fact:
         _aggregate_run_dir: >-
           {{ (_scan_runs.files | sort(attribute='mtime', reverse=true)
               | first).path }}
       when: _scan_runs.files | length > 0
 
-    - name: Fail if no scan runs found
+    - name: Fail if no scan campaigns found
       ansible.builtin.fail:
         msg: >-
-          No scan run directories found in {{ _aggregate_input }}.
+          No scan campaign directories found in {{ _aggregate_input }}.
           Run the scan play first.
       when: _scan_runs.files | length == 0
 
@@ -1009,6 +1145,14 @@ an inspectah installation it did not create.
           # - --ack-sensitive
       changed_when: true
 ```
+
+**Partial-campaign behavior:** When `max_fail_percentage` allows some
+hosts to fail, the aggregate play runs on whatever tarballs were
+successfully fetched. This is the correct behavior: `inspectah aggregate`
+processes whatever tarballs it finds in the campaign directory. The
+aggregate output documents which hosts are included. Operators who need
+all-or-nothing semantics should set `max_fail_percentage: 0` (the
+Ansible default) and not use the aggregate play on partial results.
 
 **Note on `--ack-sensitive` propagation:** If the scan play used
 `inspectah_preserve` or `inspectah_no_redaction`, the resulting tarballs
@@ -1115,13 +1259,22 @@ the role's response when running on that platform.
 
 | Distribution | Versions | Architectures | Tier | Notes |
 |-------------|----------|---------------|------|-------|
-| RHEL | 9 | x86_64, aarch64 | Release-blocking | Primary target, full Molecule coverage |
+| CentOS Stream | 9 | x86_64 | Release-blocking | Molecule + real-host smoke in CI |
+| RHEL | 9 | x86_64 | Smoke-tested | Manual validation, promote to release-blocking at Galaxy graduation |
+| RHEL | 9 | aarch64 | Smoke-tested | When aarch64 CI runner available; promote at Galaxy graduation |
 | RHEL | 10 | x86_64, aarch64 | Smoke-tested | COPR builds available, needs real-host validation |
-| CentOS Stream | 9 | x86_64 | Release-blocking | CI uses CentOS Stream 9 containers |
+| CentOS Stream | 9 | aarch64 | Smoke-tested | When aarch64 CI runner available |
 | CentOS Stream | 10 | x86_64 | Smoke-tested | Tracks RHEL 10 |
-| Fedora | 40, 41 | x86_64 | Smoke-tested | Latest 2 releases, COPR builds available |
+| Fedora | 40, 41 | x86_64 | Best-effort | Latest 2 releases, COPR builds available |
 | AlmaLinux | 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
 | Rocky Linux | 9 | x86_64, aarch64 | Best-effort | RHEL rebuild, should work, not CI-gated |
+
+**Release-blocking rationale:** Only CentOS Stream 9 x86_64 is
+release-blocking because that is what CI actually proves (Molecule
+container tests + real-host smoke). RHEL 9 and aarch64 are promoted
+to release-blocking at Galaxy graduation when CI infrastructure for
+those platforms is in place. Claiming release-blocking status without
+CI enforcement is empty.
 
 **EL8 note:** EL8 is excluded from the support matrix. inspectah requires
 podman >= 4.4, which is not available in the default EL8 repos. EL8 is
@@ -1138,11 +1291,16 @@ shifted to EL9+). The preflight check rejects EL8 with a clear message.
 
 ### 8.4 Control node requirements
 
-| Dependency | Version | Purpose |
-|-----------|---------|---------|
-| Ansible | >= 2.14 | Role execution |
-| inspectah | >= 0.8.0 | Aggregate command (localhost only, in example playbook) |
-| community.general | >= 5.0 | `community.general.copr` module (optional, for COPR install) |
+| Dependency | Version | Purpose | Enforced |
+|-----------|---------|---------|----------|
+| Ansible | >= 2.14 | Role execution | Galaxy metadata |
+| inspectah | >= 0.8.0 | Aggregate command (localhost, example playbook) | Assert task in example aggregate play |
+| community.general | >= 5.0 | `community.general.copr` module (optional) | Fallback if absent |
+
+The example aggregate play includes an `ansible.builtin.assert` task
+that checks the localhost inspectah version against `_inspectah_min_version`
+and fails with a clear message if the version is too old. This is not
+"just documented" — it is enforced at runtime.
 
 ### 8.5 Role-to-inspectah compatibility
 
@@ -1151,9 +1309,13 @@ constant in `vars/main.yml` encodes this. When a new inspectah release
 changes CLI flags, output format, or exit codes in a way that affects
 the role, bump `_inspectah_min_version` and release a new role version.
 
-The preflight check enforces this: if the installed inspectah version is
-below `_inspectah_min_version`, the role fails with a message stating the
-required and installed versions.
+**Target-side:** The preflight check enforces this: if the installed
+inspectah version is below `_inspectah_min_version`, the role fails
+with a message stating the required and installed versions.
+
+**Control-side:** The example aggregate play enforces the same minimum
+via an assert task. Consuming playbooks that diverge from the example
+should replicate this check.
 
 ---
 
@@ -1193,9 +1355,14 @@ Fail fast with a clear message. No partial state to clean up.
 
 ### 9.4 Cleanup Resilience
 
-Container cleanup runs in `always` block. Individual container removal
-failures are non-fatal (`failed_when: false` on the list step, individual
-`rm` failures logged but do not abort).
+**Primary container cleanup** is inspectah's internal `CleanupGuard`.
+If inspectah exits normally (success or handled error), the guard
+removes the baseline container. The role does not duplicate this.
+
+**Orphan janitor** (opt-in via `inspectah_cleanup_orphan_containers`)
+runs in scan.yml's `always` block. Individual container removal failures
+are non-fatal (`failed_when: false` on the list step, individual `rm`
+failures logged but do not abort).
 
 ### 9.5 Failure Recovery and Resume
 
@@ -1203,7 +1370,7 @@ failures are non-fatal (`failed_when: false` on the list step, individual
 
 - **Scan failed on some hosts:** Re-run the playbook with
   `--limit @playbook.retry` to target only failed hosts. Each retry
-  creates a new run-scoped fetch directory, so results from different
+  creates a new campaign directory, so results from different
   attempts do not mix.
 - **Fetch failed (scan succeeded):** The tarball remains on the target
   host (tarball cleanup only runs on successful fetch). Re-running
@@ -1220,10 +1387,10 @@ failures are non-fatal (`failed_when: false` on the list step, individual
   scans on the same host race on this file. Use `serial: 1` or
   `forks: 1` per host to prevent this.
 
-**Campaign isolation:** Run-scoped fetch directories prevent stale
+**Campaign isolation:** Campaign-scoped fetch directories prevent stale
 tarball aggregation. Each `ansible-playbook` invocation writes to its
-own timestamped directory. The aggregate play should point at a specific
-run directory, not the parent.
+own timestamped campaign directory. The aggregate play should point at
+a specific campaign directory, not the parent.
 
 ---
 
@@ -1390,18 +1557,23 @@ is NOT installed. Validates the COPR enable fallback to
 - yamllint
 - ansible-playbook --syntax-check on all example playbooks
 
-**Molecule workflow (every PR) — medium:**
-- Molecule default scenario on CentOS Stream 9
-- Molecule air_gapped scenario on CentOS Stream 9
+**Molecule workflow (every PR, release-blocking) — medium:**
+- Molecule default scenario on CentOS Stream 9 x86_64
+- Molecule air_gapped scenario on CentOS Stream 9 x86_64
 - Molecule fallback scenario (no community.general)
 - Matrix: ansible-core 2.14, 2.15, 2.16, 2.17
 
-**Real-host smoke test (nightly / manual trigger) — slow:**
-- Provisions an actual VM (CentOS Stream 9)
+**Real-host smoke test (nightly / manual trigger, release-blocking) — slow:**
+- Provisions an actual VM (CentOS Stream 9 x86_64)
 - Runs the full scan-fetch-aggregate pipeline with a real inspectah binary
 - Validates tarball content and aggregate output
 - Covers gaps Molecule cannot: real scan, base image pull, container
   lifecycle, tarball content validation
+
+**Galaxy graduation gates (not release-blocking for v1):**
+- RHEL 9 x86_64 real-host smoke (manual until CI infra exists)
+- CentOS Stream 9 / RHEL 9 aarch64 (when runner available)
+- These graduate to release-blocking once CI proves them automatically
 
 **Validation cadence split rationale:** Lint and syntax checks run in
 seconds. Molecule scenarios run in 2-5 minutes. Real-host smoke tests
@@ -1498,6 +1670,18 @@ registry returns for that reference. This is a known trust boundary:
 the operator is responsible for pointing `inspectah_base_image` at a
 trusted registry and reference.
 
+**Digest pinning for fleet consistency:** Tag-based image references
+(e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`) can resolve to
+different digests across hosts if the tag is updated mid-campaign.
+For reproducible fleet-wide scans, use digest-pinned references:
+
+```yaml
+inspectah_base_image: "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123..."
+```
+
+This guarantees every host in the campaign scans against the same image
+content. The README variable table should note this recommendation.
+
 For environments requiring image provenance guarantees, use a local
 registry mirror with signature verification, or pre-pull and pin by
 digest in a separate play before running the role.
@@ -1518,7 +1702,12 @@ digest in a separate play before running the role.
    refine server hosting), consider migrating to a collection. For now,
    standalone role is correct.
 
-4. **Container name determinism.** The container cleanup scoping relies
-   on inspectah's baseline container naming being deterministic. If
-   inspectah changes its container naming scheme, the cleanup logic may
-   need updating. Track this as a coupling point.
+4. **Container name externalization.** inspectah creates baseline
+   containers as `inspectah-baseline-<unix_ts>`, with the timestamp
+   generated internally at scan time. The role cannot predict this name
+   from outside, so invocation-scoped container cleanup is not possible.
+   If inspectah adds a flag to accept an externally specified container
+   name (e.g., `--container-name <name>`) or emits the name to a
+   discoverable location, the role can switch from the prefix-sweep
+   orphan janitor to precise invocation-scoped cleanup. Track this as
+   a future enhancement.
