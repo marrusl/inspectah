@@ -637,26 +637,43 @@ impl RefineSession {
             }
         }
 
-        // Relaxed match: extract name + arch from filename
+        // Relaxed match: extract arch and candidate names from filename.
+        // Try progressively shorter name prefixes to handle non-NEVRA
+        // filenames like "epel-release-latest-10.noarch.rpm" where the
+        // heuristic name ("epel-release-latest") doesn't match the real
+        // package name ("epel-release").
         let (extracted_name, extracted_arch, extracted_ver) = parse_rpm_filename(filename)?;
 
-        for pkg in &mut rpm.packages_added {
-            if pkg.repoless_annotation.is_empty() {
-                continue;
+        // Build candidate names: full extracted name, then progressively
+        // shorter prefixes by stripping trailing `-segment` pieces.
+        let mut candidates = vec![extracted_name.clone()];
+        let mut remaining = extracted_name.as_str();
+        while let Some(pos) = remaining.rfind('-') {
+            remaining = &remaining[..pos];
+            if !remaining.is_empty() {
+                candidates.push(remaining.to_string());
             }
-            if pkg.name == extracted_name && pkg.arch == extracted_arch {
-                pkg.repoless_cached = true;
-                pkg.cache_path = Some(staged_path.to_string());
-                // Track version mismatch if the uploaded version differs
-                let installed_ver = format!("{}-{}", pkg.version, pkg.release);
-                if let Some(ref ver) = extracted_ver
-                    && *ver != installed_ver
-                {
-                    pkg.uploaded_version = Some(ver.clone());
+        }
+
+        for candidate in &candidates {
+            for pkg in &mut rpm.packages_added {
+                if pkg.repoless_annotation.is_empty() {
+                    continue;
                 }
-                let canonical = format!("{}.{}", pkg.name, pkg.arch);
-                self.invalidate_caches();
-                return Some(canonical);
+                if pkg.name == *candidate && pkg.arch == extracted_arch {
+                    pkg.repoless_cached = true;
+                    pkg.cache_path = Some(staged_path.to_string());
+                    // Track version mismatch if the uploaded version differs
+                    let installed_ver = format!("{}-{}", pkg.version, pkg.release);
+                    if let Some(ref ver) = extracted_ver
+                        && *ver != installed_ver
+                    {
+                        pkg.uploaded_version = Some(ver.clone());
+                    }
+                    let canonical = format!("{}.{}", pkg.name, pkg.arch);
+                    self.invalidate_caches();
+                    return Some(canonical);
+                }
             }
         }
 
@@ -6396,17 +6413,19 @@ mod tests {
 
     #[test]
     fn mark_uploaded_rpm_matches_epel_release_by_name_arch() {
+        // "epel-release-latest-10.noarch.rpm" — heuristic extracts name
+        // "epel-release-latest" which doesn't match "epel-release" directly.
+        // Progressive prefix matching tries shorter prefixes until it finds
+        // "epel-release" which matches the package.
         let snap = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
         let mut session = RefineSession::new(snap);
         let result = session.mark_uploaded_rpm(
             "epel-release-latest-10.noarch.rpm",
             "/tmp/epel-release-latest-10.noarch.rpm",
         );
-        // "epel-release-latest" != "epel-release" — this won't match by relaxed name.
-        // The filename parses to name="epel-release-latest", which differs from pkg.name.
-        assert_eq!(result, None);
+        assert_eq!(result, Some("epel-release.noarch".into()));
 
-        // But the standard NEVRA filename should work:
+        // Standard NEVRA filename also still works:
         let snap2 = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
         let mut session2 = RefineSession::new(snap2);
         let result2 = session2.mark_uploaded_rpm(
