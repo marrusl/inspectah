@@ -169,7 +169,7 @@ export function AggregateSectionContent({
                   />
                 )}
               {expanded && !hasVariants && isDecisionSection && (
-                <ItemDetailPane item={item} />
+                <ItemDetailPane item={item} sectionId={section.id} />
               )}
             </div>
           );
@@ -217,7 +217,7 @@ export function AggregateSectionContent({
               />
             )}
           {expanded && !hasVariants && isDecisionSection && (
-            <ItemDetailPane item={item} />
+            <ItemDetailPane item={item} sectionId={section.id} />
           )}
         </div>
       );

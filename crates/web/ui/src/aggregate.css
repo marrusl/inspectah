@@ -488,6 +488,31 @@
   font-family: var(--pf-t--global--font--family--mono);
 }
 
+.item-detail-pane__section-detail {
+  display: contents;
+}
+
+.item-detail-pane__pkg-table {
+  grid-column: 1 / -1;
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.item-detail-pane__pkg-table th {
+  text-align: left;
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  color: var(--pf-t--global--text--color--subtle);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+
+.item-detail-pane__pkg-table td {
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+
 /* ─── Diff drawer ────────────────────────────────────────────────────── */
 
 .diff-drawer {
