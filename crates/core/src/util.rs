@@ -14,8 +14,14 @@ pub const METHOD_PIP_DIST_INFO: &str = "pip dist-info";
 /// Method string for npm projects detected via package-lock.json.
 pub const METHOD_NPM_LOCKFILE: &str = "npm lockfile";
 
+/// Method string for npm projects detected via package.json (no lockfile).
+pub const METHOD_NPM_MANIFEST: &str = "npm manifest";
+
 /// Method string for gem projects detected via Gemfile.lock.
 pub const METHOD_GEM_LOCKFILE: &str = "gem lockfile";
+
+/// Method string for system gems detected via `gem list --local`.
+pub const METHOD_GEM_SYSTEM: &str = "gem system";
 
 /// Compute a short hash (12 hex chars) from a path for use in language environment identifiers.
 ///

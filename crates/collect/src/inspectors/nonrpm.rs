@@ -14,19 +14,24 @@ use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use inspectah_core::util::{
-    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
+    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_LOCKFILE, METHOD_NPM_MANIFEST,
+    METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Directories to prune during recursive walks (build artifacts, caches).
+///
+/// NOTE: `"venv"` is intentionally absent. The venv walker specifically
+/// looks FOR directories named `venv` (via `pyvenv.cfg`), so pruning
+/// them defeats detection. `.venv` (dotfile convention) is kept because
+/// it's more likely a development artifact than a deployed environment.
 const PRUNE_DIRS: &[&str] = &[
     "node_modules",
     ".git",
     "__pycache__",
     ".tox",
     ".venv",
-    "venv",
     ".cache",
     ".npm",
     "target",
@@ -207,13 +212,14 @@ impl Inspector for NonRpmInspector {
             },
         });
 
-        // Scan gem packages (Gemfile.lock).
+        // Scan gem packages (Gemfile.lock + system gems).
         progress.emit(ProgressEvent::ProbeStarted {
             inspector: InspectorId::NonRpmSoftware,
             probe: ProbeId::GemPackages,
         });
         let pre = section.items.len();
         scan_gem_packages(exec, &mut section, is_ostree);
+        scan_system_gems(exec, &mut section);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -844,13 +850,17 @@ fn scan_pip_packages(
 // npm scanning
 // ---------------------------------------------------------------------------
 
-/// Scan for npm packages via package-lock.json files.
+/// Scan for npm packages via package-lock.json files, with a fallback
+/// pass for package.json-only projects.
 ///
 /// Emits one `NonRpmItem` per project directory (not per package).
 /// Individual packages are stored in the `packages` vec as
 /// `LanguagePackage` entries; raw lockfile and package.json content
 /// is captured in `manifest_files` for downstream rendering.
 fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
+    // Collect paths that have a lockfile so the manifest-only pass can skip them.
+    let mut lockfile_paths: HashSet<String> = HashSet::new();
+
     for root in SCAN_ROOTS {
         find_files_matching(exec, root, "package-lock.json", &mut |lockfile_path| {
             let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
@@ -861,6 +871,8 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
             if is_ostree && rel_path.starts_with("var/") {
                 return;
             }
+
+            lockfile_paths.insert(rel_path.clone());
 
             let mut manifest_files = HashMap::new();
             let mut packages = Vec::new();
@@ -892,6 +904,48 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .to_string(),
                 method: METHOD_NPM_LOCKFILE.to_string(),
                 confidence: "high".to_string(),
+                include: true,
+                packages,
+                manifest_files,
+                ..Default::default()
+            });
+        });
+    }
+
+    // Fallback: scan for package.json without a lockfile.
+    for root in SCAN_ROOTS {
+        find_files_matching(exec, root, "package.json", &mut |manifest_path| {
+            let project_dir = Path::new(manifest_path).parent().unwrap_or(Path::new("/"));
+            let rel_path = project_dir
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .to_string();
+            if is_ostree && rel_path.starts_with("var/") {
+                return;
+            }
+
+            // Skip if a lockfile-based item already exists for this path.
+            if lockfile_paths.contains(&rel_path) {
+                return;
+            }
+
+            let mut manifest_files = HashMap::new();
+            let mut packages = Vec::new();
+
+            if let Ok(content) = exec.read_file(Path::new(manifest_path)) {
+                manifest_files.insert("package.json".to_string(), content.clone());
+                packages = parse_package_json(&content);
+            }
+
+            section.items.push(NonRpmItem {
+                path: rel_path,
+                name: project_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                method: METHOD_NPM_MANIFEST.to_string(),
+                confidence: "low".to_string(),
                 include: true,
                 packages,
                 manifest_files,
@@ -942,6 +996,33 @@ fn parse_package_lock(content: &str) -> Vec<NpmPackage> {
                 name: name.clone(),
                 version,
             });
+        }
+    }
+
+    packages
+}
+
+/// Parse package.json to extract dependency names and versions.
+///
+/// Extracts from both `dependencies` and `devDependencies` objects.
+/// Version strings are stored as-is (may be ranges like `^1.2.3`).
+fn parse_package_json(content: &str) -> Vec<LanguagePackage> {
+    let mut packages = Vec::new();
+
+    let parsed: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => return packages,
+    };
+
+    for section in &["dependencies", "devDependencies"] {
+        if let Some(deps) = parsed.get(*section).and_then(|d| d.as_object()) {
+            for (name, version_val) in deps {
+                let version = version_val.as_str().unwrap_or("").to_string();
+                packages.push(LanguagePackage {
+                    name: name.clone(),
+                    version,
+                });
+            }
         }
     }
 
@@ -1043,6 +1124,99 @@ fn parse_gemfile_lock(content: &str) -> Vec<GemPackage> {
     }
 
     gems
+}
+
+/// Scan for system-installed gems via `gem list --local`.
+///
+/// Only runs if the `gem` command is available. Filters out gems whose
+/// spec directory is owned by an RPM package (via `rpm -qf`). Emits a
+/// single `NonRpmItem` with method `"gem system"` if any non-RPM gems
+/// are found.
+fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
+    // Check if gem is available.
+    let probe = exec.run("gem", &["--version"]);
+    if !probe.success() {
+        return;
+    }
+
+    let result = exec.run("gem", &["list", "--local", "--no-details"]);
+    if !result.success() {
+        return;
+    }
+
+    let mut packages = Vec::new();
+    for line in result.stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Format: "name (version1, version2)" — take the first version.
+        if let Some((name, rest)) = line.split_once(' ') {
+            let version = rest
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            packages.push(LanguagePackage {
+                name: name.to_string(),
+                version,
+            });
+        }
+    }
+
+    if packages.is_empty() {
+        return;
+    }
+
+    // Filter out RPM-owned gems by checking spec file ownership.
+    let rpm_filtered = filter_rpm_owned_gems(exec, &mut packages);
+
+    let confidence = if rpm_filtered { "medium" } else { "low" };
+
+    section.items.push(NonRpmItem {
+        path: "system-gems".to_string(),
+        name: "system-gems".to_string(),
+        method: METHOD_GEM_SYSTEM.to_string(),
+        confidence: confidence.to_string(),
+        include: true,
+        packages,
+        ..Default::default()
+    });
+}
+
+/// Filter out gems whose gemspec is owned by an RPM package.
+///
+/// Returns `true` if RPM filtering was applied (rpm -qf succeeded for
+/// at least one gem), `false` if filtering was skipped entirely.
+fn filter_rpm_owned_gems(exec: &dyn Executor, packages: &mut Vec<LanguagePackage>) -> bool {
+    // Find the gem spec directory.
+    let spec_dir_result = exec.run("gem", &["environment", "gemdir"]);
+    if !spec_dir_result.success() {
+        return false;
+    }
+    let gemdir = spec_dir_result.stdout.trim();
+    if gemdir.is_empty() {
+        return false;
+    }
+    let spec_dir = format!("{}/specifications", gemdir);
+
+    let mut filtered = false;
+    packages.retain(|pkg| {
+        let spec_path = format!("{}/{}-{}.gemspec", spec_dir, pkg.name, pkg.version);
+        let rpm_check = exec.run("rpm", &["-qf", &spec_path]);
+        if rpm_check.success() {
+            // Owned by RPM — filter out.
+            filtered = true;
+            false
+        } else {
+            true
+        }
+    });
+
+    filtered
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,9 +1387,9 @@ fn filter_ostree_var_paths(section: &mut NonRpmSoftwareSection) {
 fn dedup_ecosystem(method: &str) -> &str {
     if method == METHOD_PIP_DIST_INFO || method == METHOD_PYTHON_VENV {
         "pip"
-    } else if method == METHOD_NPM_LOCKFILE {
+    } else if method == METHOD_NPM_LOCKFILE || method == METHOD_NPM_MANIFEST {
         "npm"
-    } else if method == METHOD_GEM_LOCKFILE {
+    } else if method == METHOD_GEM_LOCKFILE || method == METHOD_GEM_SYSTEM {
         "gem"
     } else {
         "binary"
@@ -2807,6 +2981,215 @@ mod tests {
         assert_eq!(
             item.confidence, "medium",
             "should be medium without manifest"
+        );
+    }
+
+    // ---- Bug 2a: venv directory named "venv" is no longer pruned ----
+
+    #[test]
+    fn venv_named_venv_is_detected() {
+        // A venv at /opt/myapp/venv/ should be found now that "venv"
+        // is removed from PRUNE_DIRS.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["venv"])
+            .with_dir("/opt/myapp/venv", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/venv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
+            .with_dir("/opt/myapp/venv/lib", vec!["python3.9"])
+            .with_dir("/opt/myapp/venv/lib/python3.9", vec!["site-packages"])
+            .with_dir("/opt/myapp/venv/lib/python3.9/site-packages", vec![])
+            .with_command(
+                "pip list --path /opt/myapp/venv/lib/python3.9/site-packages --format json",
+                ExecResult {
+                    stdout: "[]".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "venv at /opt/myapp/venv/ should be detected"
+        );
+        assert_eq!(section.items[0].path, "opt/myapp/venv");
+    }
+
+    // ---- Bug 2b: npm package.json fallback ----
+
+    #[test]
+    fn npm_manifest_only_detected() {
+        // Project with package.json but no lockfile.
+        let pkg_json = r#"{"name":"myapp","dependencies":{"express":"^4.18.2"},"devDependencies":{"jest":"^29.0.0"}}"#;
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["package.json"])
+            .with_file("/opt/myapp/package.json", pkg_json);
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_packages(&exec, &mut section, false);
+
+        assert_eq!(section.items.len(), 1, "should detect manifest-only npm");
+        let item = &section.items[0];
+        assert_eq!(item.method, "npm manifest");
+        assert_eq!(item.confidence, "low");
+        assert_eq!(item.packages.len(), 2, "should have express + jest");
+        assert!(
+            item.packages.iter().any(|p| p.name == "express"),
+            "should include express"
+        );
+        assert!(
+            item.packages.iter().any(|p| p.name == "jest"),
+            "should include jest"
+        );
+    }
+
+    #[test]
+    fn npm_lockfile_takes_priority_over_manifest() {
+        // Project with both lockfile and package.json — lockfile wins.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["package-lock.json", "package.json"])
+            .with_file("/opt/myapp/package-lock.json", package_lock_fixture())
+            .with_file(
+                "/opt/myapp/package.json",
+                r#"{"dependencies":{"express":"^4.18.2"}}"#,
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_packages(&exec, &mut section, false);
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should produce exactly one item, not two"
+        );
+        assert_eq!(
+            section.items[0].method, "npm lockfile",
+            "lockfile method should be used when both exist"
+        );
+    }
+
+    #[test]
+    fn parse_package_json_extracts_deps() {
+        let content = r#"{"dependencies":{"express":"^4.18.2","lodash":"~4.17.21"},"devDependencies":{"jest":"^29.0.0"}}"#;
+        let packages = parse_package_json(content);
+        assert_eq!(packages.len(), 3);
+        assert!(packages.iter().any(|p| p.name == "express"));
+        assert!(packages.iter().any(|p| p.name == "lodash"));
+        assert!(packages.iter().any(|p| p.name == "jest"));
+    }
+
+    #[test]
+    fn parse_package_json_no_deps() {
+        let content = r#"{"name":"myapp","version":"1.0.0"}"#;
+        let packages = parse_package_json(content);
+        assert!(packages.is_empty());
+    }
+
+    // ---- Bug 2c: system gem detection ----
+
+    #[test]
+    fn system_gems_detected() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "gem --version",
+                ExecResult {
+                    stdout: "3.3.26\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem list --local --no-details",
+                ExecResult {
+                    stdout: "bundler (2.4.19)\nrake (13.1.0)\nrspec (3.12.0, 3.11.0)\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem environment gemdir",
+                ExecResult {
+                    stdout: "/usr/share/gems\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // bundler is RPM-owned, rake and rspec are not.
+            .with_command(
+                "rpm -qf /usr/share/gems/specifications/bundler-2.4.19.gemspec",
+                ExecResult {
+                    stdout: "rubygem-bundler-2.4.19-1.el9.noarch\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/share/gems/specifications/rake-13.1.0.gemspec",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/share/gems/specifications/rspec-3.12.0.gemspec",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_system_gems(&exec, &mut section);
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should produce one system-gems item"
+        );
+        let item = &section.items[0];
+        assert_eq!(item.method, "gem system");
+        assert_eq!(item.confidence, "medium", "RPM-filtered should be medium");
+        // bundler filtered out (RPM-owned), rake and rspec remain.
+        assert_eq!(
+            item.packages.len(),
+            2,
+            "bundler should be filtered, leaving rake+rspec"
+        );
+        assert!(
+            !item.packages.iter().any(|p| p.name == "bundler"),
+            "bundler should be filtered out"
+        );
+        assert!(item.packages.iter().any(|p| p.name == "rake"));
+        assert!(item.packages.iter().any(|p| p.name == "rspec"));
+    }
+
+    #[test]
+    fn system_gems_skipped_when_gem_unavailable() {
+        let exec = MockExecutor::new().with_command(
+            "gem --version",
+            ExecResult {
+                exit_code: 127,
+                ..Default::default()
+            },
+        );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_system_gems(&exec, &mut section);
+
+        assert!(
+            section.items.is_empty(),
+            "should skip when gem is not available"
         );
     }
 }

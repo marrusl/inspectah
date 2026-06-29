@@ -7,7 +7,8 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::NonRpmItem;
 use inspectah_core::util::{
-    METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
+    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_LOCKFILE, METHOD_NPM_MANIFEST,
+    METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
 
 const HIGH_CONFIDENCE: &str = "high";
@@ -23,9 +24,19 @@ pub fn is_pip_env(item: &NonRpmItem) -> bool {
     item.method == METHOD_PYTHON_VENV || item.method == METHOD_PIP_DIST_INFO
 }
 
+/// Returns true if the item is an npm environment (lockfile or manifest-only).
+fn is_npm_env(item: &NonRpmItem) -> bool {
+    item.method == METHOD_NPM_LOCKFILE || item.method == METHOD_NPM_MANIFEST
+}
+
+/// Returns true if the item is a gem environment (lockfile or system).
+fn is_gem_env(item: &NonRpmItem) -> bool {
+    item.method == METHOD_GEM_LOCKFILE || item.method == METHOD_GEM_SYSTEM
+}
+
 /// Returns true if the item is a language environment handled by this module.
 pub fn is_language_env(item: &NonRpmItem) -> bool {
-    is_pip_env(item) || item.method == METHOD_NPM_LOCKFILE || item.method == METHOD_GEM_LOCKFILE
+    is_pip_env(item) || is_npm_env(item) || is_gem_env(item)
 }
 
 /// Render Containerfile lines for all language package environments.
@@ -43,16 +54,8 @@ pub fn language_package_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let rpm_names = collect_rpm_names(snap);
 
     let pip_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_pip_env(i)).collect();
-    let npm_items: Vec<&NonRpmItem> = nrs
-        .items
-        .iter()
-        .filter(|i| i.method == METHOD_NPM_LOCKFILE)
-        .collect();
-    let gem_items: Vec<&NonRpmItem> = nrs
-        .items
-        .iter()
-        .filter(|i| i.method == METHOD_GEM_LOCKFILE)
-        .collect();
+    let npm_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_npm_env(i)).collect();
+    let gem_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_gem_env(i)).collect();
 
     if pip_items.is_empty() && npm_items.is_empty() && gem_items.is_empty() {
         return Vec::new();
