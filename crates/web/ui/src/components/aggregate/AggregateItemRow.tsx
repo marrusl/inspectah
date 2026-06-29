@@ -1,5 +1,10 @@
 import { Label, Switch } from "@patternfly/react-core";
-import type { AggregateItem, ItemId } from "../../api/types";
+import type {
+  AggregateItem,
+  ItemId,
+  LanguagePackageMetadata,
+  UnmanagedFileMetadata,
+} from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import { PrevalenceBadge } from "../PrevalenceBadge";
 
@@ -11,6 +16,38 @@ export interface AggregateItemRowProps {
   onExpandVariant?: (itemId: ItemId) => void;
   /** Whether this row's inline variant view is expanded. */
   isExpanded?: boolean;
+  /** Section ID from the parent AggregateSection — drives metadata rendering. */
+  sectionId?: string;
+}
+
+/* ---- Section metadata helpers ---- */
+
+const FILE_TYPE_LABELS: Record<string, string> = {
+  elf_binary: "ELF Binary",
+  shell_script: "Shell Script",
+  data: "Data",
+  text: "Text",
+  symlink: "Symlink",
+  directory: "Directory",
+};
+
+/** Map a backend file_type slug to a human-readable label. */
+export function formatFileType(fileType: string): string {
+  if (FILE_TYPE_LABELS[fileType]) return FILE_TYPE_LABELS[fileType];
+  // Title-case unknown types: "python_script" → "Python Script"
+  return fileType
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** Format byte count to a human-readable size string. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 export function attentionDisplayLabel(level: string): string {
@@ -92,6 +129,7 @@ export function AggregateItemRow({
   ack: _ack,
   onExpandVariant,
   isExpanded = false,
+  sectionId,
 }: AggregateItemRowProps) {
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
@@ -111,6 +149,81 @@ export function AggregateItemRow({
   const handleRowClick = () => {
     if (isDecisionSection) onExpandVariant?.(item.item_id);
   };
+
+  /* Section-specific metadata fragments */
+  let sectionMeta: React.ReactNode = null;
+
+  if (sectionId === "language_packages" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as LanguagePackageMetadata;
+    sectionMeta = (
+      <span className="aggregate-item-row__section-meta">
+        <Label
+          color="blue"
+          isCompact
+          data-testid="section-meta-ecosystem"
+          className="aggregate-item-row__ecosystem"
+        >
+          {meta.ecosystem}
+        </Label>
+        <span
+          className={`aggregate-item-row__confidence aggregate-item-row__confidence--${meta.confidence}`}
+          data-testid="section-meta-confidence"
+        >
+          {meta.confidence}
+        </span>
+        <Label
+          color="grey"
+          isCompact
+          data-testid="section-meta-pkg-count"
+          className="aggregate-item-row__pkg-count"
+        >
+          {meta.package_count} packages
+        </Label>
+        {meta.manifest_basis != null && (
+          <span
+            className="aggregate-item-row__manifest-basis"
+            data-testid="section-meta-manifest-basis"
+          >
+            {meta.manifest_basis}
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  if (sectionId === "unmanaged_files" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as UnmanagedFileMetadata;
+    sectionMeta = (
+      <span className="aggregate-item-row__section-meta">
+        <Label
+          color="blue"
+          isCompact
+          data-testid="section-meta-file-type"
+          className="aggregate-item-row__file-type"
+        >
+          {formatFileType(meta.file_type)}
+        </Label>
+        <Label
+          color="grey"
+          isCompact
+          data-testid="section-meta-size"
+          className="aggregate-item-row__file-size"
+        >
+          {formatSize(meta.size)}
+        </Label>
+        {meta.under_var && (
+          <span
+            className="aggregate-item-row__var-warning"
+            data-testid="section-meta-var-warning"
+            title="File is under /var — may be ephemeral or runtime-generated"
+            aria-label="/var warning"
+          >
+            &#9888;
+          </span>
+        )}
+      </span>
+    );
+  }
 
   return (
     <div
@@ -138,6 +251,8 @@ export function AggregateItemRow({
       )}
 
       <div className="aggregate-item-row__name">{name}</div>
+
+      {sectionMeta}
 
       {locked && (
         <Label

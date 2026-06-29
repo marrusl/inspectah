@@ -67,6 +67,50 @@
   font-size: var(--pf-t--global--font--size--body--default);
 }
 
+/* --- Section-specific metadata --- */
+
+.aggregate-item-row__section-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs);
+  flex-shrink: 0;
+}
+
+.aggregate-item-row__confidence {
+  display: inline-block;
+  padding: 1px var(--pf-t--global--spacer--xs);
+  border-radius: var(--pf-t--global--border--radius--small);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.aggregate-item-row__confidence--high {
+  background-color: var(--pf-t--global--color--status--success--100, #f3faf2);
+  color: #1e4620;
+}
+
+.aggregate-item-row__confidence--medium {
+  background-color: var(--pf-t--global--color--status--warning--100, #fef6e7);
+  color: #795600;
+}
+
+.aggregate-item-row__confidence--low {
+  background-color: var(--pf-t--global--color--status--danger--100, #faeaea);
+  color: #7d1007;
+}
+
+.aggregate-item-row__manifest-basis {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+}
+
+.aggregate-item-row__var-warning {
+  font-size: var(--pf-t--global--font--size--body--default);
+  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  cursor: default;
+}
+
 /* Prevalence badge styles are in App.css (.prevalence-badge) */
 
 .aggregate-item-row__variants {

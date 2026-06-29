@@ -128,7 +128,13 @@ export function AggregateSectionContent({
 
   if (!section) return null;
 
-  const rowProps = { isDecisionSection, onToggle, ack, onExpandVariant };
+  const rowProps = {
+    isDecisionSection,
+    onToggle,
+    ack,
+    onExpandVariant,
+    sectionId: section.id,
+  };
 
   const isItemExpanded = (item: AggregateItem) =>
     expandedItemId != null &&
