@@ -52,29 +52,61 @@ fn repo_matches_enabled(source_repo: &str, enabled_repos: &[String]) -> bool {
         .any(|full_id| full_id.to_lowercase().contains(&short))
 }
 
+/// Query `dnf repoquery --available` to get the set of package names
+/// available from any enabled repository. Returns `None` if the command
+/// fails, so callers can fall back gracefully.
+fn get_available_packages(exec: &dyn Executor) -> Option<std::collections::HashSet<String>> {
+    let result = exec.run(
+        "dnf",
+        &[
+            "repoquery",
+            "--available",
+            "--queryformat",
+            "%{name}\n",
+            "-q",
+        ],
+    );
+    if result.exit_code != 0 {
+        return None;
+    }
+    Some(
+        result
+            .stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+    )
+}
+
 /// Identify repo-less packages and scan `/var/cache/dnf/` for cached RPMs.
 ///
 /// A package is repo-less when:
 /// 1. `source_repo` is empty (no repo recorded), OR
 /// 2. `source_repo` names a repo not in `dnf repolist --enabled`
 ///
-/// For each repo-less package, checks whether a matching `.rpm` file
-/// exists in the dnf cache. Found RPMs get `repoless_cached = true`
+/// Packages that fail conditions 1 or 2 get a secondary availability
+/// check: if `dnf repoquery --available` confirms the package exists in
+/// an enabled repo, it is NOT repo-less. This catches packages installed
+/// during OS setup (`from_repo = "anaconda"`) or via `rpm -i`
+/// (`@commandline`) that are perfectly available in standard repos.
+///
+/// For each truly repo-less package, checks whether a matching `.rpm`
+/// file exists in the dnf cache. Found RPMs get `repoless_cached = true`
 /// and `cache_path` set; missing RPMs get an annotation directing the
 /// user toward manual resolution.
 pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageEntry]) {
     let enabled_repos = get_enabled_repos(exec);
 
-    // Identify which packages are repo-less.
-    // When dnf repolist failed (None), only process packages with empty
-    // source_repo -- skip the disabled-repo branch entirely to avoid
-    // false-flagging every package as repo-less.
-    let repoless_indices: Vec<usize> = packages
+    // Phase 1: identify candidates whose source_repo doesn't match an
+    // enabled repo. These are candidates, not confirmed repo-less —
+    // the availability check in phase 2 may clear them.
+    let candidate_indices: Vec<usize> = packages
         .iter()
         .enumerate()
         .filter(|(_, p)| {
             if p.source_repo.is_empty() {
-                true // Always repo-less: no repo recorded
+                true // Always a candidate: no repo recorded
             } else {
                 match &enabled_repos {
                     Some(repos) => !repo_matches_enabled(&p.source_repo, repos),
@@ -83,6 +115,23 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
             }
         })
         .map(|(i, _)| i)
+        .collect();
+
+    if candidate_indices.is_empty() {
+        return;
+    }
+
+    // Phase 2: secondary availability check. Packages from pseudo-repos
+    // like "anaconda" or "@commandline" may be available in real repos.
+    let available = get_available_packages(exec);
+    let repoless_indices: Vec<usize> = candidate_indices
+        .into_iter()
+        .filter(|&i| {
+            match &available {
+                Some(avail) => !avail.contains(&packages[i].name),
+                None => true, // repoquery failed -- keep candidate as repo-less
+            }
+        })
         .collect();
 
     if repoless_indices.is_empty() {
@@ -159,9 +208,18 @@ mod tests {
         }
     }
 
-    /// Build a MockExecutor with enabled repos and cache listing.
+    /// Build a MockExecutor with enabled repos, available packages, and cache listing.
     fn build_repoless_executor(
         enabled_repos_stdout: &str,
+        cache_listing_stdout: &str,
+    ) -> MockExecutor {
+        build_repoless_executor_with_available(enabled_repos_stdout, "", cache_listing_stdout)
+    }
+
+    /// Build a MockExecutor with enabled repos, available package names, and cache listing.
+    fn build_repoless_executor_with_available(
+        enabled_repos_stdout: &str,
+        available_stdout: &str,
         cache_listing_stdout: &str,
     ) -> MockExecutor {
         MockExecutor::new()
@@ -169,6 +227,14 @@ mod tests {
                 "dnf repolist --enabled -q",
                 ExecResult {
                     stdout: enabled_repos_stdout.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "dnf repoquery --available --queryformat %{name}\n -q",
+                ExecResult {
+                    stdout: available_stdout.into(),
                     exit_code: 0,
                     ..Default::default()
                 },
@@ -272,11 +338,13 @@ mod tests {
     }
 
     #[test]
-    fn anaconda_repo_still_flagged_as_repoless() {
-        // anaconda is the install-time source, not a real repo.
-        // No RHEL repo ID contains "anaconda".
-        let exec = build_repoless_executor(
+    fn anaconda_package_available_in_repo_not_flagged() {
+        // anaconda is the install-time source, not a real repo. But if
+        // the package IS available in an enabled repo (the common case
+        // for base OS packages), it should NOT be flagged as repo-less.
+        let exec = build_repoless_executor_with_available(
             "repo id                       repo name\nrhel-9-for-x86_64-appstream-rpms  RHEL 9 AppStream\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
+            "kernel\nbash\nglibc\naudit\n",
             "",
         );
 
@@ -284,12 +352,52 @@ mod tests {
         scan_dnf_cache_for_repoless(&exec, &mut packages);
 
         assert!(
-            !packages[0].repoless_annotation.is_empty(),
-            "anaconda should be flagged as repo-less"
+            packages[0].repoless_annotation.is_empty(),
+            "anaconda package available in repos should not be flagged"
         );
+    }
+
+    #[test]
+    fn anaconda_package_not_available_still_flagged() {
+        // A package from anaconda that is NOT in any enabled repo
+        // (e.g., a custom installer-only package) should still be flagged.
+        let exec = build_repoless_executor_with_available(
+            "repo id                       repo name\nrhel-9-for-x86_64-appstream-rpms  RHEL 9 AppStream\n",
+            "bash\nhttpd\n",
+            "",
+        );
+
+        let mut packages = vec![pkg(
+            "custom-installer-pkg",
+            "1.0",
+            "1.el9",
+            "x86_64",
+            "anaconda",
+        )];
+        scan_dnf_cache_for_repoless(&exec, &mut packages);
+
         assert!(
-            packages[0].repoless_annotation.contains("anaconda"),
-            "annotation should mention the anaconda repo"
+            !packages[0].repoless_annotation.is_empty(),
+            "anaconda package NOT available should be flagged"
+        );
+    }
+
+    #[test]
+    fn commandline_package_available_not_flagged() {
+        // @commandline packages (installed via rpm -i) that are available
+        // in an enabled repo should not be flagged as repo-less.
+        let exec = build_repoless_executor_with_available(
+            "repo id                       repo name\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
+            "epel-release\nbash\n",
+            "",
+        );
+
+        let mut packages = vec![pkg("epel-release", "9", "7.el9", "noarch", "@commandline")];
+        scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+        assert!(
+            packages[0].repoless_annotation.is_empty(),
+            "@commandline package available in repos should not be flagged"
         );
     }
 
