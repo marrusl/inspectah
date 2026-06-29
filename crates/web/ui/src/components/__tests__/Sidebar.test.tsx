@@ -233,7 +233,7 @@ describe("Sidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("services");
   });
 
-  it("shows Language Packages in review group when data exists", () => {
+  it("shows Language Packages in review group unconditionally", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -242,14 +242,13 @@ describe("Sidebar", () => {
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
         viewData={MOCK_VIEW_DATA}
-        hasLanguagePackages={true}
         hasUnmanagedScan={true}
       />,
     );
     expect(screen.getByText("Language Packages")).toBeInTheDocument();
   });
 
-  it("shows Unmanaged Files section when scan data exists", () => {
+  it("shows Unmanaged Files section unconditionally", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -258,14 +257,13 @@ describe("Sidebar", () => {
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
         viewData={MOCK_VIEW_DATA}
-        hasUnmanagedFiles={true}
         hasUnmanagedScan={true}
       />,
     );
     expect(screen.getByText("Unmanaged Files")).toBeInTheDocument();
   });
 
-  it("hides Language Packages when no data", () => {
+  it("shows 0 count for Language Packages when no data", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -274,11 +272,11 @@ describe("Sidebar", () => {
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
         viewData={MOCK_VIEW_DATA}
-        hasLanguagePackages={false}
         hasUnmanagedScan={true}
       />,
     );
-    expect(screen.queryByText("Language Packages")).not.toBeInTheDocument();
+    expect(screen.getByText("Language Packages")).toBeInTheDocument();
+    // Should show 0 badge when no language package data
   });
 
   it("shows discoverability hint when unmanaged scan was not used", () => {

@@ -12,14 +12,15 @@ import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 
-/** Base review section IDs (always present). Language Packages and Unmanaged Files
- *  are conditionally inserted after Containers when their data is available. */
+/** Review section IDs (always present). */
 const BASE_REVIEW_SECTIONS = [
   { id: "packages", label: "Packages" },
   { id: "configs", label: "Config Files" },
   { id: "users_groups", label: "Users & Groups" },
   { id: "services", label: "Services" },
   { id: "containers", label: "Containers" },
+  { id: "language_packages", label: "Language Packages" },
+  { id: "unmanaged_files", label: "Unmanaged Files" },
   { id: "system_tuning", label: "System Tuning" },
 ];
 
@@ -45,10 +46,6 @@ export interface SidebarProps {
   viewData?: ViewResponse | null;
   /** Number of user decisions (for the Users & Groups badge). */
   userDecisionCount?: number;
-  /** Whether the snapshot contains language package data. */
-  hasLanguagePackages?: boolean;
-  /** Whether the snapshot contains unmanaged file data. */
-  hasUnmanagedFiles?: boolean;
   /** Whether the snapshot was collected with --include-unmanaged. */
   hasUnmanagedScan?: boolean;
   /** When true, renders as a fixed overlay with backdrop. */
@@ -128,32 +125,12 @@ export function Sidebar({
   health,
   viewData,
   userDecisionCount,
-  hasLanguagePackages = false,
-  hasUnmanagedFiles = false,
   hasUnmanagedScan = false,
   overlay = false,
   onClose,
   searchSlot,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
-
-  /** Build the review sections list, conditionally inserting Language Packages
-   *  and Unmanaged Files after Containers. */
-  const reviewSections = useMemo(() => {
-    const result = [...BASE_REVIEW_SECTIONS];
-    // Insert after Containers (index 4), before System Tuning (index 5)
-    const insertIdx = result.findIndex((s) => s.id === "system_tuning");
-    const at = insertIdx >= 0 ? insertIdx : result.length;
-    const toInsert: { id: string; label: string }[] = [];
-    if (hasLanguagePackages) {
-      toInsert.push({ id: "language_packages", label: "Language Packages" });
-    }
-    if (hasUnmanagedFiles) {
-      toInsert.push({ id: "unmanaged_files", label: "Unmanaged Files" });
-    }
-    result.splice(at, 0, ...toInsert);
-    return result;
-  }, [hasLanguagePackages, hasUnmanagedFiles]);
 
   // Focus trap and Escape handler for overlay mode
   useEffect(() => {
@@ -227,7 +204,7 @@ export function Sidebar({
       {searchSlot}
       <Nav aria-label="Sections">
         <NavGroup title="Review">
-          {reviewSections.map((sec) => (
+          {BASE_REVIEW_SECTIONS.map((sec) => (
             <NavItem
               key={sec.id}
               itemId={sec.id}

@@ -614,8 +614,6 @@ function SingleHostApp({
                   health={health.data}
                   viewData={view.data}
                   userDecisionCount={view.data?.users_groups_decisions?.length}
-                  hasLanguagePackages={!!view.data?.language_packages?.length}
-                  hasUnmanagedFiles={!!view.data?.unmanaged_files?.length}
                   hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                   searchSlot={searchSlot}
                 />
@@ -645,6 +643,8 @@ function SingleHostApp({
                 onToggleUnmanagedGroup={handleToggleUnmanagedGroup}
                 onUnmanagedIncludeNone={handleUnmanagedIncludeNone}
                 onUnmanagedResetAll={handleUnmanagedResetAll}
+                isPending={mutation.isPending}
+                hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                 rpmRowStates={rpmRowStates}
                 onUploadClick={handleUploadClick}
                 onRemoveRpmUpload={handleRemoveRpmUpload}
@@ -659,8 +659,6 @@ function SingleHostApp({
                 health={health.data}
                 viewData={view.data}
                 userDecisionCount={view.data?.users_groups_decisions?.length}
-                hasLanguagePackages={!!view.data?.language_packages?.length}
-                hasUnmanagedFiles={!!view.data?.unmanaged_files?.length}
                 hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                 overlay
                 onClose={closeSidebarOverlay}

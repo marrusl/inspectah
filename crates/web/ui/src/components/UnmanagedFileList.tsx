@@ -54,6 +54,8 @@ export interface UnmanagedFileListProps {
   revealItemId?: string;
   /** When true, force-expand all groups (section search is active). */
   searchActive?: boolean;
+  /** Whether the snapshot was collected with --include-unmanaged. */
+  hasUnmanagedScan?: boolean;
 }
 
 /**
@@ -294,6 +296,7 @@ export function UnmanagedFileList({
   onResetAll,
   revealItemId,
   searchActive,
+  hasUnmanagedScan = true,
 }: UnmanagedFileListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -442,6 +445,21 @@ export function UnmanagedFileList({
     },
     [moveFocus],
   );
+
+  if (groups.length === 0) {
+    if (!hasUnmanagedScan) {
+      return (
+        <Content component="p" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+          Not scanned — re-run with --include-unmanaged to catalog files from /opt, /srv, and /usr/local.
+        </Content>
+      );
+    }
+    return (
+      <Content component="p" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+        None detected.
+      </Content>
+    );
+  }
 
   return (
     <div

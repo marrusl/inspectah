@@ -79,6 +79,8 @@ export interface MainContentProps {
   onUnmanagedResetAll?: () => void;
   /** True while an optimistic mutation is in flight. */
   isPending?: boolean;
+  /** Whether the snapshot was collected with --include-unmanaged. */
+  hasUnmanagedScan?: boolean;
   /** Per-package RPM upload row states for repo-less packages. */
   rpmRowStates?: Record<string, import("../api/types").RpmUploadRowState>;
   /** Called when user clicks the upload button on a repo-less package row. */
@@ -131,6 +133,7 @@ export function MainContent({
   rpmRowStates,
   onUploadClick,
   onRemoveRpmUpload,
+  hasUnmanagedScan = false,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -571,6 +574,8 @@ export function MainContent({
 
   // Language Packages decision section
   if (activeSection === "language_packages") {
+    const hasFilter = filterText.trim().length > 0;
+    const noResults = hasFilter && filteredLangPkgs.length === 0;
     return (
       <div data-testid="section-language_packages">
         <Content>
@@ -585,7 +590,7 @@ export function MainContent({
             resultCount={filteredLangPkgs.length}
           />
         )}
-        {filterText.trim() && filteredLangPkgs.length === 0 ? (
+        {noResults ? (
           <EmptyState titleText="No items match your search" headingLevel="h3">
             <EmptyStateBody>
               <Button variant="link" onClick={() => setFilterText("")}>
@@ -609,6 +614,8 @@ export function MainContent({
 
   // Unmanaged Files decision section
   if (activeSection === "unmanaged_files") {
+    const hasFilter = filterText.trim().length > 0;
+    const noResults = hasFilter && filteredUnmanagedGroups.length === 0;
     return (
       <div data-testid="section-unmanaged_files">
         <Content>
@@ -626,7 +633,7 @@ export function MainContent({
             )}
           />
         )}
-        {filterText.trim() && filteredUnmanagedGroups.length === 0 ? (
+        {noResults ? (
           <EmptyState titleText="No items match your search" headingLevel="h3">
             <EmptyStateBody>
               <Button variant="link" onClick={() => setFilterText("")}>
@@ -647,7 +654,8 @@ export function MainContent({
             onIncludeNone={onUnmanagedIncludeNone}
             onResetAll={onUnmanagedResetAll}
             revealItemId={revealItemId}
-            searchActive={!!filterText.trim()}
+            searchActive={hasFilter}
+            hasUnmanagedScan={hasUnmanagedScan}
           />
         )}
       </div>

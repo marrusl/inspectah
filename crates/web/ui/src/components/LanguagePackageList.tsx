@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Badge, Label } from "@patternfly/react-core";
+import { Badge, Label, Content } from "@patternfly/react-core";
 import type { LanguagePackageEnv } from "../api/types";
 
 /** Confidence-to-PatternFly Label color mapping per Plan 1 gate. */
@@ -38,6 +38,14 @@ export function LanguagePackageList({
     },
     [onToggle, isPending],
   );
+
+  if (environments.length === 0) {
+    return (
+      <Content component="p" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
+        None detected.
+      </Content>
+    );
+  }
 
   return (
     <div
