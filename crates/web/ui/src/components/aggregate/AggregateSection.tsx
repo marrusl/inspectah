@@ -1,5 +1,11 @@
 import { useState, useEffect } from "react";
-import type { AggregateSection, AggregateItem, ItemId } from "../../api/types";
+import type {
+  AggregateSection,
+  AggregateItem,
+  ItemId,
+  LanguagePackageMetadata,
+  UnmanagedFileMetadata,
+} from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import type { UseAggregateDiffResult } from "../../hooks/useAggregateDiff";
 import { ZoneGroup } from "./ZoneGroup";
@@ -31,14 +37,36 @@ export interface AggregateSectionContentProps {
   diffHook?: UseAggregateDiffResult;
 }
 
+/**
+ * Build searchable text for section-level filtering.
+ * Mirrors the enrichment in AggregateApp.itemSearchableText so that
+ * in-section filters match the same fields as global search.
+ */
+function itemFilterText(sectionId: string, item: AggregateItem): string {
+  const displayName = itemDisplayName(item.item_id);
+  if (sectionId === "language_packages" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as LanguagePackageMetadata;
+    const packageNames = (meta.packages ?? []).map((p) => p.name).join(" ");
+    return [displayName, meta.ecosystem, packageNames, meta.manifest_basis ?? ""]
+      .filter(Boolean)
+      .join(" ");
+  }
+  if (sectionId === "unmanaged_files" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as UnmanagedFileMetadata;
+    return [displayName, meta.file_type].filter(Boolean).join(" ");
+  }
+  return displayName;
+}
+
 function filterItems(
   items: AggregateItem[],
   filterText: string,
+  sectionId: string,
 ): AggregateItem[] {
   if (!filterText) return items;
   const lower = filterText.toLowerCase();
   return items.filter((item) =>
-    itemDisplayName(item.item_id).toLowerCase().includes(lower),
+    itemFilterText(sectionId, item).toLowerCase().includes(lower),
   );
 }
 
@@ -142,7 +170,7 @@ export function AggregateSectionContent({
 
   // Flat mode: section has items directly (aggregate-of-2 or no zones)
   if (!section.zones) {
-    const filtered = filterItems(section.items ?? [], filterText);
+    const filtered = filterItems(section.items ?? [], filterText, section.id);
     return (
       <div className="aggregate-section" data-testid="aggregate-section">
         {filtered.map((item) => {
@@ -181,12 +209,13 @@ export function AggregateSectionContent({
 
   // Zone mode: group items by consensus zone
   const zones = section.zones;
-  const consensusFiltered = filterItems(zones.consensus.items, filterText);
+  const consensusFiltered = filterItems(zones.consensus.items, filterText, section.id);
   const nearConsensusFiltered = filterItems(
     zones.near_consensus.items,
     filterText,
+    section.id,
   );
-  const divergentFiltered = filterItems(zones.divergent.items, filterText);
+  const divergentFiltered = filterItems(zones.divergent.items, filterText, section.id);
 
   // Count zones with unfiltered items for header suppression
   const populatedZones = [

@@ -57,6 +57,23 @@ function LanguagePackageDetail({ item }: { item: AggregateItem }) {
   );
 }
 
+/** Format bytes as a human-readable size string. */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** Format a snake_case file type as a human-readable label. */
+function formatFileType(fileType: string): string {
+  return fileType
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 function UnmanagedFileDetail({ item }: { item: AggregateItem }) {
   const meta = item.section_metadata as unknown as UnmanagedFileMetadata;
   if (!meta?.provenance) return null;
@@ -68,6 +85,25 @@ function UnmanagedFileDetail({ item }: { item: AggregateItem }) {
       className="item-detail-pane__section-detail"
       data-testid="detail-provenance"
     >
+      <div className="item-detail-pane__field">
+        <dt>File type</dt>
+        <dd data-testid="detail-file-type">{formatFileType(meta.file_type)}</dd>
+      </div>
+      <div className="item-detail-pane__field">
+        <dt>Size</dt>
+        <dd data-testid="detail-file-size">{formatFileSize(meta.size)}</dd>
+      </div>
+      {meta.under_var && (
+        <div
+          className="item-detail-pane__field item-detail-pane__warning"
+          data-testid="detail-var-warning"
+        >
+          <dt>Warning</dt>
+          <dd>
+            File is under /var — contents may not persist across image updates
+          </dd>
+        </div>
+      )}
       <div className="item-detail-pane__field">
         <dt>Last modified</dt>
         <dd data-testid="detail-last-modified">

@@ -207,6 +207,66 @@ describe("ItemDetailPane", () => {
       expect(within(prov).getByText("GID")).toBeInTheDocument();
     });
 
+    it("renders file type label", () => {
+      render(
+        <ItemDetailPane item={unmanagedItem} sectionId="unmanaged_files" />,
+      );
+
+      const el = screen.getByTestId("detail-file-type");
+      expect(el).toHaveTextContent("Elf Binary");
+    });
+
+    it("renders human-readable file size", () => {
+      render(
+        <ItemDetailPane item={unmanagedItem} sectionId="unmanaged_files" />,
+      );
+
+      const el = screen.getByTestId("detail-file-size");
+      // 1048576 bytes = 1.0 MB
+      expect(el).toHaveTextContent("1.0 MB");
+    });
+
+    it("shows /var warning when under_var is true", () => {
+      const varItem = makeItem({
+        item_id: {
+          kind: "UnmanagedFile",
+          key: { path: "/var/lib/splunk/data" },
+        },
+        section_metadata: {
+          file_type: "elf_binary",
+          size: 52000000,
+          under_var: true,
+          provenance: {
+            last_modified: 1700000000,
+            uid: 1001,
+            gid: 1001,
+            permissions: "0755",
+            writable_mount: true,
+            mutability: true,
+            service_working_dir: false,
+          },
+        },
+      });
+
+      render(
+        <ItemDetailPane item={varItem} sectionId="unmanaged_files" />,
+      );
+
+      const warning = screen.getByTestId("detail-var-warning");
+      expect(warning).toBeInTheDocument();
+      expect(warning).toHaveTextContent("/var");
+    });
+
+    it("omits /var warning when under_var is false", () => {
+      render(
+        <ItemDetailPane item={unmanagedItem} sectionId="unmanaged_files" />,
+      );
+
+      expect(
+        screen.queryByTestId("detail-var-warning"),
+      ).not.toBeInTheDocument();
+    });
+
     it("does not render provenance without sectionId", () => {
       render(<ItemDetailPane item={unmanagedItem} />);
 

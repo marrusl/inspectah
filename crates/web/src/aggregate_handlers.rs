@@ -1524,7 +1524,9 @@ fn build_language_package_metadata(
     };
 
     // Deterministic manifest_basis: priority order for well-known names,
-    // then sorted-key fallback for HashMap stability.
+    // then sorted-key fallback for HashMap stability, then method-based
+    // fallback for detection methods like "pip dist-info" that may not
+    // populate manifest_files.
     let manifest_basis = ["requirements.txt", "package-lock.json", "Gemfile.lock"]
         .iter()
         .find(|k| item.manifest_files.contains_key(**k))
@@ -1533,6 +1535,10 @@ fn build_language_package_metadata(
             let mut keys: Vec<&String> = item.manifest_files.keys().collect();
             keys.sort();
             keys.first().map(|k| k.to_string())
+        })
+        .or_else(|| match item.method.as_str() {
+            "pip dist-info" => Some("dist-info".to_string()),
+            _ => None,
         });
 
     let packages: Vec<LanguagePackageDto> = item
@@ -3300,6 +3306,78 @@ mod tests {
         assert!(
             items[0].variants.is_none(),
             "single unmanaged file should not have variants"
+        );
+    }
+
+    #[test]
+    fn pip_dist_info_manifest_basis_synthesized() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        // pip dist-info entry with NO manifest_files — manifest_basis
+        // should fall back to "dist-info" from the method name.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "system-pip".to_string(),
+                    path: "/usr/lib/python3.9/site-packages".to_string(),
+                    method: "pip dist-info".to_string(),
+                    confidence: "medium".to_string(),
+                    include: true,
+                    packages: vec![LanguagePackage {
+                        name: "setuptools".to_string(),
+                        version: "53.0.0".to_string(),
+                    }],
+                    manifest_files: std::collections::HashMap::new(),
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+        let items = section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        let meta = items[0]
+            .section_metadata
+            .as_ref()
+            .expect("section_metadata should be populated");
+
+        assert_eq!(
+            meta["manifest_basis"], "dist-info",
+            "pip dist-info items with empty manifest_files should get manifest_basis='dist-info'"
         );
     }
 }

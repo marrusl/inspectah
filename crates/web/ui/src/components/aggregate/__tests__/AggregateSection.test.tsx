@@ -230,4 +230,106 @@ describe("AggregateSectionContent", () => {
     expect(screen.queryByText("/etc/sysctl.conf")).not.toBeInTheDocument();
     expect(screen.queryByText("/etc/nginx/nginx.conf")).not.toBeInTheDocument();
   });
+
+  it("section filter matches language package names from section_metadata", () => {
+    const langItem = makeItem({
+      item_id: { kind: "LanguageEnv", key: { ecosystem: "pip", path: "/opt/app/venv" } },
+      section_metadata: {
+        ecosystem: "pip",
+        confidence: "high",
+        package_count: 2,
+        manifest_basis: "requirements.txt",
+        packages: [
+          { name: "flask", version: "2.3.3" },
+          { name: "requests", version: "2.31.0" },
+        ],
+      },
+    });
+    const otherItem = makeItem({
+      item_id: { kind: "LanguageEnv", key: { ecosystem: "npm", path: "/opt/other" } },
+      section_metadata: {
+        ecosystem: "npm",
+        confidence: "high",
+        package_count: 1,
+        manifest_basis: "package-lock.json",
+        packages: [{ name: "express", version: "4.18.0" }],
+      },
+    });
+
+    const section: AggregateSection = {
+      id: "language_packages",
+      display_name: "Language Packages",
+      is_decision_section: false,
+      items: [langItem, otherItem],
+    };
+
+    render(
+      <AggregateSectionContent
+        section={section}
+        filterText="flask"
+        isDecisionSection={false}
+        onToggle={vi.fn()}
+        ack={defaultAck}
+      />,
+    );
+
+    // flask matches first item's package list
+    expect(screen.getByText("pip:/opt/app/venv")).toBeInTheDocument();
+    expect(screen.queryByText("npm:/opt/other")).not.toBeInTheDocument();
+  });
+
+  it("section filter matches unmanaged file type from section_metadata", () => {
+    const elfItem = makeItem({
+      item_id: { kind: "UnmanagedFile", key: { path: "/opt/app/server" } },
+      section_metadata: {
+        file_type: "elf_binary",
+        size: 1048576,
+        under_var: false,
+        provenance: {
+          last_modified: 1700000000,
+          uid: 1000, gid: 1000,
+          permissions: "rwxr-xr-x",
+          writable_mount: false,
+          mutability: false,
+          service_working_dir: false,
+        },
+      },
+    });
+    const jarItem = makeItem({
+      item_id: { kind: "UnmanagedFile", key: { path: "/opt/app/lib.jar" } },
+      section_metadata: {
+        file_type: "jar",
+        size: 2048,
+        under_var: false,
+        provenance: {
+          last_modified: 1700000000,
+          uid: 1000, gid: 1000,
+          permissions: "rw-r--r--",
+          writable_mount: false,
+          mutability: false,
+          service_working_dir: false,
+        },
+      },
+    });
+
+    const section: AggregateSection = {
+      id: "unmanaged_files",
+      display_name: "Unmanaged Files",
+      is_decision_section: false,
+      items: [elfItem, jarItem],
+    };
+
+    render(
+      <AggregateSectionContent
+        section={section}
+        filterText="elf"
+        isDecisionSection={false}
+        onToggle={vi.fn()}
+        ack={defaultAck}
+      />,
+    );
+
+    expect(screen.getByText("/opt/app/server")).toBeInTheDocument();
+    expect(screen.queryByText("/opt/app/lib.jar")).not.toBeInTheDocument();
+  });
 });
