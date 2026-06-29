@@ -335,7 +335,7 @@ impl AggregateMergeable for SysctlOverride {
 // Non-RPM types
 // ---------------------------------------------------------------------------
 
-use crate::types::nonrpm::NonRpmItem;
+use crate::types::nonrpm::{NonRpmItem, UnmanagedFile, UnmanagedFileSection};
 
 impl AggregateMergeable for NonRpmItem {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -373,6 +373,35 @@ impl AggregateMergeable for NonRpmItem {
 
     fn set_include(&mut self, val: bool) {
         self.include = val;
+    }
+}
+
+impl AggregateMergeable for UnmanagedFile {
+    fn identity_key(&self) -> Cow<'_, str> {
+        // File path is the stable identity for unmanaged files.
+        Cow::Borrowed(&self.path)
+    }
+
+    fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
+        &mut self.aggregate
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = val;
+    }
+
+    fn content_variant_key(&self) -> Option<Cow<'_, str>> {
+        // Use the content hash to detect divergent file content across hosts.
+        // content_hash is added by Task 5a — empty in single-host mode.
+        if self.content_hash.is_empty() {
+            None
+        } else {
+            Some(Cow::Borrowed(&self.content_hash))
+        }
+    }
+
+    fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
+        Some(&mut self.variant_selection)
     }
 }
 
@@ -1743,6 +1772,36 @@ pub fn merge_nonrpm_sections(
     Some(NonRpmSoftwareSection { items, env_files })
 }
 
+/// Merge unmanaged file sections from multiple hosts.
+///
+/// Uses Plan 2's UnmanagedFileSection contract: `items` (not `files`),
+/// with `total_size` and `total_count` recomputed from merged items.
+pub fn merge_unmanaged_file_sections(
+    sections: Vec<Option<UnmanagedFileSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<UnmanagedFileSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let items = merge_items(
+        collect_items(&sections, |s| &s.items),
+        total_hosts,
+        hostnames,
+    );
+
+    // Recompute totals from merged items.
+    let total_size: u64 = items.iter().map(|f| f.size).sum();
+    let total_count = items.len();
+
+    Some(UnmanagedFileSection {
+        items,
+        total_size,
+        total_count,
+    })
+}
+
 /// Merge users/groups sections from multiple hosts.
 ///
 /// Users and groups are `Vec<serde_json::Value>` — deduplicated by the
@@ -2822,6 +2881,186 @@ mod tests {
         assert_eq!(agg.total, 2);
         assert!(
             !item.include,
+            "partial prevalence should default to include: false"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // UnmanagedFile merge tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unmanaged_file_merge_by_path_same_content() {
+        use crate::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // Same path + same content hash -> single merged item
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
+                include: true,
+                content_hash: "aaa111".to_string(),
+                ..Default::default()
+            }],
+            total_size: 52_000_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
+                include: true,
+                content_hash: "aaa111".to_string(),
+                ..Default::default()
+            }],
+            total_size: 52_000_000,
+            total_count: 1,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        // Same path + same content hash -> merged into one item.
+        assert_eq!(merged.items.len(), 1);
+        let file = &merged.items[0];
+        assert_eq!(file.path, "/opt/splunk/bin/splunkd");
+        let agg = file.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 2);
+        // Totals recomputed
+        assert_eq!(merged.total_count, 1);
+        assert_eq!(merged.total_size, 52_000_000);
+    }
+
+    #[test]
+    fn unmanaged_file_merge_by_path_different_content_creates_variants() {
+        use crate::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // Same path but different content hashes -> two variant entries
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
+                include: true,
+                content_hash: "aaa111".to_string(),
+                ..Default::default()
+            }],
+            total_size: 52_000_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/splunk/bin/splunkd".to_string(),
+                size: 52_000_000,
+                include: true,
+                content_hash: "bbb222".to_string(),
+                ..Default::default()
+            }],
+            total_size: 52_000_000,
+            total_count: 1,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        // Different content hashes -> two variant entries, each on one host.
+        assert_eq!(merged.items.len(), 2);
+        for file in &merged.items {
+            assert_eq!(file.path, "/opt/splunk/bin/splunkd");
+            let agg = file.aggregate.as_ref().unwrap();
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
+        }
+        // Totals recomputed from the two variant items
+        assert_eq!(merged.total_count, 2);
+        assert_eq!(merged.total_size, 104_000_000);
+    }
+
+    #[test]
+    fn unmanaged_file_merge_100_pct_prevalence_includes() {
+        use crate::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // File present on all hosts -> 100% -> include: true
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let file = &merged.items[0];
+        let agg = file.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.total, 2);
+        assert!(
+            file.include,
+            "100% prevalence should default to include: true"
+        );
+    }
+
+    #[test]
+    fn unmanaged_file_merge_partial_prevalence_excludes() {
+        use crate::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // File on 1 of 2 hosts -> 50% -> include: false
+        let section_a = Some(UnmanagedFileSection {
+            items: vec![UnmanagedFile {
+                path: "/opt/app/server".to_string(),
+                size: 10_000,
+                include: true,
+                ..Default::default()
+            }],
+            total_size: 10_000,
+            total_count: 1,
+        });
+        let section_b = Some(UnmanagedFileSection {
+            items: vec![],
+            total_size: 0,
+            total_count: 0,
+        });
+
+        let merged = merge_unmanaged_file_sections(
+            vec![section_a, section_b],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        let file = &merged.items[0];
+        let agg = file.aggregate.as_ref().unwrap();
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.total, 2);
+        assert!(
+            !file.include,
             "partial prevalence should default to include: false"
         );
     }

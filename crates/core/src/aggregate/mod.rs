@@ -13,7 +13,7 @@ use self::merge::{
     merge_config_sections, merge_container_sections, merge_kernelboot_sections,
     merge_network_sections, merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections,
     merge_selinux_sections, merge_service_sections, merge_storage_sections,
-    merge_usersgroups_sections,
+    merge_unmanaged_file_sections, merge_usersgroups_sections,
 };
 use self::validate::{AggregateValidationError, AggregateWarning, extract_hostname};
 
@@ -104,6 +104,10 @@ pub fn merge_snapshots(
     let nonrpm_sections: Vec<Option<_>> = sorted_snapshots
         .iter()
         .map(|s| s.non_rpm_software.clone())
+        .collect();
+    let unmanaged_sections: Vec<Option<_>> = sorted_snapshots
+        .iter()
+        .map(|s| s.unmanaged_files.clone())
         .collect();
     let kernelboot_sections: Vec<Option<_>> = sorted_snapshots
         .iter()
@@ -245,6 +249,7 @@ pub fn merge_snapshots(
     merged.scheduled_tasks = merge_scheduled_sections(scheduled_sections, total, &hostnames);
     merged.containers = merge_container_sections(container_sections, total, &hostnames);
     merged.non_rpm_software = merge_nonrpm_sections(nonrpm_sections, total, &hostnames);
+    merged.unmanaged_files = merge_unmanaged_file_sections(unmanaged_sections, total, &hostnames);
     merged.kernel_boot = merge_kernelboot_sections(kernelboot_sections, total, &hostnames);
     merged.selinux = merge_selinux_sections(selinux_sections, total, &hostnames);
     merged.users_groups = merge_usersgroups_sections(usergroup_sections, total, &hostnames);
@@ -267,6 +272,7 @@ fn compute_section_host_counts(snapshots: &[InspectionSnapshot]) -> BTreeMap<Str
         ("scheduled_tasks", |s| s.scheduled_tasks.is_some()),
         ("containers", |s| s.containers.is_some()),
         ("non_rpm_software", |s| s.non_rpm_software.is_some()),
+        ("unmanaged_files", |s| s.unmanaged_files.is_some()),
         ("kernel_boot", |s| s.kernel_boot.is_some()),
         ("selinux", |s| s.selinux.is_some()),
         ("users_groups", |s| s.users_groups.is_some()),
