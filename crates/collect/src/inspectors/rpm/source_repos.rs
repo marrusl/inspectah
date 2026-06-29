@@ -9,7 +9,7 @@
 //! NeedsReview.
 
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::rpm::{PackageEntry, RepoFile};
 use std::collections::{HashMap, HashSet};
 
 /// Maximum number of package names per dnf/rpm invocation.
@@ -152,6 +152,56 @@ fn try_rpm_source_repo(
                         .or_insert_with(|| repo.to_string());
                 }
             }
+        }
+    }
+}
+
+/// Extract INI-style section IDs (`[repo-id]`) from `.repo` file content.
+fn extract_section_ids(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                Some(trimmed[1..trimmed.len() - 1].to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Normalize `source_repo` short names to full repo IDs.
+///
+/// `populate_source_repos` stores install-time short names like `AppStream`
+/// or `baseos` (from `%{from_repo}`). The `.repo` config files use full IDs
+/// like `rhel-9-for-aarch64-appstream-rpms`. This function maps short names
+/// to full IDs using case-insensitive substring matching so that package
+/// tables and config trees display the same identifier.
+///
+/// Packages with empty `source_repo` or no matching full ID are left
+/// unchanged.
+pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoFile]) {
+    // Collect all section IDs from repo file content.
+    let full_ids: Vec<String> = repo_files
+        .iter()
+        .flat_map(|rf| extract_section_ids(&rf.content))
+        .collect();
+
+    if full_ids.is_empty() {
+        return;
+    }
+
+    for pkg in packages.iter_mut() {
+        if pkg.source_repo.is_empty() {
+            continue;
+        }
+        let short = pkg.source_repo.to_lowercase();
+        if let Some(full_id) = full_ids
+            .iter()
+            .find(|id| id.to_lowercase().contains(&short))
+        {
+            pkg.source_repo = full_id.clone();
         }
     }
 }
@@ -411,5 +461,109 @@ Repository  : baseos
 
         // Both should get "baseos" (first seen wins in repo_map)
         assert!(packages.iter().all(|p| p.source_repo == "baseos"));
+    }
+
+    // --- normalize_source_repos tests ---
+
+    fn pkg_with_repo(name: &str, source_repo: &str) -> PackageEntry {
+        PackageEntry {
+            name: name.into(),
+            source_repo: source_repo.into(),
+            state: PackageState::Added,
+            ..Default::default()
+        }
+    }
+
+    fn repo_file(content: &str) -> RepoFile {
+        RepoFile {
+            path: "/etc/yum.repos.d/test.repo".into(),
+            content: content.into(),
+            is_default_repo: false,
+            include: true,
+            locked: false,
+            aggregate: None,
+        }
+    }
+
+    #[test]
+    fn test_normalize_appstream_to_full_id() {
+        let repo_files = vec![repo_file(
+            "[rhel-9-for-aarch64-appstream-rpms]\nname=RHEL 9 AppStream\n",
+        )];
+        let mut packages = vec![pkg_with_repo("httpd", "AppStream")];
+
+        normalize_source_repos(&mut packages, &repo_files);
+
+        assert_eq!(
+            packages[0].source_repo, "rhel-9-for-aarch64-appstream-rpms",
+            "AppStream should normalize to full repo ID"
+        );
+    }
+
+    #[test]
+    fn test_normalize_baseos_to_full_id() {
+        let repo_files = vec![repo_file(
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=RHEL 9 BaseOS\n[rhel-9-for-x86_64-appstream-rpms]\nname=RHEL 9 AppStream\n",
+        )];
+        let mut packages = vec![
+            pkg_with_repo("bash", "baseos"),
+            pkg_with_repo("glibc", "BaseOS"),
+        ];
+
+        normalize_source_repos(&mut packages, &repo_files);
+
+        assert_eq!(packages[0].source_repo, "rhel-9-for-x86_64-baseos-rpms");
+        assert_eq!(packages[1].source_repo, "rhel-9-for-x86_64-baseos-rpms");
+    }
+
+    #[test]
+    fn test_normalize_anaconda_stays_unchanged() {
+        let repo_files = vec![repo_file(
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=RHEL 9 BaseOS\n",
+        )];
+        let mut packages = vec![pkg_with_repo("kernel", "anaconda")];
+
+        normalize_source_repos(&mut packages, &repo_files);
+
+        assert_eq!(
+            packages[0].source_repo, "anaconda",
+            "anaconda has no matching repo ID, should stay as-is"
+        );
+    }
+
+    #[test]
+    fn test_normalize_empty_source_repo_unchanged() {
+        let repo_files = vec![repo_file(
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=RHEL 9 BaseOS\n",
+        )];
+        let mut packages = vec![pkg_with_repo("custom-tool", "")];
+
+        normalize_source_repos(&mut packages, &repo_files);
+
+        assert_eq!(
+            packages[0].source_repo, "",
+            "empty source_repo should stay empty"
+        );
+    }
+
+    #[test]
+    fn test_normalize_no_repo_files_is_noop() {
+        let repo_files: Vec<RepoFile> = Vec::new();
+        let mut packages = vec![pkg_with_repo("httpd", "AppStream")];
+
+        normalize_source_repos(&mut packages, &repo_files);
+
+        assert_eq!(
+            packages[0].source_repo, "AppStream",
+            "no repo files means no normalization"
+        );
+    }
+
+    #[test]
+    fn test_extract_section_ids() {
+        let content =
+            "[rhel-9-baseos]\nname=BaseOS\nenabled=1\n\n[rhel-9-appstream]\nname=AppStream\n";
+        let ids = extract_section_ids(content);
+        assert_eq!(ids, vec!["rhel-9-baseos", "rhel-9-appstream"]);
     }
 }

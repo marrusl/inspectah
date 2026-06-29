@@ -437,6 +437,10 @@ impl Inspector for RpmInspector {
             });
         }
 
+        // 9a. Normalize source_repo short names to full repo IDs so
+        //     package tables and config trees use the same identifier.
+        source_repos::normalize_source_repos(&mut packages_added, &supp.repo_files);
+
         // 10. Build RpmSection
         let section = RpmSection {
             packages_added,
