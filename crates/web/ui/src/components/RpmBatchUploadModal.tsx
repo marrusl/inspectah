@@ -11,6 +11,7 @@ import {
   List,
   ListItem,
   Label,
+  ExpandableSection,
 } from "@patternfly/react-core";
 import {
   CheckCircleIcon,
@@ -78,6 +79,7 @@ export function RpmBatchUploadModal({
 }: RpmBatchUploadModalProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isChecklistExpanded, setIsChecklistExpanded] = useState(true);
 
   // Build a set of canonical keys for quick lookup, plus a map from bare name
   // to canonical keys to handle matching when canonical extraction fails.
@@ -210,6 +212,14 @@ export function RpmBatchUploadModal({
     onClose();
   }, [onClose]);
 
+  const matchedSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of matchResult.matched) {
+      s.add(m.packageName);
+    }
+    return s;
+  }, [matchResult.matched]);
+
   if (!isOpen) return null;
 
   const canConfirm =
@@ -226,6 +236,53 @@ export function RpmBatchUploadModal({
         title={`Upload RPMs (${needsUploadPackages.length} packages need RPMs)`}
       />
       <ModalBody>
+        <ExpandableSection
+          toggleContent={
+            <span className="inspectah-rpm-batch__checklist-toggle">
+              Packages needing RPMs ({needsUploadPackages.length})
+            </span>
+          }
+          isExpanded={isChecklistExpanded}
+          onToggle={(_event, expanded) => setIsChecklistExpanded(expanded)}
+          aria-label="Packages needing RPMs"
+          className="inspectah-rpm-batch__checklist"
+        >
+          <Content
+            component="p"
+            className="inspectah-rpm-batch__checklist-summary"
+          >
+            {matchedSet.size} of {needsUploadPackages.length} packages matched
+          </Content>
+          <div
+            className="inspectah-rpm-batch__checklist-labels"
+            role="list"
+            aria-label="Package checklist"
+          >
+            {needsUploadPackages.map((pkg) => (
+              <span key={pkg} role="listitem">
+                {matchedSet.has(pkg) ? (
+                  <Label
+                    color="green"
+                    isCompact
+                    icon={<CheckCircleIcon />}
+                    className="inspectah-rpm-batch__checklist-label"
+                  >
+                    {pkg}
+                  </Label>
+                ) : (
+                  <Label
+                    color="grey"
+                    isCompact
+                    className="inspectah-rpm-batch__checklist-label"
+                  >
+                    {pkg}
+                  </Label>
+                )}
+              </span>
+            ))}
+          </div>
+        </ExpandableSection>
+
         <div
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}

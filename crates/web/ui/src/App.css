@@ -1071,6 +1071,30 @@ body,
   margin-bottom: var(--pf-t--global--spacer--sm);
 }
 
+.inspectah-rpm-batch__checklist {
+  margin-bottom: var(--pf-t--global--spacer--md);
+}
+
+.inspectah-rpm-batch__checklist-toggle {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-rpm-batch__checklist-summary {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  margin-bottom: var(--pf-t--global--spacer--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-rpm-batch__checklist-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--xs);
+}
+
+.inspectah-rpm-batch__checklist-label {
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
 /* ─── RPM upload blocked row ────────────────────────────────────────── */
 
 .inspectah-package-row--blocked {
