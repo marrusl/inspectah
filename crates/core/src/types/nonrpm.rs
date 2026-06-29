@@ -1,4 +1,4 @@
-use super::aggregate::AggregatePrevalence;
+use super::aggregate::{AggregatePrevalence, VariantSelection};
 use super::config::ConfigFileEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -156,6 +156,19 @@ pub struct UnmanagedFile {
     pub link_target: String,
     /// Aggregate prevalence (populated in aggregate mode)
     pub aggregate: Option<AggregatePrevalence>,
+    /// SHA-256 hash of the actual file content, for aggregate variant
+    /// detection. Empty in single-host mode — populated by the collector
+    /// during scan (the file content is read for bundling anyway when
+    /// --include-unmanaged is used, so hashing adds negligible cost).
+    /// Same file content across hosts produces the same hash; different
+    /// content at the same path produces different hashes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_hash: String,
+    /// Variant selection state for aggregate mode.
+    /// Only meaningful when multiple hosts have the same file path but
+    /// different content hashes.
+    #[serde(default)]
+    pub variant_selection: VariantSelection,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -287,5 +300,74 @@ mod tests {
         assert!(!deser.provenance.mutable);
         assert!(!deser.provenance.writable_mount);
         assert!(!deser.provenance.service_working_dir);
+        assert!(deser.content_hash.is_empty());
+        assert_eq!(deser.variant_selection, VariantSelection::default());
+    }
+
+    #[test]
+    fn unmanaged_file_aggregate_fields_roundtrip() {
+        let uf = UnmanagedFile {
+            path: "/opt/splunk/bin/splunkd".to_string(),
+            size: 52_000_000,
+            content_hash: "abc123def456".to_string(),
+            variant_selection: VariantSelection::Selected,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&uf).unwrap();
+        assert!(json.contains("content_hash"));
+        assert!(json.contains("variant_selection"));
+        let parsed: UnmanagedFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(uf.content_hash, parsed.content_hash);
+        assert_eq!(uf.variant_selection, parsed.variant_selection);
+    }
+
+    #[test]
+    fn unmanaged_file_aggregate_fields_default_from_plan2_json() {
+        // Simulates deserializing a Plan 2 snapshot that lacks
+        // content_hash and variant_selection.
+        let json = r#"{"path":"/opt/app/bin","size":1000,"file_type":"elf_binary","include":true}"#;
+        let parsed: UnmanagedFile = serde_json::from_str(json).unwrap();
+        assert!(parsed.content_hash.is_empty());
+        assert_eq!(parsed.variant_selection, VariantSelection::default());
+    }
+
+    #[test]
+    fn unmanaged_file_empty_content_hash_omitted_in_json() {
+        let uf = UnmanagedFile {
+            path: "/opt/app/bin".to_string(),
+            content_hash: String::new(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&uf).unwrap();
+        assert!(
+            !json.contains("content_hash"),
+            "empty content_hash should be omitted"
+        );
+    }
+
+    #[test]
+    fn same_content_produces_same_hash() {
+        // content_hash is a SHA-256 of the actual file bytes.
+        // Two hosts with identical file content at the same path
+        // must produce the same variant key.
+        use sha2::{Digest, Sha256};
+        let content = b"#!/bin/bash\necho hello\n";
+        let hash1 = format!("{:x}", Sha256::digest(content));
+        let hash2 = format!("{:x}", Sha256::digest(content));
+        assert_eq!(
+            hash1, hash2,
+            "identical content must produce identical hash"
+        );
+    }
+
+    #[test]
+    fn different_content_produces_different_hash() {
+        use sha2::{Digest, Sha256};
+        let hash1 = format!("{:x}", Sha256::digest(b"version 1.0"));
+        let hash2 = format!("{:x}", Sha256::digest(b"version 2.0"));
+        assert_ne!(
+            hash1, hash2,
+            "different content must produce different hash"
+        );
     }
 }
