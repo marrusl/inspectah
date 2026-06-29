@@ -233,3 +233,45 @@ fn dnf_repolist_failure_skips_named_repo_packages() {
         "custom-tool with empty source_repo should be detected even when dnf fails"
     );
 }
+
+#[test]
+fn short_name_matches_full_repo_id() {
+    // Real RHEL scenario: dnf repolist returns full repo IDs,
+    // source_repo has install-time short names from %{from_repo}.
+    let exec = build_executor(
+        "repo id                              repo name\nrhel-9-for-x86_64-appstream-rpms     RHEL 9 AppStream\nrhel-9-for-x86_64-baseos-rpms        RHEL 9 BaseOS\n",
+        "",
+    );
+
+    let mut packages = vec![
+        pkg("httpd", "2.4.57", "5.el9", "x86_64", "AppStream"),
+        pkg("bash", "5.2.26", "3.el9", "x86_64", "baseos"),
+    ];
+    scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+    assert!(
+        packages[0].repoless_annotation.is_empty(),
+        "AppStream should match rhel-9-for-x86_64-appstream-rpms via substring"
+    );
+    assert!(
+        packages[1].repoless_annotation.is_empty(),
+        "baseos should match rhel-9-for-x86_64-baseos-rpms via substring"
+    );
+}
+
+#[test]
+fn anaconda_source_repo_still_flagged() {
+    // anaconda is the install-time source, not a real repo.
+    let exec = build_executor(
+        "repo id                              repo name\nrhel-9-for-x86_64-appstream-rpms     RHEL 9 AppStream\nrhel-9-for-x86_64-baseos-rpms        RHEL 9 BaseOS\n",
+        "",
+    );
+
+    let mut packages = vec![pkg("kernel", "5.14.0", "362.el9", "x86_64", "anaconda")];
+    scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+    assert!(
+        !packages[0].repoless_annotation.is_empty(),
+        "anaconda source_repo should still be flagged as repo-less"
+    );
+}

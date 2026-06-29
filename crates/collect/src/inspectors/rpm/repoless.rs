@@ -36,6 +36,22 @@ fn get_enabled_repos(exec: &dyn Executor) -> Option<Vec<String>> {
     )
 }
 
+/// Check whether a package's `source_repo` short name matches any enabled
+/// repo ID using case-insensitive substring matching.
+///
+/// `dnf repoquery --installed` returns install-time short names like
+/// `AppStream` or `baseos`, while `dnf repolist --enabled` returns full
+/// repo IDs like `rhel-9-for-aarch64-appstream-rpms`. Exact comparison
+/// fails for every RHEL system. This function normalizes by checking
+/// whether the lowercased short name appears anywhere within any
+/// lowercased enabled repo ID.
+fn repo_matches_enabled(source_repo: &str, enabled_repos: &[String]) -> bool {
+    let short = source_repo.to_lowercase();
+    enabled_repos
+        .iter()
+        .any(|full_id| full_id.to_lowercase().contains(&short))
+}
+
 /// Identify repo-less packages and scan `/var/cache/dnf/` for cached RPMs.
 ///
 /// A package is repo-less when:
@@ -61,7 +77,7 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
                 true // Always repo-less: no repo recorded
             } else {
                 match &enabled_repos {
-                    Some(repos) => !repos.iter().any(|r| r == &p.source_repo),
+                    Some(repos) => !repo_matches_enabled(&p.source_repo, repos),
                     None => false, // dnf failed -- don't assume disabled
                 }
             }
@@ -222,6 +238,76 @@ mod tests {
         assert!(!packages[0].repoless_cached);
         assert!(packages[0].cache_path.is_none());
         assert!(packages[0].repoless_annotation.is_empty());
+    }
+
+    #[test]
+    fn short_name_matches_full_repo_id_case_insensitive() {
+        // Real RHEL scenario: dnf repolist returns full IDs, source_repo
+        // has install-time short names from %{from_repo}.
+        let exec = build_repoless_executor(
+            "repo id                       repo name\nrhel-9-for-aarch64-appstream-rpms  RHEL 9 AppStream\nrhel-9-for-aarch64-baseos-rpms     RHEL 9 BaseOS\n",
+            "",
+        );
+
+        let mut packages = vec![
+            pkg("httpd", "2.4.57", "5.el9", "aarch64", "AppStream"),
+            pkg("bash", "5.2.26", "3.el9", "aarch64", "baseos"),
+            pkg("glibc", "2.34", "60.el9", "aarch64", "BaseOS"),
+        ];
+        scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+        // All should match via case-insensitive substring.
+        assert!(
+            packages[0].repoless_annotation.is_empty(),
+            "AppStream should match rhel-9-for-aarch64-appstream-rpms"
+        );
+        assert!(
+            packages[1].repoless_annotation.is_empty(),
+            "baseos should match rhel-9-for-aarch64-baseos-rpms"
+        );
+        assert!(
+            packages[2].repoless_annotation.is_empty(),
+            "BaseOS should match rhel-9-for-aarch64-baseos-rpms"
+        );
+    }
+
+    #[test]
+    fn anaconda_repo_still_flagged_as_repoless() {
+        // anaconda is the install-time source, not a real repo.
+        // No RHEL repo ID contains "anaconda".
+        let exec = build_repoless_executor(
+            "repo id                       repo name\nrhel-9-for-x86_64-appstream-rpms  RHEL 9 AppStream\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
+            "",
+        );
+
+        let mut packages = vec![pkg("kernel", "5.14.0", "362.el9", "x86_64", "anaconda")];
+        scan_dnf_cache_for_repoless(&exec, &mut packages);
+
+        assert!(
+            !packages[0].repoless_annotation.is_empty(),
+            "anaconda should be flagged as repo-less"
+        );
+        assert!(
+            packages[0].repoless_annotation.contains("anaconda"),
+            "annotation should mention the anaconda repo"
+        );
+    }
+
+    #[test]
+    fn repo_matches_enabled_unit() {
+        use super::repo_matches_enabled;
+
+        let enabled = vec![
+            "rhel-9-for-aarch64-appstream-rpms".to_string(),
+            "rhel-9-for-aarch64-baseos-rpms".to_string(),
+        ];
+
+        assert!(repo_matches_enabled("AppStream", &enabled));
+        assert!(repo_matches_enabled("appstream", &enabled));
+        assert!(repo_matches_enabled("baseos", &enabled));
+        assert!(repo_matches_enabled("BaseOS", &enabled));
+        assert!(!repo_matches_enabled("anaconda", &enabled));
+        assert!(!repo_matches_enabled("epel", &enabled));
     }
 
     #[test]
