@@ -17,6 +17,8 @@ import type {
   RefinementOp,
   RefineStats,
   ReferenceSection,
+  LanguagePackageMetadata,
+  UnmanagedFileMetadata,
 } from "../api/types";
 import { fetchAggregateView } from "../api/aggregate-client";
 import "../aggregate.css";
@@ -101,8 +103,37 @@ function itemIdKey(id: ItemId): string {
   return JSON.stringify(id);
 }
 
+/**
+ * Build enriched searchable text for a single aggregate item.
+ * For language_packages and unmanaged_files, appends section_metadata
+ * fields so that searches like "flask" or "elf" match the right items.
+ */
+function itemSearchableText(
+  sectionId: string,
+  displayName: string,
+  item: AggregateItem,
+): string {
+  if (sectionId === "language_packages" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as LanguagePackageMetadata;
+    const packageNames = (meta.packages ?? []).map((p) => p.name).join(" ");
+    return [
+      displayName,
+      meta.ecosystem,
+      packageNames,
+      meta.manifest_basis ?? "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  if (sectionId === "unmanaged_files" && item.section_metadata) {
+    const meta = item.section_metadata as unknown as UnmanagedFileMetadata;
+    return [displayName, meta.file_type].filter(Boolean).join(" ");
+  }
+  return displayName;
+}
+
 /** Build ReferenceSection[] from aggregate sections for GlobalSearch indexing. */
-function buildAggregateSearchSections(
+export function buildAggregateSearchSections(
   sections: AggregateSection[],
 ): ReferenceSection[] {
   return sections.map((s) => ({
@@ -115,7 +146,7 @@ function buildAggregateSearchSections(
         title: name,
         subtitle: null,
         detail: null,
-        searchable_text: name,
+        searchable_text: itemSearchableText(s.id, name, item),
       };
     }),
   }));
