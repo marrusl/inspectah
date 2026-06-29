@@ -337,4 +337,219 @@ describe("AggregateSidebar", () => {
     // Services: plain count (reference section)
     expect(screen.getByText("0")).toBeInTheDocument();
   });
+
+  it("shows language_packages section in Review group with zone-based counts", () => {
+    const sectionsWithLangPkgs = [
+      ...sections,
+      {
+        id: "language_packages",
+        display_name: "Language Packages",
+        is_decision_section: true,
+        zones: {
+          consensus: {
+            items: [
+              {
+                item_id: {
+                  kind: "LanguageEnv" as const,
+                  key: { ecosystem: "pip", manifest: "/usr/lib/python3/requirements.txt" },
+                },
+                include: true,
+                triage: {
+                  bucket: "consensus" as const,
+                  prevalence: { count: 3, total: 3 },
+                },
+                prevalence: { count: 3, total: 3 },
+                source_repo: "",
+              },
+            ],
+            count: 1,
+          },
+          near_consensus: { items: [], count: 2 },
+          divergent: {
+            items: [
+              {
+                item_id: {
+                  kind: "LanguageEnv" as const,
+                  key: { ecosystem: "npm", manifest: "/opt/app/package.json" },
+                },
+                include: false,
+                triage: {
+                  bucket: "divergent" as const,
+                  prevalence: { count: 1, total: 3 },
+                },
+                prevalence: { count: 1, total: 3 },
+                source_repo: "",
+              },
+            ],
+            count: 1,
+          },
+        },
+      },
+    ];
+
+    render(
+      <AggregateSidebar
+        sections={sectionsWithLangPkgs}
+        activeSection="packages"
+        onSelect={vi.fn()}
+        ackState={defaultAck}
+      />,
+    );
+
+    // Language Packages appears in the sidebar
+    expect(screen.getByText("Language Packages")).toBeInTheDocument();
+
+    // Decision section badge: 1 included / 4 total (1 consensus + 2 near_consensus + 1 divergent)
+    expect(screen.getByText("1 / 4")).toBeInTheDocument();
+
+    // Verify it's in the Review group (is_decision_section: true),
+    // not the Reference group
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    const sidebar = screen.getByTestId("aggregate-sidebar");
+    expect(
+      within(sidebar).getByText("Language Packages"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows unmanaged_files section in Review group with zone-based counts", () => {
+    const sectionsWithUnmanaged = [
+      ...sections,
+      {
+        id: "unmanaged_files",
+        display_name: "Unmanaged Files",
+        is_decision_section: true,
+        zones: {
+          consensus: {
+            items: [
+              {
+                item_id: {
+                  kind: "UnmanagedFile" as const,
+                  key: { path: "/opt/app/data.db" },
+                },
+                include: true,
+                triage: {
+                  bucket: "consensus" as const,
+                  prevalence: { count: 3, total: 3 },
+                },
+                prevalence: { count: 3, total: 3 },
+                source_repo: "",
+              },
+              {
+                item_id: {
+                  kind: "UnmanagedFile" as const,
+                  key: { path: "/var/log/custom.log" },
+                },
+                include: false,
+                triage: {
+                  bucket: "consensus" as const,
+                  prevalence: { count: 3, total: 3 },
+                },
+                prevalence: { count: 3, total: 3 },
+                source_repo: "",
+              },
+            ],
+            count: 2,
+          },
+          near_consensus: { items: [], count: 0 },
+          divergent: {
+            items: [
+              {
+                item_id: {
+                  kind: "UnmanagedFile" as const,
+                  key: { path: "/etc/custom.conf" },
+                },
+                include: true,
+                triage: {
+                  bucket: "divergent" as const,
+                  prevalence: { count: 1, total: 3 },
+                },
+                prevalence: { count: 1, total: 3 },
+                source_repo: "",
+              },
+            ],
+            count: 1,
+          },
+        },
+      },
+    ];
+
+    render(
+      <AggregateSidebar
+        sections={sectionsWithUnmanaged}
+        activeSection="packages"
+        onSelect={vi.fn()}
+        ackState={defaultAck}
+      />,
+    );
+
+    // Unmanaged Files appears in the sidebar
+    expect(screen.getByText("Unmanaged Files")).toBeInTheDocument();
+
+    // Decision section badge: 2 included / 3 total (2 consensus + 0 near_consensus + 1 divergent)
+    expect(screen.getByText("2 / 3")).toBeInTheDocument();
+
+    // Verify it's in the Review group, not Reference
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    const sidebar = screen.getByTestId("aggregate-sidebar");
+    expect(
+      within(sidebar).getByText("Unmanaged Files"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows both new sections together with existing sections", () => {
+    const allSections = [
+      ...sections,
+      {
+        id: "language_packages",
+        display_name: "Language Packages",
+        is_decision_section: true,
+        zones: {
+          consensus: { items: [], count: 3 },
+          near_consensus: { items: [], count: 1 },
+          divergent: { items: [], count: 0 },
+        },
+      },
+      {
+        id: "unmanaged_files",
+        display_name: "Unmanaged Files",
+        is_decision_section: true,
+        zones: {
+          consensus: { items: [], count: 5 },
+          near_consensus: { items: [], count: 2 },
+          divergent: { items: [], count: 1 },
+        },
+      },
+    ];
+
+    render(
+      <AggregateSidebar
+        sections={allSections}
+        activeSection="packages"
+        onSelect={vi.fn()}
+        ackState={defaultAck}
+      />,
+    );
+
+    const sidebar = screen.getByTestId("aggregate-sidebar");
+
+    // All decision sections present in sidebar
+    expect(within(sidebar).getByText("Packages")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Config Files")).toBeInTheDocument();
+    expect(
+      within(sidebar).getByText("Language Packages"),
+    ).toBeInTheDocument();
+    expect(
+      within(sidebar).getByText("Unmanaged Files"),
+    ).toBeInTheDocument();
+
+    // Reference section still rendered
+    expect(within(sidebar).getByText("Services")).toBeInTheDocument();
+
+    // Badge counts for new sections (zone count totals, 0 items included)
+    // Language Packages: 0 / 4 (3+1+0, no items in zones)
+    expect(screen.getByText("0 / 4")).toBeInTheDocument();
+    // Unmanaged Files: 0 / 8 matches Config Files badge — verify both exist
+    const zeroOfEight = screen.getAllByText("0 / 8");
+    expect(zeroOfEight.length).toBe(2); // Config Files + Unmanaged Files
+  });
 });
