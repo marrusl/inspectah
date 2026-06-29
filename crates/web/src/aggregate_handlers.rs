@@ -13,6 +13,7 @@ use inspectah_refine::types::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::handlers::AppState;
@@ -161,7 +162,7 @@ pub struct LanguagePackageMetadata {
     pub packages: Vec<LanguagePackageDto>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LanguagePackageDto {
     pub name: String,
     pub version: String,
@@ -197,13 +198,13 @@ pub struct UnmanagedFileProvenanceDto {
 // ---------------------------------------------------------------------------
 
 /// Variant payload for language packages — package-list diff inputs.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LanguagePackageVariantPayload {
     /// Per-variant package lists for diff rendering.
     pub variant_packages: Vec<VariantPackageList>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VariantPackageList {
     pub content_hash: String,
     pub hosts: Vec<String>,
@@ -213,13 +214,13 @@ pub struct VariantPackageList {
 }
 
 /// Variant payload for unmanaged files — metadata comparison inputs.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UnmanagedFileVariantPayload {
     /// Per-variant metadata for comparison rendering.
     pub variant_metadata: Vec<VariantFileMetadata>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VariantFileMetadata {
     pub content_hash: String,
     pub hosts: Vec<String>,
@@ -1343,10 +1344,38 @@ fn build_reference_sections(
     {
         let lang_envs = classify_language_envs(snap);
         if !lang_envs.is_empty() {
+            // Group entries by identity key (ecosystem:path from ItemId)
+            // to detect variants — multiple content variants at the same key.
+            let mut lang_by_key: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, (_, item_id)) in lang_envs.iter().enumerate() {
+                let key = lang_env_group_key(item_id);
+                lang_by_key.entry(key).or_default().push(idx);
+            }
+
             let items: Vec<AggregateItem> = lang_envs
                 .iter()
-                .map(|(entry, item_id)| {
+                .enumerate()
+                .map(|(idx, (entry, item_id))| {
                     let fp = entry.aggregate.as_ref();
+
+                    // Check if this identity key has multiple content variants.
+                    let key = lang_env_group_key(item_id);
+                    let siblings = lang_by_key.get(&key);
+                    let has_variants = siblings.map(|s| s.len()).unwrap_or(0) >= 2;
+
+                    let (variants, variant_payload) = if has_variants {
+                        (
+                            Some(build_language_package_variants(
+                                siblings.unwrap(),
+                                &lang_envs,
+                                idx,
+                            )),
+                            build_language_package_variant_payload(siblings.unwrap(), &lang_envs),
+                        )
+                    } else {
+                        (None, None)
+                    };
+
                     AggregateItem {
                         item_id: item_id.clone(),
                         include: entry.include,
@@ -1354,11 +1383,11 @@ fn build_reference_sections(
                         attention_reason: None,
                         triage: default_context_triage(fp, ctx),
                         prevalence: aggregate_prevalence_dto(fp, ctx),
-                        variants: None,
+                        variants,
                         source_repo: String::new(),
                         repo_conflict: None,
                         section_metadata: build_language_package_metadata(entry),
-                        variant_payload: None,
+                        variant_payload,
                     }
                 })
                 .collect();
@@ -1377,14 +1406,41 @@ fn build_reference_sections(
 
     // Unmanaged Files — decision items with aggregate prevalence
     if let Some(ref unmanaged) = snap.unmanaged_files {
+        // Group by path to detect variants (same path, different content hash).
+        let mut unmanaged_by_path: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (idx, f) in unmanaged.items.iter().enumerate() {
+            unmanaged_by_path
+                .entry(f.path.as_str())
+                .or_default()
+                .push(idx);
+        }
+
         let items: Vec<AggregateItem> = unmanaged
             .items
             .iter()
-            .map(|f| {
+            .enumerate()
+            .map(|(idx, f)| {
                 let item_id = ItemId::UnmanagedFile {
                     path: f.path.clone(),
                 };
                 let fp = f.aggregate.as_ref();
+
+                let siblings = unmanaged_by_path.get(f.path.as_str());
+                let has_variants = siblings.map(|s| s.len()).unwrap_or(0) >= 2;
+
+                let (variants, variant_payload) = if has_variants {
+                    (
+                        Some(build_unmanaged_file_variants(
+                            siblings.unwrap(),
+                            &unmanaged.items,
+                            idx,
+                        )),
+                        build_unmanaged_file_variant_payload(siblings.unwrap(), &unmanaged.items),
+                    )
+                } else {
+                    (None, None)
+                };
+
                 AggregateItem {
                     item_id,
                     include: f.include,
@@ -1392,11 +1448,11 @@ fn build_reference_sections(
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
                     prevalence: aggregate_prevalence_dto(fp, ctx),
-                    variants: None,
+                    variants,
                     source_repo: String::new(),
                     repo_conflict: None,
                     section_metadata: build_unmanaged_file_metadata(f),
-                    variant_payload: None,
+                    variant_payload,
                 }
             })
             .collect();
@@ -1453,6 +1509,15 @@ fn classify_language_envs(
             (item, item_id)
         })
         .collect()
+}
+
+/// Extract the grouping key from a language environment `ItemId`.
+/// Must match the identity key used by the merge layer.
+fn lang_env_group_key(item_id: &ItemId) -> String {
+    match item_id {
+        ItemId::LanguageEnv { ecosystem, path } => format!("{ecosystem}:{path}"),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Build section metadata for a language package aggregate item.
@@ -1520,6 +1585,147 @@ fn build_unmanaged_file_metadata(
         },
     })
     .ok()
+}
+
+/// Compute a content hash for a language package entry that mirrors the
+/// `AggregateMergeable::content_variant_key` implementation for `NonRpmItem`.
+fn lang_package_content_hash(entry: &inspectah_core::types::nonrpm::NonRpmItem) -> String {
+    use inspectah_refine::types::ContentHash;
+    let mut key = String::new();
+    key.push_str(&entry.method);
+    key.push('\n');
+    for pkg in &entry.packages {
+        key.push_str(&format!("{}={}\n", pkg.name, pkg.version));
+    }
+    ContentHash::from_content(key.as_bytes())
+        .as_str()
+        .to_string()
+}
+
+/// Build `AggregateVariants` for language package items that share an identity
+/// key (ecosystem:path) but have different package lists.
+fn build_language_package_variants(
+    sibling_indices: &[usize],
+    lang_envs: &[(&inspectah_core::types::nonrpm::NonRpmItem, ItemId)],
+    _current_idx: usize,
+) -> AggregateVariants {
+    let options: Vec<AggregateVariantOption> = sibling_indices
+        .iter()
+        .map(|&idx| {
+            let (entry, _) = &lang_envs[idx];
+            let hash = lang_package_content_hash(entry);
+            let fp = entry.aggregate.as_ref();
+            AggregateVariantOption {
+                hash,
+                hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
+                host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
+                selected: idx == sibling_indices[0], // most-prevalent variant is first
+            }
+        })
+        .collect();
+
+    let selected_hash = options
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.hash.clone())
+        .unwrap_or_default();
+
+    AggregateVariants {
+        count: options.len(),
+        selected: selected_hash,
+        options,
+    }
+}
+
+/// Build `LanguagePackageVariantPayload` for language package items that
+/// share an identity key but have divergent package lists.
+fn build_language_package_variant_payload(
+    sibling_indices: &[usize],
+    lang_envs: &[(&inspectah_core::types::nonrpm::NonRpmItem, ItemId)],
+) -> Option<serde_json::Value> {
+    let variant_packages: Vec<VariantPackageList> = sibling_indices
+        .iter()
+        .map(|&idx| {
+            let (entry, _) = &lang_envs[idx];
+            let content_hash = lang_package_content_hash(entry);
+            let fp = entry.aggregate.as_ref();
+            VariantPackageList {
+                content_hash,
+                hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
+                host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
+                selected: idx == sibling_indices[0],
+                packages: entry
+                    .packages
+                    .iter()
+                    .map(|p| LanguagePackageDto {
+                        name: p.name.clone(),
+                        version: p.version.clone(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    serde_json::to_value(LanguagePackageVariantPayload { variant_packages }).ok()
+}
+
+/// Build `AggregateVariants` for unmanaged files that share a path but have
+/// different content hashes.
+fn build_unmanaged_file_variants(
+    sibling_indices: &[usize],
+    items: &[inspectah_core::types::nonrpm::UnmanagedFile],
+    _current_idx: usize,
+) -> AggregateVariants {
+    let options: Vec<AggregateVariantOption> = sibling_indices
+        .iter()
+        .map(|&idx| {
+            let f = &items[idx];
+            let fp = f.aggregate.as_ref();
+            AggregateVariantOption {
+                hash: f.content_hash.clone(),
+                hosts: fp.map(|a| a.hosts.clone()).unwrap_or_default(),
+                host_count: fp.map(|a| a.count.max(0) as usize).unwrap_or(0),
+                selected: idx == sibling_indices[0],
+            }
+        })
+        .collect();
+
+    let selected_hash = options
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.hash.clone())
+        .unwrap_or_default();
+
+    AggregateVariants {
+        count: options.len(),
+        selected: selected_hash,
+        options,
+    }
+}
+
+/// Build `UnmanagedFileVariantPayload` for unmanaged files that share a path
+/// but have divergent content.
+fn build_unmanaged_file_variant_payload(
+    sibling_indices: &[usize],
+    items: &[inspectah_core::types::nonrpm::UnmanagedFile],
+) -> Option<serde_json::Value> {
+    let variant_metadata: Vec<VariantFileMetadata> = sibling_indices
+        .iter()
+        .map(|&idx| {
+            let f = &items[idx];
+            let fp = f.aggregate.as_ref();
+            VariantFileMetadata {
+                content_hash: f.content_hash.clone(),
+                hosts: fp.map(|a| a.hosts.clone()).unwrap_or_default(),
+                host_count: fp.map(|a| a.count.max(0) as usize).unwrap_or(0),
+                selected: idx == sibling_indices[0],
+                size: f.size,
+                last_modified: f.provenance.last_modified,
+            }
+        })
+        .collect();
+
+    serde_json::to_value(UnmanagedFileVariantPayload { variant_metadata }).ok()
 }
 
 fn build_triage_dto(
@@ -2705,6 +2911,390 @@ mod tests {
         assert!(
             items[0].variant_payload.is_none(),
             "non-RPM software section should not have variant_payload"
+        );
+    }
+
+    #[test]
+    fn language_package_variant_payload_populated() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        // Two hosts with the same pip:/opt/app/venv but different package lists.
+        // The merge layer produces two NonRpmItem entries with the same
+        // identity key but different content — simulated here directly.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![
+                    NonRpmItem {
+                        name: "app-venv".to_string(),
+                        path: "/opt/app/venv".to_string(),
+                        method: "venv".to_string(),
+                        confidence: "high".to_string(),
+                        include: true,
+                        packages: vec![
+                            LanguagePackage {
+                                name: "flask".to_string(),
+                                version: "2.3.0".to_string(),
+                            },
+                            LanguagePackage {
+                                name: "requests".to_string(),
+                                version: "2.31.0".to_string(),
+                            },
+                        ],
+                        aggregate: Some(AggregatePrevalence {
+                            count: 2,
+                            total: 3,
+                            hosts: vec!["host-a".into(), "host-b".into()],
+                            aggregate_count: Some(3),
+                            aggregate_hosts: Some(vec![
+                                "host-a".into(),
+                                "host-b".into(),
+                                "host-c".into(),
+                            ]),
+                        }),
+                        ..Default::default()
+                    },
+                    NonRpmItem {
+                        name: "app-venv".to_string(),
+                        path: "/opt/app/venv".to_string(),
+                        method: "venv".to_string(),
+                        confidence: "high".to_string(),
+                        include: true,
+                        packages: vec![
+                            LanguagePackage {
+                                name: "flask".to_string(),
+                                version: "2.2.5".to_string(),
+                            },
+                            LanguagePackage {
+                                name: "requests".to_string(),
+                                version: "2.28.0".to_string(),
+                            },
+                        ],
+                        aggregate: Some(AggregatePrevalence {
+                            count: 1,
+                            total: 3,
+                            hosts: vec!["host-c".into()],
+                            aggregate_count: Some(3),
+                            aggregate_hosts: Some(vec![
+                                "host-a".into(),
+                                "host-b".into(),
+                                "host-c".into(),
+                            ]),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let lang_section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+
+        let items = lang_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        // Both items should have variant_payload populated.
+        for item in items {
+            assert!(
+                item.variant_payload.is_some(),
+                "variant_payload should be populated for divergent language package items"
+            );
+            assert!(
+                item.variants.is_some(),
+                "variants should be populated for divergent language package items"
+            );
+        }
+
+        // Verify the payload structure: variant_packages with 2 entries.
+        let payload: LanguagePackageVariantPayload =
+            serde_json::from_value(items[0].variant_payload.clone().unwrap())
+                .expect("variant_payload should deserialize to LanguagePackageVariantPayload");
+        assert_eq!(
+            payload.variant_packages.len(),
+            2,
+            "should have 2 variant package lists"
+        );
+
+        // Each variant should have a distinct content_hash.
+        let hashes: Vec<&str> = payload
+            .variant_packages
+            .iter()
+            .map(|v| v.content_hash.as_str())
+            .collect();
+        assert_ne!(
+            hashes[0], hashes[1],
+            "variant package lists with different packages must have different content hashes"
+        );
+
+        // Verify host counts are plumbed through.
+        assert_eq!(payload.variant_packages[0].host_count, 2);
+        assert_eq!(payload.variant_packages[1].host_count, 1);
+        assert_eq!(payload.variant_packages[0].packages.len(), 2);
+        assert_eq!(payload.variant_packages[1].packages.len(), 2);
+    }
+
+    #[test]
+    fn language_package_no_variant_payload_when_single() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        // Single entry — no variants, variant_payload should be None.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "app-venv".to_string(),
+                    path: "/opt/app/venv".to_string(),
+                    method: "venv".to_string(),
+                    confidence: "high".to_string(),
+                    include: true,
+                    packages: vec![LanguagePackage {
+                        name: "flask".to_string(),
+                        version: "2.3.0".to_string(),
+                    }],
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let lang_section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+        let items = lang_section.items.as_ref().expect("flat items list");
+
+        assert!(
+            items[0].variant_payload.is_none(),
+            "single language package should not have variant_payload"
+        );
+        assert!(
+            items[0].variants.is_none(),
+            "single language package should not have variants"
+        );
+    }
+
+    #[test]
+    fn unmanaged_file_variant_payload_populated() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // Two hosts with /opt/app/server at the same path but different content.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![
+                    UnmanagedFile {
+                        path: "/opt/app/server".to_string(),
+                        size: 1_000_000,
+                        include: true,
+                        content_hash: "aaa111".to_string(),
+                        aggregate: Some(AggregatePrevalence {
+                            count: 2,
+                            total: 3,
+                            hosts: vec!["host-a".into(), "host-b".into()],
+                            aggregate_count: Some(3),
+                            aggregate_hosts: Some(vec![
+                                "host-a".into(),
+                                "host-b".into(),
+                                "host-c".into(),
+                            ]),
+                        }),
+                        ..Default::default()
+                    },
+                    UnmanagedFile {
+                        path: "/opt/app/server".to_string(),
+                        size: 1_200_000,
+                        include: true,
+                        content_hash: "bbb222".to_string(),
+                        aggregate: Some(AggregatePrevalence {
+                            count: 1,
+                            total: 3,
+                            hosts: vec!["host-c".into()],
+                            aggregate_count: Some(3),
+                            aggregate_hosts: Some(vec![
+                                "host-a".into(),
+                                "host-b".into(),
+                                "host-c".into(),
+                            ]),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                total_size: 2_200_000,
+                total_count: 2,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["host-a".into(), "host-b".into(), "host-c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let unmanaged_section = sections
+            .iter()
+            .find(|s| s.id == "unmanaged_files")
+            .expect("unmanaged_files section must exist");
+
+        let items = unmanaged_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        // Both items should have variant_payload populated.
+        for item in items {
+            assert!(
+                item.variant_payload.is_some(),
+                "variant_payload should be populated for divergent unmanaged file items"
+            );
+            assert!(
+                item.variants.is_some(),
+                "variants should be populated for divergent unmanaged file items"
+            );
+        }
+
+        // Verify the payload structure: variant_metadata with 2 entries.
+        let payload: UnmanagedFileVariantPayload =
+            serde_json::from_value(items[0].variant_payload.clone().unwrap())
+                .expect("variant_payload should deserialize to UnmanagedFileVariantPayload");
+        assert_eq!(
+            payload.variant_metadata.len(),
+            2,
+            "should have 2 variant metadata entries"
+        );
+
+        // Check distinct content hashes.
+        assert_eq!(payload.variant_metadata[0].content_hash, "aaa111");
+        assert_eq!(payload.variant_metadata[1].content_hash, "bbb222");
+
+        // Check size and last_modified are carried through.
+        assert_eq!(payload.variant_metadata[0].size, 1_000_000);
+        assert_eq!(payload.variant_metadata[1].size, 1_200_000);
+
+        // Check host counts.
+        assert_eq!(payload.variant_metadata[0].host_count, 2);
+        assert_eq!(payload.variant_metadata[1].host_count, 1);
+    }
+
+    #[test]
+    fn unmanaged_file_no_variant_payload_when_single() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        // Single file — no variants.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".to_string(),
+                    size: 1_000_000,
+                    include: true,
+                    content_hash: "aaa111".to_string(),
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 1_000_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let unmanaged_section = sections
+            .iter()
+            .find(|s| s.id == "unmanaged_files")
+            .expect("unmanaged_files section must exist");
+        let items = unmanaged_section.items.as_ref().expect("flat items list");
+
+        assert!(
+            items[0].variant_payload.is_none(),
+            "single unmanaged file should not have variant_payload"
+        );
+        assert!(
+            items[0].variants.is_none(),
+            "single unmanaged file should not have variants"
         );
     }
 }
