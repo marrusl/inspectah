@@ -85,11 +85,12 @@ fn get_available_packages(exec: &dyn Executor) -> Option<std::collections::HashS
 /// 1. `source_repo` is empty (no repo recorded), OR
 /// 2. `source_repo` names a repo not in `dnf repolist --enabled`
 ///
-/// Packages that fail conditions 1 or 2 get a secondary availability
-/// check: if `dnf repoquery --available` confirms the package exists in
-/// an enabled repo, it is NOT repo-less. This catches packages installed
-/// during OS setup (`from_repo = "anaconda"`) or via `rpm -i`
-/// (`@commandline`) that are perfectly available in standard repos.
+/// Packages from the `anaconda` pseudo-repo (OS installer) get a
+/// secondary availability check: if `dnf repoquery --available` confirms
+/// the package exists in an enabled repo, it is NOT repo-less.
+/// `@commandline` packages (installed via `rpm -i`) are always repo-less
+/// regardless of availability — the user explicitly bypassed the repo
+/// system and the installed version may differ from the repo version.
 ///
 /// For each truly repo-less package, checks whether a matching `.rpm`
 /// file exists in the dnf cache. Found RPMs get `repoless_cached = true`
@@ -121,14 +122,22 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
         return;
     }
 
-    // Phase 2: secondary availability check. Packages from pseudo-repos
-    // like "anaconda" or "@commandline" may be available in real repos.
+    // Phase 2: secondary availability check for anaconda packages.
+    // @commandline packages are always repo-less (user bypassed repos).
+    // Empty source_repo packages are always repo-less (no info at all).
+    // Only anaconda (and similar installer pseudo-repos) get the check.
     let available = get_available_packages(exec);
     let repoless_indices: Vec<usize> = candidate_indices
         .into_iter()
         .filter(|&i| {
+            let pkg = &packages[i];
+            // @commandline = explicitly installed outside repos, always repo-less
+            if pkg.source_repo.starts_with('@') || pkg.source_repo.is_empty() {
+                return true;
+            }
+            // For other pseudo-repos (anaconda, etc.), check availability
             match &available {
-                Some(avail) => !avail.contains(&packages[i].name),
+                Some(avail) => !avail.contains(&pkg.name),
                 None => true, // repoquery failed -- keep candidate as repo-less
             }
         })
@@ -383,9 +392,9 @@ mod tests {
     }
 
     #[test]
-    fn commandline_package_available_not_flagged() {
-        // @commandline packages (installed via rpm -i) that are available
-        // in an enabled repo should not be flagged as repo-less.
+    fn commandline_package_always_flagged() {
+        // @commandline packages (installed via rpm -i) are always repo-less
+        // regardless of availability — the user bypassed the repo system.
         let exec = build_repoless_executor_with_available(
             "repo id                       repo name\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
             "epel-release\nbash\n",
@@ -396,8 +405,8 @@ mod tests {
         scan_dnf_cache_for_repoless(&exec, &mut packages);
 
         assert!(
-            packages[0].repoless_annotation.is_empty(),
-            "@commandline package available in repos should not be flagged"
+            !packages[0].repoless_annotation.is_empty(),
+            "@commandline packages should always be flagged as repo-less"
         );
     }
 
