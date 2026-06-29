@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VariantView } from "../VariantView";
 import type { AggregateItem, ItemId } from "../../../api/types";
@@ -372,5 +372,195 @@ describe("VariantView", () => {
     );
 
     expect(container.firstChild).toBeNull();
+  });
+
+  it("renders package-list diff between variants for language packages", () => {
+    const langEnvItemId: ItemId = {
+      kind: "LanguageEnv",
+      key: { ecosystem: "pip", path: "/opt/app/venv" },
+    };
+
+    const item = makeItem({
+      item_id: langEnvItemId,
+      variants: {
+        count: 2,
+        selected: "hash_a",
+        options: [
+          { hash: "hash_a", hosts: ["host-a"], host_count: 1, selected: true },
+          { hash: "hash_b", hosts: ["host-b"], host_count: 1, selected: false },
+        ],
+      },
+      variant_payload: {
+        variant_packages: [
+          {
+            content_hash: "hash_a",
+            hosts: ["host-a"],
+            host_count: 1,
+            selected: true,
+            packages: [
+              { name: "flask", version: "2.3.3" },
+              { name: "requests", version: "2.31.0" },
+            ],
+          },
+          {
+            content_hash: "hash_b",
+            hosts: ["host-b"],
+            host_count: 1,
+            selected: false,
+            packages: [
+              { name: "flask", version: "2.3.3" },
+              { name: "requests", version: "2.32.0" },
+              { name: "newpkg", version: "1.0.0" },
+            ],
+          },
+        ],
+      },
+    });
+
+    render(
+      <VariantView
+        item={item}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+        sectionId="language_packages"
+      />,
+    );
+
+    const comparison = screen.getByTestId("variant-package-comparison");
+    expect(comparison).toBeInTheDocument();
+
+    // "requests" shows version change between variants
+    expect(screen.getByText("2.31.0")).toBeInTheDocument();
+    expect(screen.getByText("2.32.0")).toBeInTheDocument();
+
+    // "newpkg" shown as added in variant B (only in hash_b)
+    expect(screen.getByText("newpkg")).toBeInTheDocument();
+
+    // "flask" is common and unchanged
+    expect(screen.getByText("flask")).toBeInTheDocument();
+  });
+
+  it("does not render package comparison when sectionId is not language_packages", () => {
+    const item = makeItem({
+      variant_payload: {
+        variant_packages: [
+          {
+            content_hash: "aaa111",
+            hosts: ["host-a"],
+            host_count: 1,
+            selected: true,
+            packages: [{ name: "flask", version: "2.3.3" }],
+          },
+        ],
+      },
+    });
+
+    render(
+      <VariantView
+        item={item}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+        sectionId="configs"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("variant-package-comparison"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders metadata comparison for unmanaged file variants", () => {
+    const unmanagedFileItemId: ItemId = {
+      kind: "UnmanagedFile",
+      key: { path: "/var/data/app.db" },
+    };
+
+    const item = makeItem({
+      item_id: unmanagedFileItemId,
+      variants: {
+        count: 2,
+        selected: "hash_x",
+        options: [
+          { hash: "hash_x", hosts: ["host-a"], host_count: 1, selected: true },
+          { hash: "hash_y", hosts: ["host-b"], host_count: 1, selected: false },
+        ],
+      },
+      variant_payload: {
+        variant_metadata: [
+          {
+            content_hash: "hash_x",
+            hosts: ["host-a"],
+            host_count: 1,
+            selected: true,
+            size: 54525952, // ~52MB
+            last_modified: 1719500000,
+          },
+          {
+            content_hash: "hash_y",
+            hosts: ["host-b"],
+            host_count: 1,
+            selected: false,
+            size: 55574528, // ~53MB
+            last_modified: 1719600000,
+          },
+        ],
+      },
+    });
+
+    render(
+      <VariantView
+        item={item}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+        sectionId="unmanaged_files"
+      />,
+    );
+
+    const comparison = screen.getByTestId("variant-metadata-comparison");
+    expect(comparison).toBeInTheDocument();
+
+    // Size shown for each variant
+    const rows = within(comparison).getAllByRole("row");
+    // Header + 2 variant rows minimum
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+
+    // "Content differs" indicator present
+    expect(
+      within(comparison).getByTestId("content-differs-indicator"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render metadata comparison when sectionId is not unmanaged_files", () => {
+    const item = makeItem({
+      variant_payload: {
+        variant_metadata: [
+          {
+            content_hash: "aaa111",
+            hosts: ["host-a"],
+            host_count: 1,
+            selected: true,
+            size: 1024,
+            last_modified: 1719500000,
+          },
+        ],
+      },
+    });
+
+    render(
+      <VariantView
+        item={item}
+        ack={makeAck()}
+        onSelectVariant={vi.fn()}
+        diffHook={makeDiffHook()}
+        sectionId="configs"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("variant-metadata-comparison"),
+    ).not.toBeInTheDocument();
   });
 });

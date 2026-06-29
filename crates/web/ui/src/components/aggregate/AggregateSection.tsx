@@ -166,6 +166,7 @@ export function AggregateSectionContent({
                     ack={ack}
                     onSelectVariant={onSelectVariant}
                     diffHook={diffHook}
+                    sectionId={section.id}
                   />
                 )}
               {expanded && !hasVariants && isDecisionSection && (
@@ -214,6 +215,7 @@ export function AggregateSectionContent({
                 ack={ack}
                 onSelectVariant={onSelectVariant}
                 diffHook={diffHook}
+                sectionId={section.id}
               />
             )}
           {expanded && !hasVariants && isDecisionSection && (
