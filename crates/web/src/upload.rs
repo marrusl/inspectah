@@ -10,11 +10,16 @@ use crate::handlers::AppState;
 /// The uploaded file is stored in the session's upload directory.
 /// Export merges these files into repoless-packages/ alongside
 /// cached RPMs from the source tarball.
+///
+/// Returns match status: `"matched"` with the canonical `name.arch` when the
+/// upload matched a repo-less package, or `"unmatched"` when no match was found
+/// (the file is still staged for manual use).
 pub async fn upload_rpm(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mut uploaded_count = 0u32;
+    let mut matched_canonical: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         AppError(inspectah_refine::types::RefineError::BadRequest(format!(
@@ -54,14 +59,21 @@ pub async fn upload_rpm(
 
         // Mark the matching PackageEntry as cached so the renderer
         // generates active COPY/localinstall lines instead of MANUAL blocks.
-        session.mark_uploaded_rpm(&filename, &dest.to_string_lossy());
+        matched_canonical = session.mark_uploaded_rpm(&filename, &dest.to_string_lossy());
 
         uploaded_count += 1;
     }
 
+    let status = if matched_canonical.is_some() {
+        "matched"
+    } else {
+        "unmatched"
+    };
+
     Ok(Json(serde_json::json!({
         "uploaded": uploaded_count,
-        "status": "staged"
+        "matched": matched_canonical,
+        "status": status
     })))
 }
 

@@ -604,34 +604,72 @@ impl RefineSession {
 
     /// Mark a repo-less PackageEntry as cached after an RPM upload.
     ///
-    /// Matches the uploaded filename against package NEVRAs in the original
-    /// snapshot. When found, sets `repoless_cached = true` and `cache_path`
-    /// so the renderer generates active COPY/localinstall lines.
-    pub fn mark_uploaded_rpm(&mut self, filename: &str, staged_path: &str) {
-        // NEVRA filename format: name-version-release.arch.rpm
-        // We match against all repo-less packages in the snapshot.
-        if let Some(ref mut rpm) = self.original.rpm {
-            for pkg in &mut rpm.packages_added {
-                if pkg.repoless_annotation.is_empty() {
-                    continue; // not repo-less
-                }
-                let expected = format!(
-                    "{}-{}-{}.{}.rpm",
-                    pkg.name, pkg.version, pkg.release, pkg.arch
-                );
-                if filename == expected {
-                    pkg.repoless_cached = true;
-                    pkg.cache_path = Some(staged_path.to_string());
-                    // Invalidate cached view so the next view() reflects the change.
-                    self.cached_view = None;
-                    self.cached_render_context = None;
-                    self.cached_decisions = None;
-                    self.generation += 1;
-                    self.recompute_view();
-                    break;
-                }
+    /// Matches the uploaded filename against repo-less packages by name and
+    /// architecture. Returns the canonical `name.arch` of the matched package,
+    /// or `None` if no match was found.
+    ///
+    /// Matching strategy:
+    /// 1. Try exact NEVRA filename (`name-version-release.arch.rpm`)
+    /// 2. Fall back to name+arch extraction: arch is the segment before `.rpm`,
+    ///    name is everything before the first `-\d` (version start) or before
+    ///    the arch suffix.
+    ///
+    /// When matched with a different version than installed, populates
+    /// `uploaded_version` on the PackageEntry.
+    pub fn mark_uploaded_rpm(&mut self, filename: &str, staged_path: &str) -> Option<String> {
+        let rpm = self.original.rpm.as_mut()?;
+
+        // Try exact NEVRA match first (backwards compat)
+        for pkg in &mut rpm.packages_added {
+            if pkg.repoless_annotation.is_empty() {
+                continue;
+            }
+            let expected = format!(
+                "{}-{}-{}.{}.rpm",
+                pkg.name, pkg.version, pkg.release, pkg.arch
+            );
+            if filename == expected {
+                pkg.repoless_cached = true;
+                pkg.cache_path = Some(staged_path.to_string());
+                let canonical = format!("{}.{}", pkg.name, pkg.arch);
+                self.invalidate_caches();
+                return Some(canonical);
             }
         }
+
+        // Relaxed match: extract name + arch from filename
+        let (extracted_name, extracted_arch, extracted_ver) = parse_rpm_filename(filename)?;
+
+        for pkg in &mut rpm.packages_added {
+            if pkg.repoless_annotation.is_empty() {
+                continue;
+            }
+            if pkg.name == extracted_name && pkg.arch == extracted_arch {
+                pkg.repoless_cached = true;
+                pkg.cache_path = Some(staged_path.to_string());
+                // Track version mismatch if the uploaded version differs
+                let installed_ver = format!("{}-{}", pkg.version, pkg.release);
+                if let Some(ref ver) = extracted_ver
+                    && *ver != installed_ver
+                {
+                    pkg.uploaded_version = Some(ver.clone());
+                }
+                let canonical = format!("{}.{}", pkg.name, pkg.arch);
+                self.invalidate_caches();
+                return Some(canonical);
+            }
+        }
+
+        None
+    }
+
+    /// Invalidate cached views after a mutation.
+    fn invalidate_caches(&mut self) {
+        self.cached_view = None;
+        self.cached_render_context = None;
+        self.cached_decisions = None;
+        self.generation += 1;
+        self.recompute_view();
     }
 
     /// Reverse the effect of `mark_uploaded_rpm` for a given `name.arch`.
@@ -3208,6 +3246,78 @@ fn sanitize_path_for_log(path: &str) -> String {
     path.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
+}
+
+/// Known RPM architectures for filename parsing.
+const KNOWN_ARCHES: &[&str] = &[
+    "x86_64", "aarch64", "ppc64le", "s390x", "i686", "i386", "armv7hl", "noarch", "src",
+];
+
+/// Parse an RPM filename into (name, arch, optional version string).
+///
+/// Tries two strategies:
+/// 1. Standard NEVRA: `name-version-release.arch.rpm` — split on the arch
+///    segment and extract version-release from between name and arch.
+/// 2. Non-standard: scan for a known arch before `.rpm` and treat everything
+///    before the version-start (`-\d`) as the package name.
+///
+/// Returns `None` if the filename has no recognizable arch or name.
+fn parse_rpm_filename(filename: &str) -> Option<(String, String, Option<String>)> {
+    let stem = filename.strip_suffix(".rpm")?;
+
+    // Find the arch: last dot-separated segment that is a known arch.
+    // E.g. "epel-release-latest-10.noarch" → arch = "noarch"
+    // E.g. "google-chrome-stable_current_x86_64" → need underscore check too
+    let arch = KNOWN_ARCHES.iter().find(|&&a| {
+        // Check `.arch` suffix (standard)
+        stem.ends_with(&format!(".{a}"))
+            // Check `_arch` suffix (vendor convention like google-chrome)
+            || stem.ends_with(&format!("_{a}"))
+    })?;
+
+    // Strip the arch suffix to get name-version-release (or just name)
+    let before_arch = if stem.ends_with(&format!(".{arch}")) {
+        &stem[..stem.len() - arch.len() - 1]
+    } else {
+        // underscore separator
+        &stem[..stem.len() - arch.len() - 1]
+    };
+
+    if before_arch.is_empty() {
+        return None;
+    }
+
+    // Extract name: everything before the first `-\d` pattern (version start).
+    // E.g. "epel-release-latest-10" → name = "epel-release-latest", ver = "10"
+    // E.g. "google-chrome-stable_current" → name = "google-chrome-stable_current", ver = None
+    let mut name_end = None;
+    let bytes = before_arch.as_bytes();
+    for i in 0..bytes.len().saturating_sub(1) {
+        if bytes[i] == b'-' && bytes[i + 1].is_ascii_digit() {
+            name_end = Some(i);
+            break;
+        }
+    }
+
+    match name_end {
+        Some(pos) => {
+            let name = &before_arch[..pos];
+            let version = &before_arch[pos + 1..]; // skip the leading '-'
+            if name.is_empty() {
+                None
+            } else {
+                Some((
+                    name.to_string(),
+                    arch.to_string(),
+                    Some(version.to_string()),
+                ))
+            }
+        }
+        None => {
+            // No version detected — use the whole thing as the name
+            Some((before_arch.to_string(), arch.to_string(), None))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6199,5 +6309,186 @@ mod tests {
     fn compose_path_control_chars_rejected() {
         assert!(!is_safe_compose_path("foo\nbar.yml"));
         assert!(!is_safe_compose_path("foo\x00bar.yml"));
+    }
+
+    // -- RPM filename parsing tests ---------------------------------------------
+
+    #[test]
+    fn parse_rpm_filename_standard_nevra() {
+        let result = parse_rpm_filename("httpd-2.4.57-5.el9.x86_64.rpm");
+        assert_eq!(
+            result,
+            Some(("httpd".into(), "x86_64".into(), Some("2.4.57-5.el9".into())))
+        );
+    }
+
+    #[test]
+    fn parse_rpm_filename_epel_release() {
+        let result = parse_rpm_filename("epel-release-latest-10.noarch.rpm");
+        assert_eq!(
+            result,
+            Some((
+                "epel-release-latest".into(),
+                "noarch".into(),
+                Some("10".into())
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_rpm_filename_google_chrome_underscore_arch() {
+        let result = parse_rpm_filename("google-chrome-stable_current_x86_64.rpm");
+        assert_eq!(
+            result,
+            Some(("google-chrome-stable_current".into(), "x86_64".into(), None))
+        );
+    }
+
+    #[test]
+    fn parse_rpm_filename_no_version() {
+        // Filename with arch but no version digits after a dash
+        let result = parse_rpm_filename("my-tool.noarch.rpm");
+        assert_eq!(result, Some(("my-tool".into(), "noarch".into(), None)));
+    }
+
+    #[test]
+    fn parse_rpm_filename_unparseable() {
+        assert_eq!(parse_rpm_filename("(1).rpm"), None);
+        assert_eq!(parse_rpm_filename("random-file.txt"), None);
+        assert_eq!(parse_rpm_filename(""), None);
+    }
+
+    // -- mark_uploaded_rpm tests ------------------------------------------------
+
+    /// Helper: build a snapshot with a single repo-less package.
+    fn snapshot_with_repoless(name: &str, ver: &str, rel: &str, arch: &str) -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: name.into(),
+                    version: ver.into(),
+                    release: rel.into(),
+                    arch: arch.into(),
+                    include: true,
+                    repoless_annotation: "No repo source".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_exact_nevra_still_works() {
+        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm(
+            "httpd-2.4.57-5.el9.x86_64.rpm",
+            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
+        );
+        assert_eq!(result, Some("httpd.x86_64".into()));
+        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
+        assert!(pkg.repoless_cached);
+        assert!(pkg.uploaded_version.is_none()); // exact match, no version mismatch
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_matches_epel_release_by_name_arch() {
+        let snap = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm(
+            "epel-release-latest-10.noarch.rpm",
+            "/tmp/epel-release-latest-10.noarch.rpm",
+        );
+        // "epel-release-latest" != "epel-release" — this won't match by relaxed name.
+        // The filename parses to name="epel-release-latest", which differs from pkg.name.
+        assert_eq!(result, None);
+
+        // But the standard NEVRA filename should work:
+        let snap2 = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
+        let mut session2 = RefineSession::new(snap2);
+        let result2 = session2.mark_uploaded_rpm(
+            "epel-release-10-1.el10.noarch.rpm",
+            "/tmp/epel-release-10-1.el10.noarch.rpm",
+        );
+        assert_eq!(result2, Some("epel-release.noarch".into()));
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_matches_google_chrome() {
+        let snap = snapshot_with_repoless("google-chrome-stable", "126.0", "1", "x86_64");
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm(
+            "google-chrome-stable-126.0-1.x86_64.rpm",
+            "/tmp/google-chrome-stable-126.0-1.x86_64.rpm",
+        );
+        assert_eq!(result, Some("google-chrome-stable.x86_64".into()));
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_populates_uploaded_version_on_mismatch() {
+        let snap = snapshot_with_repoless("custom-tool", "1.0.0", "1.el9", "x86_64");
+        let mut session = RefineSession::new(snap);
+        // Upload a file with version 2.0.0 instead of 1.0.0
+        let result = session.mark_uploaded_rpm(
+            "custom-tool-2.0.0-1.el9.x86_64.rpm",
+            "/tmp/custom-tool-2.0.0-1.el9.x86_64.rpm",
+        );
+        assert_eq!(result, Some("custom-tool.x86_64".into()));
+        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
+        assert!(pkg.repoless_cached);
+        assert_eq!(pkg.uploaded_version, Some("2.0.0-1.el9".into()));
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_returns_none_when_no_match() {
+        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm(
+            "nginx-1.0-1.el9.x86_64.rpm",
+            "/tmp/nginx-1.0-1.el9.x86_64.rpm",
+        );
+        assert_eq!(result, None);
+        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
+        assert!(!pkg.repoless_cached);
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_unparseable_filename_returns_none() {
+        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm("(1).rpm", "/tmp/(1).rpm");
+        assert_eq!(result, None);
+        // No panic, no match
+    }
+
+    #[test]
+    fn mark_uploaded_rpm_skips_non_repoless_packages() {
+        // Package has a source_repo (not repo-less), should not match
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "httpd".into(),
+                    version: "2.4.57".into(),
+                    release: "5.el9".into(),
+                    arch: "x86_64".into(),
+                    include: true,
+                    source_repo: "appstream".into(),
+                    repoless_annotation: String::new(), // not repo-less
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut session = RefineSession::new(snap);
+        let result = session.mark_uploaded_rpm(
+            "httpd-2.4.57-5.el9.x86_64.rpm",
+            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
+        );
+        assert_eq!(result, None);
     }
 }

@@ -53,6 +53,9 @@ pub struct PackageEntry {
     /// can read it when creating the tarball.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_path: Option<String>,
+    /// Version of the uploaded RPM (from filename), if different from installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploaded_version: Option<String>,
     pub aggregate: Option<AggregatePrevalence>,
 }
 
