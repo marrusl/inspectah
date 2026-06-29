@@ -351,11 +351,11 @@ describe("AggregateSidebar", () => {
               {
                 item_id: {
                   kind: "LanguageEnv" as const,
-                  key: { ecosystem: "pip", manifest: "/usr/lib/python3/requirements.txt" },
+                  key: { ecosystem: "pip", path: "/usr/lib/python3/requirements.txt" },
                 },
                 include: true,
                 triage: {
-                  bucket: "consensus" as const,
+                  bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
                 },
                 prevalence: { count: 3, total: 3 },
@@ -370,7 +370,7 @@ describe("AggregateSidebar", () => {
               {
                 item_id: {
                   kind: "LanguageEnv" as const,
-                  key: { ecosystem: "npm", manifest: "/opt/app/package.json" },
+                  key: { ecosystem: "npm", path: "/opt/app/package.json" },
                 },
                 include: false,
                 triage: {
@@ -428,7 +428,7 @@ describe("AggregateSidebar", () => {
                 },
                 include: true,
                 triage: {
-                  bucket: "consensus" as const,
+                  bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
                 },
                 prevalence: { count: 3, total: 3 },
@@ -441,7 +441,7 @@ describe("AggregateSidebar", () => {
                 },
                 include: false,
                 triage: {
-                  bucket: "consensus" as const,
+                  bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
                 },
                 prevalence: { count: 3, total: 3 },

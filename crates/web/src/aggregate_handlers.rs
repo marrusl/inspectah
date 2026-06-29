@@ -1360,21 +1360,15 @@ fn build_reference_sections(
 
                     // Check if this identity key has multiple content variants.
                     let key = lang_env_group_key(item_id);
-                    let siblings = lang_by_key.get(&key);
-                    let has_variants = siblings.map(|s| s.len()).unwrap_or(0) >= 2;
-
-                    let (variants, variant_payload) = if has_variants {
-                        (
-                            Some(build_language_package_variants(
-                                siblings.unwrap(),
-                                &lang_envs,
-                                idx,
-                            )),
-                            build_language_package_variant_payload(siblings.unwrap(), &lang_envs),
-                        )
-                    } else {
-                        (None, None)
-                    };
+                    let (variants, variant_payload) =
+                        if let Some(sibs) = lang_by_key.get(&key).filter(|s| s.len() >= 2) {
+                            (
+                                Some(build_language_package_variants(sibs, &lang_envs, idx)),
+                                build_language_package_variant_payload(sibs, &lang_envs),
+                            )
+                        } else {
+                            (None, None)
+                        };
 
                     AggregateItem {
                         item_id: item_id.clone(),
@@ -1425,17 +1419,13 @@ fn build_reference_sections(
                 };
                 let fp = f.aggregate.as_ref();
 
-                let siblings = unmanaged_by_path.get(f.path.as_str());
-                let has_variants = siblings.map(|s| s.len()).unwrap_or(0) >= 2;
-
-                let (variants, variant_payload) = if has_variants {
+                let (variants, variant_payload) = if let Some(sibs) = unmanaged_by_path
+                    .get(f.path.as_str())
+                    .filter(|s| s.len() >= 2)
+                {
                     (
-                        Some(build_unmanaged_file_variants(
-                            siblings.unwrap(),
-                            &unmanaged.items,
-                            idx,
-                        )),
-                        build_unmanaged_file_variant_payload(siblings.unwrap(), &unmanaged.items),
+                        Some(build_unmanaged_file_variants(sibs, &unmanaged.items, idx)),
+                        build_unmanaged_file_variant_payload(sibs, &unmanaged.items),
                     )
                 } else {
                     (None, None)
@@ -1594,7 +1584,10 @@ fn lang_package_content_hash(entry: &inspectah_core::types::nonrpm::NonRpmItem) 
     let mut key = String::new();
     key.push_str(&entry.method);
     key.push('\n');
-    for pkg in &entry.packages {
+    // Sort by (name, version) to match merge layer's content_variant_key.
+    let mut sorted: Vec<_> = entry.packages.iter().collect();
+    sorted.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+    for pkg in &sorted {
         key.push_str(&format!("{}={}\n", pkg.name, pkg.version));
     }
     ContentHash::from_content(key.as_bytes())

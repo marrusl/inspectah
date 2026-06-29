@@ -1,8 +1,9 @@
 /// Scrubs secret-like values from compose YAML content.
 ///
-/// Replaces values of environment variables whose names match
-/// secret patterns with `<REDACTED>`. Handles both `KEY=VALUE` and
-/// `KEY: value` patterns within `environment:` blocks.
+/// Scans every line for variable names matching secret patterns
+/// (PASSWORD, SECRET, TOKEN, API_KEY, etc.) and replaces the value
+/// with `<REDACTED>`. Applies to any line containing a matching key
+/// with `=` or `:` — not limited to `environment:` blocks.
 ///
 /// Lives in inspectah-core so both inspectah-collect and
 /// inspectah-refine can use it without cross-crate dependency issues.

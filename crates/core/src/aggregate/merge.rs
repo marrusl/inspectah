@@ -358,10 +358,14 @@ impl AggregateMergeable for NonRpmItem {
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
         use sha2::{Digest, Sha256};
         // Hash the unified package list to detect divergence across hosts.
+        // Sort by (name, version) before hashing to prevent false variant
+        // divergence from different filesystem enumeration order.
         let mut hasher = Sha256::new();
         hasher.update(self.method.as_bytes());
         hasher.update(b"\n");
-        for pkg in &self.packages {
+        let mut sorted: Vec<_> = self.packages.iter().collect();
+        sorted.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+        for pkg in &sorted {
             hasher.update(format!("{}={}\n", pkg.name, pkg.version).as_bytes());
         }
         Some(Cow::Owned(format!("{:x}", hasher.finalize())))
