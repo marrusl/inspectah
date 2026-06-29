@@ -33,10 +33,23 @@ pub fn scrub_compose_secrets(content: &str) -> String {
             return true;
         }
         // Lines with `:` could be YAML structure or `KEY: value` env vars.
-        // Top-level YAML keys (no leading whitespace, or single indent)
-        // like `secrets:`, `services:`, `volumes:` are structure, not secrets.
         // Env vars appear indented under `environment:` and have the form
-        // `KEY: value` where KEY is UPPER_SNAKE_CASE.
+        // `KEY: value` where KEY is UPPER_SNAKE_CASE (e.g., DATABASE_URL).
+        // Top-level YAML keys like `secrets:`, `services:` are lowercase
+        // and are NOT env vars.
+        if let Some(colon_pos) = trimmed.find(':') {
+            let key = &trimmed[..colon_pos];
+            // UPPER_SNAKE_CASE: non-empty, all uppercase ASCII letters,
+            // digits, or underscores, with at least one letter.
+            if !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && key.chars().any(|c| c.is_ascii_uppercase())
+            {
+                return true;
+            }
+        }
         false
     }
 
@@ -88,11 +101,28 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         let is_env_assignment = is_env_var_line(trimmed);
         let matches_pattern = SECRET_PATTERNS.iter().any(|pat| upper.contains(pat));
 
-        if is_env_assignment && matches_pattern {
-            let indent = &line[..indent_len];
+        // Split env-var lines into (key_with_sep, value). Supports both
+        // `KEY=value` and `KEY: value` (colon-space mapping style).
+        let kv_split = if is_env_assignment {
             if let Some(eq_pos) = trimmed.find('=') {
-                let key = &trimmed[..eq_pos + 1];
-                let value = &trimmed[eq_pos + 1..];
+                // KEY=value — separator is `=`, included in key portion
+                Some((&trimmed[..eq_pos + 1], &trimmed[eq_pos + 1..]))
+            } else if let Some(colon_pos) = trimmed.find(':') {
+                // KEY: value — separator is `: `, included in key portion
+                let rest = &trimmed[colon_pos + 1..];
+                let value = rest.strip_prefix(' ').unwrap_or(rest);
+                let sep_end = colon_pos + 1 + (rest.len() - value.len());
+                Some((&trimmed[..sep_end], value))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if is_env_assignment && matches_pattern {
+            if let Some((key, value)) = kv_split {
+                let indent = &line[..indent_len];
                 // Check for URL-embedded credentials in the value
                 if has_url_credentials(value) {
                     result.push_str(indent);
@@ -113,11 +143,9 @@ pub fn scrub_compose_secrets(content: &str) -> String {
             // Not a secret-named key, but check for URL-embedded credentials
             // in the value (e.g., DATABASE_URL without matching a pattern name
             // but containing postgres://user:pass@host).
-            if let Some(eq_pos) = trimmed.find('=') {
-                let value = &trimmed[eq_pos + 1..];
+            if let Some((key, value)) = kv_split {
                 if has_url_credentials(value) {
                     let indent = &line[..indent_len];
-                    let key = &trimmed[..eq_pos + 1];
                     result.push_str(indent);
                     result.push_str(key);
                     result.push_str(&scrub_url_credentials(value));
@@ -214,6 +242,51 @@ mod tests {
         assert!(
             scrubbed.contains("https://app.example.com/api"),
             "URL without credentials should not be modified"
+        );
+    }
+
+    #[test]
+    fn scrub_compose_secrets_colon_style_url_credentials() {
+        let input = "      DATABASE_URL: postgres://user:pass@db/prod\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("<REDACTED>:<REDACTED>@db/prod"),
+            "colon-style URL credentials should be scrubbed: {scrubbed}"
+        );
+        assert!(!scrubbed.contains("user"));
+        assert!(!scrubbed.contains("pass"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_eq_style_url_credentials_still_works() {
+        let input = "      DATABASE_URL=postgres://user:pass@db/prod\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("<REDACTED>:<REDACTED>@db/prod"),
+            "equals-style URL credentials should still be scrubbed: {scrubbed}"
+        );
+        assert!(!scrubbed.contains("user"));
+        assert!(!scrubbed.contains("pass"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_colon_style_secret_pattern() {
+        let input = "      DB_PASSWORD: hunter2\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("DB_PASSWORD: <REDACTED>"),
+            "colon-style secret pattern should be redacted: {scrubbed}"
+        );
+        assert!(!scrubbed.contains("hunter2"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_colon_style_preserves_nonsecret() {
+        let input = "      APP_PORT: 8080\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("APP_PORT: 8080"),
+            "colon-style non-secret should be preserved: {scrubbed}"
         );
     }
 }

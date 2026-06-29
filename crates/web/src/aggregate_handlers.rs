@@ -1618,7 +1618,7 @@ fn build_language_package_variants(
                 hash,
                 hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
-                selected: idx == sibling_indices[0], // most-prevalent variant is first
+                selected: entry.include,
             }
         })
         .collect();
@@ -1652,7 +1652,7 @@ fn build_language_package_variant_payload(
                 content_hash,
                 hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
-                selected: idx == sibling_indices[0],
+                selected: entry.include,
                 packages: entry
                     .packages
                     .iter()
@@ -1684,7 +1684,10 @@ fn build_unmanaged_file_variants(
                 hash: f.content_hash.clone(),
                 hosts: fp.map(|a| a.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|a| a.count.max(0) as usize).unwrap_or(0),
-                selected: idx == sibling_indices[0],
+                selected: matches!(
+                    f.variant_selection,
+                    VariantSelection::Selected | VariantSelection::Only
+                ),
             }
         })
         .collect();
@@ -1717,7 +1720,10 @@ fn build_unmanaged_file_variant_payload(
                 content_hash: f.content_hash.clone(),
                 hosts: fp.map(|a| a.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|a| a.count.max(0) as usize).unwrap_or(0),
-                selected: idx == sibling_indices[0],
+                selected: matches!(
+                    f.variant_selection,
+                    VariantSelection::Selected | VariantSelection::Only
+                ),
                 size: f.size,
                 last_modified: f.provenance.last_modified,
             }

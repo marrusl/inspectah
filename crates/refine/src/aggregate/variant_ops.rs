@@ -772,7 +772,7 @@ fn materialize_language_env_variants(
             .items
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.path == *path && !e.lang.is_empty())
+            .filter(|(_, e)| e.path == *path && !e.method.is_empty())
             .map(|(i, _)| i)
             .collect();
 
@@ -801,7 +801,7 @@ fn materialize_language_env_variants(
     }
 }
 
-/// Materialize variant state for the unmanaged file section (select-only).
+/// Materialize variant state for the unmanaged-file section (select-only).
 ///
 /// UnmanagedFile items use `content_hash` as the variant key. Only applies
 /// selection flags based on `state.selected`.
@@ -843,5 +843,139 @@ fn materialize_unmanaged_file_variants(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::aggregate::merge::AggregateMergeable;
+    use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::nonrpm::{
+        LanguagePackage, NonRpmItem, NonRpmSoftwareSection, UnmanagedFile, UnmanagedFileSection,
+    };
+
+    /// SelectVariant on a language-env item updates the `include` flag to
+    /// reflect the chosen variant (not just the first/most-prevalent).
+    #[test]
+    fn select_variant_language_env_flips_include() {
+        // Two pip envs at the same path with different package lists.
+        let item_a = NonRpmItem {
+            path: "/opt/app/venv".into(),
+            method: "pip list".into(),
+            include: true,
+            packages: vec![LanguagePackage {
+                name: "requests".into(),
+                version: "2.28.0".into(),
+            }],
+            ..Default::default()
+        };
+        let item_b = NonRpmItem {
+            path: "/opt/app/venv".into(),
+            method: "pip list".into(),
+            include: true,
+            packages: vec![LanguagePackage {
+                name: "requests".into(),
+                version: "2.31.0".into(),
+            }],
+            ..Default::default()
+        };
+
+        // Compute the content hash for item_b (the one we will select).
+        let target_key = item_b
+            .content_variant_key()
+            .expect("language env items have a content variant key");
+        let target_hash = ContentHash::new(target_key.into_owned()).expect("valid hex hash");
+
+        let mut snap = InspectionSnapshot {
+            schema_version: 1,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![item_a, item_b],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // Build projection state: select item_b's hash for the path.
+        let mut state = VariantProjectionState::default();
+        let item_id = ItemId::LanguageEnv {
+            ecosystem: "pip".into(),
+            path: "/opt/app/venv".into(),
+        };
+        apply_select(&mut state, &item_id, &target_hash);
+
+        // Materialize and verify.
+        materialize_variants(&mut snap, &state);
+
+        let items = &snap.non_rpm_software.as_ref().unwrap().items;
+        assert_eq!(items.len(), 2, "both variants should still exist");
+
+        // item_b (index 1) should have include=true (selected).
+        let b_key = items[1].content_variant_key().expect("key exists");
+        let b_hash = ContentHash::new(b_key.into_owned()).unwrap();
+        assert_eq!(b_hash, target_hash);
+        assert!(
+            items[1].include,
+            "selected variant should have include=true"
+        );
+    }
+
+    /// SelectVariant on an unmanaged-file item sets `variant_selection`
+    /// to `Selected` for the chosen variant and `Alternative` for others.
+    #[test]
+    fn select_variant_unmanaged_file_flips_selection() {
+        // Use ContentHash::from_content to generate valid 64-char hex hashes
+        let hash_a = ContentHash::from_content(b"content-a");
+        let hash_b = ContentHash::from_content(b"content-b");
+
+        let file_a = UnmanagedFile {
+            path: "/opt/app/config.yaml".into(),
+            content_hash: hash_a.as_str().to_string(),
+            include: true,
+            variant_selection: VariantSelection::default(),
+            ..Default::default()
+        };
+        let file_b = UnmanagedFile {
+            path: "/opt/app/config.yaml".into(),
+            content_hash: hash_b.as_str().to_string(),
+            include: true,
+            variant_selection: VariantSelection::default(),
+            ..Default::default()
+        };
+
+        // Select file_b (the non-first variant).
+        let target_hash = hash_b;
+
+        let mut snap = InspectionSnapshot {
+            schema_version: 1,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![file_a, file_b],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut state = VariantProjectionState::default();
+        let item_id = ItemId::UnmanagedFile {
+            path: "/opt/app/config.yaml".into(),
+        };
+        apply_select(&mut state, &item_id, &target_hash);
+
+        materialize_variants(&mut snap, &state);
+
+        let items = &snap.unmanaged_files.as_ref().unwrap().items;
+        assert_eq!(items.len(), 2);
+
+        // file_a should be Alternative, file_b should be Selected.
+        assert_eq!(
+            items[0].variant_selection,
+            VariantSelection::Alternative,
+            "non-selected variant should be Alternative"
+        );
+        assert_eq!(
+            items[1].variant_selection,
+            VariantSelection::Selected,
+            "selected variant should be Selected"
+        );
     }
 }
