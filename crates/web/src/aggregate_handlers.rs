@@ -1237,6 +1237,41 @@ fn build_reference_sections(
         }
     }
 
+    // Unmanaged Files — decision items with aggregate prevalence
+    if let Some(ref unmanaged) = snap.unmanaged_files {
+        let items: Vec<AggregateItem> = unmanaged
+            .items
+            .iter()
+            .map(|f| {
+                let item_id = ItemId::UnmanagedFile {
+                    path: f.path.clone(),
+                };
+                let fp = f.aggregate.as_ref();
+                AggregateItem {
+                    item_id,
+                    include: f.include,
+                    locked: f.locked,
+                    attention_reason: None,
+                    triage: default_context_triage(fp, ctx),
+                    prevalence: aggregate_prevalence_dto(fp, ctx),
+                    variants: None,
+                    source_repo: String::new(),
+                    repo_conflict: None,
+                }
+            })
+            .collect();
+
+        if !items.is_empty() {
+            sections.push(build_section(
+                "unmanaged_files",
+                "Unmanaged Files",
+                true,
+                &items,
+                ctx,
+            ));
+        }
+    }
+
     // NOTE: users_groups is DEFERRED — not included in aggregate view
     // NOTE: version_changes comes from rpm section diffs, not a standalone section
 }
@@ -2027,5 +2062,194 @@ mod tests {
             lang_section.is_none(),
             "binary-detection items should not produce a language_packages section"
         );
+    }
+
+    #[test]
+    fn aggregate_unmanaged_files_section_emitted() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/splunk/bin/splunkd".to_string(),
+                    size: 52_000_000,
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 2,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 52_000_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            zones_active: true,
+            total_hosts: 3,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let unmanaged_section = sections.iter().find(|s| s.id == "unmanaged_files");
+
+        assert!(
+            unmanaged_section.is_some(),
+            "unmanaged_files section should be present"
+        );
+        let section = unmanaged_section.unwrap();
+        assert!(section.is_decision_section);
+    }
+
+    #[test]
+    fn aggregate_unmanaged_files_100_pct_includes() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".to_string(),
+                    size: 10_000,
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 2,
+                        total: 2,
+                        hosts: vec!["a".into(), "b".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 10_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 2,
+                hostnames: vec!["a".into(), "b".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            zones_active: true,
+            total_hosts: 2,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "unmanaged_files")
+            .expect("unmanaged_files section should exist");
+
+        // Items are zone-sorted; collect all items from zones
+        let items: Vec<&AggregateItem> = if let Some(ref zones) = section.zones {
+            zones
+                .consensus
+                .items
+                .iter()
+                .chain(zones.near_consensus.items.iter())
+                .chain(zones.divergent.items.iter())
+                .collect()
+        } else {
+            section
+                .items
+                .as_ref()
+                .map_or(vec![], |v| v.iter().collect())
+        };
+
+        assert!(!items.is_empty(), "should have at least one item");
+        assert!(items[0].include, "100% prevalence should be included");
+    }
+
+    #[test]
+    fn aggregate_unmanaged_files_partial_excludes() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".to_string(),
+                    size: 10_000,
+                    include: false,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 1,
+                        total: 3,
+                        hosts: vec!["a".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                total_size: 10_000,
+                total_count: 1,
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            zones_active: true,
+            total_hosts: 3,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "unmanaged_files")
+            .expect("unmanaged_files section should exist");
+
+        // Items are zone-sorted; collect all items from zones
+        let items: Vec<&AggregateItem> = if let Some(ref zones) = section.zones {
+            zones
+                .consensus
+                .items
+                .iter()
+                .chain(zones.near_consensus.items.iter())
+                .chain(zones.divergent.items.iter())
+                .collect()
+        } else {
+            section
+                .items
+                .as_ref()
+                .map_or(vec![], |v| v.iter().collect())
+        };
+
+        assert!(!items.is_empty(), "should have at least one item");
+        assert!(!items[0].include, "partial prevalence should be excluded");
     }
 }
