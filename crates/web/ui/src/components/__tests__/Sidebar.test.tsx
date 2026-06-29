@@ -319,8 +319,6 @@ describe("Sidebar", () => {
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
         viewData={MOCK_VIEW_DATA}
-        hasLanguagePackages={true}
-        hasUnmanagedFiles={true}
         hasUnmanagedScan={true}
       />,
     );
