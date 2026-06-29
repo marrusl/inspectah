@@ -1203,6 +1203,40 @@ fn build_reference_sections(
         }
     }
 
+    // Language Packages — decision items grouped by ecosystem:path
+    {
+        let lang_envs = classify_language_envs(snap);
+        if !lang_envs.is_empty() {
+            let items: Vec<AggregateItem> = lang_envs
+                .iter()
+                .map(|(entry, item_id)| {
+                    let fp = entry.aggregate.as_ref();
+                    AggregateItem {
+                        item_id: item_id.clone(),
+                        include: entry.include,
+                        locked: entry.locked,
+                        attention_reason: None,
+                        triage: default_context_triage(fp, ctx),
+                        prevalence: aggregate_prevalence_dto(fp, ctx),
+                        variants: None,
+                        source_repo: String::new(),
+                        repo_conflict: None,
+                    }
+                })
+                .collect();
+
+            if !items.is_empty() {
+                sections.push(build_section(
+                    "language_packages",
+                    "Language Packages",
+                    true,
+                    &items,
+                    ctx,
+                ));
+            }
+        }
+    }
+
     // NOTE: users_groups is DEFERRED — not included in aggregate view
     // NOTE: version_changes comes from rpm section diffs, not a standalone section
 }
@@ -1210,6 +1244,41 @@ fn build_reference_sections(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Classifies non-RPM items as language package environments for the
+/// aggregate view. Groups by ecosystem + path (matching the aggregate
+/// merge identity key).
+fn classify_language_envs(
+    snap: &InspectionSnapshot,
+) -> Vec<(&inspectah_core::types::nonrpm::NonRpmItem, ItemId)> {
+    let nrs = match &snap.non_rpm_software {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+
+    nrs.items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.method.as_str(),
+                "pip list" | "pip dist-info" | "venv" | "npm lockfile" | "gem lockfile"
+            )
+        })
+        .map(|item| {
+            let ecosystem = match item.method.as_str() {
+                "pip list" | "pip dist-info" | "venv" => "pip",
+                "npm lockfile" => "npm",
+                "gem lockfile" => "gem",
+                _ => "other",
+            };
+            let item_id = ItemId::LanguageEnv {
+                ecosystem: ecosystem.to_string(),
+                path: item.path.clone(),
+            };
+            (item, item_id)
+        })
+        .collect()
+}
 
 fn build_triage_dto(
     tag: &TriageTag,
@@ -1724,6 +1793,239 @@ mod tests {
             "non-universal tuned profile must show count < total, got {}/{}",
             items_partial[0].prevalence.count,
             items_partial[0].prevalence.total,
+        );
+    }
+
+    #[test]
+    fn aggregate_language_packages_section_emitted() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "myapp-venv".to_string(),
+                    path: "/opt/myapp/venv".to_string(),
+                    method: "venv".to_string(),
+                    confidence: "high".to_string(),
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let lang_section = sections.iter().find(|s| s.id == "language_packages");
+
+        assert!(
+            lang_section.is_some(),
+            "language_packages section should be present"
+        );
+        let section = lang_section.unwrap();
+        assert!(section.is_decision_section);
+    }
+
+    #[test]
+    fn aggregate_language_packages_prevalence_plumbed() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        // 3/3 hosts — universal, include: true
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "myapp-venv".to_string(),
+                    path: "/opt/myapp/venv".to_string(),
+                    method: "venv".to_string(),
+                    confidence: "high".to_string(),
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+        let items = section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+        assert_eq!(items[0].prevalence.count, 3);
+        assert_eq!(items[0].prevalence.total, 3);
+        assert!(
+            items[0].include,
+            "100% prevalence should preserve stored include=true"
+        );
+    }
+
+    #[test]
+    fn aggregate_language_packages_partial_prevalence() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        // 1/3 hosts — divergent, include: false (stored value)
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "stale-venv".to_string(),
+                    path: "/opt/stale/venv".to_string(),
+                    method: "pip list".to_string(),
+                    confidence: "high".to_string(),
+                    include: false,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 1,
+                        total: 3,
+                        hosts: vec!["a".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+        let items = section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+        assert_eq!(items[0].prevalence.count, 1);
+        assert_eq!(items[0].prevalence.total, 3);
+        assert!(
+            !items[0].include,
+            "partial prevalence should preserve stored include=false"
+        );
+    }
+
+    #[test]
+    fn aggregate_language_packages_filters_non_lang_methods() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        // A binary-detection item should NOT appear in language_packages
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "custom-binary".to_string(),
+                    path: "/usr/local/bin/custom".to_string(),
+                    method: "binary".to_string(),
+                    confidence: "medium".to_string(),
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let lang_section = sections.iter().find(|s| s.id == "language_packages");
+
+        assert!(
+            lang_section.is_none(),
+            "binary-detection items should not produce a language_packages section"
         );
     }
 }
