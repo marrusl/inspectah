@@ -95,6 +95,17 @@ pub struct AggregateItem {
     pub source_repo: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo_conflict: Option<Vec<RepoSourceEntryDto>>,
+    /// Section-specific per-item metadata, serialized as JSON.
+    /// Language packages: `LanguagePackageMetadata`.
+    /// Unmanaged files: `UnmanagedFileMetadata`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_metadata: Option<serde_json::Value>,
+    /// Section-specific variant payload, serialized as JSON.
+    /// Only populated when the item has variants (multiple hosts
+    /// with different content at the same identity key).
+    /// Track C (T12) reads this field to render variant diff views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant_payload: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize)]
@@ -125,6 +136,97 @@ pub struct AggregateVariantOption {
     pub hosts: Vec<String>,
     pub host_count: usize,
     pub selected: bool,
+}
+
+// ---------------------------------------------------------------------------
+// DTOs — per-section metadata (serialized into AggregateItem.section_metadata)
+// ---------------------------------------------------------------------------
+
+/// Per-item metadata for language package aggregate rows.
+/// Carried in `AggregateItem.section_metadata` as a `serde_json::Value`.
+#[derive(Clone, Serialize)]
+pub struct LanguagePackageMetadata {
+    /// Ecosystem identifier (pip, npm, gem).
+    pub ecosystem: String,
+    /// Confidence level (high, medium, low).
+    pub confidence: String,
+    /// Number of packages in this environment.
+    pub package_count: usize,
+    /// Manifest file basis (e.g., "requirements.txt", "package-lock.json").
+    /// Deterministic: priority order requirements.txt > package-lock.json >
+    /// Gemfile.lock > first key (sorted for stability).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_basis: Option<String>,
+    /// Full package list for detail pane rendering.
+    pub packages: Vec<LanguagePackageDto>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct LanguagePackageDto {
+    pub name: String,
+    pub version: String,
+}
+
+/// Per-item metadata for unmanaged file aggregate rows.
+/// Carried in `AggregateItem.section_metadata` as a `serde_json::Value`.
+#[derive(Clone, Serialize)]
+pub struct UnmanagedFileMetadata {
+    /// Detected file type (elf_binary, jar, script, etc.).
+    pub file_type: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// True if path is under /var (persistence warning).
+    pub under_var: bool,
+    /// Provenance detail for the detail pane.
+    pub provenance: UnmanagedFileProvenanceDto,
+}
+
+#[derive(Clone, Serialize)]
+pub struct UnmanagedFileProvenanceDto {
+    pub last_modified: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub permissions: String,
+    pub writable_mount: bool,
+    pub mutability: bool,
+    pub service_working_dir: bool,
+}
+
+// ---------------------------------------------------------------------------
+// DTOs — variant payloads (serialized into AggregateItem.variant_payload)
+// ---------------------------------------------------------------------------
+
+/// Variant payload for language packages — package-list diff inputs.
+#[derive(Clone, Serialize)]
+pub struct LanguagePackageVariantPayload {
+    /// Per-variant package lists for diff rendering.
+    pub variant_packages: Vec<VariantPackageList>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct VariantPackageList {
+    pub content_hash: String,
+    pub hosts: Vec<String>,
+    pub host_count: usize,
+    pub selected: bool,
+    pub packages: Vec<LanguagePackageDto>,
+}
+
+/// Variant payload for unmanaged files — metadata comparison inputs.
+#[derive(Clone, Serialize)]
+pub struct UnmanagedFileVariantPayload {
+    /// Per-variant metadata for comparison rendering.
+    pub variant_metadata: Vec<VariantFileMetadata>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct VariantFileMetadata {
+    pub content_hash: String,
+    pub hosts: Vec<String>,
+    pub host_count: usize,
+    pub selected: bool,
+    pub size: u64,
+    pub last_modified: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +588,8 @@ fn build_aggregate_sections(
                     variants: None,
                     source_repo: pkg.entry.source_repo.clone(),
                     repo_conflict,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -560,6 +664,8 @@ fn build_aggregate_sections(
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -594,6 +700,8 @@ fn build_aggregate_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -651,6 +759,8 @@ fn build_aggregate_sections(
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 });
             }
         }
@@ -719,6 +829,8 @@ fn build_aggregate_sections(
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 });
             }
         }
@@ -741,6 +853,8 @@ fn build_aggregate_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
 
@@ -797,6 +911,8 @@ fn build_aggregate_sections(
                 variants,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
 
@@ -848,6 +964,8 @@ fn build_aggregate_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -976,6 +1094,8 @@ fn build_reference_sections(
                     variants,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 });
             }
         }
@@ -1009,6 +1129,8 @@ fn build_reference_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
         for zone in &net.firewall_zones {
@@ -1026,6 +1148,8 @@ fn build_reference_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
         if !items.is_empty() {
@@ -1053,6 +1177,8 @@ fn build_reference_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -1079,6 +1205,8 @@ fn build_reference_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
         for timer in &sched.systemd_timers {
@@ -1096,6 +1224,8 @@ fn build_reference_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
         if !items.is_empty() {
@@ -1129,6 +1259,8 @@ fn build_reference_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -1156,6 +1288,8 @@ fn build_reference_sections(
                 variants: None,
                 source_repo: String::new(),
                 repo_conflict: None,
+                section_metadata: None,
+                variant_payload: None,
             });
         }
         if !items.is_empty() {
@@ -1189,6 +1323,8 @@ fn build_reference_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: None,
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -1221,6 +1357,8 @@ fn build_reference_sections(
                         variants: None,
                         source_repo: String::new(),
                         repo_conflict: None,
+                        section_metadata: build_language_package_metadata(entry),
+                        variant_payload: None,
                     }
                 })
                 .collect();
@@ -1257,6 +1395,8 @@ fn build_reference_sections(
                     variants: None,
                     source_repo: String::new(),
                     repo_conflict: None,
+                    section_metadata: build_unmanaged_file_metadata(f),
+                    variant_payload: None,
                 }
             })
             .collect();
@@ -1313,6 +1453,73 @@ fn classify_language_envs(
             (item, item_id)
         })
         .collect()
+}
+
+/// Build section metadata for a language package aggregate item.
+/// Returns `Some(serde_json::Value)` with ecosystem, confidence, package
+/// count, manifest basis, and full package list for the detail pane.
+fn build_language_package_metadata(
+    item: &inspectah_core::types::nonrpm::NonRpmItem,
+) -> Option<serde_json::Value> {
+    let ecosystem = match item.method.as_str() {
+        "pip list" | "pip dist-info" | "venv" => "pip",
+        "npm lockfile" => "npm",
+        "gem lockfile" => "gem",
+        _ => "other",
+    };
+
+    // Deterministic manifest_basis: priority order for well-known names,
+    // then sorted-key fallback for HashMap stability.
+    let manifest_basis = ["requirements.txt", "package-lock.json", "Gemfile.lock"]
+        .iter()
+        .find(|k| item.manifest_files.contains_key(**k))
+        .map(|k| k.to_string())
+        .or_else(|| {
+            let mut keys: Vec<&String> = item.manifest_files.keys().collect();
+            keys.sort();
+            keys.first().map(|k| k.to_string())
+        });
+
+    let packages: Vec<LanguagePackageDto> = item
+        .packages
+        .iter()
+        .map(|p| LanguagePackageDto {
+            name: p.name.clone(),
+            version: p.version.clone(),
+        })
+        .collect();
+
+    serde_json::to_value(LanguagePackageMetadata {
+        ecosystem: ecosystem.to_string(),
+        confidence: item.confidence.clone(),
+        package_count: item.packages.len(),
+        manifest_basis,
+        packages,
+    })
+    .ok()
+}
+
+/// Build section metadata for an unmanaged file aggregate item.
+/// Returns `Some(serde_json::Value)` with file type, size, under_var flag,
+/// and full provenance signals for the detail pane.
+fn build_unmanaged_file_metadata(
+    f: &inspectah_core::types::nonrpm::UnmanagedFile,
+) -> Option<serde_json::Value> {
+    serde_json::to_value(UnmanagedFileMetadata {
+        file_type: format!("{:?}", f.file_type),
+        size: f.size,
+        under_var: f.under_var,
+        provenance: UnmanagedFileProvenanceDto {
+            last_modified: f.provenance.last_modified,
+            uid: f.provenance.uid,
+            gid: f.provenance.gid,
+            permissions: f.provenance.permissions.clone(),
+            writable_mount: f.provenance.writable_mount,
+            mutability: f.provenance.mutable,
+            service_working_dir: f.provenance.service_working_dir,
+        },
+    })
+    .ok()
 }
 
 fn build_triage_dto(
@@ -2251,5 +2458,253 @@ mod tests {
 
         assert!(!items.is_empty(), "should have at least one item");
         assert!(!items[0].include, "partial prevalence should be excluded");
+    }
+
+    #[test]
+    fn language_packages_section_metadata_populated() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        let mut manifest_files = std::collections::HashMap::new();
+        manifest_files.insert("requirements.txt".to_string(), String::new());
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "myapp-venv".to_string(),
+                    path: "/opt/myapp/venv".to_string(),
+                    method: "venv".to_string(),
+                    confidence: "high".to_string(),
+                    include: true,
+                    packages: vec![
+                        LanguagePackage {
+                            name: "flask".to_string(),
+                            version: "2.3.0".to_string(),
+                        },
+                        LanguagePackage {
+                            name: "requests".to_string(),
+                            version: "2.31.0".to_string(),
+                        },
+                    ],
+                    manifest_files,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "language_packages")
+            .expect("language_packages section must exist");
+        let items = section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        let meta = items[0]
+            .section_metadata
+            .as_ref()
+            .expect("section_metadata should be populated for language packages");
+
+        assert_eq!(meta["ecosystem"], "pip");
+        assert_eq!(meta["confidence"], "high");
+        assert_eq!(meta["package_count"], 2);
+        assert_eq!(meta["manifest_basis"], "requirements.txt");
+
+        let packages = meta["packages"]
+            .as_array()
+            .expect("packages should be array");
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0]["name"], "flask");
+        assert_eq!(packages[0]["version"], "2.3.0");
+    }
+
+    #[test]
+    fn unmanaged_files_section_metadata_populated() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{
+            FileType, ProvenanceSignals, UnmanagedFile, UnmanagedFileSection,
+        };
+        use inspectah_refine::session::RefineSession;
+
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/var/lib/splunk/data".to_string(),
+                    size: 52_000_000,
+                    file_type: FileType::ElfBinary,
+                    under_var: true,
+                    provenance: ProvenanceSignals {
+                        file_type: FileType::ElfBinary,
+                        last_modified: 1700000000,
+                        uid: 1001,
+                        gid: 1001,
+                        permissions: "0755".to_string(),
+                        mutable: true,
+                        writable_mount: true,
+                        service_working_dir: false,
+                    },
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 3,
+                        total: 3,
+                        hosts: vec!["a".into(), "b".into(), "c".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 3,
+                hostnames: vec!["a".into(), "b".into(), "c".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 3,
+            zones_active: true,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let section = sections
+            .iter()
+            .find(|s| s.id == "unmanaged_files")
+            .expect("unmanaged_files section must exist");
+
+        // zones_active=true, so items are in zone groups
+        let items: Vec<&AggregateItem> = if let Some(ref zones) = section.zones {
+            zones
+                .consensus
+                .items
+                .iter()
+                .chain(zones.near_consensus.items.iter())
+                .chain(zones.divergent.items.iter())
+                .collect()
+        } else {
+            section
+                .items
+                .as_ref()
+                .map_or(vec![], |v| v.iter().collect())
+        };
+
+        let meta = items[0]
+            .section_metadata
+            .as_ref()
+            .expect("section_metadata should be populated for unmanaged files");
+
+        assert_eq!(meta["file_type"], "ElfBinary");
+        assert_eq!(meta["size"], 52_000_000);
+        assert_eq!(meta["under_var"], true);
+
+        let prov = &meta["provenance"];
+        assert_eq!(prov["last_modified"], 1700000000_u64);
+        assert_eq!(prov["uid"], 1001);
+        assert_eq!(prov["gid"], 1001);
+        assert_eq!(prov["permissions"], "0755");
+        assert_eq!(prov["writable_mount"], true);
+        assert_eq!(prov["mutability"], true);
+        assert_eq!(prov["service_working_dir"], false);
+    }
+
+    #[test]
+    fn non_metadata_sections_have_no_section_metadata() {
+        use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        use inspectah_refine::session::RefineSession;
+
+        // A binary-detection item goes to the nonrpm section, not language_packages
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    name: "custom-tool".to_string(),
+                    path: "/opt/tool".to_string(),
+                    method: "binary-detection".to_string(),
+                    confidence: "medium".to_string(),
+                    include: true,
+                    aggregate: Some(AggregatePrevalence {
+                        count: 2,
+                        total: 2,
+                        hosts: vec!["a".into(), "b".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let ctx = AggregateContext {
+            aggregate_meta: AggregateSnapshotMeta {
+                label: "test".to_string(),
+                host_count: 2,
+                hostnames: vec!["a".into(), "b".into()],
+                merged_at: "2026-01-01T00:00:00Z".to_string(),
+                baseline_provisional: false,
+                section_host_counts: BTreeMap::new(),
+            },
+            zones: HashMap::new(),
+            total_hosts: 2,
+            zones_active: false,
+            repo_conflicts: HashMap::new(),
+        };
+
+        let session = RefineSession::new(snap.clone());
+        let sections = build_aggregate_sections(&session, &snap, &ctx);
+        let nonrpm_section = sections
+            .iter()
+            .find(|s| s.id == "nonrpm")
+            .expect("nonrpm section must exist");
+        let items = nonrpm_section
+            .items
+            .as_ref()
+            .expect("zones_active=false produces flat items list");
+
+        assert!(
+            items[0].section_metadata.is_none(),
+            "non-RPM software section should not have section_metadata"
+        );
+        assert!(
+            items[0].variant_payload.is_none(),
+            "non-RPM software section should not have variant_payload"
+        );
     }
 }

@@ -745,6 +745,73 @@ export interface UnmanagedFileGroup {
   items: UnmanagedFileItem[];
 }
 
+// ---------------------------------------------------------------------------
+// Aggregate section metadata DTOs (mirrors Rust LanguagePackageMetadata, etc.)
+// ---------------------------------------------------------------------------
+
+/** Section-specific metadata for language package aggregate items. */
+export interface LanguagePackageMetadata {
+  ecosystem: string;
+  confidence: string;
+  package_count: number;
+  manifest_basis: string | null;
+  packages: LanguagePackageDto[];
+}
+
+export interface LanguagePackageDto {
+  name: string;
+  version: string;
+}
+
+/** Section-specific metadata for unmanaged file aggregate items. */
+export interface UnmanagedFileMetadata {
+  file_type: string;
+  size: number;
+  under_var: boolean;
+  provenance: UnmanagedFileProvenanceDto;
+}
+
+export interface UnmanagedFileProvenanceDto {
+  last_modified: number;
+  uid: number;
+  gid: number;
+  permissions: string;
+  writable_mount: boolean;
+  mutability: boolean;
+  service_working_dir: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate variant payload DTOs (mirrors Rust variant payload structs)
+// ---------------------------------------------------------------------------
+
+/** Variant payload for language packages — package-list diff inputs. */
+export interface LanguagePackageVariantPayload {
+  variant_packages: VariantPackageList[];
+}
+
+export interface VariantPackageList {
+  content_hash: string;
+  hosts: string[];
+  host_count: number;
+  selected: boolean;
+  packages: LanguagePackageDto[];
+}
+
+/** Variant payload for unmanaged files — metadata comparison inputs. */
+export interface UnmanagedFileVariantPayload {
+  variant_metadata: VariantFileMetadata[];
+}
+
+export interface VariantFileMetadata {
+  content_hash: string;
+  hosts: string[];
+  host_count: number;
+  selected: boolean;
+  size: number;
+  last_modified: number;
+}
+
 /**
  * Row state for repo-less RPM packages.
  * Derived from Plan 2's backend fields (repoless_annotation, repoless_cached)
@@ -840,6 +907,20 @@ export interface AggregateItem {
   variants?: AggregateVariants;
   source_repo: string;
   repo_conflict?: RepoSourceEntry[];
+  /**
+   * Section-specific per-item metadata, serialized as JSON.
+   * Language packages: LanguagePackageMetadata.
+   * Unmanaged files: UnmanagedFileMetadata.
+   */
+  section_metadata?: Record<string, unknown>;
+  /**
+   * Section-specific variant payload, serialized as JSON.
+   * Only present when the item has variants across hosts.
+   * Language packages: LanguagePackageVariantPayload.
+   * Unmanaged files: UnmanagedFileVariantPayload.
+   * Track C T12 reads this to render variant diff views.
+   */
+  variant_payload?: Record<string, unknown>;
 }
 
 export interface AggregateZoneGroup {
