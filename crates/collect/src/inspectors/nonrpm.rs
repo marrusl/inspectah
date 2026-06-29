@@ -1621,6 +1621,22 @@ fn walk_for_unmanaged(
         let writable_mount = is_on_writable_mount(&child, mounts);
         let service_working_dir = is_under_service_workdir(&child, service_workdirs);
 
+        // Compute content hash for aggregate variant detection.
+        // Uses sha256sum to handle binary files without String corruption.
+        let content_hash = {
+            let result = exec.run("sha256sum", &[&child]);
+            if result.exit_code == 0 {
+                result
+                    .stdout
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            }
+        };
+
         *total_size += size;
         items.push(UnmanagedFile {
             path: child,
@@ -1638,6 +1654,7 @@ fn walk_for_unmanaged(
             },
             include: true,
             under_var: false, // Not possible -- /var is not a scan root
+            content_hash,
             ..Default::default()
         });
     }

@@ -1560,8 +1560,14 @@ fn build_language_package_metadata(
 fn build_unmanaged_file_metadata(
     f: &inspectah_core::types::nonrpm::UnmanagedFile,
 ) -> Option<serde_json::Value> {
+    // Use serde serialization for file_type to get snake_case wire format
+    // (e.g., "elf_binary") instead of Debug format ("ElfBinary").
+    let file_type_wire = serde_json::to_value(&f.file_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "other".to_string());
     serde_json::to_value(UnmanagedFileMetadata {
-        file_type: format!("{:?}", f.file_type),
+        file_type: file_type_wire,
         size: f.size,
         under_var: f.under_var,
         provenance: UnmanagedFileProvenanceDto {
@@ -2828,7 +2834,7 @@ mod tests {
             .as_ref()
             .expect("section_metadata should be populated for unmanaged files");
 
-        assert_eq!(meta["file_type"], "ElfBinary");
+        assert_eq!(meta["file_type"], "elf_binary");
         assert_eq!(meta["size"], 52_000_000);
         assert_eq!(meta["under_var"], true);
 

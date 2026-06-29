@@ -357,16 +357,31 @@ impl AggregateMergeable for NonRpmItem {
 
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
         use sha2::{Digest, Sha256};
-        // Hash the unified package list to detect divergence across hosts.
-        // Sort by (name, version) before hashing to prevent false variant
-        // divergence from different filesystem enumeration order.
+        // Hash method + packages for language environment items.
+        // For non-language pathful items with empty packages (binary
+        // detections, etc.), include additional differentiating fields
+        // to prevent silently collapsing divergent metadata.
         let mut hasher = Sha256::new();
         hasher.update(self.method.as_bytes());
         hasher.update(b"\n");
-        let mut sorted: Vec<_> = self.packages.iter().collect();
-        sorted.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
-        for pkg in &sorted {
-            hasher.update(format!("{}={}\n", pkg.name, pkg.version).as_bytes());
+        if self.packages.is_empty() {
+            // Non-language items: include name, version, and content
+            // to differentiate items at the same path with different metadata.
+            hasher.update(self.name.as_bytes());
+            hasher.update(b"\n");
+            hasher.update(self.version.as_bytes());
+            hasher.update(b"\n");
+            hasher.update(self.content.as_bytes());
+            hasher.update(b"\n");
+        } else {
+            // Language items: sort by (name, version) before hashing to
+            // prevent false variant divergence from different filesystem
+            // enumeration order.
+            let mut sorted: Vec<_> = self.packages.iter().collect();
+            sorted.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+            for pkg in &sorted {
+                hasher.update(format!("{}={}\n", pkg.name, pkg.version).as_bytes());
+            }
         }
         Some(Cow::Owned(format!("{:x}", hasher.finalize())))
     }
@@ -3066,6 +3081,55 @@ mod tests {
         assert!(
             !file.include,
             "partial prevalence should default to include: false"
+        );
+    }
+
+    #[test]
+    fn nonrpm_non_language_items_different_metadata_produce_different_variants() {
+        use crate::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+
+        // Two hosts have the same binary at the same path but different versions.
+        // With the old variant key (method+packages only), both would hash identically
+        // because packages is empty. The fix includes name+version+content.
+        let host_a = NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/app/bin/server".into(),
+                name: "server".into(),
+                method: "binary".into(),
+                version: "1.0.0".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let host_b = NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/app/bin/server".into(),
+                name: "server".into(),
+                method: "binary".into(),
+                version: "2.0.0".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let merged = merge_nonrpm_sections(
+            vec![Some(host_a), Some(host_b)],
+            2,
+            &["host-a".into(), "host-b".into()],
+        )
+        .unwrap();
+
+        // Items at the same identity key with different variant keys should
+        // produce 2 entries (one per version), not silently collapse to 1.
+        let server_items: Vec<_> = merged
+            .items
+            .iter()
+            .filter(|i| i.path == "/opt/app/bin/server")
+            .collect();
+        assert_eq!(
+            server_items.len(),
+            2,
+            "non-language items with different metadata must not collapse"
         );
     }
 }

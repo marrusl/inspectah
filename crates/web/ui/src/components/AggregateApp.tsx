@@ -213,10 +213,19 @@ export function AggregateApp({
   // GlobalSearch navigation clears the section search.
   const filterClearRef = useRef(0);
 
-  // Clear section filter and close variant view when switching sections
+  // Clear section filter and close variant view when switching sections,
+  // then move focus to the first reviewable item in the new section.
   useEffect(() => {
     setFilterText("");
     setExpandedItemId(null);
+    // Defer focus to next frame so the section content has rendered.
+    const timer = setTimeout(() => {
+      const firstRow = document.querySelector(
+        '[data-testid="aggregate-content"] [data-testid="aggregate-item-row"]',
+      ) as HTMLElement | null;
+      if (firstRow) firstRow.focus();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [activeSection]);
 
   // Build a set of divergent item keys for fast membership checks

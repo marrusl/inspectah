@@ -150,6 +150,16 @@ export function AggregateItemRow({
     if (isDecisionSection) onExpandVariant?.(item.item_id);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (isDecisionSection) onExpandVariant?.(item.item_id);
+    } else if (e.key === "Escape" && isExpanded) {
+      e.preventDefault();
+      onExpandVariant?.(item.item_id); // toggle close
+    }
+  };
+
   /* Section-specific metadata fragments */
   let sectionMeta: React.ReactNode = null;
 
@@ -232,6 +242,7 @@ export function AggregateItemRow({
       data-item-id={JSON.stringify(item.item_id)}
       data-locked={locked ? "true" : undefined}
       onClick={handleRowClick}
+      onKeyDown={handleKeyDown}
       role="row"
       tabIndex={0}
     >

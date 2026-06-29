@@ -3038,6 +3038,15 @@ pub fn render_refine_export(
                 .unwrap_or(false);
 
             for cf in &compose_files {
+                // Validate compose path: reject absolute paths and
+                // traversal components to prevent directory escape.
+                if !is_safe_compose_path(&cf.path) {
+                    eprintln!(
+                        "compose export: skipping hostile path: {}",
+                        sanitize_path_for_log(&cf.path)
+                    );
+                    continue;
+                }
                 // Mirror directory structure: compose/opt/myapp/docker-compose.yml
                 let dest = compose_root.join(&cf.path);
                 if let Some(parent) = dest.parent() {
@@ -3126,6 +3135,16 @@ pub fn render_refine_export(
                 }
             }
         }
+        // Scrub compose raw_content so the snapshot JSON doesn't leak
+        // unsanitized compose YAML that was already scrubbed in the
+        // compose/ sidecar files above.
+        if let Some(ref mut containers) = redacted.containers {
+            for cf in &mut containers.compose_files {
+                if let Some(ref raw) = cf.raw_content {
+                    cf.raw_content = Some(inspectah_core::redaction::scrub_compose_secrets(raw));
+                }
+            }
+        }
         redacted
     } else {
         snap.clone()
@@ -3157,6 +3176,38 @@ pub fn render_refine_export(
         .map_err(|e| RefineError::TarballError(e.to_string()))?;
 
     Ok(())
+}
+
+/// Check whether a compose file path is safe for export writes.
+///
+/// Rejects absolute paths and paths containing `..` components that
+/// could escape the export root directory.
+fn is_safe_compose_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    // Reject absolute paths
+    if path.starts_with('/') || path.starts_with('\\') {
+        return false;
+    }
+    // Reject path traversal components
+    for component in std::path::Path::new(path).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return false;
+        }
+    }
+    // Reject control characters and newlines
+    if path.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return false;
+    }
+    true
+}
+
+/// Sanitize a path for safe logging by replacing control characters.
+fn sanitize_path_for_log(path: &str) -> String {
+    path.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
 }
 
 #[cfg(test)]
@@ -6116,5 +6167,37 @@ mod tests {
             !pkg.entry.include,
             "harfbuzz must be excluded after user toggle"
         );
+    }
+
+    // -- Compose path validation tests ----------------------------------------
+
+    #[test]
+    fn compose_path_traversal_rejected() {
+        assert!(!is_safe_compose_path("../../../etc/passwd"));
+        assert!(!is_safe_compose_path("foo/../../../etc/shadow"));
+    }
+
+    #[test]
+    fn compose_path_absolute_rejected() {
+        assert!(!is_safe_compose_path("/etc/shadow"));
+        assert!(!is_safe_compose_path("/opt/myapp/docker-compose.yml"));
+    }
+
+    #[test]
+    fn compose_path_valid_accepted() {
+        assert!(is_safe_compose_path("opt/myapp/docker-compose.yml"));
+        assert!(is_safe_compose_path("docker-compose.yml"));
+        assert!(is_safe_compose_path("app/compose/prod.yml"));
+    }
+
+    #[test]
+    fn compose_path_empty_rejected() {
+        assert!(!is_safe_compose_path(""));
+    }
+
+    #[test]
+    fn compose_path_control_chars_rejected() {
+        assert!(!is_safe_compose_path("foo\nbar.yml"));
+        assert!(!is_safe_compose_path("foo\x00bar.yml"));
     }
 }

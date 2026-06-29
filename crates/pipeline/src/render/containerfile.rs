@@ -1149,7 +1149,14 @@ fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
         } else {
             format!("{svc_count} services")
         };
-        body.push(format!("#   - /{} ({svc_label})", cf.path));
+        // Sanitize path for comment rendering: replace control characters
+        // and newlines to prevent comment injection.
+        let safe_path: String = cf
+            .path
+            .chars()
+            .map(|c| if c.is_control() { '?' } else { c })
+            .collect();
+        body.push(format!("#   - /{safe_path} ({svc_label})"));
     }
 
     lines.extend(section("Compose Stacks (reference only)", body));

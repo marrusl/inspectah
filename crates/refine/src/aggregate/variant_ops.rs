@@ -34,14 +34,17 @@ pub struct VariantProjectionState {
 
 /// Extract the path from an ItemId for variant-capable item kinds.
 ///
-/// Returns the path for Config, DropIn, Quadlet, and Compose items.
-/// Other item kinds do not participate in variant operations.
+/// Returns the path for Config, DropIn, Quadlet, Compose, LanguageEnv,
+/// and UnmanagedFile items. Other item kinds do not participate in
+/// variant operations.
 pub fn item_path(item_id: &ItemId) -> Option<&str> {
     match item_id {
         ItemId::Config { path } => Some(path.as_str()),
         ItemId::DropIn { path } => Some(path.as_str()),
         ItemId::Quadlet { path } => Some(path.as_str()),
         ItemId::Compose { path } => Some(path.as_str()),
+        ItemId::LanguageEnv { path, .. } => Some(path.as_str()),
+        ItemId::UnmanagedFile { path } => Some(path.as_str()),
         _ => None,
     }
 }
@@ -198,6 +201,16 @@ pub fn validate_select(
             .as_ref()
             .map(|c| c.compose_files.iter().any(|e| e.path == path))
             .unwrap_or(false),
+        ItemId::LanguageEnv { .. } => snap
+            .non_rpm_software
+            .as_ref()
+            .map(|nrs| nrs.items.iter().any(|e| e.path == path))
+            .unwrap_or(false),
+        ItemId::UnmanagedFile { .. } => snap
+            .unmanaged_files
+            .as_ref()
+            .map(|ufs| ufs.items.iter().any(|e| e.path == path))
+            .unwrap_or(false),
         _ => false,
     };
     if !path_exists {
@@ -247,6 +260,39 @@ pub fn validate_select(
                 })
             })
             .unwrap_or(false),
+        ItemId::LanguageEnv { .. } => {
+            // LanguageEnv variant key is computed from method+packages
+            // (via AggregateMergeable::content_variant_key). We compare
+            // the target hash against computed variant keys.
+            use inspectah_core::aggregate::merge::AggregateMergeable;
+            snap.non_rpm_software
+                .as_ref()
+                .map(|nrs| {
+                    nrs.items.iter().any(|e| {
+                        e.path == path
+                            && e.content_variant_key()
+                                .and_then(|k| ContentHash::new(k.into_owned()).ok())
+                                .map(|h| h == *target)
+                                .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        }
+        ItemId::UnmanagedFile { .. } => {
+            // UnmanagedFile variant key is the content_hash field.
+            snap.unmanaged_files
+                .as_ref()
+                .map(|ufs| {
+                    ufs.items.iter().any(|e| {
+                        e.path == path
+                            && !e.content_hash.is_empty()
+                            && ContentHash::new(e.content_hash.clone())
+                                .map(|h| h == *target)
+                                .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        }
         _ => false,
     };
 
@@ -384,6 +430,12 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
 
     // --- Compose section (select-only, no user variants or discards) ---
     materialize_compose_variants(snap, state, &affected_paths);
+
+    // --- LanguageEnv section (select-only) ---
+    materialize_language_env_variants(snap, state, &affected_paths);
+
+    // --- UnmanagedFile section (select-only) ---
+    materialize_unmanaged_file_variants(snap, state, &affected_paths);
 }
 
 /// Materialize variant state for the config section.
@@ -693,6 +745,101 @@ fn materialize_compose_variants(
                     containers.compose_files[idx].variant_selection = VariantSelection::Selected;
                 } else {
                     containers.compose_files[idx].variant_selection = VariantSelection::Alternative;
+                }
+            }
+        }
+    }
+}
+
+/// Materialize variant state for the language environment section (select-only).
+///
+/// LanguageEnv items are structured carriers (package lists) — no user
+/// variants or discards. Only applies selection flags based on `state.selected`.
+/// Variant keys are computed via `AggregateMergeable::content_variant_key`.
+fn materialize_language_env_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    use inspectah_core::aggregate::merge::AggregateMergeable;
+
+    let Some(ref mut nrs) = snap.non_rpm_software else {
+        return;
+    };
+
+    for path in affected_paths {
+        let variants: Vec<usize> = nrs
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.path == *path && !e.lang.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+
+        if variants.is_empty() {
+            continue;
+        }
+
+        // LanguageEnv items don't have a variant_selection field on NonRpmItem,
+        // so selection is tracked via the aggregate prevalence metadata.
+        // The UI uses the selected hash to highlight the chosen variant.
+        if variants.len() == 1 {
+            // Single variant — no selection needed (implicitly Only)
+            continue;
+        }
+
+        if let Some(selected_hash) = state.selected.get(path) {
+            for &idx in &variants {
+                if let Some(key) = nrs.items[idx].content_variant_key()
+                    && let Ok(hash) = ContentHash::new(key.into_owned())
+                    && hash == *selected_hash
+                {
+                    nrs.items[idx].include = true;
+                }
+            }
+        }
+    }
+}
+
+/// Materialize variant state for the unmanaged file section (select-only).
+///
+/// UnmanagedFile items use `content_hash` as the variant key. Only applies
+/// selection flags based on `state.selected`.
+fn materialize_unmanaged_file_variants(
+    snap: &mut InspectionSnapshot,
+    state: &VariantProjectionState,
+    affected_paths: &HashSet<String>,
+) {
+    let Some(ref mut ufs) = snap.unmanaged_files else {
+        return;
+    };
+
+    for path in affected_paths {
+        let variants: Vec<usize> = ufs
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.path == *path && !e.content_hash.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+
+        if variants.is_empty() {
+            continue;
+        }
+
+        if variants.len() == 1 {
+            ufs.items[variants[0]].variant_selection = VariantSelection::Only;
+            continue;
+        }
+
+        if let Some(selected_hash) = state.selected.get(path) {
+            for &idx in &variants {
+                if let Ok(entry_hash) = ContentHash::new(ufs.items[idx].content_hash.clone()) {
+                    ufs.items[idx].variant_selection = if entry_hash == *selected_hash {
+                        VariantSelection::Selected
+                    } else {
+                        VariantSelection::Alternative
+                    };
                 }
             }
         }

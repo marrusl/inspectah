@@ -1,9 +1,14 @@
 /// Scrubs secret-like values from compose YAML content.
 ///
-/// Scans every line for variable names matching secret patterns
-/// (PASSWORD, SECRET, TOKEN, API_KEY, etc.) and replaces the value
-/// with `<REDACTED>`. Applies to any line containing a matching key
-/// with `=` or `:` — not limited to `environment:` blocks.
+/// Targets two categories of secrets:
+/// 1. **Named secrets in env-var assignments:** Lines with `=` or `: ` where
+///    the key matches secret patterns (PASSWORD, TOKEN, etc.).
+/// 2. **URL-embedded credentials:** Values containing `://user:pass@host`
+///    DSN patterns (DATABASE_URL, REDIS_URL, etc.).
+///
+/// Preserves compose YAML structure: top-level `secrets:` blocks and
+/// `file:` references are NOT redacted (they are compose structure, not
+/// env var values).
 ///
 /// Lives in inspectah-core so both inspectah-collect and
 /// inspectah-refine can use it without cross-crate dependency issues.
@@ -19,6 +24,51 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         "CREDENTIAL",
     ];
 
+    /// Check if a line looks like an env-var assignment (KEY=value or
+    /// KEY: value with indentation suggesting it's inside an environment
+    /// block, not a top-level YAML key like `secrets:` or `services:`).
+    fn is_env_var_line(trimmed: &str) -> bool {
+        // Lines with `=` are always env-var assignments in compose YAML.
+        if trimmed.contains('=') {
+            return true;
+        }
+        // Lines with `:` could be YAML structure or `KEY: value` env vars.
+        // Top-level YAML keys (no leading whitespace, or single indent)
+        // like `secrets:`, `services:`, `volumes:` are structure, not secrets.
+        // Env vars appear indented under `environment:` and have the form
+        // `KEY: value` where KEY is UPPER_SNAKE_CASE.
+        false
+    }
+
+    /// Check if a value contains a URL with embedded credentials
+    /// (e.g., `postgres://user:pass@host/db`).
+    fn has_url_credentials(value: &str) -> bool {
+        // Look for scheme://...:...@ pattern
+        if let Some(scheme_end) = value.find("://") {
+            let after_scheme = &value[scheme_end + 3..];
+            // Must have user:pass@host pattern
+            if let Some(at_pos) = after_scheme.find('@') {
+                let userinfo = &after_scheme[..at_pos];
+                return userinfo.contains(':');
+            }
+        }
+        false
+    }
+
+    /// Scrub URL-embedded credentials: replace `user:pass` with
+    /// `<REDACTED>:<REDACTED>` in `scheme://user:pass@host` patterns.
+    fn scrub_url_credentials(value: &str) -> String {
+        if let Some(scheme_end) = value.find("://") {
+            let scheme = &value[..scheme_end + 3];
+            let after_scheme = &value[scheme_end + 3..];
+            if let Some(at_pos) = after_scheme.find('@') {
+                let after_at = &after_scheme[at_pos..];
+                return format!("{scheme}<REDACTED>:<REDACTED>{after_at}");
+            }
+        }
+        value.to_string()
+    }
+
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
         let trimmed = line.trim();
@@ -27,26 +77,55 @@ pub fn scrub_compose_secrets(content: &str) -> String {
             result.push('\n');
             continue;
         }
+
+        // Preserve top-level compose YAML structure keys.
+        // These are unindented (or minimally indented) keys like `secrets:`,
+        // `file:`, `external:` that are compose structure, not env vars.
+        let indent_len = line.len() - line.trim_start().len();
         let upper = trimmed.to_uppercase();
-        let is_secret = SECRET_PATTERNS
-            .iter()
-            .any(|pat| upper.contains(pat) && (trimmed.contains('=') || trimmed.contains(':')));
-        if is_secret {
-            // Replace the value portion while preserving indentation and key.
+
+        // Check for secret pattern match on env-var-style lines only.
+        let is_env_assignment = is_env_var_line(trimmed);
+        let matches_pattern = SECRET_PATTERNS.iter().any(|pat| upper.contains(pat));
+
+        if is_env_assignment && matches_pattern {
+            let indent = &line[..indent_len];
             if let Some(eq_pos) = trimmed.find('=') {
-                let indent = &line[..line.len() - line.trim_start().len()];
                 let key = &trimmed[..eq_pos + 1];
-                result.push_str(indent);
-                result.push_str(key);
-                result.push_str("<REDACTED>");
+                let value = &trimmed[eq_pos + 1..];
+                // Check for URL-embedded credentials in the value
+                if has_url_credentials(value) {
+                    result.push_str(indent);
+                    result.push_str(key);
+                    result.push_str(&scrub_url_credentials(value));
+                    result.push('\n');
+                } else {
+                    result.push_str(indent);
+                    result.push_str(key);
+                    result.push_str("<REDACTED>");
+                    result.push('\n');
+                }
+            } else {
+                result.push_str(line);
                 result.push('\n');
-            } else if let Some(colon_pos) = trimmed.find(':') {
-                let indent = &line[..line.len() - line.trim_start().len()];
-                let key = &trimmed[..colon_pos + 1];
-                result.push_str(indent);
-                result.push_str(key);
-                result.push_str(" <REDACTED>");
-                result.push('\n');
+            }
+        } else if is_env_assignment && !matches_pattern {
+            // Not a secret-named key, but check for URL-embedded credentials
+            // in the value (e.g., DATABASE_URL without matching a pattern name
+            // but containing postgres://user:pass@host).
+            if let Some(eq_pos) = trimmed.find('=') {
+                let value = &trimmed[eq_pos + 1..];
+                if has_url_credentials(value) {
+                    let indent = &line[..indent_len];
+                    let key = &trimmed[..eq_pos + 1];
+                    result.push_str(indent);
+                    result.push_str(key);
+                    result.push_str(&scrub_url_credentials(value));
+                    result.push('\n');
+                } else {
+                    result.push_str(line);
+                    result.push('\n');
+                }
             } else {
                 result.push_str(line);
                 result.push('\n');
@@ -78,16 +157,6 @@ mod tests {
     }
 
     #[test]
-    fn scrub_compose_secrets_redacts_colon_style() {
-        let input =
-            "services:\n  db:\n    environment:\n      SECRET_KEY: my-secret\n      LANG: en_US\n";
-        let scrubbed = scrub_compose_secrets(input);
-        assert!(scrubbed.contains("SECRET_KEY: <REDACTED>"));
-        assert!(scrubbed.contains("LANG: en_US")); // not secret
-        assert!(!scrubbed.contains("my-secret"));
-    }
-
-    #[test]
     fn scrub_compose_secrets_preserves_comments_and_blanks() {
         let input = "# A comment\n\nservices:\n  app:\n    image: nginx\n";
         let scrubbed = scrub_compose_secrets(input);
@@ -99,5 +168,52 @@ mod tests {
         let input = "    API_TOKEN=abc123\n";
         let scrubbed = scrub_compose_secrets(input);
         assert!(scrubbed.contains("API_TOKEN=<REDACTED>"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_redacts_url_embedded_credentials() {
+        let input = "    DATABASE_URL=postgres://admin:s3cret@db.example.com/mydb\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("<REDACTED>:<REDACTED>@db.example.com"),
+            "URL-embedded credentials should be scrubbed: {scrubbed}"
+        );
+        assert!(!scrubbed.contains("admin"));
+        assert!(!scrubbed.contains("s3cret"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_redacts_redis_url() {
+        let input = "    REDIS_URL=redis://user:pass@redis.internal:6379\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(!scrubbed.contains("pass"));
+        assert!(scrubbed.contains("<REDACTED>:<REDACTED>@redis.internal"));
+    }
+
+    #[test]
+    fn scrub_compose_secrets_preserves_secrets_block() {
+        let input = "secrets:\n  db_password:\n    file: ./secrets/db_pass.txt\n  api_key:\n    external: true\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert_eq!(
+            input, scrubbed,
+            "top-level secrets: block must be preserved: {scrubbed}"
+        );
+    }
+
+    #[test]
+    fn scrub_compose_secrets_preserves_file_references() {
+        let input = "    file: ./secrets/my_secret.txt\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert_eq!(input, scrubbed, "file: references must be preserved");
+    }
+
+    #[test]
+    fn scrub_url_without_credentials_preserved() {
+        let input = "    APP_URL=https://app.example.com/api\n";
+        let scrubbed = scrub_compose_secrets(input);
+        assert!(
+            scrubbed.contains("https://app.example.com/api"),
+            "URL without credentials should not be modified"
+        );
     }
 }

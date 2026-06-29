@@ -591,6 +591,78 @@ describe("AggregateItemRow", () => {
     });
   });
 
+  describe("keyboard interaction", () => {
+    it("Enter expands details in decision section", async () => {
+      const user = userEvent.setup();
+      const onExpandVariant = vi.fn();
+      const item = makeItem({
+        item_id: { kind: "Config", key: { path: "/etc/httpd.conf" } },
+      });
+
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          onExpandVariant={onExpandVariant}
+        />,
+      );
+
+      const row = screen.getByTestId("aggregate-item-row");
+      row.focus();
+      await user.keyboard("{Enter}");
+      expect(onExpandVariant).toHaveBeenCalledWith(item.item_id);
+    });
+
+    it("Space expands details in decision section", async () => {
+      const user = userEvent.setup();
+      const onExpandVariant = vi.fn();
+      const item = makeItem({
+        item_id: { kind: "Config", key: { path: "/etc/httpd.conf" } },
+      });
+
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          onExpandVariant={onExpandVariant}
+        />,
+      );
+
+      const row = screen.getByTestId("aggregate-item-row");
+      row.focus();
+      await user.keyboard(" ");
+      expect(onExpandVariant).toHaveBeenCalledWith(item.item_id);
+    });
+
+    it("Escape closes expanded details and returns focus", async () => {
+      const user = userEvent.setup();
+      const onExpandVariant = vi.fn();
+      const item = makeItem({
+        item_id: { kind: "Config", key: { path: "/etc/httpd.conf" } },
+      });
+
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          onExpandVariant={onExpandVariant}
+          isExpanded={true}
+        />,
+      );
+
+      const row = screen.getByTestId("aggregate-item-row");
+      row.focus();
+      await user.keyboard("{Escape}");
+      expect(onExpandVariant).toHaveBeenCalledWith(item.item_id);
+    });
+  });
+
   describe("formatSize", () => {
     it("formats bytes", () => {
       expect(formatSize(500)).toBe("500 B");
