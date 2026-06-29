@@ -6,9 +6,26 @@ import { useRpmUpload } from "../useRpmUpload";
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
+/** Default matched response from POST /api/upload-rpm. */
+const matchedResponse = {
+  uploaded: 1,
+  matched: "nginx.x86_64",
+  status: "matched",
+};
+
+/** Unmatched response from POST /api/upload-rpm. */
+const unmatchedResponse = {
+  uploaded: 1,
+  matched: null,
+  status: "unmatched",
+};
+
 beforeEach(() => {
   mockFetch.mockReset();
-  mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+  mockFetch.mockResolvedValue({
+    ok: true,
+    json: async () => matchedResponse,
+  });
 });
 
 describe("useRpmUpload", () => {
@@ -265,6 +282,58 @@ describe("useRpmUpload", () => {
     expect(matchResult!.conflicts).toHaveLength(1);
     expect(matchResult!.conflicts[0].packageName).toBe("nginx.x86_64");
     expect(matchResult!.conflicts[0].files).toHaveLength(2);
+  });
+
+  it("uploadRpm returns match result from backend", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => matchedResponse,
+    });
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        {
+          name: "nginx",
+          arch: "x86_64",
+          repoless_annotation: "manual",
+          repoless_cached: false,
+        },
+      ]);
+    });
+    const mockFile = new File(["rpm"], "nginx-1.24-1.el9.x86_64.rpm");
+    let matchResult: Awaited<ReturnType<typeof result.current.uploadRpm>>;
+    await act(async () => {
+      matchResult = await result.current.uploadRpm("nginx.x86_64", mockFile);
+    });
+    expect(matchResult!.status).toBe("matched");
+    expect(matchResult!.matched).toBe("nginx.x86_64");
+    expect(result.current.hasUnmatchedUploads).toBe(false);
+  });
+
+  it("tracks unmatched uploads when backend returns unmatched status", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => unmatchedResponse,
+    });
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        {
+          name: "nginx",
+          arch: "x86_64",
+          repoless_annotation: "manual",
+          repoless_cached: false,
+        },
+      ]);
+    });
+    const mockFile = new File(["rpm"], "wrong-package-1.0-1.el9.x86_64.rpm");
+    await act(async () => {
+      await result.current.uploadRpm("nginx.x86_64", mockFile);
+    });
+    expect(result.current.hasUnmatchedUploads).toBe(true);
+    expect(result.current.unmatchedUploads).toContain(
+      "wrong-package-1.0-1.el9.x86_64.rpm",
+    );
   });
 
   it("disambiguates multilib packages with same name but different arch", () => {

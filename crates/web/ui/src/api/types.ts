@@ -30,6 +30,8 @@ export interface PackageEntry {
   repoless_annotation?: string;
   /** True if cached RPM was found in /var/cache/dnf/ (from Plan 2 backend). */
   repoless_cached?: boolean;
+  /** Version of the uploaded RPM when it differs from the installed version. */
+  uploaded_version?: string;
 }
 
 // --- Config types (inspectah-core/src/types/config.rs) ---

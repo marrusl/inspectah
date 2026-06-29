@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { RpmUploadModal } from "../RpmUploadModal";
 import { RpmBatchUploadModal } from "../RpmBatchUploadModal";
 
@@ -56,6 +57,62 @@ describe("RpmUploadModal", () => {
     // The modal should show the bare name, not the canonical key
     expect(screen.getByText(/Upload RPM for nginx/)).toBeInTheDocument();
     expect(screen.getByText(/nginx-\*-\*\.x86_64\.rpm/)).toBeInTheDocument();
+  });
+
+  it("shows matched feedback after successful upload", async () => {
+    const user = userEvent.setup();
+    const onUpload = vi.fn().mockResolvedValue({
+      uploaded: 1,
+      matched: "custom-agent.x86_64",
+      status: "matched",
+    });
+    render(<RpmUploadModal {...defaultProps} onUpload={onUpload} />);
+    // Simulate file selection by finding the file input
+    const input = document.querySelector('input[type="file"]')!;
+    const file = new File(
+      ["rpm"],
+      "custom-agent-1.0-1.el9.x86_64.rpm",
+      { type: "application/x-rpm" },
+    );
+    fireEvent.change(input, { target: { files: [file] } });
+    // Click upload using userEvent for proper async handling
+    const uploadBtn = screen.getByRole("button", { name: /confirm|upload/i });
+    await user.click(uploadBtn);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("upload-match-result"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Matched to custom-agent\.x86_64/),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows warning for unmatched upload", async () => {
+    const user = userEvent.setup();
+    const onUpload = vi.fn().mockResolvedValue({
+      uploaded: 1,
+      matched: null,
+      status: "unmatched",
+    });
+    render(<RpmUploadModal {...defaultProps} onUpload={onUpload} />);
+    const input = document.querySelector('input[type="file"]')!;
+    const file = new File(
+      ["rpm"],
+      "custom-agent-1.0-1.el9.x86_64.rpm",
+      { type: "application/x-rpm" },
+    );
+    fireEvent.change(input, { target: { files: [file] } });
+    const uploadBtn = screen.getByRole("button", { name: /confirm|upload/i });
+    await user.click(uploadBtn);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("upload-unmatched-warning"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/no matching package found/),
+      ).toBeInTheDocument();
+    });
   });
 });
 

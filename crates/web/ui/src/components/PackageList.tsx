@@ -22,6 +22,10 @@ export interface PackageListPackage {
   include: boolean;
   prevalence?: { count: number; total: number };
   repo_conflict?: { repo: string; host_count: number }[];
+  /** Version of the uploaded RPM when it differs from installed. */
+  uploaded_version?: string;
+  /** Currently installed version (for version mismatch display). */
+  installed_version?: string;
 }
 
 export interface PackageListProps {
@@ -711,6 +715,20 @@ function PackageRow({
           <Label color="orange" isCompact>
             No repo
           </Label>
+        )}
+        {pkg.uploaded_version && pkg.installed_version && (
+          <span
+            data-testid="version-mismatch-info"
+            className="inspectah-package-row__version-mismatch"
+            style={{
+              color:
+                "var(--pf-t--global--color--nonstatus--gray--default)",
+              fontSize: "var(--pf-t--global--font--size--xs)",
+            }}
+          >
+            Uploaded: {pkg.uploaded_version} (installed:{" "}
+            {pkg.installed_version})
+          </span>
         )}
         {mode === "aggregate" && (
           <>

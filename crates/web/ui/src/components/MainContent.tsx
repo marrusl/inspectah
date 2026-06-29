@@ -105,6 +105,8 @@ function toPackageListPackages(
     name: `${pkg.entry.name}.${pkg.entry.arch}`,
     source_repo: pkg.entry.source_repo,
     include: pkg.entry.include,
+    uploaded_version: pkg.entry.uploaded_version,
+    installed_version: pkg.entry.uploaded_version ? pkg.entry.version : undefined,
   }));
 }
 

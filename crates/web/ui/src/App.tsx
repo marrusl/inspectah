@@ -565,6 +565,7 @@ function SingleHostApp({
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}
+        unmatchedUploadCount={rpmUpload.unmatchedUploads.length}
         toolbarExtra={
           rpmUpload.needsUploadCount > 0 ? (
             <ToolbarItem>
@@ -674,13 +675,9 @@ function SingleHostApp({
         isOpen={uploadTarget !== null}
         packageName={uploadTarget?.name ?? ""}
         packageArch={uploadTarget?.arch ?? "x86_64"}
-        onUpload={(_name, file) => {
+        onUpload={async (_name, file) => {
           if (uploadTarget) {
-            rpmUpload
-              .uploadRpm(uploadTarget.canonicalKey, file)
-              .catch((err) => {
-                console.error("RPM upload failed:", err);
-              });
+            return rpmUpload.uploadRpm(uploadTarget.canonicalKey, file);
           }
         }}
         onClose={() => setUploadTarget(null)}

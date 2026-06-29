@@ -301,6 +301,60 @@ describe("ExportDialog", () => {
     });
   });
 
+  it("shows unmatched upload warning and gates export when unmatched uploads exist", async () => {
+    const user = userEvent.setup();
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={MOCK_STATS}
+        generation={7}
+        sessionIsSensitive={false}
+        onViewUpdate={vi.fn()}
+        unmatchedUploadCount={2}
+      />,
+    );
+
+    // Warning should be visible
+    expect(
+      screen.getByTestId("unmatched-upload-warning"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 uploaded RPMs have no matching package/),
+    ).toBeInTheDocument();
+
+    // Export button should be disabled until acknowledged
+    const exportBtn = screen.getByRole("button", { name: "Export" });
+    expect(exportBtn).toBeDisabled();
+
+    // Check the acknowledgment box
+    const checkbox = screen.getByTestId("unmatched-ack-checkbox");
+    await user.click(checkbox);
+
+    // Export button should now be enabled
+    expect(exportBtn).not.toBeDisabled();
+  });
+
+  it("does not show unmatched warning when unmatchedUploadCount is zero", () => {
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={MOCK_STATS}
+        generation={7}
+        sessionIsSensitive={false}
+        onViewUpdate={vi.fn()}
+        unmatchedUploadCount={0}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("unmatched-upload-warning"),
+    ).not.toBeInTheDocument();
+    // Export should be enabled (no gates)
+    expect(screen.getByRole("button", { name: "Export" })).not.toBeDisabled();
+  });
+
   it("shows zero exclusions when stats have no exclusions", () => {
     const zeroStats = mockStats({
       sections: [

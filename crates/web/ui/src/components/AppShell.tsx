@@ -96,6 +96,8 @@ export interface AppShellProps {
   isAggregateMode?: boolean;
   /** Override section IDs for 1-9 keyboard navigation (aggregate mode). */
   sectionIds?: string[];
+  /** Number of uploaded RPMs that did not match any package (gates export). */
+  unmatchedUploadCount?: number;
 }
 
 /**
@@ -137,6 +139,7 @@ export function AppShell({
   aggregateSummary,
   isAggregateMode = false,
   sectionIds,
+  unmatchedUploadCount = 0,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(() =>
     isAggregateMode ? readPanelPref() : initialPanelOpen(),
@@ -261,6 +264,7 @@ export function AppShell({
         generation={generation}
         sessionIsSensitive={sessionIsSensitive}
         onViewUpdate={onExportComplete}
+        unmatchedUploadCount={unmatchedUploadCount}
       />
     </Page>
   );

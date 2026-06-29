@@ -2053,4 +2053,43 @@ describe("PackageList", () => {
       ).toBeInTheDocument();
     });
   });
+
+  describe("version mismatch info", () => {
+    it("shows version mismatch when uploaded_version differs from installed", () => {
+      const pkg = {
+        ...makePkg("nginx.x86_64", "baseos"),
+        uploaded_version: "1.25.0-1.el9",
+        installed_version: "1.24.0-1.el9",
+      };
+      render(
+        <PackageList
+          mode="single"
+          packages={[pkg]}
+          repoGroups={[distroRepo]}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+        />,
+      );
+      const info = screen.getByTestId("version-mismatch-info");
+      expect(info).toBeInTheDocument();
+      expect(info.textContent).toContain("Uploaded: 1.25.0-1.el9");
+      expect(info.textContent).toContain("installed: 1.24.0-1.el9");
+    });
+
+    it("does not show version mismatch when uploaded_version is absent", () => {
+      const pkg = makePkg("nginx.x86_64", "baseos");
+      render(
+        <PackageList
+          mode="single"
+          packages={[pkg]}
+          repoGroups={[distroRepo]}
+          onToggle={vi.fn()}
+          onRepoToggle={vi.fn()}
+        />,
+      );
+      expect(
+        screen.queryByTestId("version-mismatch-info"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });

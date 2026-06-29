@@ -13,6 +13,13 @@ interface ValidationResult {
   error?: string;
 }
 
+/** Response from POST /api/upload-rpm after backend matching. */
+export interface UploadMatchResult {
+  uploaded: number;
+  matched: string | null;
+  status: "matched" | "unmatched";
+}
+
 interface BatchMatchResult {
   matched: Array<{ packageName: string; file: File }>;
   unmatched: File[];
@@ -24,8 +31,8 @@ export interface UseRpmUploadResult {
   initFromBackend: (entries: RepolessEntry[]) => void;
   /** Get the current row state for a package. Returns undefined for non-repoless packages. */
   getRowState: (packageName: string) => RpmUploadRowState | undefined;
-  /** Upload an RPM via POST /api/upload-rpm. Transitions to uploaded_excluded on success. */
-  uploadRpm: (packageName: string, file: File) => Promise<void>;
+  /** Upload an RPM via POST /api/upload-rpm. Returns match result from backend. */
+  uploadRpm: (packageName: string, file: File) => Promise<UploadMatchResult>;
   /** Remove a local upload, reverting to needs_upload. */
   removeUpload: (packageName: string) => Promise<void>;
   /** Validate a filename against expected NEVRA. */
@@ -42,6 +49,10 @@ export interface UseRpmUploadResult {
   applyBatchMatch: (matched: BatchMatchResult["matched"]) => Promise<void>;
   /** Get names of packages that need RPM uploads. */
   needsUploadPackages: string[];
+  /** Filenames that were uploaded but did not match any package. */
+  unmatchedUploads: string[];
+  /** Quick check: true when any uploaded RPMs are unmatched. */
+  hasUnmatchedUploads: boolean;
 }
 
 /**
@@ -67,6 +78,9 @@ export function useRpmUpload(): UseRpmUploadResult {
     () => new Map(),
   );
   const [uploadedSet, setUploadedSet] = useState<Set<string>>(() => new Set());
+  const [unmatchedSet, setUnmatchedSet] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const initFromBackend = useCallback((entries: RepolessEntry[]) => {
     const map = new Map<string, RepolessEntry>();
@@ -93,25 +107,48 @@ export function useRpmUpload(): UseRpmUploadResult {
     [repolessMap, uploadedSet],
   );
 
-  const uploadRpm = useCallback(async (packageName: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
+  const uploadRpm = useCallback(
+    async (packageName: string, file: File): Promise<UploadMatchResult> => {
+      const formData = new FormData();
+      formData.append("file", file);
 
-    const response = await fetch("/api/upload-rpm", {
-      method: "POST",
-      body: formData,
-    });
+      const response = await fetch("/api/upload-rpm", {
+        method: "POST",
+        body: formData,
+      });
 
-    if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`);
+      }
 
-    setUploadedSet((prev) => {
-      const next = new Set(prev);
-      next.add(packageName);
-      return next;
-    });
-  }, []);
+      const result: UploadMatchResult = await response.json();
+
+      setUploadedSet((prev) => {
+        const next = new Set(prev);
+        next.add(packageName);
+        return next;
+      });
+
+      if (result.status === "unmatched") {
+        setUnmatchedSet((prev) => {
+          const next = new Set(prev);
+          next.add(file.name);
+          return next;
+        });
+      } else {
+        // If it matched, ensure the filename is not in the unmatched set
+        setUnmatchedSet((prev) => {
+          if (!prev.has(file.name)) return prev;
+          const next = new Set(prev);
+          next.delete(file.name);
+          return next;
+        });
+      }
+
+      return result;
+    },
+    [],
+  );
 
   const removeUpload = useCallback(async (packageName: string) => {
     const response = await fetch(`/api/upload-rpm/${packageName}`, {
@@ -245,6 +282,12 @@ export function useRpmUpload(): UseRpmUploadResult {
     [uploadRpm],
   );
 
+  const unmatchedUploads = useMemo(
+    () => Array.from(unmatchedSet),
+    [unmatchedSet],
+  );
+  const hasUnmatchedUploads = unmatchedSet.size > 0;
+
   return {
     initFromBackend,
     getRowState,
@@ -255,5 +298,7 @@ export function useRpmUpload(): UseRpmUploadResult {
     batchMatch,
     applyBatchMatch,
     needsUploadPackages,
+    unmatchedUploads,
+    hasUnmatchedUploads,
   };
 }

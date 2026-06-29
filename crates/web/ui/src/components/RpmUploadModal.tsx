@@ -9,18 +9,23 @@ import {
   FileUpload,
   HelperText,
   HelperTextItem,
+  Alert,
   Content,
 } from "@patternfly/react-core";
 import {
   CheckCircleIcon,
   ExclamationCircleIcon,
 } from "@patternfly/react-icons";
+import type { UploadMatchResult } from "../hooks/useRpmUpload";
 
 export interface RpmUploadModalProps {
   isOpen: boolean;
   packageName: string;
   packageArch: string;
-  onUpload: (packageName: string, file: File) => void;
+  onUpload: (
+    packageName: string,
+    file: File,
+  ) => Promise<UploadMatchResult | void>;
   onClose: () => void;
   /** Ref to the trigger element for focus return on close. */
   triggerRef: React.RefObject<HTMLElement | null>;
@@ -67,6 +72,10 @@ export function RpmUploadModal({
     valid: boolean;
     error?: string;
   } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [matchResult, setMatchResult] = useState<UploadMatchResult | null>(
+    null,
+  );
   const uploadAreaRef = useRef<HTMLDivElement>(null);
 
   // Focus the upload area on open
@@ -95,15 +104,27 @@ export function RpmUploadModal({
     setFile(null);
     setFilename("");
     setValidation(null);
+    setMatchResult(null);
   }, []);
 
-  const handleConfirm = useCallback(() => {
+  const handleConfirm = useCallback(async () => {
     if (file && validation?.valid) {
-      onUpload(packageName, file);
-      handleClear();
-      onClose();
-      // Return focus to trigger element
-      triggerRef.current?.focus();
+      setUploading(true);
+      try {
+        const result = await onUpload(packageName, file);
+        if (result) {
+          setMatchResult(result);
+        } else {
+          // Legacy: onUpload returned void — close immediately
+          handleClear();
+          onClose();
+          triggerRef.current?.focus();
+        }
+      } catch {
+        setMatchResult(null);
+      } finally {
+        setUploading(false);
+      }
     }
   }, [
     file,
@@ -117,6 +138,7 @@ export function RpmUploadModal({
 
   const handleClose = useCallback(() => {
     handleClear();
+    setUploading(false);
     onClose();
     // Return focus to trigger element
     triggerRef.current?.focus();
@@ -153,7 +175,7 @@ export function RpmUploadModal({
             aria-label={`Upload RPM for ${packageName}`}
           />
         </div>
-        {validation && (
+        {validation && !matchResult && (
           <HelperText>
             <HelperTextItem
               variant={validation.valid ? "success" : "error"}
@@ -171,19 +193,51 @@ export function RpmUploadModal({
             </HelperTextItem>
           </HelperText>
         )}
+        {matchResult && matchResult.status === "matched" && (
+          <HelperText data-testid="upload-match-result">
+            <HelperTextItem variant="success" icon={<CheckCircleIcon />}>
+              Matched to {matchResult.matched}
+            </HelperTextItem>
+          </HelperText>
+        )}
+        {matchResult && matchResult.status === "unmatched" && (
+          <Alert
+            variant="warning"
+            isInline
+            isPlain
+            title="No matching package"
+            data-testid="upload-unmatched-warning"
+          >
+            RPM uploaded but no matching package found. Check that the filename
+            matches a package in the list.
+          </Alert>
+        )}
       </ModalBody>
       <ModalFooter>
-        <Button
-          variant="primary"
-          onClick={handleConfirm}
-          isDisabled={!file || !validation?.valid}
-          aria-label="Confirm upload"
-        >
-          Upload
-        </Button>
-        <Button variant="link" onClick={handleClose}>
-          Cancel
-        </Button>
+        {matchResult ? (
+          <Button variant="primary" onClick={handleClose}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="primary"
+              onClick={handleConfirm}
+              isDisabled={!file || !validation?.valid || uploading}
+              isLoading={uploading}
+              aria-label="Confirm upload"
+            >
+              Upload
+            </Button>
+            <Button
+              variant="link"
+              onClick={handleClose}
+              isDisabled={uploading}
+            >
+              Cancel
+            </Button>
+          </>
+        )}
       </ModalFooter>
     </Modal>
   );

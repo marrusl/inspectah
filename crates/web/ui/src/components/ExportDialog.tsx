@@ -20,6 +20,8 @@ export interface ExportDialogProps {
   generation: number;
   sessionIsSensitive: boolean;
   onViewUpdate: (view: ViewResponse) => void;
+  /** Number of uploaded RPMs that did not match any package. */
+  unmatchedUploadCount?: number;
 }
 
 export function ExportDialog({
@@ -29,11 +31,13 @@ export function ExportDialog({
   generation,
   sessionIsSensitive,
   onViewUpdate,
+  unmatchedUploadCount = 0,
 }: ExportDialogProps) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [sensitiveAck, setSensitiveAck] = useState(false);
+  const [unmatchedAck, setUnmatchedAck] = useState(false);
 
   const excludedPackages =
     stats?.sections.find((s) => s.kind === "package")?.excluded ?? 0;
@@ -82,6 +86,7 @@ export function ExportDialog({
     setError(null);
     setStale(false);
     setSensitiveAck(false);
+    setUnmatchedAck(false);
     onClose();
   }, [onClose]);
 
@@ -139,6 +144,39 @@ export function ExportDialog({
           </>
         )}
 
+        {unmatchedUploadCount > 0 && (
+          <>
+            <Alert
+              variant="warning"
+              isInline
+              title="Unmatched uploads"
+              data-testid="unmatched-upload-warning"
+              style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}
+            >
+              {unmatchedUploadCount} uploaded{" "}
+              {unmatchedUploadCount === 1 ? "RPM has" : "RPMs have"} no matching
+              package and will not be included in the export.
+            </Alert>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--pf-t--global--spacer--xs)",
+                marginTop: "var(--pf-t--global--spacer--sm)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={unmatchedAck}
+                onChange={(e) => setUnmatchedAck(e.target.checked)}
+                data-testid="unmatched-ack-checkbox"
+              />
+              Continue with export anyway
+            </label>
+          </>
+        )}
+
         {error && (
           <Alert variant="danger" isInline title="Export failed">
             {error}
@@ -157,7 +195,11 @@ export function ExportDialog({
           variant="primary"
           onClick={handleExport}
           isLoading={exporting}
-          isDisabled={exporting || (sessionIsSensitive && !sensitiveAck)}
+          isDisabled={
+            exporting ||
+            (sessionIsSensitive && !sensitiveAck) ||
+            (unmatchedUploadCount > 0 && !unmatchedAck)
+          }
         >
           Export
         </Button>
