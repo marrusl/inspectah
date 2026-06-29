@@ -19,3 +19,4 @@ development or review.
 | [release-build-configuration](release-build-configuration.md) | Workspace Cargo.toml layout, zigbuild cross-compile, musl static binaries, missing `[profile.release]` tuning |
 | [release-process](release-process.md) | Full release checklist: version bump locations, RPM tilde convention, changelog flow, build targets, binary naming, GH release, Homebrew formula |
 | [rpm-ownership-vs-name-heuristic](rpm-ownership-vs-name-heuristic.md) | Use `rpm -qf <path>` for ownership proof, not `python3-<name>` heuristic; `RpmState.owned_paths` is /etc-only |
+| [rpm-repo-name-mismatch](rpm-repo-name-mismatch.md) | Install-time short names vs full repo IDs require case-insensitive substring matching; method constant registry in `util.rs` |
