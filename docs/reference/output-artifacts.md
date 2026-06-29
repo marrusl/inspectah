@@ -67,6 +67,8 @@ system did not have the relevant configuration.
 | `inspectah-users.toml` | `users_groups` has included users or custom groups | Blueprint TOML fragment for bootc-image-builder user/group provisioning. |
 | `users/` | Users have `authorized_keys` data | SSH key staging tree (e.g., `users/home/<user>/.ssh/authorized_keys`). |
 | `language-packages/` | `non_rpm_software.language_packages` has included entries | Manifest files for pip/npm/gem language package environments. |
+| `unmanaged/` | `unmanaged_files` has included entries | Files from `/opt`, `/srv`, `/usr/local` not owned by RPM or language packages. Symlinks preserved as tar symlink entries. |
+| `repoless-packages/` | Repo-less RPMs detected with cached or uploaded `.rpm` files | RPM files for packages with no repository source. Used by `dnf localinstall` in the Containerfile. |
 | `compose/` | `containers.compose_files` has included entries | Compose YAML files mirroring source directory structure. Subject to redaction: secret-like env var values replaced with `<REDACTED>` when snapshot is in redacted state. |
 
 ### `--inspect-only` mode
@@ -223,6 +225,10 @@ hostname-20260527-143000.tar.gz
     │   │   └── <project-path>/package-lock.json
     │   └── gem/
     │       └── <project-path>/Gemfile.lock
+    ├── unmanaged/                        (conditional)
+    │   └── <path>/filename
+    ├── repoless-packages/                (conditional)
+    │   └── <name>-<version>-<release>.<arch>.rpm
     └── compose/                          (conditional)
         └── <path>/docker-compose.yml
 ```
@@ -247,6 +253,8 @@ export.tar.gz  (no prefix directory)
 ├── inspectah-users.toml                  (conditional)
 ├── users/                                (conditional)
 ├── language-packages/                    (conditional)
+├── unmanaged/                            (conditional)
+├── repoless-packages/                    (conditional)
 └── compose/                              (conditional)
 ```
 

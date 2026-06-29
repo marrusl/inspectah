@@ -29,6 +29,7 @@ inspectah [COMMAND]
 
 | Flag          | Description    |
 |---------------|----------------|
+| `-y, --yes`   | Assume yes to all interactive prompts (for CI/automation) |
 | `-h, --help`  | Print help     |
 | `-V, --version` | Print version |
 
@@ -55,6 +56,8 @@ inspectah scan [OPTIONS]
 | `--progress <MODE>` | enum | `(auto)` | Progress display mode: `pretty` or `flat`. Auto-detected: TTY → `pretty`, non-TTY/CI → `flat`. Override with `INSPECTAH_PROGRESS` env var. |
 | `-v, --verbose` | bool | `false` | Show sub-step detail for all inspectors (works with both pretty and flat modes) |
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints) |
+| `--include-unmanaged` | bool | `false` | Catalog and bundle unmanaged files from `/opt`, `/srv`, `/usr/local`. Prompts with total size before bundling (suppressed by `-y`/`--yes`). |
+| `--exclude-path <PATH>` | string | — | Exclude specific paths from unmanaged file collection. Repeatable. |
 
 ### Progress Modes
 
@@ -111,6 +114,24 @@ Scan with verbose sub-step output:
 
 ```bash
 sudo inspectah scan -v
+```
+
+Scan with unmanaged file collection enabled:
+
+```bash
+sudo inspectah scan --include-unmanaged
+```
+
+Scan with unmanaged files, excluding specific paths:
+
+```bash
+sudo inspectah scan --include-unmanaged --exclude-path /opt/backups --exclude-path /srv/archive
+```
+
+Scan in CI with no interactive prompts:
+
+```bash
+sudo inspectah -y scan --include-unmanaged -o snapshot.tar.gz
 ```
 
 ---

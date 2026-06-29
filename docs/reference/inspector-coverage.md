@@ -45,8 +45,12 @@ If the RPM inspector fails entirely, Wave 2 inspectors that depend on RPM state 
 | RPM GPG keyring | Imported GPG keys |
 | `dnf module list --enabled` | Enabled module streams |
 | `dnf versionlock list` | Version lock entries |
+| `dnf repolist --enabled` | Enabled repository list (for repo-less detection) |
+| `find /var/cache/dnf -name *.rpm` | Cached RPM files for repo-less packages |
 
 **Section fields:** `packages_added`, `base_image_only`, `rpm_va`, `repo_files`, `gpg_keys`, `version_changes`, `leaf_packages`, `auto_packages`, `leaf_dep_tree`, `module_streams`, `version_locks`, `multiarch_packages`, `duplicate_packages`.
+
+**Repo-less detection** (`inspectors/rpm/repoless.rs`): After the main RPM inventory, packages whose `source_repo` is empty or names a disabled/removed repository are flagged as repo-less. For each repo-less package, the inspector scans `/var/cache/dnf/` for cached `.rpm` files matching the package NEVRA. Matching uses case-insensitive substring comparison between install-time short names (e.g., `AppStream`) and full repo IDs (e.g., `rhel-9-for-aarch64-appstream-rpms`). Cached RPMs are bundled in the tarball under `repoless-packages/`; uncached RPMs are annotated as `MANUAL` for user provision via the refine UI.
 
 ---
 
@@ -179,6 +183,8 @@ Scans cron/at command content for secret-like patterns (`password`, `secret`, `t
 
 Parses `Image=` directives from `.container` Quadlet files to identify container image references.
 
+**Compose detection:** Discovered compose files (`docker-compose*.yml` / `docker-compose*.yaml`) are stored in `compose_files` and bundled in the tarball under `compose/`. In the Containerfile, compose stacks are rendered as a reference-only comment block (no COPY or RUN) with a pointer to the bundled files and guidance on Quadlet migration.
+
 ---
 
 ### NonRpmInspector
@@ -187,19 +193,55 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 |:---|:---|
 | **ID** | `NonRpm` |
 | **Applies to** | `PackageBased` systems |
-| **Snapshot field** | `non_rpm_software` (`NonRpmSoftwareSection`) |
+| **Snapshot fields** | `non_rpm_software` (`NonRpmSoftwareSection`), `unmanaged_files` (`UnmanagedFileSection`) |
 | **Source** | `inspectors/nonrpm.rs` |
+
+**Scan roots:** `/opt`, `/srv`, `/usr/local`. Directories matching `node_modules`, `.git`, `.cache`, `.npm`, `.bundle`, `__pycache__`, `target`, `build`, `dist` are pruned during recursive walks.
 
 **What it reads:**
 
 | Data source | Purpose |
 |:------------|:--------|
-| Filesystem walk | Python virtualenvs (`venv`, `.venv`, `virtualenv`) |
-| `pip list --format=json` | Pip-installed packages (system + per-venv) |
-| `package-lock.json` / `node_modules/` | Node.js dependencies |
+| `pyvenv.cfg` file walk | Python virtual environment discovery |
+| `pip list --path <site-packages> --format=json` | Per-venv pip package inventory |
+| `.dist-info/` directory scan | Fallback venv package detection when `pip list` fails |
+| `pip list --format=json` (system) | System-level pip packages |
+| `rpm -qf <path>` | RPM ownership filtering for system pip packages |
+| `package-lock.json` file walk | npm project discovery (lockfile version 2/3 parsing) |
+| `package.json` | npm manifest fallback when no lockfile present |
+| `Gemfile.lock` file walk | Ruby gem project discovery (specs section parsing) |
+| `Gemfile` | Ruby project manifest collection |
+| `gem list --local` | System-installed gem detection |
 | `.env` files in common locations | Environment variable files (redaction-sensitive) |
 | `.git/` directories | Git repository locations |
 | `readelf` on unpackaged binaries | ELF binary detection |
+
+**Language package detection methods:**
+
+| Method | Ecosystem | Confidence | Description |
+|:-------|:----------|:-----------|:------------|
+| `python venv` | pip | High | `pyvenv.cfg` found + `requirements.txt` present in venv root |
+| `pip dist-info` | pip | Medium | `pyvenv.cfg` found but no `requirements.txt`; packages read from `.dist-info/` directories |
+| `pip list` | pip | Medium | System-level pip packages via `pip list --format=json`, RPM-owned packages filtered out via `rpm -qf` |
+| `npm lockfile` | npm | High | `package-lock.json` found; dependencies parsed from lockfile |
+| `npm manifest` | npm | Low | `package.json` found but no lockfile; dependency names extracted, no pinned versions |
+| `gem lockfile` | gem | High | `Gemfile.lock` found; gems parsed from specs section |
+| `gem system` | gem | Medium/Low | System gems via `gem list --local`, RPM-owned gems filtered out |
+
+**Confidence rendering:** High-confidence items render as active Containerfile directives. Medium-confidence items render as commented-out directives. Low-confidence items render as advisory comments only.
+
+**Unmanaged file scanning** (`scan_unmanaged_files()`): When `--include-unmanaged` is passed, files under `/opt`, `/srv`, `/usr/local` that are not owned by RPM or claimed by a Tier 1 language package environment are cataloged with provenance signals:
+
+| Signal | Source | Description |
+|:-------|:-------|:------------|
+| Last modified | `stat` | File modification timestamp |
+| Permissions | `stat` | File permission bits |
+| UID / GID | `stat` | Owning user and group IDs |
+| Writable mount | `findmnt` | Whether the file resides on a writable mount |
+| Mutable | Filesystem check | Whether the file path is on a mutable filesystem layer |
+| Service working dir | `systemctl show` | Whether the path is a service's `WorkingDirectory` |
+
+Symlinks are detected without following and preserved as tar symlink entries. In the Containerfile, symlinks render as `RUN ln -sf` directives rather than COPY.
 
 ---
 

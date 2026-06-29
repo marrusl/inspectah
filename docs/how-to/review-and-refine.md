@@ -68,11 +68,15 @@ findings into these sections:
 | Services | systemd service units and their state |
 | Quadlets | Podman quadlet container definitions |
 | Flatpaks | Flatpak applications |
+| Language Packages | pip, npm, and gem environments |
+| Unmanaged Files | Files from `/opt`, `/srv`, `/usr/local` not owned by a package manager |
 | Sysctl | Kernel tunable overrides |
 | Tuned | Performance tuning profiles |
 
 Not every section appears in every scan. Sections only show up when
-the scan found relevant data on the host.
+the scan found relevant data on the host. Language Packages appear
+when pip/npm/gem environments are detected. Unmanaged Files appear
+only when `--include-unmanaged` was passed during the scan.
 
 The stats bar at the top summarizes each section's item counts
 (total, included, excluded) and shows how many items still need review.

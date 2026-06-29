@@ -142,10 +142,10 @@ When the scan finishes, you will see output like:
   ✓ Config files                12 modified
   ✓ SELinux                     done
   ✓ Non-RPM packages            2 ecosystems
-      pip packages 23 · npm packages 69
+      pip packages 23 · npm packages 69 · 1 repo-less RPM (cached)
 
   ┄┄┄
-  12 modified configs · 23 pip packages · 69 npm packages
+  12 modified configs · 23 pip packages · 69 npm packages · 1 repo-less
 
   Inspected in 42.3s
   Report: myhost-20260527-143000.tar.gz
@@ -177,12 +177,33 @@ Key files inside:
 | `config/` | Modified config files to COPY into the image |
 
 Conditional files may also appear depending on your system: `quadlet/`
-for container workloads, `inspectah-users.toml` / `inspectah-users.ks`
-for user and group definitions, and `entitlement/` / `rhsm/` for
-RHEL subscription data.
+for container workloads, `language-packages/` for pip/npm/gem
+environments, `repoless-packages/` for RPMs with no repository source,
+`inspectah-users.toml` / `inspectah-users.ks` for user and group
+definitions, and `subscription/` for RHEL subscription data.
 
 For a complete description of every artifact, see
 [Output Artifacts](reference/output-artifacts.md).
+
+### Beyond RPMs
+
+inspectah detects language packages (pip, npm, gem) automatically.
+The Containerfile includes install directives for detected environments,
+with confidence levels that control whether directives are active,
+commented-out, or advisory. See
+[Handle Non-RPM Software](how-to/non-rpm-software.md) for details.
+
+To also capture files under `/opt`, `/srv`, `/usr/local` that are not
+managed by any package manager, add `--include-unmanaged`:
+
+```bash
+sudo inspectah scan --include-unmanaged
+```
+
+Packages installed from local `.rpm` files or disabled repositories are
+flagged automatically. See
+[Handle Repo-less RPMs](how-to/repoless-rpms.md) for the upload and
+resolution workflow.
 
 ## Open the refine UI
 
@@ -205,9 +226,10 @@ Your browser opens automatically. If it does not, navigate to
 `http://127.0.0.1:8642` manually.
 
 The refine UI shows every finding organized by section (packages,
-configs, services, etc.). Each item has a triage classification and
-an include/exclude toggle. Your changes are autosaved — close the
-browser and stop the server with Ctrl-C when you are done.
+configs, services, language packages, unmanaged files, etc.). Each item
+has a triage classification and an include/exclude toggle. Your changes
+are autosaved -- close the browser and stop the server with Ctrl-C when
+you are done.
 
 If you are accessing a remote host over SSH, forward the port:
 
@@ -285,5 +307,11 @@ model in action. From here:
 - **Roll up multiple hosts** — migrating more than one system? Scan them
   all and aggregate the results to find common patterns. See
   [How to Aggregate Multiple Hosts](how-to/aggregation.md).
+- **Handle non-RPM software** — pip, npm, and gem packages are
+  detected automatically. See
+  [Handle Non-RPM Software](how-to/non-rpm-software.md).
+- **Resolve repo-less packages** — packages without a repository source
+  need manual handling. See
+  [Handle Repo-less RPMs](how-to/repoless-rpms.md).
 - **Explore the full CLI** — see all available commands and flags in
   the [CLI Reference](reference/cli.md).
