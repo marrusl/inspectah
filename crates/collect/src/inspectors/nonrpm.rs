@@ -1139,6 +1139,17 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
         return;
     }
 
+    // Get the gem directory path early so we can use it for both
+    // the NonRpmItem.path field and RPM filtering.
+    let gemdir_result = exec.run("gem", &["environment", "gemdir"]);
+    if !gemdir_result.success() {
+        return;
+    }
+    let gemdir = gemdir_result.stdout.trim();
+    if gemdir.is_empty() {
+        return;
+    }
+
     let result = exec.run("gem", &["list", "--local", "--no-details"]);
     if !result.success() {
         return;
@@ -1172,12 +1183,16 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
     }
 
     // Filter out RPM-owned gems by checking spec file ownership.
-    let rpm_filtered = filter_rpm_owned_gems(exec, &mut packages);
+    let rpm_filtered = filter_rpm_owned_gems_with_gemdir(exec, &mut packages, gemdir);
 
     let confidence = if rpm_filtered { "medium" } else { "low" };
 
+    // Strip leading '/' to match relative-path convention used by other
+    // language environment detectors.
+    let path = gemdir.strip_prefix('/').unwrap_or(gemdir).to_string();
+
     section.items.push(NonRpmItem {
-        path: "system-gems".to_string(),
+        path,
         name: "system-gems".to_string(),
         method: METHOD_GEM_SYSTEM.to_string(),
         confidence: confidence.to_string(),
@@ -1191,16 +1206,11 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
 ///
 /// Returns `true` if RPM filtering was applied (rpm -qf succeeded for
 /// at least one gem), `false` if filtering was skipped entirely.
-fn filter_rpm_owned_gems(exec: &dyn Executor, packages: &mut Vec<LanguagePackage>) -> bool {
-    // Find the gem spec directory.
-    let spec_dir_result = exec.run("gem", &["environment", "gemdir"]);
-    if !spec_dir_result.success() {
-        return false;
-    }
-    let gemdir = spec_dir_result.stdout.trim();
-    if gemdir.is_empty() {
-        return false;
-    }
+fn filter_rpm_owned_gems_with_gemdir(
+    exec: &dyn Executor,
+    packages: &mut Vec<LanguagePackage>,
+    gemdir: &str,
+) -> bool {
     let spec_dir = format!("{}/specifications", gemdir);
 
     let mut filtered = false;
@@ -3190,6 +3200,53 @@ mod tests {
         assert!(
             section.items.is_empty(),
             "should skip when gem is not available"
+        );
+    }
+
+    #[test]
+    fn system_gems_path_is_gemdir_not_synthetic() {
+        // System gem scanner should use the actual gemdir path
+        // so the unmanaged file exclusion layer works correctly.
+        let exec = MockExecutor::new()
+            .with_command(
+                "gem --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem environment gemdir",
+                ExecResult {
+                    stdout: "/usr/local/share/gems\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem list --local --no-details",
+                ExecResult {
+                    stdout: "bundler (2.5.0)\nsinatra (4.0.0)\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_system_gems(&exec, &mut section);
+
+        let gem_item = section
+            .items
+            .iter()
+            .find(|i| i.method == "gem system")
+            .expect("should find system gem item");
+        assert_eq!(
+            gem_item.path, "usr/local/share/gems",
+            "path should be the actual gemdir (without leading /), not 'system-gems'"
+        );
+        assert_eq!(
+            gem_item.name, "system-gems",
+            "name should remain 'system-gems' for display"
         );
     }
 }

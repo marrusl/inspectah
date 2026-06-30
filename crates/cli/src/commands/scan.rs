@@ -561,7 +561,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                         item.method == METHOD_PYTHON_VENV
                             || item.method == METHOD_PIP_DIST_INFO
                             || item.method == METHOD_NPM_LOCKFILE
+                            || item.method == METHOD_NPM_MANIFEST
                             || item.method == METHOD_GEM_LOCKFILE
+                            || item.method == METHOD_GEM_SYSTEM
                     })
                     .map(|item| {
                         if item.path.starts_with('/') {
