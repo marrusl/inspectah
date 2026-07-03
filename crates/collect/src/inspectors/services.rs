@@ -5,6 +5,7 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
+use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
@@ -615,6 +616,29 @@ fn partition_units(units: &[UnitFileEntry]) -> (Vec<String>, Vec<String>) {
     (enabled, disabled)
 }
 
+/// Detect whether a unit has a full shadow or drop-in override.
+///
+/// - FullShadow: `/etc/systemd/system/{unit}` exists AND `/usr/lib/systemd/system/{unit}` exists
+/// - DropIn: `/etc/systemd/system/{unit}.d/` exists
+/// - None: neither condition is met
+fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Option<ShadowType> {
+    let etc_path = format!("/etc/systemd/system/{}", unit_name);
+    let usr_path = format!("/usr/lib/systemd/system/{}", unit_name);
+    let dropin_dir = format!("/etc/systemd/system/{}.d", unit_name);
+
+    let etc_exists = exec.run("test", &["-f", &etc_path]).exit_code == 0;
+    let usr_exists = exec.run("test", &["-f", &usr_path]).exit_code == 0;
+    let dropin_exists = exec.run("test", &["-d", &dropin_dir]).exit_code == 0;
+
+    if etc_exists && usr_exists {
+        Some(ShadowType::FullShadow)
+    } else if dropin_exists {
+        Some(ShadowType::DropIn)
+    } else {
+        None
+    }
+}
+
 /// Collect drop-in `.conf` files from `/etc/systemd/system/*.service.d/`.
 /// Returns (drop_ins, redaction_hints, read_failures).
 /// Read failures on listed `.conf` files are correctness-bearing — the
@@ -691,11 +715,24 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
                 }
             }
 
+            // Detect shadow type and set rationale for full shadows
+            let shadow_type = detect_shadow_type(exec, unit);
+            let shadow_rationale = if shadow_type == Some(ShadowType::FullShadow) {
+                Some(
+                    "Full unit shadow — base image updates to this unit will be silently ignored"
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+
             drop_ins.push(SystemdDropIn {
                 unit: unit.to_string(),
                 path: path_str,
                 content,
                 disposition: FindingKind::included(),
+                shadow_type,
+                shadow_rationale,
                 ..Default::default()
             });
         }
@@ -1474,5 +1511,211 @@ mod tests {
             result.is_ok(),
             "all drop-ins readable → must succeed, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_detect_shadow_type_full_shadow() {
+        // Both /etc and /usr/lib unit files exist → FullShadow
+        let exec = MockExecutor::new()
+            .with_command(
+                "test -f /etc/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/httpd.service.d",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let shadow_type = detect_shadow_type(&exec, "httpd.service");
+        assert_eq!(shadow_type, Some(ShadowType::FullShadow));
+    }
+
+    #[test]
+    fn test_detect_shadow_type_drop_in() {
+        // Only drop-in directory exists → DropIn
+        let exec = MockExecutor::new()
+            .with_command(
+                "test -f /etc/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/httpd.service.d",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let shadow_type = detect_shadow_type(&exec, "httpd.service");
+        assert_eq!(shadow_type, Some(ShadowType::DropIn));
+    }
+
+    #[test]
+    fn test_detect_shadow_type_none() {
+        // Neither full shadow nor drop-in exists → None
+        let exec = MockExecutor::new()
+            .with_command(
+                "test -f /etc/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/httpd.service.d",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let shadow_type = detect_shadow_type(&exec, "httpd.service");
+        assert_eq!(shadow_type, None);
+    }
+
+    #[test]
+    fn test_full_shadow_carries_rationale() {
+        // Full shadow should populate shadow_rationale field
+        let exec = svc_base_mock()
+            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
+            .with_file(
+                "/etc/systemd/system/httpd.service.d/override.conf",
+                "[Service]\nRestart=always\n",
+            )
+            .with_command(
+                "test -f /etc/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/httpd.service.d",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            let dropin = svc.drop_ins.iter().find(|d| d.unit == "httpd.service");
+            assert!(dropin.is_some(), "httpd.service drop-in must be captured");
+            let dropin = dropin.unwrap();
+            assert_eq!(dropin.shadow_type, Some(ShadowType::FullShadow));
+            assert_eq!(
+                dropin.shadow_rationale,
+                Some(
+                    "Full unit shadow — base image updates to this unit will be silently ignored"
+                        .to_string()
+                )
+            );
+        } else {
+            panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_drop_in_no_rationale() {
+        // Drop-in (not full shadow) should have shadow_type but no rationale
+        let exec = svc_base_mock()
+            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
+            .with_file(
+                "/etc/systemd/system/httpd.service.d/override.conf",
+                "[Service]\nRestart=always\n",
+            )
+            .with_command(
+                "test -f /etc/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/httpd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/httpd.service.d",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            let dropin = svc.drop_ins.iter().find(|d| d.unit == "httpd.service");
+            assert!(dropin.is_some(), "httpd.service drop-in must be captured");
+            let dropin = dropin.unwrap();
+            assert_eq!(dropin.shadow_type, Some(ShadowType::DropIn));
+            assert_eq!(dropin.shadow_rationale, None);
+        } else {
+            panic!("expected SectionData::Services");
+        }
     }
 }
