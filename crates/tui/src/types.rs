@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::time::Instant;
 
 /// Which panel has keyboard focus.
@@ -74,6 +75,8 @@ pub struct TuiState {
     pub sidebar_scroll: usize,
     /// Scroll offset for fullscreen detail view content.
     pub detail_scroll: u16,
+    /// Which nav groups are collapsed in the sidebar tree.
+    pub collapsed_nav_groups: HashSet<NavGroup>,
 }
 
 impl TuiState {
@@ -97,7 +100,57 @@ impl TuiState {
             section_cursors: vec![0; section_count],
             sidebar_scroll: 0,
             detail_scroll: 0,
+            collapsed_nav_groups: HashSet::new(),
         }
+    }
+}
+
+/// Logical group that collects related sidebar sections for tree navigation.
+///
+/// Mirrors `SectionGroup` from the pipeline crate but lives here to avoid
+/// a dependency on the pipeline for pure-UI concepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NavGroup {
+    Packages,
+    SystemConfig,
+    Services,
+    Identity,
+    Network,
+    Storage,
+    Software,
+}
+
+impl NavGroup {
+    /// Human-readable label for this group.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Packages => "Packages",
+            Self::SystemConfig => "System Configuration",
+            Self::Services => "Services & Scheduling",
+            Self::Identity => "Users & Identity",
+            Self::Network => "Network",
+            Self::Storage => "Storage",
+            Self::Software => "Software & Files",
+        }
+    }
+
+    /// Short label for the sidebar (fits in ~18 chars).
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Packages => "Packages",
+            Self::SystemConfig => "System Config",
+            Self::Services => "Services",
+            Self::Identity => "Identity",
+            Self::Network => "Network",
+            Self::Storage => "Storage",
+            Self::Software => "Software",
+        }
+    }
+}
+
+impl fmt::Display for NavGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.short_label())
     }
 }
 
@@ -176,6 +229,21 @@ impl SectionId {
             Self::ScheduledTasks => "Sched.",
             Self::NonRpmSoftware => "Non-RPM",
             Self::SELinux => "SELinux",
+        }
+    }
+
+    /// Which nav group this section belongs to.
+    pub fn group(&self) -> NavGroup {
+        match self {
+            Self::Packages | Self::VerChanges => NavGroup::Packages,
+            Self::Configs | Self::Sysctls | Self::Tuned | Self::KernelBoot | Self::SELinux => {
+                NavGroup::SystemConfig
+            }
+            Self::Services | Self::Containers | Self::ScheduledTasks => NavGroup::Services,
+            Self::Users => NavGroup::Identity,
+            Self::Network => NavGroup::Network,
+            Self::Storage => NavGroup::Storage,
+            Self::NonRpmSoftware => NavGroup::Software,
         }
     }
 

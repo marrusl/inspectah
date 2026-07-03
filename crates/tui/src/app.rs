@@ -15,7 +15,7 @@ use crate::event::{Event, EventReader};
 use crate::keys::map_key;
 use crate::screen::Screen;
 use crate::screen::single_host::{SingleHostScreen, build_user_entries};
-use crate::sections::{self, SECTION_ORDER};
+use crate::sections::{self, SECTION_ORDER, visible_sections};
 use crate::theme::{ColorTier, detect_color_tier};
 use crate::types::{DetailMode, FlashMessage, FocusTarget, InputMode, SectionId, TuiState};
 
@@ -223,10 +223,13 @@ impl App {
             // Navigation — focus-aware
             Action::CursorDown => match self.state.focus {
                 FocusTarget::Sidebar => {
-                    let sections = sections::build_section_entries(&self.session);
-                    if self.state.active_section < sections.len() - 1 {
+                    // Navigate to the next visible section (skip collapsed groups).
+                    let vis = visible_sections(&self.state.collapsed_nav_groups);
+                    if let Some(pos) = vis.iter().position(|&idx| idx == self.state.active_section)
+                        && pos + 1 < vis.len()
+                    {
                         self.state.section_cursors[self.state.active_section] = self.state.cursor;
-                        self.state.active_section += 1;
+                        self.state.active_section = vis[pos + 1];
                         self.state.cursor = self.state.section_cursors[self.state.active_section];
                     }
                 }
@@ -243,9 +246,13 @@ impl App {
             },
             Action::CursorUp => match self.state.focus {
                 FocusTarget::Sidebar => {
-                    if self.state.active_section > 0 {
+                    // Navigate to the previous visible section (skip collapsed groups).
+                    let vis = visible_sections(&self.state.collapsed_nav_groups);
+                    if let Some(pos) = vis.iter().position(|&idx| idx == self.state.active_section)
+                        && pos > 0
+                    {
                         self.state.section_cursors[self.state.active_section] = self.state.cursor;
-                        self.state.active_section -= 1;
+                        self.state.active_section = vis[pos - 1];
                         self.state.cursor = self.state.section_cursors[self.state.active_section];
                     }
                 }
@@ -267,6 +274,56 @@ impl App {
             // Focus
             Action::FocusSidebar => self.state.focus = FocusTarget::Sidebar,
             Action::FocusItems => self.state.focus = FocusTarget::ItemList,
+
+            // Sidebar Left/Right: collapse/expand nav groups when in sidebar focus.
+            Action::SidebarLeft => {
+                if self.state.focus == FocusTarget::Sidebar {
+                    // Collapse the nav group of the current section.
+                    let section_id = SECTION_ORDER
+                        .get(self.state.active_section)
+                        .copied()
+                        .unwrap_or(SectionId::Packages);
+                    let group = section_id.group();
+                    if !self.state.collapsed_nav_groups.contains(&group) {
+                        self.state.collapsed_nav_groups.insert(group);
+                        // Move active_section to the first section in the next visible group.
+                        let vis = visible_sections(&self.state.collapsed_nav_groups);
+                        if !vis.contains(&self.state.active_section) {
+                            // Find the nearest visible section.
+                            if let Some(&next) =
+                                vis.iter().find(|&&idx| idx > self.state.active_section)
+                            {
+                                self.state.active_section = next;
+                            } else if let Some(&prev) = vis
+                                .iter()
+                                .rev()
+                                .find(|&&idx| idx < self.state.active_section)
+                            {
+                                self.state.active_section = prev;
+                            }
+                        }
+                    }
+                } else {
+                    self.state.focus = FocusTarget::Sidebar;
+                }
+            }
+            Action::SidebarRight => {
+                if self.state.focus == FocusTarget::Sidebar {
+                    // Expand the nav group of the current section (or focus items if already expanded).
+                    let section_id = SECTION_ORDER
+                        .get(self.state.active_section)
+                        .copied()
+                        .unwrap_or(SectionId::Packages);
+                    let group = section_id.group();
+                    if self.state.collapsed_nav_groups.contains(&group) {
+                        self.state.collapsed_nav_groups.remove(&group);
+                    } else {
+                        self.state.focus = FocusTarget::ItemList;
+                    }
+                } else {
+                    self.state.focus = FocusTarget::ItemList;
+                }
+            }
             Action::CycleFocus => {
                 self.state.focus = match self.state.focus {
                     FocusTarget::Sidebar => FocusTarget::ItemList,
@@ -530,7 +587,9 @@ impl App {
                 } else {
                     let items = self.current_items();
                     if let Some(item) = items.get(self.state.cursor) {
-                        if item.locked {
+                        if item.is_advisory {
+                            // Advisory items are informational and cannot be toggled.
+                        } else if item.locked {
                             let reason = item.lock_reason.as_deref().unwrap_or("item is locked");
                             self.state.flash =
                                 Some(FlashMessage::new(format!("Locked: {reason}"), 3));

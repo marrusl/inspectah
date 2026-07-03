@@ -23,6 +23,8 @@ pub enum DetailContentType {
     YamlContent,
     /// Plain text (key-value summaries, etc.).
     PlainText,
+    /// Advisory rationale -- prefixed with advisory type label.
+    Advisory,
 }
 
 /// Pre-built data for the fullscreen detail view.
@@ -84,16 +86,24 @@ impl Widget for DetailViewWidget<'_> {
 
 impl DetailViewWidget<'_> {
     fn render_header(&self, area: Rect, buf: &mut Buffer, width: usize) {
-        let include_indicator = match self.data.include {
-            Some(true) => "\u{25cf} ",  // ● included
-            Some(false) => "\u{25cb} ", // ○ excluded
-            None => "",
+        let include_indicator = if self.data.content_type == DetailContentType::Advisory {
+            "\u{2139} " // ℹ for advisory items
+        } else {
+            match self.data.include {
+                Some(true) => "\u{25cf} ",  // ● included
+                Some(false) => "\u{25cb} ", // ○ excluded
+                None => "",
+            }
         };
 
-        let include_style = match self.data.include {
-            Some(true) => Token::StatusIncluded.style(self.tier),
-            Some(false) => Token::StatusExcluded.style(self.tier),
-            None => Token::TextMuted.style(self.tier),
+        let include_style = if self.data.content_type == DetailContentType::Advisory {
+            Token::TextMuted.style(self.tier)
+        } else {
+            match self.data.include {
+                Some(true) => Token::StatusIncluded.style(self.tier),
+                Some(false) => Token::StatusExcluded.style(self.tier),
+                None => Token::TextMuted.style(self.tier),
+            }
         };
 
         // Position string right-aligned.
@@ -136,16 +146,25 @@ impl DetailViewWidget<'_> {
             let y = top_y + row as u16;
             let display = truncate(line, width);
 
-            let style = if self.data.content_type == DetailContentType::Diff {
-                if line.starts_with('+') && !line.starts_with("+++") {
-                    Token::DiffAdded.style(self.tier)
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    Token::DiffRemoved.style(self.tier)
-                } else {
-                    Token::TextPrimary.style(self.tier)
+            let style = match self.data.content_type {
+                DetailContentType::Diff => {
+                    if line.starts_with('+') && !line.starts_with("+++") {
+                        Token::DiffAdded.style(self.tier)
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        Token::DiffRemoved.style(self.tier)
+                    } else {
+                        Token::TextPrimary.style(self.tier)
+                    }
                 }
-            } else {
-                Token::TextPrimary.style(self.tier)
+                DetailContentType::Advisory => {
+                    // Advisory rationale: label lines are dimmed, rationale is primary.
+                    if line.starts_with("Type:") || line.starts_with("Advisory:") {
+                        Token::TextMuted.style(self.tier)
+                    } else {
+                        Token::TextPrimary.style(self.tier)
+                    }
+                }
+                _ => Token::TextPrimary.style(self.tier),
             };
 
             buf.set_string(x, y, &display, style);

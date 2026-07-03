@@ -11,7 +11,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, TriageBucket};
 
-use crate::sections::{SECTION_ORDER, build_section_entries};
+use crate::sections::{SECTION_ORDER, build_nav_rows, build_section_entries};
 use crate::theme::ColorTier;
 use crate::types::{DetailMode, FocusTarget, SectionId, TuiState};
 use crate::widget::containerfile::ContainerfileWidget;
@@ -24,17 +24,67 @@ use crate::widget::user_strategy::{UserEntry, UserStrategyWidget};
 
 const SIDEBAR_WIDTH: u16 = 18;
 
-/// A raw item tuple: (name, detail, triage_group, include_state, item_id, has_content, locked, lock_reason).
-type RawItem = (
-    String,
-    String,
-    TriageGroup,
-    Option<bool>,
-    Option<ItemId>,
-    bool,
-    bool,
-    Option<String>,
-);
+/// A raw item before grouping into triage buckets.
+#[derive(Debug, Clone)]
+struct RawItem {
+    name: String,
+    detail: String,
+    group: TriageGroup,
+    included: Option<bool>,
+    item_id: Option<ItemId>,
+    has_content: bool,
+    locked: bool,
+    lock_reason: Option<String>,
+    is_advisory: bool,
+    advisory_rationale: Option<String>,
+}
+
+impl RawItem {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        included: Option<bool>,
+        item_id: Option<ItemId>,
+        has_content: bool,
+        locked: bool,
+        lock_reason: Option<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included,
+            item_id,
+            has_content,
+            locked,
+            lock_reason,
+            is_advisory: false,
+            advisory_rationale: None,
+        }
+    }
+
+    fn advisory(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        rationale: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included: None,
+            item_id: None,
+            has_content: false,
+            locked: false,
+            lock_reason: None,
+            is_advisory: true,
+            advisory_rationale: Some(rationale.into()),
+        }
+    }
+}
 
 pub struct SingleHostScreen;
 
@@ -113,9 +163,10 @@ impl SingleHostScreen {
 
             // --- Sidebar ---
             let sidebar_focused = state.focus == FocusTarget::Sidebar;
+            let nav_rows = build_nav_rows(&entries, &state.collapsed_nav_groups);
             let sidebar = SectionNavWidget::new(
-                &entries,
-                state.active_section,
+                &nav_rows,
+                active_section_id,
                 sidebar_focused,
                 tier,
                 state.sidebar_scroll,
@@ -269,7 +320,7 @@ pub fn build_list_items(
                         name: pkg.entry.name.clone(),
                         arch: pkg.entry.arch.clone(),
                     };
-                    (
+                    RawItem::new(
                         name,
                         detail,
                         group,
@@ -293,10 +344,9 @@ pub fn build_list_items(
                     let id = ItemId::Config {
                         path: cfg.entry.path.clone(),
                     };
-                    // Configs have diff content available for fullscreen detail.
                     let has_content =
                         cfg.entry.diff_against_rpm.is_some() || !cfg.entry.content.is_empty();
-                    (
+                    RawItem::new(
                         name,
                         detail,
                         group,
@@ -323,7 +373,7 @@ pub fn build_list_items(
                 let id = ItemId::Service {
                     unit: svc.entry.unit.clone(),
                 };
-                items.push((
+                items.push(RawItem::new(
                     name,
                     detail,
                     group,
@@ -344,7 +394,7 @@ pub fn build_list_items(
                     path: di.entry.path.clone(),
                 };
                 let has_content = !di.entry.content.is_empty();
-                items.push((
+                items.push(RawItem::new(
                     name,
                     detail,
                     group,
@@ -359,9 +409,9 @@ pub fn build_list_items(
             // Reference: services sub-collections (read-only, no toggle).
             let rs = &reference.services;
             for s in &rs.divergent {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
-                    "divergent".into(),
+                    "divergent",
                     TriageGroup::Site,
                     None,
                     None,
@@ -371,9 +421,9 @@ pub fn build_list_items(
                 ));
             }
             for s in &rs.preset_matched_with_dropins {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
-                    "preset+dropins".into(),
+                    "preset+dropins",
                     TriageGroup::Site,
                     None,
                     None,
@@ -383,9 +433,9 @@ pub fn build_list_items(
                 ));
             }
             for s in &rs.preset_unknown_enabled {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
-                    "unknown (enabled)".into(),
+                    "unknown (enabled)",
                     TriageGroup::Site,
                     None,
                     None,
@@ -395,9 +445,9 @@ pub fn build_list_items(
                 ));
             }
             for s in &rs.preset_unknown_disabled {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
-                    "unknown (disabled)".into(),
+                    "unknown (disabled)",
                     TriageGroup::Site,
                     None,
                     None,
@@ -407,7 +457,7 @@ pub fn build_list_items(
                 ));
             }
             for s in &rs.standalone_dropins {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
                     format!("drop-in: {}", s.path),
                     TriageGroup::Site,
@@ -419,7 +469,7 @@ pub fn build_list_items(
                 ));
             }
             for s in &rs.omitted {
-                items.push((
+                items.push(RawItem::new(
                     s.unit.clone(),
                     format!("omitted: {}", s.reason),
                     TriageGroup::Baseline,
@@ -430,20 +480,17 @@ pub fn build_list_items(
                     None,
                 ));
             }
+            // Advisory services: full-shadow and other advisory findings.
             for a in &rs.advisories {
-                items.push((
+                items.push(RawItem::advisory(
                     a.unit.clone(),
                     format!("advisory ({})", a.owning_package),
                     TriageGroup::Investigate,
-                    None,
-                    None,
-                    false,
-                    false,
-                    None,
+                    format!("Full-shadow service owned by {}", a.owning_package),
                 ));
             }
             for w in &rs.warnings {
-                items.push((
+                items.push(RawItem::new(
                     w.unit.clone(),
                     format!("warning: {}", w.message),
                     TriageGroup::Investigate,
@@ -462,7 +509,6 @@ pub fn build_list_items(
             let reference = session.reference();
             let mut items: Vec<RawItem> = Vec::new();
 
-            // Decision: quadlets (togglable).
             for q in &decisions.quadlets {
                 let name = q.entry.name.clone();
                 let detail = q.entry.image.clone();
@@ -471,7 +517,7 @@ pub fn build_list_items(
                     path: q.entry.path.clone(),
                 };
                 let has_content = !q.entry.content.is_empty();
-                items.push((
+                items.push(RawItem::new(
                     name,
                     detail,
                     group,
@@ -483,7 +529,6 @@ pub fn build_list_items(
                 ));
             }
 
-            // Decision: flatpaks (togglable).
             for f in &decisions.flatpaks {
                 let name = f.entry.app_id.clone();
                 let detail = format!("{}/{}", f.entry.origin, f.entry.branch);
@@ -493,7 +538,7 @@ pub fn build_list_items(
                     remote: f.entry.remote.clone(),
                     branch: f.entry.branch.clone(),
                 };
-                items.push((
+                items.push(RawItem::new(
                     name,
                     detail,
                     group,
@@ -505,10 +550,9 @@ pub fn build_list_items(
                 ));
             }
 
-            // Reference: running containers (read-only).
             let rc = &reference.containers;
             for c in &rc.running_containers {
-                items.push((
+                items.push(RawItem::new(
                     c.name.clone(),
                     format!("{} ({})", c.image, c.status),
                     TriageGroup::Site,
@@ -520,10 +564,9 @@ pub fn build_list_items(
                 ));
             }
 
-            // Reference: compose files (read-only).
             for cf in &rc.compose_files {
                 let svc_names: Vec<&str> = cf.services.iter().map(|s| s.service.as_str()).collect();
-                items.push((
+                items.push(RawItem::new(
                     cf.path.clone(),
                     svc_names.join(", "),
                     TriageGroup::Site,
@@ -549,7 +592,7 @@ pub fn build_list_items(
                     let id = ItemId::Sysctl {
                         key: s.entry.key.clone(),
                     };
-                    (
+                    RawItem::new(
                         name,
                         detail,
                         group,
@@ -578,7 +621,7 @@ pub fn build_list_items(
                     let id = ItemId::TunedSelection {
                         profile: t.active_profile.clone(),
                     };
-                    (
+                    RawItem::new(
                         name,
                         detail,
                         group,
@@ -600,11 +643,9 @@ pub fn build_list_items(
             let vc = &reference.version_changes;
             let mut items: Vec<RawItem> = Vec::new();
             for v in &vc.downgrades {
-                let name = format!("{}.{}", v.name, v.arch);
-                let detail = format!("{} -> {} (downgrade)", v.host_version, v.base_version);
-                items.push((
-                    name,
-                    detail,
+                items.push(RawItem::new(
+                    format!("{}.{}", v.name, v.arch),
+                    format!("{} -> {} (downgrade)", v.host_version, v.base_version),
                     TriageGroup::Investigate,
                     None,
                     None,
@@ -614,11 +655,9 @@ pub fn build_list_items(
                 ));
             }
             for v in &vc.upgrades {
-                let name = format!("{}.{}", v.name, v.arch);
-                let detail = format!("{} -> {} (upgrade)", v.host_version, v.base_version);
-                items.push((
-                    name,
-                    detail,
+                items.push(RawItem::new(
+                    format!("{}.{}", v.name, v.arch),
+                    format!("{} -> {} (upgrade)", v.host_version, v.base_version),
                     TriageGroup::Site,
                     None,
                     None,
@@ -635,8 +674,8 @@ pub fn build_list_items(
             let mut items: Vec<RawItem> = Vec::new();
 
             if let Some(ref cmdline) = kb.cmdline {
-                items.push((
-                    "cmdline".into(),
+                items.push(RawItem::new(
+                    "cmdline",
                     cmdline.clone(),
                     TriageGroup::Site,
                     None,
@@ -647,8 +686,8 @@ pub fn build_list_items(
                 ));
             }
             if let Some(ref grub) = kb.grub_defaults {
-                items.push((
-                    "grub defaults".into(),
+                items.push(RawItem::new(
+                    "grub defaults",
                     grub.clone(),
                     TriageGroup::Site,
                     None,
@@ -659,8 +698,8 @@ pub fn build_list_items(
                 ));
             }
             if let Some(ref tuned) = kb.tuned_active {
-                items.push((
-                    "tuned active".into(),
+                items.push(RawItem::new(
+                    "tuned active",
                     tuned.clone(),
                     TriageGroup::Site,
                     None,
@@ -671,8 +710,8 @@ pub fn build_list_items(
                 ));
             }
             if let Some(ref locale) = kb.locale {
-                items.push((
-                    "locale".into(),
+                items.push(RawItem::new(
+                    "locale",
                     locale.clone(),
                     TriageGroup::Site,
                     None,
@@ -683,8 +722,8 @@ pub fn build_list_items(
                 ));
             }
             if let Some(ref tz) = kb.timezone {
-                items.push((
-                    "timezone".into(),
+                items.push(RawItem::new(
+                    "timezone",
                     tz.clone(),
                     TriageGroup::Site,
                     None,
@@ -695,7 +734,7 @@ pub fn build_list_items(
                 ));
             }
             for s in &kb.sysctl_overrides {
-                items.push((
+                items.push(RawItem::new(
                     s.key.clone(),
                     format!("{} (default: {})", s.runtime, s.default),
                     TriageGroup::Site,
@@ -707,7 +746,7 @@ pub fn build_list_items(
                 ));
             }
             for m in &kb.non_default_modules {
-                items.push((
+                items.push(RawItem::new(
                     m.name.clone(),
                     format!("size: {}, used by: {}", m.size, m.used_by),
                     TriageGroup::Site,
@@ -721,9 +760,9 @@ pub fn build_list_items(
                 ));
             }
             for c in &kb.modules_load_d {
-                items.push((
+                items.push(RawItem::new(
                     c.path.clone(),
-                    "modules-load.d".into(),
+                    "modules-load.d",
                     TriageGroup::Site,
                     None,
                     None,
@@ -733,9 +772,9 @@ pub fn build_list_items(
                 ));
             }
             for c in &kb.modprobe_d {
-                items.push((
+                items.push(RawItem::new(
                     c.path.clone(),
-                    "modprobe.d".into(),
+                    "modprobe.d",
                     TriageGroup::Site,
                     None,
                     None,
@@ -745,9 +784,9 @@ pub fn build_list_items(
                 ));
             }
             for c in &kb.dracut_conf {
-                items.push((
+                items.push(RawItem::new(
                     c.path.clone(),
-                    "dracut.conf".into(),
+                    "dracut.conf",
                     TriageGroup::Site,
                     None,
                     None,
@@ -757,9 +796,9 @@ pub fn build_list_items(
                 ));
             }
             for c in &kb.custom_tuned_profiles {
-                items.push((
+                items.push(RawItem::new(
                     c.path.clone(),
-                    "tuned profile".into(),
+                    "tuned profile",
                     TriageGroup::Site,
                     None,
                     None,
@@ -769,7 +808,7 @@ pub fn build_list_items(
                 ));
             }
             for a in &kb.alternatives {
-                items.push((
+                items.push(RawItem::new(
                     a.name.clone(),
                     format!("{} ({})", a.path, a.status),
                     TriageGroup::Site,
@@ -789,7 +828,7 @@ pub fn build_list_items(
             let mut items: Vec<RawItem> = Vec::new();
 
             for c in &net.connections {
-                items.push((
+                items.push(RawItem::new(
                     c.name.clone(),
                     format!("{} ({})", c.conn_type, c.method),
                     TriageGroup::Site,
@@ -803,7 +842,7 @@ pub fn build_list_items(
                 ));
             }
             for z in &net.firewall_zones {
-                items.push((
+                items.push(RawItem::new(
                     z.name.clone(),
                     format!("zone ({})", z.path),
                     TriageGroup::Site,
@@ -817,7 +856,7 @@ pub fn build_list_items(
                 ));
             }
             for r in &net.firewall_direct_rules {
-                items.push((
+                items.push(RawItem::new(
                     format!("{}/{}", r.table, r.chain),
                     format!("ipv{} prio={}", r.ipv, r.priority),
                     TriageGroup::Site,
@@ -829,7 +868,7 @@ pub fn build_list_items(
                 ));
             }
             for r in &net.static_routes {
-                items.push((
+                items.push(RawItem::new(
                     r.name.clone(),
                     r.path.clone(),
                     TriageGroup::Site,
@@ -841,8 +880,8 @@ pub fn build_list_items(
                 ));
             }
             for route in &net.ip_routes {
-                items.push((
-                    "ip route".into(),
+                items.push(RawItem::new(
+                    "ip route",
                     route.clone(),
                     TriageGroup::Site,
                     None,
@@ -853,8 +892,8 @@ pub fn build_list_items(
                 ));
             }
             for rule in &net.ip_rules {
-                items.push((
-                    "ip rule".into(),
+                items.push(RawItem::new(
+                    "ip rule",
                     rule.clone(),
                     TriageGroup::Site,
                     None,
@@ -865,8 +904,8 @@ pub fn build_list_items(
                 ));
             }
             if !net.resolv_provenance.is_empty() {
-                items.push((
-                    "resolv.conf".into(),
+                items.push(RawItem::new(
+                    "resolv.conf",
                     net.resolv_provenance.clone(),
                     TriageGroup::Site,
                     None,
@@ -877,8 +916,8 @@ pub fn build_list_items(
                 ));
             }
             for h in &net.hosts_additions {
-                items.push((
-                    "/etc/hosts".into(),
+                items.push(RawItem::new(
+                    "/etc/hosts",
                     h.clone(),
                     TriageGroup::Site,
                     None,
@@ -889,8 +928,8 @@ pub fn build_list_items(
                 ));
             }
             for p in &net.proxy_env {
-                items.push((
-                    "proxy".into(),
+                items.push(RawItem::new(
+                    "proxy",
                     format!("{}: {}", p.source, p.line),
                     TriageGroup::Site,
                     None,
@@ -909,7 +948,7 @@ pub fn build_list_items(
             let mut items: Vec<RawItem> = Vec::new();
 
             for f in &st.fstab_entries {
-                items.push((
+                items.push(RawItem::new(
                     f.mount_point.clone(),
                     format!("{} ({} {})", f.device, f.fstype, f.options),
                     TriageGroup::Site,
@@ -923,7 +962,7 @@ pub fn build_list_items(
                 ));
             }
             for m in &st.mount_points {
-                items.push((
+                items.push(RawItem::new(
                     m.target.clone(),
                     format!("{} ({} {})", m.source, m.fstype, m.options),
                     TriageGroup::Site,
@@ -935,7 +974,7 @@ pub fn build_list_items(
                 ));
             }
             for lv in &st.lvm_volumes {
-                items.push((
+                items.push(RawItem::new(
                     format!("{}/{}", lv.vg_name, lv.lv_name),
                     lv.lv_size.clone(),
                     TriageGroup::Site,
@@ -947,9 +986,9 @@ pub fn build_list_items(
                 ));
             }
             for d in &st.var_directories {
-                items.push((
+                items.push(RawItem::new(
                     d.path.clone(),
-                    format!("{} — {}", d.size_estimate, d.recommendation),
+                    format!("{} \u{2014} {}", d.size_estimate, d.recommendation),
                     TriageGroup::Site,
                     None,
                     None,
@@ -959,7 +998,7 @@ pub fn build_list_items(
                 ));
             }
             for cr in &st.credential_refs {
-                items.push((
+                items.push(RawItem::new(
                     cr.credential_path.clone(),
                     format!("{} ({})", cr.mount_point, cr.source),
                     TriageGroup::Site,
@@ -980,14 +1019,13 @@ pub fn build_list_items(
                 .iter()
                 .map(|t| {
                     let detail = t.summary.as_deref().unwrap_or("").to_string();
-                    let has_content = t.content.is_some();
-                    (
+                    RawItem::new(
                         t.key.clone(),
                         detail,
                         TriageGroup::Site,
                         None,
                         None,
-                        has_content,
+                        t.content.is_some(),
                         false,
                         None,
                     )
@@ -1001,17 +1039,16 @@ pub fn build_list_items(
                 .iter()
                 .map(|s| {
                     let detail = s.summary.as_deref().unwrap_or("").to_string();
-                    let has_content = s.content.is_some();
                     let id = ItemId::NonRpm {
                         name: s.key.clone(),
                     };
-                    (
+                    RawItem::new(
                         s.key.clone(),
                         detail,
                         TriageGroup::Site,
                         None,
                         Some(id),
-                        has_content,
+                        s.content.is_some(),
                         false,
                         None,
                     )
@@ -1025,14 +1062,13 @@ pub fn build_list_items(
                 .iter()
                 .map(|s| {
                     let detail = s.summary.as_deref().unwrap_or("").to_string();
-                    let has_content = s.content.is_some();
-                    (
+                    RawItem::new(
                         s.key.clone(),
                         detail,
                         TriageGroup::Site,
                         None,
                         None,
-                        has_content,
+                        s.content.is_some(),
                         false,
                         None,
                     )
@@ -1137,6 +1173,31 @@ fn build_detail_data(
     let item = items.get(state.cursor)?;
     if item.is_group_header {
         return None;
+    }
+
+    // Advisory items show their rationale in the detail view.
+    if item.is_advisory {
+        let item_index = items
+            .iter()
+            .take(state.cursor + 1)
+            .filter(|i| !i.is_group_header)
+            .count();
+        let total_items = items.iter().filter(|i| !i.is_group_header).count();
+        let rationale = item
+            .advisory_rationale
+            .as_deref()
+            .unwrap_or("No rationale available");
+        let content = format!(
+            "Advisory: {}\n\nType: informational\n\nRationale:\n{}",
+            item.name, rationale
+        );
+        return Some(DetailData {
+            title: item.name.clone(),
+            content,
+            content_type: DetailContentType::Advisory,
+            include: None,
+            position: format!("{} of {}", item_index, total_items),
+        });
     }
 
     let active_section_id = SECTION_ORDER
@@ -1245,7 +1306,7 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
     // Group items by triage group.
     let mut grouped: HashMap<TriageGroup, Vec<&RawItem>> = HashMap::new();
     for item in items {
-        grouped.entry(item.2).or_default().push(item);
+        grouped.entry(item.group).or_default().push(item);
     }
 
     let mut result = Vec::new();
@@ -1265,28 +1326,38 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
 
         if !is_collapsed {
             for (idx, item) in group_items.iter().enumerate() {
-                let mut li = if item.5 {
-                    ListItem::item_with_content(
-                        item.0.clone(),
-                        item.1.clone(),
+                if item.is_advisory {
+                    result.push(ListItem::advisory(
+                        item.name.clone(),
+                        item.detail.clone(),
                         bucket,
-                        item.3,
                         idx,
-                        item.4.clone(),
-                    )
+                        item.advisory_rationale.as_deref().unwrap_or(""),
+                    ));
                 } else {
-                    ListItem::item(
-                        item.0.clone(),
-                        item.1.clone(),
-                        bucket,
-                        item.3,
-                        idx,
-                        item.4.clone(),
-                    )
-                };
-                li.locked = item.6;
-                li.lock_reason = item.7.clone();
-                result.push(li);
+                    let mut li = if item.has_content {
+                        ListItem::item_with_content(
+                            item.name.clone(),
+                            item.detail.clone(),
+                            bucket,
+                            item.included,
+                            idx,
+                            item.item_id.clone(),
+                        )
+                    } else {
+                        ListItem::item(
+                            item.name.clone(),
+                            item.detail.clone(),
+                            bucket,
+                            item.included,
+                            idx,
+                            item.item_id.clone(),
+                        )
+                    };
+                    li.locked = item.locked;
+                    li.lock_reason = item.lock_reason.clone();
+                    result.push(li);
+                }
             }
         }
     }
@@ -1345,9 +1416,9 @@ mod tests {
     #[test]
     fn grouped_items_have_headers_then_items() {
         let items: Vec<RawItem> = vec![
-            (
-                "httpd".to_string(),
-                "2.4".to_string(),
+            RawItem::new(
+                "httpd",
+                "2.4",
                 TriageGroup::Investigate,
                 Some(true),
                 None,
@@ -1355,9 +1426,9 @@ mod tests {
                 false,
                 None,
             ),
-            (
-                "nginx".to_string(),
-                "1.24".to_string(),
+            RawItem::new(
+                "nginx",
+                "1.24",
                 TriageGroup::Investigate,
                 Some(false),
                 None,
@@ -1365,9 +1436,9 @@ mod tests {
                 false,
                 None,
             ),
-            (
-                "bash".to_string(),
-                "5.2".to_string(),
+            RawItem::new(
+                "bash",
+                "5.2",
                 TriageGroup::Baseline,
                 Some(true),
                 None,
@@ -1392,5 +1463,23 @@ mod tests {
         assert!(result[3].is_group_header);
         assert_eq!(result[3].group, TriageGroup::Baseline);
         assert!(result[3].is_collapsed);
+    }
+
+    #[test]
+    fn advisory_items_are_marked_in_grouped_output() {
+        let items: Vec<RawItem> = vec![RawItem::advisory(
+            "sshd.service",
+            "advisory (openssh-server)",
+            TriageGroup::Investigate,
+            "full-shadow service",
+        )];
+        let state = TuiState::new(14);
+        let result = build_grouped_items(&items, &state, SectionId::Services);
+
+        // Header + 1 advisory item.
+        assert_eq!(result.len(), 2);
+        assert!(result[0].is_group_header);
+        assert!(result[1].is_advisory);
+        assert!(result[1].advisory_rationale.is_some());
     }
 }

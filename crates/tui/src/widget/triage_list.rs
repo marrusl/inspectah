@@ -61,6 +61,10 @@ pub struct ListItem {
     pub locked: bool,
     /// Reason the item is locked (shown inline when locked).
     pub lock_reason: Option<String>,
+    /// True if this item is an advisory (informational, non-toggleable).
+    pub is_advisory: bool,
+    /// Rationale text for advisory items (shown in detail view).
+    pub advisory_rationale: Option<String>,
 }
 
 impl ListItem {
@@ -87,6 +91,8 @@ impl ListItem {
             is_repo_bar: false,
             locked: false,
             lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
         }
     }
 
@@ -113,6 +119,8 @@ impl ListItem {
             is_repo_bar: false,
             locked: false,
             lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
         }
     }
 
@@ -132,6 +140,8 @@ impl ListItem {
             is_repo_bar: false,
             locked: false,
             lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
         }
     }
 
@@ -151,6 +161,35 @@ impl ListItem {
             is_repo_bar: true,
             locked: false,
             lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
+        }
+    }
+
+    /// Create an advisory item row (informational, non-toggleable).
+    pub fn advisory(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        group_index: usize,
+        rationale: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included: None,
+            is_group_header: false,
+            group_index,
+            is_collapsed: false,
+            group_count: 0,
+            item_id: None,
+            has_content: false,
+            is_repo_bar: false,
+            locked: false,
+            lock_reason: None,
+            is_advisory: true,
+            advisory_rationale: Some(rationale.into()),
         }
     }
 }
@@ -246,6 +285,8 @@ impl Widget for TriageListWidget<'_> {
                 render_repo_bar(item, is_cursor, &mut ctx);
             } else if item.is_group_header {
                 render_group_header(item, is_cursor, &mut ctx);
+            } else if item.is_advisory {
+                render_advisory_row(item, is_cursor, &mut ctx);
             } else {
                 render_item_row(item, is_cursor, is_pure_reference, &mut ctx);
             }
@@ -297,6 +338,61 @@ fn render_repo_bar(item: &ListItem, is_cursor: bool, ctx: &mut RowCtx<'_>) {
         Token::TextMuted.style(ctx.tier)
     };
     ctx.buf.set_string(ctx.x, ctx.y, &padded, style);
+}
+
+/// Render an advisory item row with `ℹ` prefix and dimmed styling.
+///
+/// Advisory items are informational and non-toggleable. They are navigable
+/// (the cursor can land on them) but Space/Enter have no toggle effect.
+fn render_advisory_row(item: &ListItem, is_cursor: bool, ctx: &mut RowCtx<'_>) {
+    // Advisory indicator: "ℹ " (info symbol + space).
+    let indicator = "\u{2139} ";
+    let indicator_width: usize = 4; // visual width: icon + padding
+
+    // Name and detail share the remaining width.
+    let remaining = ctx.width.saturating_sub(indicator_width);
+    let (name_width, detail_width) = if remaining > 20 {
+        let detail_w = remaining / 3;
+        (remaining - detail_w, detail_w)
+    } else {
+        (remaining, 0)
+    };
+
+    let name_str = truncate(&item.name, name_width);
+    let detail_str = if detail_width > 0 {
+        truncate(&item.detail, detail_width)
+    } else {
+        String::new()
+    };
+
+    // Dimmed styling for advisory items; cursor overrides.
+    let dimmed = Token::TextMuted.style(ctx.tier);
+    let style = if is_cursor {
+        Token::FocusSelected.style(ctx.tier)
+    } else {
+        dimmed
+    };
+
+    // Write indicator.
+    let ind_padded = format!("{:<width$}", indicator, width = indicator_width);
+    ctx.buf.set_string(ctx.x, ctx.y, &ind_padded, style);
+
+    // Write name.
+    let ind_u16 = indicator_width as u16;
+    let name_padded = format!("{:<width$}", name_str, width = name_width);
+    ctx.buf
+        .set_string(ctx.x + ind_u16, ctx.y, &name_padded, style);
+
+    // Write detail.
+    if detail_width > 0 {
+        let detail_padded = format!("{:<width$}", detail_str, width = detail_width);
+        ctx.buf.set_string(
+            ctx.x + ind_u16 + name_width as u16,
+            ctx.y,
+            &detail_padded,
+            style,
+        );
+    }
 }
 
 /// Render a regular item row with include/exclude indicator.
@@ -546,5 +642,53 @@ mod tests {
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
         assert_eq!(buffer_to_string(&buf), "");
+    }
+
+    #[test]
+    fn advisory_item_renders_with_info_prefix() {
+        let items = vec![
+            ListItem::header(TriageGroup::Investigate, 1, false),
+            ListItem::advisory(
+                "sshd.service",
+                "advisory (openssh-server)",
+                TriageGroup::Investigate,
+                0,
+                "full-shadow service",
+            ),
+        ];
+        let widget = TriageListWidget::new(
+            &items,
+            1, // cursor on advisory item
+            SectionId::Services,
+            true,
+            ColorTier::Mono,
+            0,
+        );
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let text = buffer_to_string(&buf);
+        // Advisory item should contain the info symbol.
+        assert!(
+            text.contains('\u{2139}'),
+            "advisory row should contain the info symbol"
+        );
+    }
+
+    #[test]
+    fn advisory_item_is_non_toggleable() {
+        let item = ListItem::advisory(
+            "test.service",
+            "advisory",
+            TriageGroup::Investigate,
+            0,
+            "rationale text",
+        );
+        assert!(item.is_advisory);
+        assert!(item.item_id.is_none(), "advisory items have no item_id");
+        assert!(
+            item.included.is_none(),
+            "advisory items have no include state"
+        );
     }
 }

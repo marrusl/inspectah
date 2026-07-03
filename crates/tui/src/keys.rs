@@ -27,8 +27,10 @@ fn map_normal(key: KeyEvent) -> Action {
         // Navigation
         KeyCode::Char('j') | KeyCode::Down => Action::CursorDown,
         KeyCode::Char('k') | KeyCode::Up => Action::CursorUp,
-        KeyCode::Char('h') | KeyCode::Left => Action::FocusSidebar,
-        KeyCode::Char('l') | KeyCode::Right => Action::FocusItems,
+        KeyCode::Char('h') => Action::FocusSidebar,
+        KeyCode::Left => Action::SidebarLeft,
+        KeyCode::Char('l') => Action::FocusItems,
+        KeyCode::Right => Action::SidebarRight,
         KeyCode::Tab => Action::CycleFocus,
         KeyCode::Char('g') => Action::CursorTop,
         KeyCode::Char('G') => Action::CursorBottom,
@@ -146,8 +148,16 @@ mod tests {
             Action::FocusSidebar
         );
         assert_eq!(
+            map_key(key(KeyCode::Left), InputMode::Normal),
+            Action::SidebarLeft
+        );
+        assert_eq!(
             map_key(key(KeyCode::Char('l')), InputMode::Normal),
             Action::FocusItems
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Right), InputMode::Normal),
+            Action::SidebarRight
         );
         assert_eq!(
             map_key(key(KeyCode::Tab), InputMode::Normal),

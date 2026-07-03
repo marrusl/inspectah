@@ -6,28 +6,135 @@
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::SectionKind;
 
-use crate::types::{SectionEntry, SectionId};
+use crate::types::{NavGroup, SectionEntry, SectionId};
 
-/// Ordered list of sidebar sections. Decision/composite sections first
-/// (above the separator), then reference-only sections below.
+/// Ordered list of sidebar sections, grouped by `NavGroup`.
+///
+/// Sections are ordered by group (matching `NAV_GROUPS`), with decision
+/// sections before reference-only sections within each group.
 pub const SECTION_ORDER: &[SectionId] = &[
-    // Decision / composite sections
+    // Packages group
     SectionId::Packages,
+    SectionId::VerChanges,
+    // System Configuration group
     SectionId::Configs,
-    SectionId::Services,
-    SectionId::Containers,
     SectionId::Sysctls,
     SectionId::Tuned,
-    SectionId::Users,
-    // Reference-only sections
-    SectionId::VerChanges,
     SectionId::KernelBoot,
-    SectionId::Network,
-    SectionId::Storage,
-    SectionId::ScheduledTasks,
-    SectionId::NonRpmSoftware,
     SectionId::SELinux,
+    // Services & Scheduling group
+    SectionId::Services,
+    SectionId::Containers,
+    SectionId::ScheduledTasks,
+    // Identity group
+    SectionId::Users,
+    // Network group
+    SectionId::Network,
+    // Storage group
+    SectionId::Storage,
+    // Software group
+    SectionId::NonRpmSoftware,
 ];
+
+/// Nav groups with their member sections in display order.
+pub const NAV_GROUPS: &[(NavGroup, &[SectionId])] = &[
+    (
+        NavGroup::Packages,
+        &[SectionId::Packages, SectionId::VerChanges],
+    ),
+    (
+        NavGroup::SystemConfig,
+        &[
+            SectionId::Configs,
+            SectionId::Sysctls,
+            SectionId::Tuned,
+            SectionId::KernelBoot,
+            SectionId::SELinux,
+        ],
+    ),
+    (
+        NavGroup::Services,
+        &[
+            SectionId::Services,
+            SectionId::Containers,
+            SectionId::ScheduledTasks,
+        ],
+    ),
+    (NavGroup::Identity, &[SectionId::Users]),
+    (NavGroup::Network, &[SectionId::Network]),
+    (NavGroup::Storage, &[SectionId::Storage]),
+    (NavGroup::Software, &[SectionId::NonRpmSoftware]),
+];
+
+/// A row in the sidebar nav tree: either a group header or a section.
+#[derive(Debug, Clone)]
+pub enum NavRow {
+    /// Collapsible group header.
+    Group {
+        group: NavGroup,
+        collapsed: bool,
+        /// Sum of actionable items across sections in this group.
+        actionable: usize,
+        /// Sum of advisory/reference items across sections in this group.
+        advisories: usize,
+    },
+    /// An individual section within a group.
+    Section(SectionEntry),
+}
+
+/// Build the flat list of nav rows from section entries and collapse state.
+///
+/// Each group gets a header row, followed by its section rows (if expanded).
+pub fn build_nav_rows(
+    entries: &[SectionEntry],
+    collapsed: &std::collections::HashSet<NavGroup>,
+) -> Vec<NavRow> {
+    let mut rows = Vec::new();
+
+    for &(group, member_ids) in NAV_GROUPS {
+        let is_collapsed = collapsed.contains(&group);
+
+        // Collect section entries for this group.
+        let group_entries: Vec<&SectionEntry> = member_ids
+            .iter()
+            .filter_map(|id| entries.iter().find(|e| e.id == *id))
+            .collect();
+
+        // Compute group summary counts.
+        let actionable: usize = group_entries.iter().map(|e| e.included + e.excluded).sum();
+        let total: usize = group_entries.iter().map(|e| e.count).sum();
+        let advisories = total.saturating_sub(actionable);
+
+        rows.push(NavRow::Group {
+            group,
+            collapsed: is_collapsed,
+            actionable,
+            advisories,
+        });
+
+        if !is_collapsed {
+            for id in member_ids {
+                if let Some(entry) = entries.iter().find(|e| e.id == *id) {
+                    rows.push(NavRow::Section(entry.clone()));
+                }
+            }
+        }
+    }
+
+    rows
+}
+
+/// Find the list of visible section indices (into SECTION_ORDER) from
+/// the current nav state.
+pub fn visible_sections(collapsed: &std::collections::HashSet<NavGroup>) -> Vec<usize> {
+    let mut visible = Vec::new();
+    for (idx, section_id) in SECTION_ORDER.iter().enumerate() {
+        if !collapsed.contains(&section_id.group()) {
+            visible.push(idx);
+        }
+    }
+    visible
+}
 
 /// Build sidebar entries with item counts from a live session.
 ///
@@ -187,6 +294,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn section_order_has_fourteen_entries() {
@@ -194,14 +302,89 @@ mod tests {
     }
 
     #[test]
-    fn section_order_starts_with_decisions_ends_with_reference() {
-        // First 7 are decision/composite sections.
-        for id in &SECTION_ORDER[..7] {
-            assert!(id.is_decision(), "{:?} should be a decision section", id);
+    fn nav_groups_cover_all_sections() {
+        // Every section in SECTION_ORDER must appear in exactly one NAV_GROUP.
+        let flat: Vec<SectionId> = NAV_GROUPS
+            .iter()
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect();
+        assert_eq!(
+            flat.len(),
+            SECTION_ORDER.len(),
+            "NAV_GROUPS must cover all sections"
+        );
+        for (i, id) in flat.iter().enumerate() {
+            assert_eq!(
+                *id, SECTION_ORDER[i],
+                "NAV_GROUPS order must match SECTION_ORDER at index {i}"
+            );
         }
-        // Last 7 are reference-only.
-        for id in &SECTION_ORDER[7..] {
-            assert!(!id.is_decision(), "{:?} should be a reference section", id);
+    }
+
+    #[test]
+    fn nav_rows_all_expanded() {
+        let entries: Vec<SectionEntry> = SECTION_ORDER
+            .iter()
+            .map(|&id| SectionEntry {
+                id,
+                count: 1,
+                included: 0,
+                excluded: 0,
+            })
+            .collect();
+        let collapsed = HashSet::new();
+        let rows = build_nav_rows(&entries, &collapsed);
+        // 7 group headers + 14 sections = 21 rows.
+        assert_eq!(rows.len(), 21);
+    }
+
+    #[test]
+    fn nav_rows_collapsed_group_hides_sections() {
+        let entries: Vec<SectionEntry> = SECTION_ORDER
+            .iter()
+            .map(|&id| SectionEntry {
+                id,
+                count: 10,
+                included: 3,
+                excluded: 2,
+            })
+            .collect();
+        let mut collapsed = HashSet::new();
+        collapsed.insert(NavGroup::SystemConfig);
+        let rows = build_nav_rows(&entries, &collapsed);
+        // SystemConfig has 5 sections, now hidden.
+        // 7 headers + 14 sections - 5 hidden = 16 rows.
+        assert_eq!(rows.len(), 16);
+        // Verify the SystemConfig header is collapsed.
+        let sc_header = rows.iter().find(|r| {
+            matches!(
+                r,
+                NavRow::Group {
+                    group: NavGroup::SystemConfig,
+                    ..
+                }
+            )
+        });
+        assert!(sc_header.is_some());
+        if let Some(NavRow::Group { collapsed, .. }) = sc_header {
+            assert!(*collapsed);
+        }
+    }
+
+    #[test]
+    fn visible_sections_excludes_collapsed() {
+        let mut collapsed = HashSet::new();
+        collapsed.insert(NavGroup::Services);
+        let vis = visible_sections(&collapsed);
+        // 14 total - 3 services sections = 11.
+        assert_eq!(vis.len(), 11);
+        // None of the visible sections should be in the Services group.
+        for idx in &vis {
+            assert_ne!(
+                SECTION_ORDER[*idx].group(),
+                NavGroup::Services,
+                "collapsed group sections should not be visible"
+            );
         }
     }
 }

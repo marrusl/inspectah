@@ -10,6 +10,10 @@ pub enum Action {
     FocusSidebar,
     FocusItems,
     CycleFocus,
+    /// Left arrow in sidebar: collapse current section's nav group.
+    SidebarLeft,
+    /// Right arrow in sidebar: expand current section's nav group or focus items.
+    SidebarRight,
     JumpToSection(usize),
     NextGroup,
     PrevGroup,
