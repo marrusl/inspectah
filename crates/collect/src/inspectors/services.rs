@@ -632,7 +632,7 @@ fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Option<ShadowType
 
     if etc_exists && usr_exists {
         Some(ShadowType::FullShadow)
-    } else if dropin_exists {
+    } else if !etc_exists && dropin_exists {
         Some(ShadowType::DropIn)
     } else {
         None
@@ -1600,6 +1600,37 @@ mod tests {
             );
 
         let shadow_type = detect_shadow_type(&exec, "httpd.service");
+        assert_eq!(shadow_type, None);
+    }
+
+    #[test]
+    fn test_detect_shadow_type_custom_service_not_drop_in() {
+        // A service defined only in /etc (not in /usr) is a custom service,
+        // not a drop-in override, even if it has a .d/ directory
+        let exec = MockExecutor::new()
+            .with_command(
+                "test -f /etc/systemd/system/custom.service",
+                ExecResult {
+                    exit_code: 0, // exists in /etc
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -f /usr/lib/systemd/system/custom.service",
+                ExecResult {
+                    exit_code: 1, // NOT in /usr
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "test -d /etc/systemd/system/custom.service.d",
+                ExecResult {
+                    exit_code: 0, // has .d/ dir
+                    ..Default::default()
+                },
+            );
+
+        let shadow_type = detect_shadow_type(&exec, "custom.service");
         assert_eq!(shadow_type, None);
     }
 
