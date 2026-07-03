@@ -19,6 +19,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use walk::{dhcp_connection_paths, is_dev_artifact, is_excluded_unowned, walk_etc_recursive};
 
+use super::modernization;
+
 /// Maximum file size to read (256 KiB). Files larger than this are skipped
 /// with a warning to prevent memory bloat.
 const MAX_CONFIG_FILE_SIZE: usize = 256 * 1024;
@@ -277,6 +279,24 @@ impl Inspector for ConfigInspector {
             &mut section,
             &mut degraded_reasons,
         );
+
+        // 4) Modernization advisories: upgrade existing entries or add new ones
+        if let Some(major) = modernization::os_major_version(ctx.source_system) {
+            for (path, disposition) in modernization::check_modernization_patterns(exec, major) {
+                if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
+                    existing.disposition = disposition;
+                } else {
+                    section.files.push(ConfigFileEntry {
+                        path: path.clone(),
+                        kind: ConfigFileKind::Unowned,
+                        category: classify_config_path(&path),
+                        content: String::new(),
+                        disposition,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
 
         // Sort all files by path for deterministic output
         section.files.sort_by(|a, b| a.path.cmp(&b.path));

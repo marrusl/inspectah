@@ -1,6 +1,7 @@
 pub mod config;
 pub mod containers;
 pub mod kernelboot;
+pub mod modernization;
 pub mod network;
 pub mod nonrpm;
 pub mod rpm;
