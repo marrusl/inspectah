@@ -65,6 +65,10 @@ pub struct ListItem {
     pub is_advisory: bool,
     /// Rationale text for advisory items (shown in detail view).
     pub advisory_rationale: Option<String>,
+    /// True if this item is inventory (informational, non-toggleable).
+    /// Inventory items display data but have no toggle — used for
+    /// network findings.
+    pub is_inventory: bool,
 }
 
 impl ListItem {
@@ -93,6 +97,7 @@ impl ListItem {
             lock_reason: None,
             is_advisory: false,
             advisory_rationale: None,
+            is_inventory: false,
         }
     }
 
@@ -121,6 +126,7 @@ impl ListItem {
             lock_reason: None,
             is_advisory: false,
             advisory_rationale: None,
+            is_inventory: false,
         }
     }
 
@@ -142,6 +148,7 @@ impl ListItem {
             lock_reason: None,
             is_advisory: false,
             advisory_rationale: None,
+            is_inventory: false,
         }
     }
 
@@ -163,6 +170,7 @@ impl ListItem {
             lock_reason: None,
             is_advisory: false,
             advisory_rationale: None,
+            is_inventory: false,
         }
     }
 
@@ -190,6 +198,36 @@ impl ListItem {
             lock_reason: None,
             is_advisory: true,
             advisory_rationale: Some(rationale.into()),
+            is_inventory: false,
+        }
+    }
+
+    /// Create an inventory item row (informational, non-toggleable).
+    /// Used for network findings — displayed but never included in
+    /// Containerfile output.
+    pub fn inventory(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        group_index: usize,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included: None,
+            is_group_header: false,
+            group_index,
+            is_collapsed: false,
+            group_count: 0,
+            item_id: None,
+            has_content: false,
+            is_repo_bar: false,
+            locked: false,
+            lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
+            is_inventory: true,
         }
     }
 }
@@ -285,7 +323,7 @@ impl Widget for TriageListWidget<'_> {
                 render_repo_bar(item, is_cursor, &mut ctx);
             } else if item.is_group_header {
                 render_group_header(item, is_cursor, &mut ctx);
-            } else if item.is_advisory {
+            } else if item.is_advisory || item.is_inventory {
                 render_advisory_row(item, is_cursor, &mut ctx);
             } else {
                 render_item_row(item, is_cursor, is_pure_reference, &mut ctx);
@@ -689,6 +727,43 @@ mod tests {
         assert!(
             item.included.is_none(),
             "advisory items have no include state"
+        );
+    }
+
+    #[test]
+    fn inventory_item_is_non_toggleable() {
+        let item = ListItem::inventory("eth0", "dhcp / ethernet", TriageGroup::Investigate, 0);
+        assert!(item.is_inventory);
+        assert!(!item.is_advisory, "inventory is not advisory");
+        assert!(item.item_id.is_none(), "inventory items have no item_id");
+        assert!(
+            item.included.is_none(),
+            "inventory items have no include state"
+        );
+    }
+
+    #[test]
+    fn inventory_item_renders_with_info_prefix() {
+        let items = vec![
+            ListItem::header(TriageGroup::Investigate, 1, false),
+            ListItem::inventory("eth0", "dhcp / ethernet", TriageGroup::Investigate, 0),
+        ];
+        let widget = TriageListWidget::new(
+            &items,
+            1, // cursor on inventory item
+            SectionId::Network,
+            true,
+            ColorTier::Mono,
+            0,
+        );
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let text = buffer_to_string(&buf);
+        // Inventory items render like advisory items with info symbol.
+        assert!(
+            text.contains('\u{2139}'),
+            "inventory row should contain the info symbol"
         );
     }
 }

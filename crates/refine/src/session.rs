@@ -229,17 +229,17 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
     }
     if let Some(ref mut net) = snapshot.network {
         for c in &mut net.connections {
-            if c.locked {
+            if c.locked && !c.disposition.is_inventory() {
                 c.disposition = FindingKind::excluded();
             }
         }
         for fz in &mut net.firewall_zones {
-            if fz.locked {
+            if fz.locked && !fz.disposition.is_inventory() {
                 fz.disposition = FindingKind::excluded();
             }
         }
         for fdr in &mut net.firewall_direct_rules {
-            if fdr.locked {
+            if fdr.locked && !fdr.disposition.is_inventory() {
                 fdr.disposition = FindingKind::excluded();
             }
         }
@@ -3046,8 +3046,9 @@ fn copy_uploaded_rpms(
 /// Check whether a finding should be included in the generated Containerfile.
 ///
 /// **Contract:** Only `Actionable { include: true }` items produce Containerfile
-/// lines. Advisory items are display-only and never appear in generated output.
-/// This is the single source of truth for the Containerfile inclusion gate.
+/// lines. Advisory and Inventory items are display-only and never appear in
+/// generated output. This is the single source of truth for the Containerfile
+/// inclusion gate.
 pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
     matches!(disposition, FindingKind::Actionable { include: true })
 }

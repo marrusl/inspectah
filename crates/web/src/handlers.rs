@@ -701,10 +701,12 @@ pub async fn batch_toggle_group(
                 }
             }
         }
+        // Network items are inventory — non-toggleable across all surfaces.
+        "network" => {}
         other => {
             return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
                 format!(
-                    "unknown batch toggle group: {other} (expected packages, configs, or services)"
+                    "unknown batch toggle group: {other} (expected packages, configs, services, or network)"
                 ),
             )));
         }
@@ -1191,8 +1193,8 @@ mod tests {
     // -- Containerfile advisory exclusion contract ----------------------------
 
     /// Verify the Containerfile contract: Actionable { include: true } items
-    /// are included, Advisory items are excluded, and Actionable { include: false }
-    /// items are excluded.
+    /// are included, Advisory/Inventory items are excluded, and
+    /// Actionable { include: false } items are excluded.
     #[test]
     fn should_include_in_containerfile_contract() {
         use inspectah_core::types::finding::AdvisoryType;
@@ -1217,6 +1219,9 @@ mod tests {
             AdvisoryType::Modernization,
             "xinetd is deprecated"
         )));
+
+        // Inventory → false (network items are informational only)
+        assert!(!should_include_in_containerfile(&FindingKind::inventory()));
     }
 
     /// Verify the view response includes shadow fields for services with

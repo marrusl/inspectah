@@ -778,12 +778,20 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
     };
 
     if firewall_only {
+        // Only count actionable (non-inventory, non-advisory) items.
+        // Network findings are inventory — they display data but never
+        // produce Containerfile output.
         let included_zones: usize = network
             .firewall_zones
             .iter()
             .filter(|z| z.disposition.is_included())
             .count();
-        if included_zones > 0 || !network.firewall_direct_rules.is_empty() {
+        let included_direct_rules: usize = network
+            .firewall_direct_rules
+            .iter()
+            .filter(|r| r.disposition.is_included())
+            .count();
+        if included_zones > 0 || included_direct_rules > 0 {
             let mut fw_body: Vec<String> = Vec::new();
             if included_zones > 0 {
                 fw_body.push(format!(

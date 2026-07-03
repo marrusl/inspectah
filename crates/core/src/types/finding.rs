@@ -10,6 +10,10 @@ pub enum FindingKind {
         advisory_type: AdvisoryType,
         rationale: String,
     },
+    /// Informational inventory — displayed but never included in
+    /// Containerfile output and non-toggleable across all interactive
+    /// surfaces. Used for network findings.
+    Inventory,
 }
 
 impl Default for FindingKind {
@@ -34,6 +38,10 @@ impl FindingKind {
         }
     }
 
+    pub fn inventory() -> Self {
+        Self::Inventory
+    }
+
     /// Convert a legacy bool into FindingKind (true → included, false → excluded).
     pub fn from_bool(include: bool) -> Self {
         if include {
@@ -49,6 +57,10 @@ impl FindingKind {
 
     pub fn is_advisory(&self) -> bool {
         matches!(self, Self::Advisory { .. })
+    }
+
+    pub fn is_inventory(&self) -> bool {
+        matches!(self, Self::Inventory)
     }
 }
 
@@ -72,6 +84,12 @@ pub enum ShadowType {
 /// Used for fields that default to excluded (e.g. tuned_disposition).
 pub fn default_finding_excluded() -> FindingKind {
     FindingKind::excluded()
+}
+
+/// Serde default helper: returns `FindingKind::inventory()`.
+/// Used for fields that default to inventory (e.g. network items).
+pub fn default_finding_inventory() -> FindingKind {
+    FindingKind::inventory()
 }
 
 #[cfg(test)]
@@ -105,6 +123,27 @@ mod tests {
         assert!(json.contains(r#""kind":"advisory"#));
         assert!(json.contains(r#""advisory_type":"modernization"#));
         assert!(json.contains(r#""rationale":"xinetd is deprecated"#));
+    }
+
+    #[test]
+    fn test_finding_kind_serde_roundtrip_inventory() {
+        let kind = FindingKind::inventory();
+        let json = serde_json::to_string(&kind).unwrap();
+        let parsed: FindingKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, parsed);
+        assert!(!parsed.is_included());
+        assert!(!parsed.is_advisory());
+        assert!(parsed.is_inventory());
+    }
+
+    #[test]
+    fn test_inventory_json_shape() {
+        let kind = FindingKind::inventory();
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains(r#""kind":"inventory"#));
+        // No additional fields — unit variant
+        assert!(!json.contains("include"));
+        assert!(!json.contains("advisory_type"));
     }
 
     #[test]

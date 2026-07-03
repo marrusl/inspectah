@@ -25,7 +25,7 @@ pub struct NMConnection {
 impl Default for NMConnection {
     fn default() -> Self {
         Self {
-            disposition: FindingKind::included(),
+            disposition: FindingKind::inventory(),
             path: Default::default(),
             name: Default::default(),
             method: Default::default(),
@@ -112,6 +112,23 @@ pub struct NetworkSection {
     pub hosts_additions: Vec<String>,
     #[serde(default)]
     pub proxy: Vec<ProxyEntry>,
+}
+
+/// Contextual note shown when the source host uses ifcfg network scripts
+/// and the target is RHEL 9+.
+pub const IFCFG_DEPRECATION_NOTE: &str = "Source host uses ifcfg network scripts. \
+    RHEL 9+ targets use NetworkManager keyfiles by default. \
+    ifcfg support is deprecated in RHEL 9 and removed in RHEL 10. \
+    Plan network configuration separately for the target environment.";
+
+impl NetworkSection {
+    /// True when any connection was collected from the legacy
+    /// `/etc/sysconfig/network-scripts/` directory (ifcfg format).
+    pub fn has_ifcfg_connections(&self) -> bool {
+        self.connections
+            .iter()
+            .any(|c| c.path.contains("network-scripts"))
+    }
 }
 
 #[cfg(test)]

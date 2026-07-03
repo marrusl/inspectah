@@ -402,21 +402,32 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
     let version_id = os_release.version_id.as_str();
     let major = version_id.split('.').next().unwrap_or("");
 
+    // EL8 hosts have no bootc image — map up to the closest available
+    // bootc base (EL9). The version clamping below ensures the tag is
+    // valid (e.g., RHEL 8.10 → rhel9/rhel-bootc:9.6).
+    let effective_major = if major == "8" { "9" } else { major };
+
     match id {
         "rhel" => {
-            // Find the minimum version for this major
+            // Find the minimum version for the effective major
             let effective = RHEL_BOOTC_MIN
                 .iter()
-                .find(|(maj, _)| *maj == major)
+                .find(|(maj, _)| *maj == effective_major)
                 .map(|(_, min)| clamp_version(version_id, min))
                 .unwrap_or_else(|| version_id.to_string());
             Ok(BaseImageResolution {
-                image_ref: format!("registry.redhat.io/rhel{}/rhel-bootc:{}", major, effective),
+                image_ref: format!(
+                    "registry.redhat.io/rhel{}/rhel-bootc:{}",
+                    effective_major, effective
+                ),
                 strategy: ResolutionStrategy::OsRelease,
             })
         }
         "centos" => Ok(BaseImageResolution {
-            image_ref: format!("quay.io/centos-bootc/centos-bootc:stream{}", major),
+            image_ref: format!(
+                "quay.io/centos-bootc/centos-bootc:stream{}",
+                effective_major
+            ),
             strategy: ResolutionStrategy::OsRelease,
         }),
         "fedora" => {
@@ -838,6 +849,34 @@ mod tests {
         let result = resolve_base_image(&os, None, None, None).unwrap();
         assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
         assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_el8_rhel_resolves_to_rhel9() {
+        // EL8 has no bootc image — maps up to RHEL 9, clamped to 9.6 floor
+        let os = make_os_release("rhel", "8.10", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
+        assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_el8_centos_resolves_to_stream9() {
+        let os = make_os_release("centos", "8", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "quay.io/centos-bootc/centos-bootc:stream9"
+        );
+        assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_el9_rhel_unchanged() {
+        // EL9 stays EL9 — no version-up mapping
+        let os = make_os_release("rhel", "9.6", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     }
 
     #[test]

@@ -289,7 +289,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 render_identity_section(snap, &mut group_lines);
             }
             SectionGroup::Network => {
-                // Network section (currently empty in the original code)
+                render_network_section(snap, &mut group_lines);
             }
             SectionGroup::Storage => {
                 render_storage_section(snap, &mut group_lines);
@@ -720,6 +720,137 @@ fn render_identity_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 }
 
 /// Render Storage section.
+/// Render Network section — inventory-only items (non-toggleable, never in
+/// Containerfile). Includes the ifcfg deprecation note when applicable.
+fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    let network = match &snap.network {
+        Some(n) => n,
+        None => return,
+    };
+
+    let has_content = !network.connections.is_empty()
+        || !network.firewall_zones.is_empty()
+        || !network.firewall_direct_rules.is_empty()
+        || !network.static_routes.is_empty()
+        || !network.hosts_additions.is_empty()
+        || !network.proxy.is_empty();
+
+    if !has_content {
+        return;
+    }
+
+    lines.push("### Inventory".into());
+    lines.push(String::new());
+
+    // Contextual note: ifcfg deprecation when source uses legacy network-scripts
+    if network.has_ifcfg_connections() {
+        let target_is_el9_plus = snap
+            .os_release
+            .as_ref()
+            .map(|os| {
+                let major: u32 = os
+                    .version_id
+                    .split('.')
+                    .next()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
+                major >= 8 && (os.id == "rhel" || os.id == "centos")
+            })
+            .unwrap_or(false);
+        if target_is_el9_plus {
+            lines.push(format!(
+                "> {}",
+                inspectah_core::types::network::IFCFG_DEPRECATION_NOTE
+            ));
+            lines.push(String::new());
+        }
+    }
+
+    if !network.connections.is_empty() {
+        lines.push(format!(
+            "#### NM Connections ({})",
+            network.connections.len()
+        ));
+        lines.push(String::new());
+        lines.push("| Name | Type | Method | Path |".into());
+        lines.push("|------|------|--------|------|".into());
+        for conn in &network.connections {
+            lines.push(format!(
+                "| {} | {} | {} | {} |",
+                conn.name, conn.conn_type, conn.method, conn.path
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !network.firewall_zones.is_empty() {
+        lines.push(format!(
+            "#### Firewall Zones ({})",
+            network.firewall_zones.len()
+        ));
+        lines.push(String::new());
+        for zone in &network.firewall_zones {
+            lines.push(format!(
+                "- **{}** — services: {}, ports: {}, rich rules: {}",
+                zone.name,
+                zone.services.len(),
+                zone.ports.len(),
+                zone.rich_rules.len()
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !network.firewall_direct_rules.is_empty() {
+        lines.push(format!(
+            "#### Firewall Direct Rules ({})",
+            network.firewall_direct_rules.len()
+        ));
+        lines.push(String::new());
+        for rule in &network.firewall_direct_rules {
+            lines.push(format!(
+                "- `{}` {} chain={} table={}",
+                rule.args, rule.ipv, rule.chain, rule.table
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !network.static_routes.is_empty() {
+        lines.push(format!(
+            "#### Static Routes ({})",
+            network.static_routes.len()
+        ));
+        lines.push(String::new());
+        for route in &network.static_routes {
+            lines.push(format!("- `{}`", route.path));
+        }
+        lines.push(String::new());
+    }
+
+    if !network.hosts_additions.is_empty() {
+        lines.push(format!(
+            "#### /etc/hosts Additions ({})",
+            network.hosts_additions.len()
+        ));
+        lines.push(String::new());
+        for entry in &network.hosts_additions {
+            lines.push(format!("- `{}`", entry));
+        }
+        lines.push(String::new());
+    }
+
+    if !network.proxy.is_empty() {
+        lines.push(format!("#### Proxy Settings ({})", network.proxy.len()));
+        lines.push(String::new());
+        for proxy in &network.proxy {
+            lines.push(format!("- `{}`: `{}`", proxy.source, proxy.line));
+        }
+        lines.push(String::new());
+    }
+}
+
 fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     if let Some(storage) = &snap.storage {
         let has_content = !storage.fstab_entries.is_empty()

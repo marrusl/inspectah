@@ -192,7 +192,7 @@ fn collect_nm_connections(
                 name: stem,
                 method,
                 conn_type,
-                disposition: FindingKind::included(),
+                disposition: FindingKind::inventory(),
                 ..Default::default()
             });
         }
@@ -388,7 +388,7 @@ fn collect_firewall_zones(
                     services: result.services,
                     ports: result.ports,
                     rich_rules: result.rich_rules,
-                    disposition: FindingKind::included(),
+                    disposition: FindingKind::inventory(),
                     ..Default::default()
                 });
             }
@@ -424,7 +424,7 @@ fn parse_passthrough_tag(tag_text: &str, content: &str) -> Option<FirewallDirect
         chain,
         priority: "0".to_string(),
         args,
-        disposition: FindingKind::included(),
+        disposition: FindingKind::inventory(),
         ..Default::default()
     })
 }
@@ -1124,7 +1124,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn collected_nm_connections_have_include_true() {
+    fn collected_nm_connections_have_inventory_disposition() {
         let text = fixture("eth0.nmconnection");
         let exec = MockExecutor::new()
             .with_dir(
@@ -1142,13 +1142,17 @@ mod tests {
 
         assert_eq!(section.connections.len(), 1);
         assert!(
-            section.connections[0].disposition.is_included(),
-            "collected NMConnection should have include: true"
+            section.connections[0].disposition.is_inventory(),
+            "collected NMConnection should have Inventory disposition"
+        );
+        assert!(
+            !section.connections[0].disposition.is_included(),
+            "Inventory items must not be included in Containerfile"
         );
     }
 
     #[test]
-    fn collected_firewall_zones_have_include_true() {
+    fn collected_firewall_zones_have_inventory_disposition() {
         let xml = fixture("public-zone.xml");
         let exec = MockExecutor::new()
             .with_dir("/etc/firewalld/zones", vec!["public.xml"])
@@ -1161,13 +1165,13 @@ mod tests {
 
         assert_eq!(section.firewall_zones.len(), 1);
         assert!(
-            section.firewall_zones[0].disposition.is_included(),
-            "collected FirewallZone should have include: true"
+            section.firewall_zones[0].disposition.is_inventory(),
+            "collected FirewallZone should have Inventory disposition"
         );
     }
 
     #[test]
-    fn collected_firewall_direct_rules_have_include_true() {
+    fn collected_firewall_direct_rules_have_inventory_disposition() {
         let xml = fixture("direct.xml");
         let exec = MockExecutor::new().with_file("/etc/firewalld/direct.xml", &xml);
 
@@ -1177,8 +1181,8 @@ mod tests {
         assert!(!section.firewall_direct_rules.is_empty());
         for rule in &section.firewall_direct_rules {
             assert!(
-                rule.disposition.is_included(),
-                "collected FirewallDirectRule should have include: true"
+                rule.disposition.is_inventory(),
+                "collected FirewallDirectRule should have Inventory disposition"
             );
         }
     }
