@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 use std::collections::BTreeSet;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -24,7 +25,7 @@ fn single_host_snapshot() -> InspectionSnapshot {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "appstream".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -35,7 +36,7 @@ fn single_host_snapshot() -> InspectionSnapshot {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
             content: "ServerRoot /etc/httpd".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             variant_selection: VariantSelection::Only,
             ..Default::default()
@@ -75,7 +76,7 @@ fn aggregate_snapshot_with_variants() -> InspectionSnapshot {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "ServerRoot /etc/httpd\nMaxClients 256".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 ..Default::default()
@@ -84,7 +85,7 @@ fn aggregate_snapshot_with_variants() -> InspectionSnapshot {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "ServerRoot /etc/httpd\nMaxClients 128".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 ..Default::default()
@@ -93,7 +94,7 @@ fn aggregate_snapshot_with_variants() -> InspectionSnapshot {
                 path: "/etc/sysctl.conf".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: "vm.swappiness = 10".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 ..Default::default()
@@ -357,9 +358,11 @@ fn aggregate_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 unit: "httpd.service".into(),
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=90".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
                     count: 3,
@@ -372,9 +375,11 @@ fn aggregate_snapshot_with_dropin_variants() -> InspectionSnapshot {
                 unit: "httpd.service".into(),
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=120".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: 2,
@@ -407,7 +412,7 @@ fn aggregate_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v1".into(),
                 image: "quay.io/app:v1".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -423,7 +428,7 @@ fn aggregate_snapshot_with_quadlet_variants() -> InspectionSnapshot {
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v2".into(),
                 image: "quay.io/app:v2".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {

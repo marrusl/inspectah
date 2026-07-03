@@ -82,7 +82,7 @@ pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet
     names.extend(
         rpm.packages_added
             .iter()
-            .filter(|pkg| pkg.include)
+            .filter(|pkg| pkg.disposition.is_included())
             .map(|pkg| pkg.name.clone()),
     );
     names
@@ -172,7 +172,7 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
             }
         }
         for u in &st.generated_timer_units {
-            if u.include && !u.name.is_empty() {
+            if u.disposition.is_included() && !u.name.is_empty() {
                 if !u.timer_content.is_empty() {
                     units.insert(format!("{}.timer", u.name));
                 }
@@ -231,7 +231,7 @@ fn classify_service_presence(
         // Tier 4: if ANY entry is included AND installable → proven present
         let any_installable = matching_packages
             .iter()
-            .any(|pkg| pkg.include && is_package_installable(pkg));
+            .any(|pkg| pkg.disposition.is_included() && is_package_installable(pkg));
         if any_installable {
             return PresenceDecision::Emit {
                 advisory_reasons: None,
@@ -241,7 +241,7 @@ fn classify_service_presence(
         // Tier 3: if ANY entry is included but not installable → PackageUnreachable
         let any_included_not_installable = matching_packages
             .iter()
-            .any(|pkg| pkg.include && !is_package_installable(pkg));
+            .any(|pkg| pkg.disposition.is_included() && !is_package_installable(pkg));
         if any_included_not_installable {
             let mut reasons = vec![AdvisoryReason::PackageUnreachable];
             if baseline_unavailable {
@@ -318,7 +318,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let included_changes: Vec<_> = services
         .state_changes
         .iter()
-        .filter(|sc| sc.include)
+        .filter(|sc| sc.disposition.is_included())
         .collect();
 
     if included_changes.is_empty() {
@@ -437,7 +437,7 @@ fn render_without_rpm(
     let included_changes: Vec<_> = services
         .state_changes
         .iter()
-        .filter(|sc| sc.include)
+        .filter(|sc| sc.disposition.is_included())
         .collect();
 
     if included_changes.is_empty() {

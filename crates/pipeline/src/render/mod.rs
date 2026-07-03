@@ -105,6 +105,7 @@ pub fn render_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use tempfile::TempDir;
@@ -118,7 +119,7 @@ mod tests {
                 release: "5.el9".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             }],
@@ -203,13 +204,13 @@ mod tests {
                 ConfigFileEntry {
                     path: "/etc/httpd/conf/httpd.conf".into(),
                     content: "ServerRoot /etc/httpd".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
                 ConfigFileEntry {
                     path: "/usr/lib/sysctl.d/99-custom.conf".into(),
                     content: "net.ipv4.ip_forward = 1".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
             ],

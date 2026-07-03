@@ -953,7 +953,7 @@ fn bundle_unmanaged_files(
     use inspectah_core::types::nonrpm::FileType;
 
     for item in items {
-        if !item.include {
+        if !item.disposition.is_included() {
             continue;
         }
         // Strip leading / to create relative path under unmanaged/

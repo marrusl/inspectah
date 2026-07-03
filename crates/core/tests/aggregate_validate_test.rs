@@ -2,6 +2,7 @@ use inspectah_core::aggregate::validate::{
     AggregateValidationError, AggregateWarning, validate_snapshots,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::os::{OsRelease, SystemType};
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ fn make_snap_with_arch(hostname: &str, arch: &str) -> InspectionSnapshot {
         packages_added: vec![PackageEntry {
             name: "kernel".into(),
             arch: arch.into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
@@ -405,7 +406,7 @@ fn test_multiple_errors_reported() {
         packages_added: vec![PackageEntry {
             name: "kernel".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
@@ -414,7 +415,7 @@ fn test_multiple_errors_reported() {
         packages_added: vec![PackageEntry {
             name: "kernel".into(),
             arch: "aarch64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()

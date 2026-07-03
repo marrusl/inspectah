@@ -30,7 +30,7 @@ pub fn repoless_rpm_lines(snap: &InspectionSnapshot) -> Vec<String> {
         let rpm_filename = format!("{nevra}.rpm");
 
         if pkg.repoless_cached {
-            if pkg.include {
+            if pkg.disposition.is_included() {
                 // User explicitly included — render active
                 lines.push(format!(
                     "# Repo-less package: {} (cached RPM, no repository provenance)",
@@ -79,6 +79,7 @@ pub fn repoless_rpm_lines(snap: &InspectionSnapshot) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
     fn test_snapshot_with_repoless(packages: Vec<PackageEntry>) -> InspectionSnapshot {
@@ -98,7 +99,7 @@ mod tests {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: String::new(),
-            include: false,
+            disposition: FindingKind::excluded(),
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
@@ -124,7 +125,7 @@ mod tests {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: String::new(),
-            include: true,
+            disposition: FindingKind::included(),
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
@@ -146,7 +147,7 @@ mod tests {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: String::new(),
-            include: false,
+            disposition: FindingKind::excluded(),
             repoless_cached: false,
             repoless_annotation: "No repo source — manual resolution needed".into(),
             ..Default::default()
@@ -175,7 +176,7 @@ mod tests {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: "internal-tools".into(), // non-empty but disabled
-            include: false,
+            disposition: FindingKind::excluded(),
             repoless_cached: true,
             repoless_annotation:
                 "No repo source — repo 'internal-tools' not in enabled repos — cached RPM bundled"

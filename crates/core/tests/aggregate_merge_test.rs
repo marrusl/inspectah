@@ -4,6 +4,7 @@ use inspectah_core::aggregate::merge::{
     merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
 };
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
@@ -53,9 +54,11 @@ fn test_package_entry_aggregate_mut() {
 #[test]
 fn test_package_entry_set_include() {
     let mut pkg = PackageEntry::default();
-    assert!(!pkg.include);
+    assert!(pkg.disposition.is_included());
+    pkg.set_include(false);
+    assert!(!pkg.disposition.is_included());
     pkg.set_include(true);
-    assert!(pkg.include);
+    assert!(pkg.disposition.is_included());
 }
 
 // ---------------------------------------------------------------------------
@@ -258,9 +261,9 @@ fn test_nm_connection_identity_is_path() {
 fn test_nm_connection_set_include() {
     let mut n = NMConnection::default();
     n.set_include(false);
-    assert!(!n.include);
+    assert!(!n.disposition.is_included());
     n.set_include(true);
-    assert!(n.include);
+    assert!(n.disposition.is_included());
 }
 
 #[test]
@@ -339,7 +342,7 @@ fn test_merge_items_two_hosts_same_package() {
     assert_eq!(agg.count, 2);
     assert_eq!(agg.total, 2);
     assert_eq!(agg.hosts, vec!["host-a", "host-b"]);
-    assert!(merged[0].include);
+    assert!(merged[0].disposition.is_included());
 }
 
 #[test]
@@ -795,7 +798,7 @@ fn test_merge_items_all_variants_included() {
     let merged = merge_items(items, 2, &hostnames);
     for item in &merged {
         assert!(
-            !item.include,
+            !item.disposition.is_included(),
             "non-universal variant (1/2 hosts) must have include=false"
         );
     }
@@ -874,18 +877,18 @@ fn test_systemd_timer_set_include() {
     let mut t = SystemdTimer::default();
     // default_true: Default trait gives false, but serde default gives true
     t.set_include(false);
-    assert!(!t.include);
+    assert!(!t.disposition.is_included());
     t.set_include(true);
-    assert!(t.include);
+    assert!(t.disposition.is_included());
 }
 
 #[test]
 fn test_fstab_entry_set_include() {
     let mut f = FstabEntry::default();
     f.set_include(false);
-    assert!(!f.include);
+    assert!(!f.disposition.is_included());
     f.set_include(true);
-    assert!(f.include);
+    assert!(f.disposition.is_included());
 }
 
 // ===========================================================================
@@ -1106,7 +1109,7 @@ fn test_merge_service_sections_dedup_units() {
         unit: unit.into(),
         current_state: ServiceUnitState::Enabled,
         default_state: None,
-        include: false,
+        disposition: FindingKind::excluded(),
         locked: false,
         owning_package: None,
         aggregate: None,
@@ -1953,7 +1956,7 @@ fn test_merge_items_representative_is_most_prevalent_payload() {
     assert_eq!(agg.count, 3);
     assert_eq!(agg.total, 3);
     assert_eq!(agg.hosts, vec!["host-a", "host-b", "host-c"]);
-    assert!(merged[0].include);
+    assert!(merged[0].disposition.is_included());
 }
 
 #[test]
@@ -2025,13 +2028,13 @@ fn test_aggregate_leaf_intersection_filters_packages_added() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "perl-libs".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2045,13 +2048,13 @@ fn test_aggregate_leaf_intersection_filters_packages_added() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "perl-libs".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2099,13 +2102,13 @@ fn test_aggregate_leaf_intersection_excludes_partial_leaf() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "htop".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2119,13 +2122,13 @@ fn test_aggregate_leaf_intersection_excludes_partial_leaf() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "htop".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2155,7 +2158,7 @@ fn test_aggregate_leaf_intersection_skips_degraded_hosts() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec!["vim.x86_64".into()]),
@@ -2167,7 +2170,7 @@ fn test_aggregate_leaf_intersection_skips_degraded_hosts() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: None,
@@ -2198,7 +2201,7 @@ fn test_aggregate_leaf_intersection_all_degraded() {
         packages_added: vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: None,
@@ -2210,7 +2213,7 @@ fn test_aggregate_leaf_intersection_all_degraded() {
         packages_added: vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: None,
@@ -2245,7 +2248,7 @@ fn test_aggregate_leaf_intersection_authoritative_empty() {
         packages_added: vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec!["git.x86_64".into()]),
@@ -2257,7 +2260,7 @@ fn test_aggregate_leaf_intersection_authoritative_empty() {
         packages_added: vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec![]),
@@ -2290,13 +2293,13 @@ fn test_aggregate_leaf_dep_tree_donor_from_authoritative_host() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "curl".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2310,13 +2313,13 @@ fn test_aggregate_leaf_dep_tree_donor_from_authoritative_host() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "curl".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2361,13 +2364,13 @@ fn test_aggregate_leaf_intersection_order_independent() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2423,13 +2426,13 @@ fn test_aggregate_leaf_intersection_multiarch_identity() {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "glibc".into(),
                 arch: "i686".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2466,13 +2469,13 @@ fn test_aggregate_leaf_intersection_host_absent_package() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2485,7 +2488,7 @@ fn test_aggregate_leaf_intersection_host_absent_package() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec!["vim.x86_64".into()]),
@@ -2512,8 +2515,14 @@ fn test_aggregate_leaf_intersection_host_absent_package() {
         .iter()
         .find(|p| p.name == "git")
         .unwrap();
-    assert!(vim.include, "intersection leaf vim must have include=true");
-    assert!(!git.include, "partial leaf git must have include=false");
+    assert!(
+        vim.disposition.is_included(),
+        "intersection leaf vim must have include=true"
+    );
+    assert!(
+        !git.disposition.is_included(),
+        "partial leaf git must have include=false"
+    );
 }
 
 #[test]
@@ -2526,14 +2535,14 @@ fn test_aggregate_leaf_filtered_packages_absent_from_repo_conflicts() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "perl-libs".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "epel".into(),
                 ..Default::default()
             },
@@ -2548,14 +2557,14 @@ fn test_aggregate_leaf_filtered_packages_absent_from_repo_conflicts() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "baseos".into(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "perl-libs".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -2599,19 +2608,19 @@ fn test_aggregate_leaf_triplet_coherence() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "curl".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2628,19 +2637,19 @@ fn test_aggregate_leaf_triplet_coherence() {
             PackageEntry {
                 name: "git".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "curl".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -2707,7 +2716,7 @@ fn test_aggregate_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec!["vim.x86_64".into()]),
@@ -2726,7 +2735,7 @@ fn test_aggregate_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
     assert_eq!(merged.packages_added.len(), 1);
     assert_eq!(merged.packages_added[0].name, "vim");
     assert!(
-        merged.packages_added[0].include,
+        merged.packages_added[0].disposition.is_included(),
         "leaf intersection survivor must have include=true despite non-universal narrowing"
     );
 }
@@ -2738,7 +2747,7 @@ fn test_aggregate_degraded_state_json_contract() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: None,
@@ -2748,7 +2757,7 @@ fn test_aggregate_degraded_state_json_contract() {
         packages_added: vec![PackageEntry {
             name: "vim".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: None,

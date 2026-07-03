@@ -150,7 +150,7 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
 
     // Excluded items never render as active, even at high confidence.
     // Downgrade to medium so they render commented-out.
-    let effective_confidence = if !item.include {
+    let effective_confidence = if !item.disposition.is_included() {
         MEDIUM_CONFIDENCE
     } else {
         item.confidence.as_str()
@@ -262,7 +262,7 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
     }
 
     // Excluded items never render as active, even at high confidence.
-    let effective_confidence = if !item.include {
+    let effective_confidence = if !item.disposition.is_included() {
         MEDIUM_CONFIDENCE
     } else {
         item.confidence.as_str()
@@ -337,7 +337,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
     }
 
     // Excluded items never render as active, even at high confidence.
-    let effective_confidence = if !item.include {
+    let effective_confidence = if !item.disposition.is_included() {
         MEDIUM_CONFIDENCE
     } else {
         item.confidence.as_str()
@@ -382,6 +382,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmSoftwareSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
@@ -403,7 +404,7 @@ mod tests {
                         release: "1.el9".into(),
                         arch: "x86_64".into(),
                         state: PackageState::Added,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     })
                     .collect(),
@@ -439,7 +440,7 @@ mod tests {
                 .to_string(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: confidence.into(),
-            include: confidence == HIGH_CONFIDENCE,
+            disposition: FindingKind::from_bool(confidence == HIGH_CONFIDENCE),
             packages: packages
                 .iter()
                 .map(|(n, v)| LanguagePackage {
@@ -469,7 +470,7 @@ mod tests {
                 .to_string(),
             method: METHOD_NPM_LOCKFILE.into(),
             confidence: confidence.into(),
-            include: confidence == HIGH_CONFIDENCE,
+            disposition: FindingKind::from_bool(confidence == HIGH_CONFIDENCE),
             manifest_files,
             ..Default::default()
         }
@@ -491,7 +492,7 @@ mod tests {
                 .to_string(),
             method: METHOD_GEM_LOCKFILE.into(),
             confidence: confidence.into(),
-            include: confidence == HIGH_CONFIDENCE,
+            disposition: FindingKind::from_bool(confidence == HIGH_CONFIDENCE),
             manifest_files,
             ..Default::default()
         }
@@ -656,7 +657,7 @@ mod tests {
             false,
             vec![("flask", "2.3.3")],
         );
-        item.include = false;
+        item.disposition = FindingKind::excluded();
 
         let snap = test_snap(vec![item], &["python3"]);
         let lines = language_package_lines(&snap);
@@ -683,7 +684,7 @@ mod tests {
             name: "venv".into(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: "low".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         };
         let snap = test_snap(vec![item], &["python3"]);
@@ -715,7 +716,7 @@ mod tests {
                 name: "myapp".into(),
                 method: "binary".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             &[],
@@ -734,7 +735,7 @@ mod tests {
             name: "system-pip".into(),
             method: METHOD_PIP_DIST_INFO.into(),
             confidence: MEDIUM_CONFIDENCE.into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             packages: vec![
                 LanguagePackage {
                     name: "flask".into(),
@@ -798,7 +799,7 @@ mod tests {
             true,
             vec![("flask", "2.3.3")],
         );
-        item.include = false;
+        item.disposition = FindingKind::excluded();
 
         let snap = test_snap(vec![item], &["python3"]);
         let lines = language_package_lines(&snap);
@@ -846,7 +847,7 @@ mod tests {
     #[test]
     fn high_confidence_excluded_npm_renders_commented_out() {
         let mut item = npm_item("/opt/webapp", HIGH_CONFIDENCE);
-        item.include = false;
+        item.disposition = FindingKind::excluded();
 
         let snap = test_snap(vec![item], &["nodejs"]);
         let lines = language_package_lines(&snap);

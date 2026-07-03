@@ -430,7 +430,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         "unit": s.unit,
                         "current_state": s.current_state.to_string(),
                         "default_state": default_str,
-                        "include": s.include,
+                        "include": s.disposition.is_included(),
                     }))
                 })
                 .collect()
@@ -723,7 +723,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             ug.users
                 .iter()
                 .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
-                .filter(|u| u.include)
+                .filter(|u| u.disposition.is_included())
                 .map(|u| {
                     Value::from_serialize(serde_json::json!({
                         "name": u.name,
@@ -988,6 +988,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{
         PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
     };
@@ -1001,7 +1002,7 @@ mod tests {
                 release: "5.el9".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             }],
@@ -1464,7 +1465,7 @@ mod tests {
             files: vec![inspectah_core::types::config::ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         });
@@ -1487,7 +1488,7 @@ mod tests {
                 path: "/etc/sysctl.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::Unowned,
                 category: inspectah_core::types::config::ConfigCategory::Sysctl,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         });
@@ -1518,7 +1519,7 @@ mod tests {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
                 package: Some("httpd".into()),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         });
@@ -1573,7 +1574,7 @@ mod tests {
                 unit: "firewalld.service".into(),
                 current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("firewalld".into()),
                 aggregate: None,
@@ -1607,7 +1608,7 @@ mod tests {
                 unit: "sshd.service".into(),
                 current_state: inspectah_core::types::services::ServiceUnitState::Disabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Enable),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
@@ -1671,7 +1672,7 @@ mod tests {
                     unit: "firewalld.service".into(),
                     current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                     default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -1681,7 +1682,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: inspectah_core::types::services::ServiceUnitState::Masked,
                     default_state: None,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -1804,7 +1805,7 @@ mod tests {
                 runtime: "16".into(),
                 default: "0".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             }],
@@ -1834,7 +1835,7 @@ mod tests {
                 runtime: "1".into(),
                 default: "0".into(),
                 source: "/etc/sysctl.d/10-forwarding.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             }],
@@ -2030,14 +2031,14 @@ mod tests {
             cron_jobs: vec![CronJob {
                 path: "/etc/cron.d/backup".into(),
                 source: "file".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             systemd_timers: vec![SystemdTimer {
                 name: "logrotate.timer".into(),
                 on_calendar: "daily".into(),
                 description: "Rotate logs".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2085,7 +2086,7 @@ mod tests {
                 confidence: "high".into(),
                 lang: "c".into(),
                 version: "1.0.0".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2260,7 +2261,7 @@ mod tests {
                 "gid": 1000,
                 "shell": "/bin/bash",
                 "home": "/home/alice",
-                "include": true,
+                "disposition": {"kind": "actionable", "include": true},
                 "classification": "interactive",
                 "containerfile_strategy": "useradd",
                 "password_choice": "preserve",
@@ -2283,7 +2284,7 @@ mod tests {
                 "gid": 1000,
                 "shell": "/bin/bash",
                 "home": "/home/alice",
-                "include": true,
+                "disposition": {"kind": "actionable", "include": true},
                 "classification": "interactive",
                 "containerfile_strategy": "useradd",
                 "password_choice": "preserve",
@@ -2378,7 +2379,7 @@ mod tests {
                     "name": "included_user",
                     "uid": 1000, "gid": 1000,
                     "shell": "/bin/bash", "home": "/home/included",
-                    "include": true,
+                    "disposition": {"kind": "actionable", "include": true},
                     "classification": "interactive",
                     "containerfile_strategy": "useradd",
                     "password_choice": "none"
@@ -2387,7 +2388,7 @@ mod tests {
                     "name": "excluded_user",
                     "uid": 1001, "gid": 1001,
                     "shell": "/sbin/nologin", "home": "/home/excluded",
-                    "include": false,
+                    "disposition": {"kind": "actionable", "include": false},
                     "classification": "system",
                     "containerfile_strategy": "skip",
                     "password_choice": "none"
@@ -2632,7 +2633,7 @@ mod tests {
                 release: "5.el9".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             }],
@@ -2643,7 +2644,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/sysconfig/network".into(),
                 content: "NETWORKING=yes".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         });
@@ -2653,7 +2654,7 @@ mod tests {
                 unit: "httpd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: None,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -2678,7 +2679,7 @@ mod tests {
                 runtime: "1".into(),
                 default: "0".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2693,7 +2694,7 @@ mod tests {
             cron_jobs: vec![CronJob {
                 path: "/etc/cron.d/backup".into(),
                 source: "file".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2704,7 +2705,7 @@ mod tests {
                 path: "/usr/local/bin/node".into(),
                 name: "node".into(),
                 method: "path".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2717,7 +2718,7 @@ mod tests {
                 "gid": 1000,
                 "shell": "/bin/bash",
                 "home": "/home/testuser",
-                "include": true,
+                "disposition": {"kind": "actionable", "include": true},
                 "classification": "interactive",
                 "containerfile_strategy": "useradd",
                 "password_choice": "preserve"

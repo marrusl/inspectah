@@ -1,3 +1,4 @@
+use super::FindingKind;
 use serde::{Deserialize, Serialize};
 
 use super::aggregate::AggregatePrevalence;
@@ -20,8 +21,8 @@ pub struct SysctlOverride {
     pub default: String,
     #[serde(default)]
     pub source: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -35,8 +36,8 @@ pub struct KernelModule {
     pub size: String,
     #[serde(default)]
     pub used_by: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -73,7 +74,7 @@ pub struct KernelBootSection {
     #[serde(default)]
     pub tuned_active: String,
     #[serde(default)]
-    pub tuned_include: bool,
+    pub tuned_disposition: FindingKind,
     #[serde(default)]
     pub tuned_custom_profiles: Vec<ConfigSnippet>,
     pub locale: Option<String>,
@@ -121,7 +122,7 @@ mod tests {
                 runtime: "16".to_string(),
                 default: "0".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             }],
@@ -131,7 +132,7 @@ mod tests {
             loaded_modules: vec![],
             non_default_modules: vec![],
             tuned_active: "virtual-guest".to_string(),
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_custom_profiles: vec![],
             locale: Some("en_US.UTF-8".to_string()),
             timezone: Some("America/New_York".to_string()),
@@ -148,7 +149,7 @@ mod tests {
         let json = r#"{"key":"kernel.sysrq","runtime":"16","default":"0","source":"/etc/sysctl.d/99-custom.conf"}"#;
         let so: SysctlOverride = serde_json::from_str(json).unwrap();
         assert!(
-            so.include,
+            so.disposition.is_included(),
             "missing include field should deserialize as true"
         );
     }

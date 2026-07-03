@@ -65,6 +65,7 @@ mod tests {
         BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
     };
     use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
 
@@ -99,7 +100,7 @@ mod tests {
                     name: "bash".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     source_repo: "baseos".into(),
                     ..Default::default()
                 },
@@ -107,7 +108,7 @@ mod tests {
                     name: "httpd".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     source_repo: "appstream".into(),
                     ..Default::default()
                 },

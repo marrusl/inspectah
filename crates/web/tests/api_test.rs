@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
@@ -34,7 +35,7 @@ fn test_state() -> Arc<AppState> {
             name: "httpd".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -44,7 +45,7 @@ fn test_state() -> Arc<AppState> {
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -172,7 +173,7 @@ async fn api_op_accepts_ungroup_directive() {
             name: "podman".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -438,7 +439,7 @@ fn rich_snapshot() -> InspectionSnapshot {
             unit: "httpd.service".into(),
             current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
             default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-            include: false,
+            disposition: FindingKind::excluded(),
             locked: false,
             owning_package: None,
             aggregate: None,
@@ -849,7 +850,7 @@ async fn view_response_repo_groups_include_tier() {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -858,7 +859,7 @@ async fn view_response_repo_groups_include_tier() {
                 name: "epel-release".into(),
                 arch: "noarch".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "epel".into(),
                 ..Default::default()
@@ -1295,7 +1296,7 @@ fn service_subsection_state() -> Arc<AppState> {
             name: "custom-app".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: false,
+            disposition: FindingKind::excluded(),
             locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
@@ -1308,7 +1309,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 unit: "custom-app.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("custom-app".into()),
                 aggregate: None,
@@ -1318,7 +1319,7 @@ fn service_subsection_state() -> Arc<AppState> {
                 unit: "sssd-kcm.service".into(),
                 current_state: ServiceUnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("sssd".into()),
                 aggregate: None,
@@ -1515,7 +1516,7 @@ fn locked_package_state() -> Arc<AppState> {
             arch: "aarch64".into(),
             state: PackageState::Added,
             source_repo: "anaconda".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -1582,7 +1583,7 @@ async fn locked_package_rejects_set_include_via_api() {
         .find(|p| p.name == "grub2-efi-aa64-cdboot")
         .unwrap();
     assert!(
-        !pkg.include,
+        !pkg.disposition.is_included(),
         "API: locked package must stay excluded after SetInclude(true)"
     );
     assert!(pkg.locked, "API: locked flag must be preserved");
@@ -1601,7 +1602,7 @@ async fn api_view_includes_package_groups() {
                 name: "gcc".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -1609,7 +1610,7 @@ async fn api_view_includes_package_groups() {
                 name: "make".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: true,
                 ..Default::default()
             },
@@ -1666,7 +1667,7 @@ async fn api_view_populates_optional_spillover_provenance() {
                 name: "gcc".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -1674,7 +1675,7 @@ async fn api_view_populates_optional_spillover_provenance() {
                 name: "valgrind".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -1715,7 +1716,7 @@ async fn api_view_populates_ungrouped_member_provenance() {
             name: "podman".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -1778,7 +1779,7 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
             name: "podman".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],

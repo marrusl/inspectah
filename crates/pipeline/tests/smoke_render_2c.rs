@@ -13,6 +13,7 @@
 //! Tests 18–21: Report renderer (NEW summary cards)
 //! Tests 22–23: Rendered-output absence proofs
 //! Tests 24–27: Negative contract tests
+use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
@@ -36,7 +37,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
             CronJob {
                 path: "etc/cron.d/backup".into(),
                 source: "cron.d".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -46,7 +47,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 // GeneratedTimerUnit.cron_expr.
                 path: "etc/cron.d/reboot-task".into(),
                 source: "cron.d".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -56,7 +57,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
             source: "local".into(),
             timer_content: "[Timer]\nOnCalendar=daily".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/logrotate".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -66,7 +67,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".into(),
                 service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
                 cron_expr: "0 2 * * *".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -81,7 +82,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
                 cron_expr: "@reboot".into(),
                 source_path: "etc/cron.d/reboot-task".into(),
                 command: "/usr/local/bin/startup.sh".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -104,7 +105,7 @@ fn snapshot_with_config_files() -> InspectionSnapshot {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: "ServerRoot /etc/httpd".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -112,7 +113,7 @@ fn snapshot_with_config_files() -> InspectionSnapshot {
                 path: "/etc/sysconfig/network".into(),
                 content: "NETWORKING=yes".into(),
                 kind: ConfigFileKind::Unowned,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -136,7 +137,7 @@ fn snapshot_with_selinux() -> InspectionSnapshot {
             protocol: "tcp".into(),
             port: "8443".into(),
             label_type: "http_port_t".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -154,7 +155,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 name: "myapp".into(),
                 method: "binary".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -163,7 +164,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 name: "flask".into(),
                 method: "pip".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -172,7 +173,7 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
                 name: "express".into(),
                 method: "npm".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -181,14 +182,14 @@ fn snapshot_with_nonrpm() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/opt/app/.env".into(),
                 content: "DB_HOST=localhost\nDB_PASS=secret123".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/srv/webapp/.env.production".into(),
                 content: "API_KEY=abc123".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -205,7 +206,7 @@ fn snapshot_with_nonrpm_no_env() -> InspectionSnapshot {
             name: "myapp".into(),
             method: "binary".into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -278,7 +279,7 @@ fn smoke_containerfile_nonrpm() {
                 name: "myapp".into(),
                 method: "binary".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 review_status: "migration_planned".into(),
                 ..Default::default()
@@ -288,7 +289,7 @@ fn smoke_containerfile_nonrpm() {
                 name: "system-pip".into(),
                 method: "pip dist-info".into(),
                 confidence: "medium".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 version: "2.3.0".into(),
                 packages: vec![inspectah_core::types::nonrpm::LanguagePackage {
@@ -614,7 +615,7 @@ fn audit_reboot_detected_from_generated_units() {
         cron_jobs: vec![CronJob {
             path: "etc/cron.d/startup".into(),
             source: "cron.d".into(), // collector-shaped, never contains @reboot
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -623,7 +624,7 @@ fn audit_reboot_detected_from_generated_units() {
             timer_content: String::new(), // no fake timer
             service_content: "[Service]\nType=oneshot\nExecStart=/opt/init.sh".into(),
             cron_expr: "@reboot".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -650,7 +651,7 @@ fn audit_no_false_reboot_from_cronjob_source() {
         cron_jobs: vec![CronJob {
             path: "etc/cron.d/backup".into(),
             source: "cron.d".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -659,7 +660,7 @@ fn audit_no_false_reboot_from_cronjob_source() {
             timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".into(),
             service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
             cron_expr: "0 2 * * *".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -719,7 +720,7 @@ fn configtree_vendor_timers_not_copied() {
             path: "/usr/lib/systemd/system/fstrim.timer".into(),
             timer_content: "[Timer]\nOnCalendar=weekly".into(),
             service_content: "[Service]\nExecStart=/usr/sbin/fstrim -a".into(),
-            include: false, // vendor timers excluded
+            disposition: FindingKind::excluded(), // vendor timers excluded
             ..Default::default()
         }],
         ..Default::default()
@@ -742,7 +743,7 @@ fn configtree_cron_spool_not_materialized() {
         cron_jobs: vec![CronJob {
             path: "/var/spool/cron/root".into(),
             source: "spool".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],

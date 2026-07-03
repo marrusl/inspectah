@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
@@ -367,7 +368,7 @@ fn parse_semanage_ports(text: &str) -> Vec<SelinuxPortLabel> {
                     protocol: protocol.clone(),
                     port: port.to_string(),
                     label_type: port_type.to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
                 });
@@ -909,7 +910,7 @@ redis_port_t                    tcp      6380\n";
         assert_eq!(results[0].label_type, "ssh_port_t");
         assert_eq!(results[0].protocol, "tcp");
         assert_eq!(results[0].port, "2222");
-        assert!(results[0].include);
+        assert!(results[0].disposition.is_included());
 
         assert_eq!(results[1].label_type, "http_port_t");
         assert_eq!(results[1].port, "8080");

@@ -1,5 +1,6 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
@@ -113,21 +114,21 @@ fn containerfile_unmanaged_copy_paths_match_export_layout() {
                 path: "/opt/splunk/bin/splunkd".into(),
                 size: 1024 * 1024,
                 file_type: FileType::ElfBinary,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/opt/splunk/bin/btool".into(),
                 size: 512 * 1024,
                 file_type: FileType::ElfBinary,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/usr/local/bin/custom-script".into(),
                 size: 4096,
                 file_type: FileType::Script,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -220,7 +221,7 @@ fn containerfile_unmanaged_copy_paths_match_export_layout() {
 
 #[test]
 fn containerfile_repoless_copy_paths_match_export_layout() {
-    // Build a snapshot with a repoless RPM (include: true, cached: true).
+    // Build a snapshot with a repoless RPM (disposition: FindingKind::included(), cached: true).
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
@@ -230,7 +231,7 @@ fn containerfile_repoless_copy_paths_match_export_layout() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: String::new(),
-            include: true,
+            disposition: FindingKind::included(),
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
@@ -323,7 +324,7 @@ fn excluded_items_absent_from_both_containerfile_and_export() {
             path: "/opt/excluded/binary".into(),
             size: 1024,
             file_type: FileType::ElfBinary,
-            include: false, // Excluded
+            disposition: FindingKind::excluded(), // Excluded
             ..Default::default()
         }],
         total_size: 1024,
@@ -337,7 +338,7 @@ fn excluded_items_absent_from_both_containerfile_and_export() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: String::new(),
-            include: false, // Excluded
+            disposition: FindingKind::excluded(), // Excluded
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()

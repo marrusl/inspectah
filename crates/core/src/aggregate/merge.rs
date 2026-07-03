@@ -1,3 +1,4 @@
+use crate::types::FindingKind;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -46,7 +47,7 @@ impl AggregateMergeable for PackageEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -60,7 +61,7 @@ impl AggregateMergeable for RepoFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -74,7 +75,7 @@ impl AggregateMergeable for EnabledModuleStream {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -88,7 +89,7 @@ impl AggregateMergeable for VersionLockEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -108,7 +109,7 @@ impl AggregateMergeable for ConfigFileEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -140,7 +141,7 @@ impl AggregateMergeable for ServiceStateChange {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -154,7 +155,7 @@ impl AggregateMergeable for SystemdDropIn {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -186,7 +187,7 @@ impl AggregateMergeable for QuadletUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -212,7 +213,7 @@ impl AggregateMergeable for ComposeFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -239,7 +240,7 @@ impl AggregateMergeable for FlatpakApp {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -259,7 +260,7 @@ impl AggregateMergeable for NMConnection {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -273,7 +274,7 @@ impl AggregateMergeable for FirewallZone {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -293,7 +294,7 @@ impl AggregateMergeable for SelinuxPortLabel {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -313,7 +314,7 @@ impl AggregateMergeable for KernelModule {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -327,7 +328,7 @@ impl AggregateMergeable for SysctlOverride {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -391,7 +392,7 @@ impl AggregateMergeable for NonRpmItem {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -406,7 +407,7 @@ impl AggregateMergeable for UnmanagedFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
@@ -440,7 +441,7 @@ impl AggregateMergeable for CronJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -454,7 +455,7 @@ impl AggregateMergeable for SystemdTimer {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -468,7 +469,7 @@ impl AggregateMergeable for AtJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -482,7 +483,7 @@ impl AggregateMergeable for GeneratedTimerUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -502,7 +503,7 @@ impl AggregateMergeable for FstabEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.include = val;
+        self.disposition = FindingKind::from_bool(val);
     }
 }
 
@@ -1172,7 +1173,7 @@ pub fn merge_rpm_sections(
         for pkg in &mut packages_added {
             let id = format!("{}.{}", pkg.name, pkg.arch);
             if leaf_intersection.contains(id.as_str()) {
-                pkg.include = true;
+                pkg.disposition = FindingKind::included();
             }
         }
     }
@@ -1735,7 +1736,7 @@ pub fn merge_kernelboot_sections(
         dracut_conf,
         loaded_modules,
         non_default_modules,
-        tuned_include,
+        tuned_disposition: FindingKind::from_bool(tuned_include),
         tuned_active,
         tuned_custom_profiles,
         locale,
@@ -1947,7 +1948,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "epel".into(),
                 ..Default::default()
             }],
@@ -1958,7 +1959,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             }],
@@ -1969,7 +1970,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "epel".into(),
                 ..Default::default()
             }],
@@ -2013,7 +2014,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "baseos".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2024,7 +2025,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "baseos".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2050,7 +2051,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "epel".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2061,7 +2062,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "appstream".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2101,7 +2102,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "anaconda".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2112,7 +2113,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "baseos".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2123,7 +2124,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "baseos".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2152,7 +2153,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "baseos".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2163,7 +2164,7 @@ mod tests {
                     arch: "x86_64".into(),
                     source_repo: "epel".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2194,7 +2195,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/chrony.conf".into(),
                 content: "server ntp1.example.com".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         };
@@ -2202,7 +2203,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/chrony.conf".into(),
                 content: "server ntp2.example.com".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         };
@@ -2257,7 +2258,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 version: "1.0".into(),
                 ..Default::default()
@@ -2270,7 +2271,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "epel".into(),
                 version: "1.1".into(),
                 ..Default::default()
@@ -2283,7 +2284,7 @@ mod tests {
                 name: "nginx".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "epel".into(),
                 version: "1.2".into(),
                 ..Default::default()
@@ -2518,7 +2519,10 @@ mod tests {
         let agg = q.aggregate.as_ref().expect("should have aggregate data");
         assert_eq!(agg.count, 2);
         assert_eq!(agg.total, 3);
-        assert!(!q.include, "non-universal quadlet must have include=false");
+        assert!(
+            !q.disposition.is_included(),
+            "non-universal quadlet must have include=false"
+        );
     }
 
     #[test]
@@ -2546,7 +2550,10 @@ mod tests {
         let agg = q.aggregate.as_ref().expect("should have aggregate data");
         assert_eq!(agg.count, 3);
         assert_eq!(agg.total, 3);
-        assert!(q.include, "universal quadlet must have include=true");
+        assert!(
+            q.disposition.is_included(),
+            "universal quadlet must have include=true"
+        );
     }
 
     #[test]
@@ -2567,7 +2574,7 @@ mod tests {
         .expect("merge should succeed");
 
         assert!(
-            !merged.tuned_include,
+            !merged.tuned_disposition.is_included(),
             "stock tuned profile must be excluded even when universal"
         );
     }
@@ -2590,7 +2597,7 @@ mod tests {
         .expect("merge should succeed");
 
         assert!(
-            merged.tuned_include,
+            merged.tuned_disposition.is_included(),
             "custom tuned profile universal across all hosts must be included"
         );
     }
@@ -2621,7 +2628,7 @@ mod tests {
         .expect("merge should succeed");
 
         assert!(
-            !merged.tuned_include,
+            !merged.tuned_disposition.is_included(),
             "non-universal custom tuned profile must be excluded"
         );
     }
@@ -2658,7 +2665,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         let pkg = &result[0];
         assert!(
-            !pkg.include,
+            !pkg.disposition.is_included(),
             "non-universal package must have include=false after narrowing"
         );
         assert_eq!(pkg.aggregate.as_ref().unwrap().count, 2);
@@ -2701,7 +2708,10 @@ mod tests {
         );
         assert_eq!(result.len(), 1);
         let pkg = &result[0];
-        assert!(pkg.include, "universal package must remain include=true");
+        assert!(
+            pkg.disposition.is_included(),
+            "universal package must remain include=true"
+        );
         assert_eq!(pkg.aggregate.as_ref().unwrap().count, 3);
     }
 
@@ -2721,7 +2731,7 @@ mod tests {
                         name: name.into(),
                         arch: arch.into(),
                         state: PackageState::Added,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     })
                     .collect(),
@@ -2762,7 +2772,10 @@ mod tests {
             .iter()
             .find(|p| p.name == "vim")
             .expect("vim should survive leaf filter");
-        assert!(vim.include, "universal leaf vim must have include=true");
+        assert!(
+            vim.disposition.is_included(),
+            "universal leaf vim must have include=true"
+        );
         assert_eq!(vim.aggregate.as_ref().unwrap().count, 3);
 
         // htop: partial leaf (2/3 hosts) → present with include=false
@@ -2772,7 +2785,7 @@ mod tests {
             .find(|p| p.name == "htop")
             .expect("partial leaf htop must survive leaf filter, not be deleted");
         assert!(
-            !htop.include,
+            !htop.disposition.is_included(),
             "partial leaf htop must have include=false (narrow_non_universal)"
         );
         assert_eq!(htop.aggregate.as_ref().unwrap().count, 2);
@@ -2834,7 +2847,7 @@ mod tests {
                 name: "myapp-venv".to_string(),
                 path: "/opt/myapp/venv".to_string(),
                 method: "venv".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             env_files: vec![],
@@ -2844,7 +2857,7 @@ mod tests {
                 name: "myapp-venv".to_string(),
                 path: "/opt/myapp/venv".to_string(),
                 method: "venv".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             env_files: vec![],
@@ -2862,7 +2875,7 @@ mod tests {
         assert_eq!(agg.count, 2);
         assert_eq!(agg.total, 2);
         assert!(
-            item.include,
+            item.disposition.is_included(),
             "100% prevalence should default to include: true"
         );
     }
@@ -2877,7 +2890,7 @@ mod tests {
                 name: "myapp-venv".to_string(),
                 path: "/opt/myapp/venv".to_string(),
                 method: "venv".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             env_files: vec![],
@@ -2899,7 +2912,7 @@ mod tests {
         assert_eq!(agg.count, 1);
         assert_eq!(agg.total, 2);
         assert!(
-            !item.include,
+            !item.disposition.is_included(),
             "partial prevalence should default to include: false"
         );
     }
@@ -2917,7 +2930,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
                 size: 52_000_000,
-                include: true,
+                disposition: FindingKind::included(),
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
@@ -2928,7 +2941,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
                 size: 52_000_000,
-                include: true,
+                disposition: FindingKind::included(),
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
@@ -2964,7 +2977,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
                 size: 52_000_000,
-                include: true,
+                disposition: FindingKind::included(),
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
@@ -2975,7 +2988,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".to_string(),
                 size: 52_000_000,
-                include: true,
+                disposition: FindingKind::included(),
                 content_hash: "bbb222".to_string(),
                 ..Default::default()
             }],
@@ -3012,7 +3025,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/app/server".to_string(),
                 size: 10_000,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             total_size: 10_000,
@@ -3022,7 +3035,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/app/server".to_string(),
                 size: 10_000,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             total_size: 10_000,
@@ -3041,7 +3054,7 @@ mod tests {
         assert_eq!(agg.count, 2);
         assert_eq!(agg.total, 2);
         assert!(
-            file.include,
+            file.disposition.is_included(),
             "100% prevalence should default to include: true"
         );
     }
@@ -3055,7 +3068,7 @@ mod tests {
             items: vec![UnmanagedFile {
                 path: "/opt/app/server".to_string(),
                 size: 10_000,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             total_size: 10_000,
@@ -3079,7 +3092,7 @@ mod tests {
         assert_eq!(agg.count, 1);
         assert_eq!(agg.total, 2);
         assert!(
-            !file.include,
+            !file.disposition.is_included(),
             "partial prevalence should default to include: false"
         );
     }

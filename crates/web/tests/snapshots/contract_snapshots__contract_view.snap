@@ -5,7 +5,7 @@ expression: json
 {
   "baseline_summary": null,
   "config_files": [],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n# 1 custom audit rule file(s) materialized under config/etc/audit/rules.d/\n# 1 custom PAM config file(s) materialized under config/etc/pam.d/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Kernel and Boot Configuration ===\n# 1 sysctl override(s) — merged into single drop-in\nCOPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n# 1 custom audit rule file(s) materialized under config/etc/audit/rules.d/\n# 1 custom PAM config file(s) materialized under config/etc/pam.d/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "flatpaks": [],
   "generation": 0,
   "has_unmanaged_scan": false,
@@ -13,7 +13,7 @@ expression: json
     {
       "confidence": "high",
       "ecosystem": "javascript",
-      "include": false,
+      "include": true,
       "manifest_basis": "",
       "method": "binary",
       "packages": [
@@ -28,8 +28,11 @@ expression: json
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "epoch": "",
-        "include": false,
         "name": "httpd",
         "release": "11.el9",
         "source_repo": "",
@@ -49,7 +52,7 @@ expression: json
     {
       "content": "[Container]\nImage=quay.io/myorg/myapp:latest",
       "image": "quay.io/myorg/myapp:latest",
-      "include": false,
+      "include": true,
       "locked": false,
       "name": "myapp.container",
       "path": "/etc/containers/systemd/myapp.container",
@@ -114,7 +117,7 @@ expression: json
   "sysctls": [
     {
       "default": "0",
-      "include": false,
+      "include": true,
       "key": "net.ipv4.ip_forward",
       "locked": false,
       "runtime": "1",

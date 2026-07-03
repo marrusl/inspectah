@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +12,8 @@ pub struct FstabEntry {
     pub fstype: String,
     #[serde(default)]
     pub options: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -26,7 +27,7 @@ pub struct FstabEntry {
 impl Default for FstabEntry {
     fn default() -> Self {
         Self {
-            include: true,
+            disposition: FindingKind::included(),
             device: Default::default(),
             mount_point: Default::default(),
             fstype: Default::default(),

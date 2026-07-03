@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::storage::{
@@ -176,7 +177,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
             mount_point,
             fstype,
             options,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             acknowledged: false,
             aggregate: None,

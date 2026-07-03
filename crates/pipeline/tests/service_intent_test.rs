@@ -1,4 +1,5 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
@@ -21,7 +22,7 @@ fn state_change(
         unit: unit.into(),
         current_state,
         default_state,
-        include: true,
+        disposition: FindingKind::included(),
         locked: false,
         owning_package: owning_package.map(str::to_string),
         aggregate: None,
@@ -42,7 +43,7 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
                 name: "custom-app".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -51,7 +52,7 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
                 name: "excluded-app".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -74,7 +75,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         name: "httpd".into(),
         arch: "x86_64".into(),
         state: PackageState::Added,
-        include: true,
+        disposition: FindingKind::included(),
         locked: false,
         source_repo: "appstream".into(),
         ..Default::default()
@@ -83,7 +84,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         name: "local-tool".into(),
         arch: "x86_64".into(),
         state: PackageState::LocalInstall,
-        include: true,
+        disposition: FindingKind::included(),
         locked: false,
         source_repo: String::new(),
         ..Default::default()
@@ -92,7 +93,7 @@ fn test_is_package_installable_matches_manual_follow_up_contract() {
         name: "mystery".into(),
         arch: "x86_64".into(),
         state: PackageState::Added,
-        include: true,
+        disposition: FindingKind::included(),
         locked: false,
         source_repo: String::new(),
         ..Default::default()
@@ -163,7 +164,7 @@ fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
             name: "custom-app".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: false,
+            disposition: FindingKind::excluded(),
             locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
@@ -213,7 +214,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
             name: "local-tool".into(),
             arch: "x86_64".into(),
             state: PackageState::LocalInstall,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             source_repo: String::new(),
             ..Default::default()
@@ -361,7 +362,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
             name: "httpd".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
@@ -519,7 +520,7 @@ fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
             name: "stacked-pkg".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: false,
+            disposition: FindingKind::excluded(),
             locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
@@ -624,7 +625,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: false, // excluded entry
+                disposition: FindingKind::excluded(), // excluded entry
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -632,7 +633,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
                 name: "httpd".into(),
                 arch: "i686".into(),
                 state: PackageState::Added,
-                include: true, // included entry — should win
+                disposition: FindingKind::included(), // included entry — should win
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -687,7 +688,7 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         packages_added: vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         leaf_packages: Some(vec!["git.x86_64".into()]),

@@ -286,7 +286,7 @@ pub fn project_ref_containers(snap: &InspectionSnapshot) -> RefContainers {
         .map(|cf| RefComposeItem {
             path: cf.path.clone(),
             services: cf.images.clone(),
-            include: cf.include,
+            include: cf.disposition.is_included(),
         })
         .collect();
 
@@ -505,7 +505,7 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
             mount_point: e.mount_point.clone(),
             fstype: e.fstype.clone(),
             options: e.options.clone(),
-            include: e.include,
+            include: e.disposition.is_included(),
             locked: e.locked,
             attention_reason: e.attention_reason.clone(),
         })
@@ -902,6 +902,7 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
 mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
     use inspectah_core::types::rpm::{RpmSection, VersionChange};
@@ -1035,7 +1036,7 @@ mod tests {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
@@ -1075,7 +1076,7 @@ mod tests {
                     unit: "chronyd.service".into(),
                     path: "/etc/systemd/system/chronyd.service.d/override.conf".into(),
                     content: "[Service]\nExecStart=".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -1168,7 +1169,7 @@ mod tests {
                     unit: "phantom.service".into(),
                     path: "/etc/systemd/system/phantom.service.d/10-custom.conf".into(),
                     content: "[Service]\nRestart=always".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -1199,7 +1200,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("httpd".into()),
                     aggregate: None,
@@ -1211,7 +1212,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                     content: "[Service]\nLimitNOFILE=65536".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -1240,7 +1241,7 @@ mod tests {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
@@ -1310,7 +1311,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Masked,
                     default_state: None,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("cups".into()),
                     aggregate: None,
@@ -1415,7 +1416,7 @@ mod tests {
                             image: "postgres:16".into(),
                         },
                     ],
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2116,7 +2117,7 @@ mod tests {
                     mount_point: "/boot".into(),
                     fstype: "xfs".into(),
                     options: "defaults".into(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: true,
                     attention_reason: Some("host state \u{2014} not image-portable".into()),
                     ..Default::default()

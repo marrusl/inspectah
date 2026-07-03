@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 pub mod classifier;
 pub mod modules;
 pub mod parser;
@@ -132,7 +133,7 @@ impl RpmInspector {
                     release: bp.release.clone(),
                     arch: bp.arch.clone(),
                     state: PackageState::BaseImageOnly,
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     ..Default::default()
                 };
                 (key, pkg)
@@ -293,7 +294,7 @@ impl Inspector for RpmInspector {
                     release: bp.release.clone(),
                     arch: bp.arch.clone(),
                     state: PackageState::BaseImageOnly,
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     ..Default::default()
                 })
                 .collect(),
@@ -1371,7 +1372,7 @@ mod tests {
         assert_eq!(bash.version, "5.2.26");
         assert_eq!(bash.release, "3.el9");
         assert_eq!(bash.state, PackageState::BaseImageOnly);
-        assert!(!bash.include);
+        assert!(!bash.disposition.is_included());
 
         // kernel with None epoch -> empty string
         let kernel = result
@@ -1381,7 +1382,7 @@ mod tests {
         assert_eq!(kernel.epoch, "");
         assert_eq!(kernel.version, "5.14.0");
         assert_eq!(kernel.state, PackageState::BaseImageOnly);
-        assert!(!kernel.include);
+        assert!(!kernel.disposition.is_included());
     }
 
     #[test]

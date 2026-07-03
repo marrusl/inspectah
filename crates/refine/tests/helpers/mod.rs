@@ -1,5 +1,6 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
 fn empty_baseline() -> BaselineData {
@@ -20,7 +21,7 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -28,7 +29,7 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
                 arch: "noarch".into(),
                 state: PackageState::Added,
                 source_repo: "epel".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -36,13 +37,13 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
             RepoFile {
                 path: "/etc/yum.repos.d/centos.repo".into(),
                 content: "[baseos]\nname=CentOS BaseOS\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n\n[appstream]\nname=CentOS AppStream\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             RepoFile {
                 path: "/etc/yum.repos.d/epel.repo".into(),
                 content: "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -50,13 +51,13 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -72,13 +73,13 @@ pub fn make_snap_with_multi_section_third_party() -> InspectionSnapshot {
     rpm.repo_files.push(RepoFile {
         path: "/etc/yum.repos.d/custom-multi.repo".into(),
         content: "[custom-a]\nname=Custom A\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n\n[custom-b]\nname=Custom B\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n".into(),
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     });
     rpm.gpg_keys.push(RepoFile {
         path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom".into(),
         content: "key-data".into(),
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     });
     rpm.packages_added.push(PackageEntry {
@@ -86,7 +87,7 @@ pub fn make_snap_with_multi_section_third_party() -> InspectionSnapshot {
         arch: "x86_64".into(),
         state: PackageState::Added,
         source_repo: "custom-a".into(),
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     });
     rpm.packages_added.push(PackageEntry {
@@ -94,7 +95,7 @@ pub fn make_snap_with_multi_section_third_party() -> InspectionSnapshot {
         arch: "x86_64".into(),
         state: PackageState::Added,
         source_repo: "custom-b".into(),
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     });
     snap

@@ -319,7 +319,7 @@ fn packages_section_lines(
     let included_repos: usize = rpm
         .repo_files
         .iter()
-        .filter(|r| r.include && !r.is_default_repo)
+        .filter(|r| r.disposition.is_included() && !r.is_default_repo)
         .count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
@@ -330,7 +330,11 @@ fn packages_section_lines(
     }
 
     // GPG keys — batch standard-dir keys, per-key import for non-standard
-    let included_gpg: Vec<_> = rpm.gpg_keys.iter().filter(|k| k.include).collect();
+    let included_gpg: Vec<_> = rpm
+        .gpg_keys
+        .iter()
+        .filter(|k| k.disposition.is_included())
+        .collect();
     if !included_gpg.is_empty() {
         let mut gpg_body: Vec<String> = Vec::new();
 
@@ -416,7 +420,7 @@ fn packages_section_lines(
     let enabled_modules: Vec<_> = rpm
         .module_streams
         .iter()
-        .filter(|ms| ms.include && !ms.baseline_match)
+        .filter(|ms| ms.disposition.is_included() && !ms.baseline_match)
         .collect();
     if !enabled_modules.is_empty() {
         let mut mod_body: Vec<String> = Vec::new();
@@ -567,7 +571,7 @@ fn packages_section_lines(
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
         .iter()
-        .filter(|pkg| pkg.include)
+        .filter(|pkg| pkg.disposition.is_included())
         .filter(|pkg| is_package_installable(pkg))
         .filter(|pkg| {
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
@@ -580,13 +584,16 @@ fn packages_section_lines(
             // Anaconda-classified packages with include=true had their
             // include state set by the anaconda classifier, not by
             // leaf classification. Bypass the leaf filter.
-            if pkg.source_repo == "anaconda" && pkg.include {
+            if pkg.source_repo == "anaconda" && pkg.disposition.is_included() {
                 return true;
             }
             let id = canonical_package_id(&pkg.name, &pkg.arch);
             if let Some(orig) = original_includes {
-                let was_included = orig.get(&id).copied().unwrap_or(pkg.include);
-                if was_included != pkg.include {
+                let was_included = orig
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(pkg.disposition.is_included());
+                if was_included != pkg.disposition.is_included() {
                     return true;
                 }
             }
@@ -689,7 +696,11 @@ fn packages_section_lines(
     }
 
     // Version locks
-    let included_locks: Vec<_> = rpm.version_locks.iter().filter(|vl| vl.include).collect();
+    let included_locks: Vec<_> = rpm
+        .version_locks
+        .iter()
+        .filter(|vl| vl.disposition.is_included())
+        .collect();
     if !included_locks.is_empty() {
         let mut safe_locks = Vec::new();
         let mut unsafe_locks = Vec::new();
@@ -738,7 +749,11 @@ fn drop_ins_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return Vec::new(),
     };
 
-    let included_count = services.drop_ins.iter().filter(|d| d.include).count();
+    let included_count = services
+        .drop_ins
+        .iter()
+        .filter(|d| d.disposition.is_included())
+        .count();
     if included_count == 0 {
         return Vec::new();
     }
@@ -763,7 +778,11 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
     };
 
     if firewall_only {
-        let included_zones: usize = network.firewall_zones.iter().filter(|z| z.include).count();
+        let included_zones: usize = network
+            .firewall_zones
+            .iter()
+            .filter(|z| z.disposition.is_included())
+            .count();
         if included_zones > 0 || !network.firewall_direct_rules.is_empty() {
             let mut fw_body: Vec<String> = Vec::new();
             if included_zones > 0 {
@@ -821,13 +840,13 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let local_timers: Vec<_> = st
         .systemd_timers
         .iter()
-        .filter(|t| t.source == "local" && t.include)
+        .filter(|t| t.source == "local" && t.disposition.is_included())
         .collect();
 
     let included_timers: Vec<_> = st
         .generated_timer_units
         .iter()
-        .filter(|u| u.include)
+        .filter(|u| u.disposition.is_included())
         .collect();
 
     let has_content =
@@ -946,14 +965,18 @@ fn config_section_lines(
         || snap
             .config
             .as_ref()
-            .is_some_and(|c| c.files.iter().any(|f| f.include));
+            .is_some_and(|c| c.files.iter().any(|f| f.disposition.is_included()));
 
     if has_config_content {
         let mut cfg_body: Vec<String> = Vec::new();
 
         // Config inventory comment
         if let Some(config) = &snap.config {
-            let total = config.files.iter().filter(|f| f.include).count();
+            let total = config
+                .files
+                .iter()
+                .filter(|f| f.disposition.is_included())
+                .count();
             if total > 0 {
                 cfg_body.push(format!("# {} config file(s) captured", total));
             }
@@ -979,7 +1002,7 @@ fn config_section_lines(
     // CA trust anchors
     if let Some(config) = &snap.config {
         let has_ca = config.files.iter().any(|f| {
-            f.include
+            f.disposition.is_included()
                 && f.path
                     .trim_start_matches('/')
                     .starts_with("etc/pki/ca-trust/source/anchors/")
@@ -1009,7 +1032,7 @@ fn config_copy_roots_from_snapshot(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut roots: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for f in &config.files {
-        if !f.include {
+        if !f.disposition.is_included() {
             continue;
         }
         let rel = f.path.trim_start_matches('/');
@@ -1030,7 +1053,7 @@ fn crypto_policy_lines(snap: &InspectionSnapshot) -> Vec<String> {
     };
 
     for f in &config.files {
-        if f.path == "/etc/crypto-policies/config" && f.include {
+        if f.path == "/etc/crypto-policies/config" && f.disposition.is_included() {
             let policy = f
                 .content
                 .lines()
@@ -1074,9 +1097,13 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let included_quadlets: usize = containers
         .quadlet_units
         .iter()
-        .filter(|u| u.include)
+        .filter(|u| u.disposition.is_included())
         .count();
-    let included_flatpaks: usize = containers.flatpak_apps.iter().filter(|a| a.include).count();
+    let included_flatpaks: usize = containers
+        .flatpak_apps
+        .iter()
+        .filter(|a| a.disposition.is_included())
+        .count();
 
     if included_quadlets == 0 && included_flatpaks == 0 {
         return lines;
@@ -1120,7 +1147,7 @@ fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let compose_files: Vec<_> = containers
         .compose_files
         .iter()
-        .filter(|c| c.include)
+        .filter(|c| c.disposition.is_included())
         .collect();
 
     if compose_files.is_empty() {
@@ -1290,7 +1317,11 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     // Non-default modules
-    let included_mods: usize = kb.non_default_modules.iter().filter(|m| m.include).count();
+    let included_mods: usize = kb
+        .non_default_modules
+        .iter()
+        .filter(|m| m.disposition.is_included())
+        .count();
     if included_mods > 0 {
         body.push(format!(
             "# {} non-default kernel module(s) — config files in COPY config/etc/ above",
@@ -1299,7 +1330,11 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     // Sysctl overrides — synthesized into a single drop-in
-    let included_sysctl: usize = kb.sysctl_overrides.iter().filter(|s| s.include).count();
+    let included_sysctl: usize = kb
+        .sysctl_overrides
+        .iter()
+        .filter(|s| s.disposition.is_included())
+        .count();
     if included_sysctl > 0 {
         body.push(format!(
             "# {} sysctl override(s) — merged into single drop-in",
@@ -1309,7 +1344,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     // Tuned — gated on include flag (set by collectors / aggregate merge).
-    let tuned_included = kb.tuned_include;
+    let tuned_included = kb.tuned_disposition.is_included();
     if tuned_included && !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
@@ -1526,6 +1561,7 @@ fn validate_lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
@@ -1539,7 +1575,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 })
@@ -1580,7 +1616,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1589,7 +1625,7 @@ mod tests {
                     arch: "i686".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1626,7 +1662,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1635,7 +1671,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::LocalInstall,
                     source_repo: String::new(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1644,7 +1680,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::NoRepo,
                     source_repo: String::new(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1653,7 +1689,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: String::new(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1710,7 +1746,7 @@ mod tests {
                 unit: "httpd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -1787,7 +1823,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -1797,7 +1833,7 @@ mod tests {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -1807,7 +1843,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -1886,7 +1922,7 @@ mod tests {
                     module_name: "safe-module".into(),
                     stream: "1.0".into(),
                     profiles: vec![],
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     baseline_match: false,
                     ..Default::default()
@@ -1895,7 +1931,7 @@ mod tests {
                     module_name: "evil$(whoami)".into(),
                     stream: "2.0".into(),
                     profiles: vec![],
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     baseline_match: false,
                     ..Default::default()
@@ -1931,13 +1967,13 @@ mod tests {
             version_locks: vec![
                 VersionLockEntry {
                     raw_pattern: "httpd-0:2.4.57-5.el9.*".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 VersionLockEntry {
                     raw_pattern: "pkg;rm -rf /".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2013,7 +2049,7 @@ mod tests {
             systemd_timers: vec![SystemdTimer {
                 name: "evil$(whoami)".into(),
                 source: "local".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2047,14 +2083,14 @@ mod tests {
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key-data".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/opt/custom/keys/signing-key.asc".into(),
                     content: "key-data".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2086,14 +2122,14 @@ mod tests {
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/GOOD-KEY".into(),
                     content: "key-data".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "../../etc/shadow".into(),
                     content: "bad".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2124,7 +2160,7 @@ mod tests {
             gpg_keys: vec![inspectah_core::types::rpm::RepoFile {
                 path: "/opt/custom keys/signing-key.asc".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2149,14 +2185,14 @@ mod tests {
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key1".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
                     content: "key2".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2188,14 +2224,14 @@ mod tests {
                 inspectah_core::types::rpm::RepoFile {
                     path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                     content: "key1".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 inspectah_core::types::rpm::RepoFile {
                     path: "/opt/custom/keys/signing-key.asc".into(),
                     content: "key2".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2227,7 +2263,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2237,7 +2273,7 @@ mod tests {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2247,7 +2283,7 @@ mod tests {
                     unit: "chronyd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2257,7 +2293,7 @@ mod tests {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2290,7 +2326,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2300,7 +2336,7 @@ mod tests {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2328,7 +2364,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Masked,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2338,7 +2374,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2371,7 +2407,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2381,7 +2417,7 @@ mod tests {
                     unit: "avahi-daemon.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2391,7 +2427,7 @@ mod tests {
                     unit: "bluetooth.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2401,7 +2437,7 @@ mod tests {
                     unit: "ModemManager.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2424,7 +2460,7 @@ mod tests {
             gpg_keys: vec![inspectah_core::types::rpm::RepoFile {
                 path: "/good-key".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2515,7 +2551,7 @@ mod tests {
             quadlet_units: vec![QuadletUnit {
                 name: "excluded.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2541,7 +2577,7 @@ mod tests {
             quadlet_units: vec![QuadletUnit {
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2564,7 +2600,7 @@ mod tests {
         // Tuned with include=true (set by collectors) produces output.
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "virtual-guest".into(),
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
@@ -2596,7 +2632,7 @@ mod tests {
                 app_id: "org.example.Excluded".into(),
                 origin: "flathub".into(),
                 branch: "stable".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 aggregate: None,
                 remote: "flathub".into(),
@@ -2628,7 +2664,7 @@ mod tests {
                     PackageEntry {
                         name: "httpd".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -2636,7 +2672,7 @@ mod tests {
                     PackageEntry {
                         name: "kernel".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "baseos".into(),
                         ..Default::default()
@@ -2672,7 +2708,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2682,7 +2718,7 @@ mod tests {
                     unit: "excluded.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: false, // excluded by triage
+                    disposition: FindingKind::excluded(), // excluded by triage
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2722,7 +2758,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("httpd".into()),
                     aggregate: None,
@@ -2732,7 +2768,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Masked,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("cups".into()),
                     aggregate: None,
@@ -2742,7 +2778,7 @@ mod tests {
                     unit: "avahi-daemon.service".into(),
                     current_state: ServiceUnitState::Disabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("avahi".into()),
                     aggregate: None,
@@ -2777,7 +2813,7 @@ mod tests {
                     key: "net.ipv4.ip_forward".into(),
                     runtime: "1".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2785,7 +2821,7 @@ mod tests {
                     key: "vm.swappiness".into(),
                     runtime: "10".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     ..Default::default()
                 },
@@ -2812,7 +2848,7 @@ mod tests {
                 key: "vm.swappiness".into(),
                 runtime: "10".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2841,7 +2877,7 @@ mod tests {
         });
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "virtual-guest".into(),
-            tuned_include: false,
+            tuned_disposition: FindingKind::excluded(),
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
@@ -2857,7 +2893,7 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".into(),
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_custom_profiles: vec![ConfigSnippet {
                 path: "etc/tuned/my-profile/tuned.conf".into(),
                 content: "[main]\nsummary=Custom".into(),
@@ -2888,7 +2924,7 @@ mod tests {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2956,7 +2992,7 @@ mod tests {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 ..Default::default()
             }],
@@ -2994,7 +3030,7 @@ mod tests {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -3624,7 +3660,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
                 PackageEntry {
@@ -3632,7 +3668,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: false, // member excluded
+                    disposition: FindingKind::excluded(), // member excluded
                     ..Default::default()
                 },
                 PackageEntry {
@@ -3640,7 +3676,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: false, // member excluded
+                    disposition: FindingKind::excluded(), // member excluded
                     ..Default::default()
                 },
             ],
@@ -3759,7 +3795,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
                 PackageEntry {
@@ -3767,7 +3803,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
                 PackageEntry {
@@ -3775,7 +3811,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
                 PackageEntry {
@@ -3783,7 +3819,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 },
             ],
@@ -3893,7 +3929,7 @@ mod tests {
                                 image: "postgres:16".to_string(),
                             },
                         ],
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     },
                     ComposeFile {
@@ -3902,7 +3938,7 @@ mod tests {
                             service: "prometheus".to_string(),
                             image: "prom/prometheus".to_string(),
                         }],
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     },
                 ],
@@ -3946,7 +3982,7 @@ mod tests {
             containers: Some(ContainerSection {
                 compose_files: vec![ComposeFile {
                     path: "opt/excluded/docker-compose.yml".to_string(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     ..Default::default()
                 }],
                 ..Default::default()

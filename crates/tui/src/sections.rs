@@ -66,12 +66,12 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                     let dec_included = decisions
                         .service_states
                         .iter()
-                        .filter(|s| s.entry.include)
+                        .filter(|s| s.entry.disposition.is_included())
                         .count()
                         + decisions
                             .service_dropins
                             .iter()
-                            .filter(|d| d.entry.include)
+                            .filter(|d| d.entry.disposition.is_included())
                             .count();
                     let ref_count = reference.services.divergent.len()
                         + reference.services.preset_matched_with_dropins.len()
@@ -91,12 +91,12 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                     let dec_included = decisions
                         .quadlets
                         .iter()
-                        .filter(|q| q.entry.include)
+                        .filter(|q| q.entry.disposition.is_included())
                         .count()
                         + decisions
                             .flatpaks
                             .iter()
-                            .filter(|f| f.entry.include)
+                            .filter(|f| f.entry.disposition.is_included())
                             .count();
                     let ref_count = reference.containers.running_containers.len()
                         + reference.containers.compose_files.len()
@@ -108,7 +108,11 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                 }
                 SectionId::Sysctls => {
                     let total = decisions.sysctls.len();
-                    let included = decisions.sysctls.iter().filter(|s| s.entry.include).count();
+                    let included = decisions
+                        .sysctls
+                        .iter()
+                        .filter(|s| s.entry.disposition.is_included())
+                        .count();
                     (total, included, total - included)
                 }
                 SectionId::Tuned => {
@@ -118,7 +122,11 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                 }
                 SectionId::Users => {
                     let total = decisions.users_groups.len();
-                    let included = decisions.users_groups.iter().filter(|u| u.include).count();
+                    let included = decisions
+                        .users_groups
+                        .iter()
+                        .filter(|u| u.disposition.is_included())
+                        .count();
                     (total, included, total - included)
                 }
 

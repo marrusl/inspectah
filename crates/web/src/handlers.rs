@@ -334,7 +334,12 @@ pub async fn export_tarball(
             .map(|r| {
                 r.packages_added
                     .iter()
-                    .map(|p| (format!("{}.{}", p.name, p.arch), p.include))
+                    .map(|p| {
+                        (
+                            format!("{}.{}", p.name, p.arch),
+                            p.disposition.is_included(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -655,6 +660,7 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
     use inspectah_refine::types::RepoTier;
@@ -753,7 +759,7 @@ mod tests {
                     name: "httpd".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -762,7 +768,7 @@ mod tests {
                     name: "kernel".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "baseos".into(),
                     ..Default::default()
@@ -771,7 +777,7 @@ mod tests {
                     name: "custom-tool".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "epel".into(),
                     ..Default::default()
@@ -833,7 +839,7 @@ mod tests {
                     name: "httpd".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -842,7 +848,7 @@ mod tests {
                     name: "zsh".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "epel".into(),
                     ..Default::default()
@@ -879,7 +885,7 @@ mod tests {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -888,7 +894,7 @@ mod tests {
                     arch: "noarch".into(),
                     state: PackageState::Added,
                     source_repo: "epel".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -898,14 +904,14 @@ mod tests {
                     path: "/etc/yum.repos.d/centos.repo".into(),
                     content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
                         .into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 RepoFile {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     content: "[epel]\nname=EPEL 9\n".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -934,7 +940,7 @@ mod tests {
             .find(|p| p.entry.name == "epel-release");
         assert!(epel_pkg.is_some(), "epel-release should still be in view");
         assert!(
-            !epel_pkg.unwrap().entry.include,
+            !epel_pkg.unwrap().entry.disposition.is_included(),
             "epel-release should be excluded"
         );
 

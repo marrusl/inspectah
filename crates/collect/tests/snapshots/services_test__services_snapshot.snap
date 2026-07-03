@@ -8,7 +8,10 @@ expression: section
       "unit": "bluetooth.service",
       "current_state": "enabled",
       "default_state": "disable",
-      "include": true,
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
       "owning_package": null,
       "aggregate": null
     },
@@ -16,7 +19,10 @@ expression: section
       "unit": "gdm.service",
       "current_state": "disabled",
       "default_state": "enable",
-      "include": true,
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
       "owning_package": null,
       "aggregate": null
     }
@@ -42,7 +48,10 @@ expression: section
       "unit": "httpd.service",
       "path": "/etc/systemd/system/httpd.service.d/override.conf",
       "content": "[Service]\nEnvironment=LANG=C\nLimitNOFILE=65535\n",
-      "include": true,
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
       "variant_selection": "Only",
       "aggregate": null
     }

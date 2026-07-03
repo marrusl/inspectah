@@ -3,6 +3,7 @@
 //! Exercises the full aggregate refine pipeline in a single test:
 //! zone classification, aggregate detection, attention scoring, variant ops,
 //! diff engine, variant summary, undo, and export.
+use inspectah_core::types::FindingKind;
 
 use std::collections::BTreeMap;
 
@@ -45,7 +46,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 content: "setting=alpha".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
                     count: 3,
@@ -59,7 +60,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 content: "setting=beta".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: 1,
@@ -73,7 +74,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
                 content: "setting=gamma".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: 1,
@@ -87,7 +88,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/db.conf".into(),
                 content: "host=db-primary".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
                     count: 4,
@@ -106,7 +107,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/db.conf".into(),
                 content: "host=db-replica".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: 1,
@@ -120,7 +121,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
             ConfigFileEntry {
                 path: "/etc/app/logging.conf".into(),
                 content: "level=info".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 variant_selection: VariantSelection::Only,
                 aggregate: Some(AggregatePrevalence {
                     count: 5,

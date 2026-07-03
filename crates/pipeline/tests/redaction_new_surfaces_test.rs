@@ -4,6 +4,7 @@
 //! engine detects and (where high-confidence) redacts them inline.
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind as SnapshotFindingKind;
 use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
 use inspectah_core::types::redaction::{FindingKind, RedactionState};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
@@ -22,7 +23,7 @@ fn test_dropin_env_secret_redacted() {
             unit: "myapp.service".into(),
             path: "/etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=secret123\n".into(),
-            include: true,
+            disposition: SnapshotFindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -288,7 +289,7 @@ fn test_secrets_review_reports_all_findings() {
             unit: "db.service".into(),
             path: "/etc/systemd/system/db.service.d/env.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=pass1\n".into(),
-            include: true,
+            disposition: SnapshotFindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -358,7 +359,7 @@ fn test_clean_surfaces_no_false_positives() {
             unit: "httpd.service".into(),
             path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
             content: "[Service]\nLimitNOFILE=65535\n".into(),
-            include: true,
+            disposition: SnapshotFindingKind::included(),
             locked: false,
             ..Default::default()
         }],

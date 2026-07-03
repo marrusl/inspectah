@@ -1,6 +1,8 @@
 pub mod aggregate;
 pub mod completeness;
 pub mod config;
+pub mod finding;
+pub use finding::{AdvisoryType, FindingKind, ShadowType};
 pub mod containers;
 pub mod group_render;
 pub mod kernelboot;

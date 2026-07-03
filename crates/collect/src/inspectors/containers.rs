@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerMount, ContainerSection, FlatpakApp, QuadletUnit,
@@ -224,7 +225,7 @@ fn scan_quadlet_dir(
             image,
             ports,
             volumes,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -363,7 +364,7 @@ fn find_compose_files(
         files.push(ComposeFile {
             path: rel_path,
             images: parse_result.services,
-            include: true,
+            disposition: FindingKind::included(),
             raw_content: Some(content.clone()),
             ..Default::default()
         });
@@ -726,7 +727,7 @@ fn parse_podman_inspect(
             ports,
             env,
             inspect_data: true,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -763,7 +764,7 @@ fn parse_podman_ps(data: &[serde_json::Value]) -> Vec<RunningContainer> {
             name,
             image: string_field(c, &["Image"]),
             status,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -886,7 +887,7 @@ fn detect_flatpak_apps(exec: &dyn Executor) -> Vec<FlatpakApp> {
             branch,
             remote,
             remote_url,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -1711,7 +1712,7 @@ com.visualstudio.code\tflathub\tstable
         let units = scan_quadlet_dir(&exec, "/etc/containers/systemd", &mut degraded);
         assert_eq!(units.len(), 1);
         assert!(
-            units[0].include,
+            units[0].disposition.is_included(),
             "collected QuadletUnit should have include: true"
         );
     }
@@ -1730,7 +1731,7 @@ com.visualstudio.code\tflathub\tstable
         let files = find_compose_files(&exec, "/opt", &mut hints, &mut degraded);
         assert_eq!(files.len(), 1);
         assert!(
-            files[0].include,
+            files[0].disposition.is_included(),
             "collected ComposeFile should have include: true"
         );
     }
@@ -1766,7 +1767,7 @@ com.visualstudio.code\tflathub\tstable
         let apps = detect_flatpak_apps(&exec);
         assert_eq!(apps.len(), 1);
         assert!(
-            apps[0].include,
+            apps[0].disposition.is_included(),
             "collected FlatpakApp should have include: true"
         );
     }
@@ -1808,7 +1809,7 @@ com.visualstudio.code\tflathub\tstable
         assert!(!containers.is_empty());
         for c in &containers {
             assert!(
-                c.include,
+                c.disposition.is_included(),
                 "collected RunningContainer '{}' should have include: true",
                 c.name
             );
@@ -1846,7 +1847,7 @@ com.visualstudio.code\tflathub\tstable
         assert!(!containers2.is_empty());
         for c in &containers2 {
             assert!(
-                c.include,
+                c.disposition.is_included(),
                 "ps-only RunningContainer '{}' should have include: true",
                 c.name
             );

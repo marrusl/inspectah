@@ -202,6 +202,7 @@ fn parse_repo_sections(content: &str) -> Vec<RepoSection> {
 mod tests {
     use super::*;
     use crate::types::RepoTier;
+    use inspectah_core::types::FindingKind;
 
     #[test]
     fn test_parse_single_section() {
@@ -291,13 +292,13 @@ mod tests {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "@commandline".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/centos.repo".into(),
                 content: "[baseos]\nname=CentOS BaseOS\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -322,13 +323,13 @@ mod tests {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "AppStream".into(), // Mixed case from dnf repoquery
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/centos.repo".into(),
                 content: "[appstream]\nname=CentOS AppStream\n".into(), // Lowercase section
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()

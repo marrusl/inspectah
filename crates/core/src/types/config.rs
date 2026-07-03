@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::{AggregatePrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
@@ -42,8 +43,8 @@ pub struct ConfigFileEntry {
     pub rpm_va_flags: Option<String>,
     pub package: Option<String>,
     pub diff_against_rpm: Option<String>,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default)]
@@ -71,7 +72,7 @@ mod tests {
                 kind: ConfigFileKind::RpmOwnedModified,
                 category: ConfigCategory::Other,
                 content: "ServerRoot \"/etc/httpd\"".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
         };

@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 use inspectah_refine::types::PackageTarget;
 use inspectah_refine::types::{AnnotatedOp, ItemId, RefinementOp};
 

@@ -1,6 +1,7 @@
 use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, TriageReason};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_pipeline::render::language_packages::is_language_env;
 use serde_json::Value;
 
@@ -64,9 +65,12 @@ fn patch_array_includes(parent: &mut Value, array_key: &str) {
     if let Some(Value::Array(entries)) = parent.get_mut(array_key) {
         for entry in entries {
             if let Value::Object(map) = entry
-                && !map.contains_key("include")
+                && !map.contains_key("disposition")
             {
-                map.insert("include".into(), Value::Bool(true));
+                map.insert(
+                    "disposition".into(),
+                    serde_json::json!({"kind": "actionable", "include": true}),
+                );
             }
         }
     }
@@ -134,13 +138,13 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         // Anaconda classifier already made tier-specific include/locked
         // decisions — respect them instead of applying generic bucket defaults.
         if is_anaconda_classified(&refined.triage.primary_reason) {
-            rpm.packages_added[i].include = refined.entry.include;
+            rpm.packages_added[i].disposition = refined.entry.disposition.clone();
             rpm.packages_added[i].locked = refined.entry.locked;
         } else {
             let bucket = refined.triage.bucket();
             match bucket {
                 TriageBucket::Baseline => {
-                    rpm.packages_added[i].include = true;
+                    rpm.packages_added[i].disposition = FindingKind::included();
                 }
                 TriageBucket::Site => {
                     let package_id = canonical_package_id(
@@ -151,10 +155,10 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
                         Some(set) => set.contains(package_id.as_str()),
                         None => true,
                     };
-                    rpm.packages_added[i].include = is_leaf;
+                    rpm.packages_added[i].disposition = FindingKind::from_bool(is_leaf);
                 }
                 TriageBucket::Investigate => {
-                    rpm.packages_added[i].include = false;
+                    rpm.packages_added[i].disposition = FindingKind::excluded();
                 }
             }
         }
@@ -165,14 +169,14 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         if let Some(ref agg) = rpm.packages_added[i].aggregate
             && agg.count < agg.total
         {
-            rpm.packages_added[i].include = false;
+            rpm.packages_added[i].disposition = FindingKind::excluded();
         }
 
         // Repo-less RPMs are pre-excluded — user must explicitly include.
         // This is the provenance trust gate per spec. Applies to both
         // empty source_repo and packages from disabled/removed repos.
         if !rpm.packages_added[i].repoless_annotation.is_empty() {
-            rpm.packages_added[i].include = false;
+            rpm.packages_added[i].disposition = FindingKind::excluded();
         }
     }
 }
@@ -190,7 +194,7 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
     // Lock ALL fstab entries — host state, not image-portable
     if let Some(ref mut storage) = snapshot.storage {
         for entry in &mut storage.fstab_entries {
-            entry.include = false;
+            entry.disposition = FindingKind::excluded();
             entry.locked = true;
             entry.attention_reason = Some("host state — not image-portable".into());
         }
@@ -199,7 +203,7 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
     if let Some(ref mut config) = snapshot.config {
         for file in &mut config.files {
             if MERGE_HOSTILE_PATHS.contains(&file.path.as_str()) {
-                file.include = false;
+                file.disposition = FindingKind::excluded();
                 file.locked = true;
                 file.attention_reason =
                     Some("merge-hostile — fights bootc /etc 3-way merge".into());
@@ -224,7 +228,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     // Lock incompatible services
     for sc in &mut services.state_changes {
         if incompatible_units.contains(&sc.unit.as_str()) {
-            sc.include = false;
+            sc.disposition = FindingKind::excluded();
             sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
         }
@@ -233,7 +237,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     // Lock drop-ins owned by incompatible services
     for di in &mut services.drop_ins {
         if incompatible_units.contains(&di.unit.as_str()) {
-            di.include = false;
+            di.disposition = FindingKind::excluded();
             di.locked = true;
             di.attention_reason = Some("parent service image-mode incompatible".to_string());
         }
@@ -256,7 +260,7 @@ pub fn normalize_inspectah_repo_files(snapshot: &mut InspectionSnapshot) {
     };
     for rf in &mut rpm.repo_files {
         if is_inspectah_repo_file(&rf.path) {
-            rf.include = false;
+            rf.disposition = FindingKind::excluded();
         }
     }
 }
@@ -280,11 +284,11 @@ pub fn normalize_language_env_defaults(snapshot: &mut InspectionSnapshot) {
                 // Leave include: true (default from serde)
             }
             "medium" | "low" => {
-                item.include = false;
+                item.disposition = FindingKind::excluded();
             }
             _ => {
                 // Unknown/empty confidence — treat as low
-                item.include = false;
+                item.disposition = FindingKind::excluded();
             }
         }
     }
@@ -327,7 +331,7 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
         // Exclude inspectah's own COPR repo definition — the migration
         // tool should never carry its own repo into the target image.
         if is_inspectah_repo_file(&config.files[i].path) {
-            config.files[i].include = false;
+            config.files[i].disposition = FindingKind::excluded();
             config.files[i].locked = true;
             continue;
         }
@@ -336,17 +340,17 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
         match bucket {
             TriageBucket::Baseline => {
                 // Baseline: NOT copied — package manager handles these
-                config.files[i].include = false;
+                config.files[i].disposition = FindingKind::excluded();
             }
             TriageBucket::Site => {
-                config.files[i].include = !matches!(
+                config.files[i].disposition = FindingKind::from_bool(!matches!(
                     config.files[i].kind,
                     inspectah_core::types::config::ConfigFileKind::Orphaned
-                );
+                ));
             }
             TriageBucket::Investigate => {
                 // Investigate: user-customized, include
-                config.files[i].include = true;
+                config.files[i].disposition = FindingKind::included();
             }
         }
 
@@ -355,7 +359,7 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
         if let Some(ref agg) = config.files[i].aggregate
             && agg.count < agg.total
         {
-            config.files[i].include = false;
+            config.files[i].disposition = FindingKind::excluded();
         }
     }
 }
@@ -387,7 +391,7 @@ mod tests {
             unit: unit.to_string(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include,
+            disposition: FindingKind::from_bool(include),
             locked: false,
             owning_package: None,
             aggregate: None,
@@ -400,7 +404,7 @@ mod tests {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
-        assert!(!services.state_changes[0].include);
+        assert!(!services.state_changes[0].disposition.is_included());
     }
 
     #[test]
@@ -408,7 +412,7 @@ mod tests {
         let mut snap = snap_with_services(vec![sc("httpd.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
-        assert!(services.state_changes[0].include);
+        assert!(services.state_changes[0].disposition.is_included());
     }
 
     #[test]
@@ -450,12 +454,12 @@ mod tests {
         let services = snap.services.as_ref().unwrap();
 
         // state_changes: incompatible ones excluded, compatible ones untouched
-        assert!(!services.state_changes[0].include); // dnf-makecache.service
-        assert!(!services.state_changes[1].include); // dnf-makecache.timer
-        assert!(!services.state_changes[2].include); // packagekit.service
-        assert!(!services.state_changes[3].include); // packagekit-offline-update.service
-        assert!(services.state_changes[4].include); // httpd.service
-        assert!(services.state_changes[5].include); // sshd.service
+        assert!(!services.state_changes[0].disposition.is_included()); // dnf-makecache.service
+        assert!(!services.state_changes[1].disposition.is_included()); // dnf-makecache.timer
+        assert!(!services.state_changes[2].disposition.is_included()); // packagekit.service
+        assert!(!services.state_changes[3].disposition.is_included()); // packagekit-offline-update.service
+        assert!(services.state_changes[4].disposition.is_included()); // httpd.service
+        assert!(services.state_changes[5].disposition.is_included()); // sshd.service
 
         // enabled_units: only compatible ones remain
         assert_eq!(
@@ -480,7 +484,7 @@ mod tests {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", false)], vec![]);
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
-        assert!(!services.state_changes[0].include);
+        assert!(!services.state_changes[0].disposition.is_included());
     }
 
     #[test]
@@ -488,7 +492,7 @@ mod tests {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
         let svc = &snap.services.as_ref().unwrap().state_changes[0];
-        assert!(!svc.include);
+        assert!(!svc.disposition.is_included());
         assert!(svc.locked);
         assert_eq!(
             svc.attention_reason.as_deref(),
@@ -505,7 +509,7 @@ mod tests {
                 drop_ins: vec![SystemdDropIn {
                     unit: "dnf-makecache.service".into(),
                     path: "/etc/systemd/system/dnf-makecache.service.d/override.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -515,10 +519,10 @@ mod tests {
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
         // Service itself locked
-        assert!(!services.state_changes[0].include);
+        assert!(!services.state_changes[0].disposition.is_included());
         assert!(services.state_changes[0].locked);
         // Drop-in also locked
-        assert!(!services.drop_ins[0].include);
+        assert!(!services.drop_ins[0].disposition.is_included());
         assert!(services.drop_ins[0].locked);
         assert_eq!(
             services.drop_ins[0].attention_reason.as_deref(),
@@ -535,7 +539,7 @@ mod tests {
                 drop_ins: vec![SystemdDropIn {
                     unit: "httpd.service".into(),
                     path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -544,7 +548,7 @@ mod tests {
         };
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
-        assert!(services.drop_ins[0].include);
+        assert!(services.drop_ins[0].disposition.is_included());
         assert!(!services.drop_ins[0].locked);
         assert!(services.drop_ins[0].attention_reason.is_none());
     }
@@ -613,7 +617,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -622,7 +626,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -631,7 +635,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -664,17 +668,17 @@ mod tests {
 
         // git is a true leaf — should be included
         assert!(
-            rpm.packages_added[0].include,
+            rpm.packages_added[0].disposition.is_included(),
             "git should be included (true leaf)"
         );
         // perl-Git is a dep of git — should be excluded
         assert!(
-            !rpm.packages_added[1].include,
+            !rpm.packages_added[1].disposition.is_included(),
             "perl-Git should be excluded (dep of git)"
         );
         // git-core is a dep of git — should be excluded
         assert!(
-            !rpm.packages_added[2].include,
+            !rpm.packages_added[2].disposition.is_included(),
             "git-core should be excluded (dep of git)"
         );
     }
@@ -704,7 +708,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -713,7 +717,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -722,7 +726,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -755,17 +759,17 @@ mod tests {
 
         // git is a top-level leaf — included
         assert!(
-            rpm.packages_added[0].include,
+            rpm.packages_added[0].disposition.is_included(),
             "git should be included (top-level leaf)"
         );
         // perl-Git is BOTH a dep of git AND a top-level leaf — stays included
         assert!(
-            rpm.packages_added[1].include,
+            rpm.packages_added[1].disposition.is_included(),
             "perl-Git should be included (top-level leaf, even though also a dep of git)"
         );
         // git-core is only a dep, not a top-level key — excluded
         assert!(
-            !rpm.packages_added[2].include,
+            !rpm.packages_added[2].disposition.is_included(),
             "git-core should be excluded (dep only, not a top-level leaf)"
         );
     }
@@ -805,12 +809,12 @@ mod tests {
             mount_point: "/boot".into(),
             fstype: "xfs".into(),
             options: "defaults".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }]);
         normalize_merge_hostile_configs(&mut snap);
         let entry = &snap.storage.as_ref().unwrap().fstab_entries[0];
-        assert!(!entry.include);
+        assert!(!entry.disposition.is_included());
         assert!(entry.locked);
         assert!(entry.attention_reason.is_some());
     }
@@ -821,12 +825,12 @@ mod tests {
         let mut snap = snap_with_configs(vec![ConfigFileEntry {
             path: "/etc/crypttab".into(),
             kind: ConfigFileKind::Unowned,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }]);
         normalize_merge_hostile_configs(&mut snap);
         let file = &snap.config.as_ref().unwrap().files[0];
-        assert!(!file.include);
+        assert!(!file.disposition.is_included());
         assert!(file.locked);
         assert!(file.attention_reason.is_some());
     }
@@ -837,12 +841,12 @@ mod tests {
         let mut snap = snap_with_configs(vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }]);
         normalize_merge_hostile_configs(&mut snap);
         let file = &snap.config.as_ref().unwrap().files[0];
-        assert!(file.include);
+        assert!(file.disposition.is_included());
         assert!(!file.locked);
         assert!(file.attention_reason.is_none());
     }
@@ -868,7 +872,7 @@ mod tests {
                 fstab_entries: vec![FstabEntry {
                     device: "/dev/sda1".into(),
                     mount_point: "/boot".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -878,13 +882,13 @@ mod tests {
                     ConfigFileEntry {
                         path: "/etc/crypttab".into(),
                         kind: ConfigFileKind::Unowned,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     },
                     ConfigFileEntry {
                         path: "/etc/httpd/conf/httpd.conf".into(),
                         kind: ConfigFileKind::RpmOwnedModified,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     },
                 ],
@@ -895,17 +899,17 @@ mod tests {
 
         // fstab locked
         let fstab = &snap.storage.as_ref().unwrap().fstab_entries[0];
-        assert!(!fstab.include);
+        assert!(!fstab.disposition.is_included());
         assert!(fstab.locked);
 
         // crypttab locked
         let crypttab = &snap.config.as_ref().unwrap().files[0];
-        assert!(!crypttab.include);
+        assert!(!crypttab.disposition.is_included());
         assert!(crypttab.locked);
 
         // httpd.conf untouched
         let httpd = &snap.config.as_ref().unwrap().files[1];
-        assert!(httpd.include);
+        assert!(httpd.disposition.is_included());
         assert!(!httpd.locked);
     }
 
@@ -953,7 +957,7 @@ mod tests {
         inspectah_core::types::nonrpm::NonRpmItem {
             method: method.to_string(),
             confidence: confidence.to_string(),
-            include,
+            disposition: FindingKind::from_bool(include),
             ..Default::default()
         }
     }
@@ -968,15 +972,15 @@ mod tests {
         normalize_language_env_defaults(&mut snap);
         let nrs = snap.non_rpm_software.as_ref().unwrap();
         assert!(
-            nrs.items[0].include,
+            nrs.items[0].disposition.is_included(),
             "npm high-confidence should stay included"
         );
         assert!(
-            nrs.items[1].include,
+            nrs.items[1].disposition.is_included(),
             "venv high-confidence should stay included"
         );
         assert!(
-            nrs.items[2].include,
+            nrs.items[2].disposition.is_included(),
             "gem high-confidence should stay included"
         );
     }
@@ -990,11 +994,11 @@ mod tests {
         normalize_language_env_defaults(&mut snap);
         let nrs = snap.non_rpm_software.as_ref().unwrap();
         assert!(
-            !nrs.items[0].include,
+            !nrs.items[0].disposition.is_included(),
             "npm medium-confidence should default to excluded"
         );
         assert!(
-            !nrs.items[1].include,
+            !nrs.items[1].disposition.is_included(),
             "pip medium-confidence should default to excluded"
         );
     }
@@ -1005,7 +1009,7 @@ mod tests {
         normalize_language_env_defaults(&mut snap);
         let nrs = snap.non_rpm_software.as_ref().unwrap();
         assert!(
-            !nrs.items[0].include,
+            !nrs.items[0].disposition.is_included(),
             "low-confidence should default to excluded"
         );
     }
@@ -1019,8 +1023,14 @@ mod tests {
         normalize_language_env_defaults(&mut snap);
         let nrs = snap.non_rpm_software.as_ref().unwrap();
         // Non-language items should not be modified by this normalize function
-        assert!(nrs.items[0].include, "binary item should stay included");
-        assert!(nrs.items[1].include, "git repo item should stay included");
+        assert!(
+            nrs.items[0].disposition.is_included(),
+            "binary item should stay included"
+        );
+        assert!(
+            nrs.items[1].disposition.is_included(),
+            "git repo item should stay included"
+        );
     }
 
     #[test]
@@ -1039,7 +1049,7 @@ mod tests {
         normalize_language_env_defaults(&mut snap);
         let nrs = snap.non_rpm_software.as_ref().unwrap();
         assert!(
-            !nrs.items[0].include,
+            !nrs.items[0].disposition.is_included(),
             "empty confidence should default to excluded"
         );
     }
@@ -1064,7 +1074,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "appstream".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         repoless_annotation: String::new(),
                         ..Default::default()
@@ -1074,7 +1084,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: String::new(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         repoless_cached: true,
                         repoless_annotation: "Empty source_repo — cached RPM bundled (pre-excluded, no GPG verification)".into(),
@@ -1085,7 +1095,7 @@ mod tests {
                         arch: "x86_64".into(),
                         state: PackageState::Added,
                         source_repo: "disabled-repo".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         repoless_annotation: "Disabled/removed source_repo — manual resolution needed".into(),
                         ..Default::default()
@@ -1118,19 +1128,19 @@ mod tests {
 
         // httpd: normal package, should stay included
         assert!(
-            rpm.packages_added[0].include,
+            rpm.packages_added[0].disposition.is_included(),
             "Normal package with repo should stay included"
         );
 
         // custom-tool: repo-less with empty source_repo, should be pre-excluded
         assert!(
-            !rpm.packages_added[1].include,
+            !rpm.packages_added[1].disposition.is_included(),
             "Repo-less package with empty source_repo should be pre-excluded"
         );
 
         // internal-tool: repo-less with disabled repo, should be pre-excluded
         assert!(
-            !rpm.packages_added[2].include,
+            !rpm.packages_added[2].disposition.is_included(),
             "Repo-less package with disabled repo should be pre-excluded"
         );
     }

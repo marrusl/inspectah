@@ -77,7 +77,12 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     let pkg_added = snap
         .rpm
         .as_ref()
-        .map(|r| r.packages_added.iter().filter(|p| p.include).count())
+        .map(|r| {
+            r.packages_added
+                .iter()
+                .filter(|p| p.disposition.is_included())
+                .count()
+        })
         .unwrap_or(0);
 
     let svc_enabled = snap

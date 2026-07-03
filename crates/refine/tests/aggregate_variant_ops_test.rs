@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -45,7 +46,7 @@ fn make_variant_snapshot(
             ConfigFileEntry {
                 path: path.into(),
                 content: content_a.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -59,7 +60,7 @@ fn make_variant_snapshot(
             ConfigFileEntry {
                 path: path.into(),
                 content: content_b.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -98,7 +99,7 @@ fn make_single_variant_snapshot(
         files: vec![ConfigFileEntry {
             path: path.into(),
             content: content.into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             variant_selection: VariantSelection::Only,
             aggregate: Some(AggregatePrevalence {
@@ -687,9 +688,11 @@ fn make_dropin_variant_snapshot(
                 unit: "test.service".into(),
                 path: path.into(),
                 content: content_a.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
                     count: count_a,
@@ -702,9 +705,11 @@ fn make_dropin_variant_snapshot(
                 unit: "test.service".into(),
                 path: path.into(),
                 content: content_b.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: count_b,
@@ -748,7 +753,7 @@ fn make_quadlet_variant_snapshot(
                 name: "test.container".into(),
                 content: content_a.into(),
                 image: "quay.io/test:latest".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -764,7 +769,7 @@ fn make_quadlet_variant_snapshot(
                 name: "test.container".into(),
                 content: content_b.into(),
                 image: "quay.io/test:latest".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -805,7 +810,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     service: "web".into(),
                     image: "nginx:1.24".into(),
                 }],
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -822,7 +827,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
                     service: "web".into(),
                     image: "nginx:1.25".into(),
                 }],
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -1152,7 +1157,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
             ConfigFileEntry {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-content".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -1166,7 +1171,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
             ConfigFileEntry {
                 path: "/etc/path-a.conf".into(),
                 content: "path-a-variant-2".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -1181,7 +1186,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
             ConfigFileEntry {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-content".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -1200,7 +1205,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
             ConfigFileEntry {
                 path: "/etc/path-b.conf".into(),
                 content: "path-b-variant-2".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {

@@ -1,5 +1,6 @@
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::redaction::{Confidence, RedactionHint, RedactionState};
 use inspectah_core::types::rpm::{
@@ -28,7 +29,7 @@ fn make_snap_with_package(
             arch: "x86_64".into(),
             state,
             source_repo: source_repo.into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
@@ -237,7 +238,7 @@ fn config_modified_gets_site() {
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -256,7 +257,7 @@ fn config_rpm_default_gets_baseline() {
         files: vec![ConfigFileEntry {
             path: "/etc/logrotate.conf".into(),
             kind: ConfigFileKind::RpmOwnedDefault,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -271,7 +272,7 @@ fn sensitive_path_adds_annotation() {
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/custom_config".into(),
             kind: ConfigFileKind::Unowned,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -291,7 +292,7 @@ fn sensitive_path_annotation_on_modified_too() {
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/sshd_config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -318,7 +319,7 @@ fn unresolved_hints_surface_as_investigate() {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -348,7 +349,7 @@ fn fully_redacted_snapshot_no_hint_tags() {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -368,7 +369,7 @@ fn make_snap_with_config(path: &str, kind: ConfigFileKind) -> InspectionSnapshot
         files: vec![ConfigFileEntry {
             path: path.into(),
             kind,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });

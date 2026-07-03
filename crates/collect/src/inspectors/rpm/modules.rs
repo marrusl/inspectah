@@ -1,4 +1,5 @@
 use inspectah_core::traits::executor::Executor;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{EnabledModuleStream, RpmVaEntry, VersionLockEntry};
 use std::path::Path;
 
@@ -66,7 +67,7 @@ fn parse_module_file_content(content: &str) -> Option<EnabledModuleStream> {
             module_name,
             stream,
             profiles,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             baseline_match: false,
             aggregate: None,
@@ -118,7 +119,7 @@ fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
     if parts.len() < 2 {
         return Some(VersionLockEntry {
             raw_pattern,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -148,7 +149,7 @@ fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
         version,
         release,
         arch,
-        include: true,
+        disposition: FindingKind::included(),
         locked: false,
         aggregate: None,
     })

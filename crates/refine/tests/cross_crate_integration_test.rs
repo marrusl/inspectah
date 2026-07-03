@@ -3,6 +3,7 @@
 //! These tests exercise the contracts between inspectah-core, inspectah-pipeline,
 //! and inspectah-refine to prove that baseline data flows correctly across crate
 //! boundaries.
+use inspectah_core::types::FindingKind;
 
 use std::collections::HashMap;
 
@@ -62,7 +63,7 @@ fn snapshot_with_full_baseline() -> InspectionSnapshot {
                 name: "bash".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -71,7 +72,7 @@ fn snapshot_with_full_baseline() -> InspectionSnapshot {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -202,7 +203,7 @@ fn service_surface_agreement() {
                 unit: "dnf-makecache.service".into(),
                 current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -212,7 +213,7 @@ fn service_surface_agreement() {
                 unit: "httpd.service".into(),
                 current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
                 default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -236,7 +237,7 @@ fn service_surface_agreement() {
         .find(|sc| sc.unit == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
     assert!(
-        !dnf_sc.include,
+        !dnf_sc.disposition.is_included(),
         "dnf-makecache.service must have include=false after normalization"
     );
 
@@ -246,7 +247,10 @@ fn service_surface_agreement() {
         .iter()
         .find(|sc| sc.unit == "httpd.service")
         .expect("httpd.service must be in state_changes");
-    assert!(httpd_sc.include, "httpd.service must remain include=true");
+    assert!(
+        httpd_sc.disposition.is_included(),
+        "httpd.service must remain include=true"
+    );
 
     // dnf-makecache.service must NOT be in enabled_units
     assert!(

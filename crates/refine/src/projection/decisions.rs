@@ -129,6 +129,7 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
 mod tests {
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{RpmSection, VersionChangeDirection};
     use inspectah_core::types::services::{
         PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
@@ -144,7 +145,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("httpd".into()),
                     aggregate: None,
@@ -230,7 +231,7 @@ mod tests {
                     PackageEntry {
                         name: "grub2-tools".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         source_repo: "anaconda".into(),
                         ..Default::default()
                     },
@@ -238,7 +239,7 @@ mod tests {
                     PackageEntry {
                         name: "cronie".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         source_repo: "anaconda".into(),
                         ..Default::default()
                     },
@@ -254,7 +255,7 @@ mod tests {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("openssh-server".into()),
                     aggregate: None,

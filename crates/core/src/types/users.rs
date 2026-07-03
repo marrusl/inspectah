@@ -1,3 +1,4 @@
+use super::FindingKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,8 +31,8 @@ pub struct UserGroupDecision {
     pub gid: u64,
     pub shell: String,
     pub home: String,
-    #[serde(default = "default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     pub classification: String,
     pub containerfile_strategy: UserContainerfileStrategy,
     pub password_choice: UserPasswordChoice,
@@ -51,10 +52,6 @@ pub struct UserGroupDecision {
     pub supplementary_groups: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_status: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -147,7 +144,7 @@ mod tests {
             gid: 1000,
             shell: "/bin/bash".to_string(),
             home: "/home/alice".to_string(),
-            include: true,
+            disposition: FindingKind::included(),
             classification: "interactive".to_string(),
             containerfile_strategy: UserContainerfileStrategy::Useradd,
             password_choice: UserPasswordChoice::Preserve,
@@ -175,7 +172,7 @@ mod tests {
             "gid": 1001,
             "shell": "/sbin/nologin",
             "home": "/home/bob",
-            "include": true,
+            "disposition": {"kind": "actionable", "include": true},
             "classification": "non-interactive",
             "containerfile_strategy": "skip",
             "password_choice": "none"
@@ -207,6 +204,6 @@ mod tests {
         });
 
         let decision: UserGroupDecision = serde_json::from_value(val).unwrap();
-        assert!(decision.include);
+        assert!(decision.disposition.is_included());
     }
 }

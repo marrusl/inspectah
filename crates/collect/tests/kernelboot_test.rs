@@ -180,7 +180,7 @@ fn sysctl_three_way_diff() {
         .expect("swappiness override should exist");
     assert_eq!(swappiness.default, "10"); // file-defined value
     assert_eq!(swappiness.runtime, "30"); // runtime value
-    assert!(swappiness.include);
+    assert!(swappiness.disposition.is_included());
 
     // kernel.sysrq: file=1, runtime=16 → override detected
     let sysrq = section
@@ -607,7 +607,7 @@ fn tuned_detected_profile_auto_includes() {
 
     assert_eq!(section.tuned_active, "throughput-performance");
     assert!(
-        section.tuned_include,
+        section.tuned_disposition.is_included(),
         "any detected tuned profile should auto-include"
     );
 }
@@ -657,7 +657,7 @@ fn tuned_no_profile_does_not_include() {
 
     assert!(section.tuned_active.is_empty());
     assert!(
-        !section.tuned_include,
+        !section.tuned_disposition.is_included(),
         "no tuned profile detected should not include"
     );
 }

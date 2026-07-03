@@ -10,6 +10,7 @@
 //! so that DiscardVariant can distinguish user-created from host-sourced
 //! variants. It is built up during the projection replay and is NOT
 //! persisted -- it is derived state.
+use inspectah_core::types::FindingKind;
 
 use std::collections::{HashMap, HashSet};
 
@@ -472,7 +473,7 @@ fn materialize_config_variants(
             }
             let mut entry = template.clone().unwrap_or_else(|| ConfigFileEntry {
                 path: path.clone(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
             entry.content = content.clone();
@@ -558,7 +559,7 @@ fn materialize_dropin_variants(
             }
             let mut entry = template.clone().unwrap_or_else(|| SystemdDropIn {
                 path: path.clone(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
             entry.content = content.clone();
@@ -649,7 +650,7 @@ fn materialize_quadlet_variants(
             }
             let mut entry = template.clone().unwrap_or_else(|| QuadletUnit {
                 path: path.clone(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
             entry.content = content.clone();
@@ -794,7 +795,7 @@ fn materialize_language_env_variants(
                     && let Ok(hash) = ContentHash::new(key.into_owned())
                     && hash == *selected_hash
                 {
-                    nrs.items[idx].include = true;
+                    nrs.items[idx].disposition = FindingKind::included();
                 }
             }
         }
@@ -863,7 +864,7 @@ mod tests {
         let item_a = NonRpmItem {
             path: "/opt/app/venv".into(),
             method: "pip list".into(),
-            include: true,
+            disposition: FindingKind::included(),
             packages: vec![LanguagePackage {
                 name: "requests".into(),
                 version: "2.28.0".into(),
@@ -873,7 +874,7 @@ mod tests {
         let item_b = NonRpmItem {
             path: "/opt/app/venv".into(),
             method: "pip list".into(),
-            include: true,
+            disposition: FindingKind::included(),
             packages: vec![LanguagePackage {
                 name: "requests".into(),
                 version: "2.31.0".into(),
@@ -915,7 +916,7 @@ mod tests {
         let b_hash = ContentHash::new(b_key.into_owned()).unwrap();
         assert_eq!(b_hash, target_hash);
         assert!(
-            items[1].include,
+            items[1].disposition.is_included(),
             "selected variant should have include=true"
         );
     }
@@ -931,14 +932,14 @@ mod tests {
         let file_a = UnmanagedFile {
             path: "/opt/app/config.yaml".into(),
             content_hash: hash_a.as_str().to_string(),
-            include: true,
+            disposition: FindingKind::included(),
             variant_selection: VariantSelection::default(),
             ..Default::default()
         };
         let file_b = UnmanagedFile {
             path: "/opt/app/config.yaml".into(),
             content_hash: hash_b.as_str().to_string(),
-            include: true,
+            disposition: FindingKind::included(),
             variant_selection: VariantSelection::default(),
             ..Default::default()
         };

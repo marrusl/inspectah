@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::{AggregatePrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
@@ -25,8 +26,8 @@ pub struct QuadletUnit {
     pub content: String,
     #[serde(default)]
     pub image: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default)]
@@ -54,8 +55,8 @@ pub struct ComposeFile {
     pub path: String,
     #[serde(default)]
     pub images: Vec<ComposeService>,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default)]
@@ -91,8 +92,8 @@ pub struct RunningContainer {
     pub env: Vec<String>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub inspect_data: bool,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -104,7 +105,7 @@ pub struct RunningContainer {
 impl Default for RunningContainer {
     fn default() -> Self {
         Self {
-            include: true,
+            disposition: FindingKind::included(),
             id: Default::default(),
             name: Default::default(),
             image: Default::default(),
@@ -131,8 +132,8 @@ pub struct FlatpakApp {
     pub origin: String,
     #[serde(default)]
     pub branch: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,13 +166,13 @@ mod tests {
             quadlet_units: vec![QuadletUnit {
                 name: "myapp.container".into(),
                 image: "quay.io/myorg/myapp:latest".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             compose_files: vec![ComposeFile {
                 path: "opt/myapp/docker-compose.yml".to_string(),
                 images: vec![],
-                include: true,
+                disposition: FindingKind::included(),
                 raw_content: Some(
                     "version: '3'\nservices:\n  web:\n    image: nginx\n".to_string(),
                 ),
@@ -212,7 +213,7 @@ mod tests {
         let json = r#"{"path":"/etc/containers/systemd/myapp.container","name":"myapp.container","content":"","image":"quay.io/myorg/myapp:latest"}"#;
         let q: QuadletUnit = serde_json::from_str(json).unwrap();
         assert!(
-            q.include,
+            q.disposition.is_included(),
             "missing include field should deserialize as true"
         );
     }

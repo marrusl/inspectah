@@ -9,6 +9,7 @@
 //! 2. Completeness aggregation from inspector outcomes
 //! 3. Panic containment → Failed status
 //! 4. Redaction state after pipeline execution
+use inspectah_core::types::FindingKind;
 
 use std::sync::atomic::AtomicBool;
 
@@ -76,7 +77,7 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             unit: "httpd.service".into(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: None,
             aggregate: None,
@@ -115,7 +116,7 @@ fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=supersecret123\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -572,7 +573,7 @@ fn redaction_state_set_after_engine() {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             content: "db_password = s3cretP@ss\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],

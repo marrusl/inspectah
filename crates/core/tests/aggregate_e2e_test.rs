@@ -6,6 +6,7 @@
 //! multiple populated sections per host and verifying cross-cutting
 //! invariants (prevalence totals, variant selection, aggregate_meta, baseline
 //! provisionality, deterministic output, validation errors).
+use inspectah_core::types::FindingKind;
 
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::aggregate::validate::AggregateValidationError;
@@ -86,7 +87,7 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
             unit: unit.to_string(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: None,
             aggregate: None,

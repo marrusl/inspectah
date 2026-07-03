@@ -209,7 +209,7 @@ pub fn write_config_tree(
     // Config files
     if let Some(ref config) = snap.config {
         for entry in &config.files {
-            if !entry.include {
+            if !entry.disposition.is_included() {
                 continue;
             }
             let rel = entry.path.trim_start_matches('/');
@@ -242,7 +242,7 @@ pub fn write_config_tree(
     // Repo files
     if let Some(ref rpm) = snap.rpm {
         for repo in &rpm.repo_files {
-            if !repo.include || repo.path.is_empty() {
+            if !repo.disposition.is_included() || repo.path.is_empty() {
                 continue;
             }
             let rel = repo.path.trim_start_matches('/');
@@ -254,7 +254,7 @@ pub fn write_config_tree(
         }
 
         for key in &rpm.gpg_keys {
-            if !key.include || key.path.is_empty() {
+            if !key.disposition.is_included() || key.path.is_empty() {
                 continue;
             }
             let rel = key.path.trim_start_matches('/');
@@ -269,7 +269,7 @@ pub fn write_config_tree(
     // Firewall zones
     if let Some(ref network) = snap.network {
         for zone in &network.firewall_zones {
-            if !zone.include || zone.path.is_empty() {
+            if !zone.disposition.is_included() || zone.path.is_empty() {
                 continue;
             }
             let rel = zone.path.trim_start_matches('/');
@@ -312,7 +312,7 @@ pub fn write_config_tree(
         }
         // Custom tuned profiles — written to tuned/ (promoted root),
         // not config/. Gated on include flag (set by collectors / aggregate merge).
-        let tuned_included = kb.tuned_include;
+        let tuned_included = kb.tuned_disposition.is_included();
         if tuned_included {
             for tp in &kb.tuned_custom_profiles {
                 if !tp.path.is_empty() {
@@ -325,7 +325,11 @@ pub fn write_config_tree(
             }
         }
         // Synthesized sysctl conf — only included overrides
-        let included_sysctls: Vec<_> = kb.sysctl_overrides.iter().filter(|s| s.include).collect();
+        let included_sysctls: Vec<_> = kb
+            .sysctl_overrides
+            .iter()
+            .filter(|s| s.disposition.is_included())
+            .collect();
         if !included_sysctls.is_empty() {
             let sysctl_dir = output_dir.join("sysctl/etc/sysctl.d");
             let _ = std::fs::create_dir_all(&sysctl_dir);
@@ -358,7 +362,7 @@ pub fn write_config_tree(
     if let Some(ref services) = snap.services {
         let drop_ins_dir = output_dir.join("drop-ins");
         for di in &services.drop_ins {
-            if !di.include {
+            if !di.disposition.is_included() {
                 continue;
             }
             let rel = di.path.trim_start_matches('/');
@@ -377,7 +381,7 @@ pub fn write_config_tree(
         let _ = std::fs::create_dir_all(&systemd_dir);
 
         for u in &st.generated_timer_units {
-            if !u.include {
+            if !u.disposition.is_included() {
                 continue;
             }
             // @reboot entries have empty timer_content — only write a
@@ -415,7 +419,7 @@ pub fn write_config_tree(
 
     if let Some(ref containers) = snap.containers {
         for u in &containers.quadlet_units {
-            if !u.include || u.name.is_empty() || u.content.is_empty() {
+            if !u.disposition.is_included() || u.name.is_empty() || u.content.is_empty() {
                 continue;
             }
             let quadlet_dir = output_dir.join("quadlet");
@@ -426,7 +430,7 @@ pub fn write_config_tree(
         let included_flatpaks: Vec<_> = containers
             .flatpak_apps
             .iter()
-            .filter(|app| app.include)
+            .filter(|app| app.disposition.is_included())
             .collect();
         if !included_flatpaks.is_empty() {
             let flatpak_dir = output_dir.join("flatpak");
@@ -655,7 +659,9 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
     let included: Vec<_> = nrs
         .env_files
         .iter()
-        .filter(|e| e.include && !e.path.is_empty() && !e.content.trim().is_empty())
+        .filter(|e| {
+            e.disposition.is_included() && !e.path.is_empty() && !e.content.trim().is_empty()
+        })
         .collect();
 
     if included.is_empty() {
@@ -682,6 +688,7 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
@@ -701,7 +708,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: path.to_string(),
                 content: content.to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -715,7 +722,7 @@ mod tests {
             repo_files: vec![RepoFile {
                 path: path.to_string(),
                 content: content.to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -753,7 +760,7 @@ mod tests {
             gpg_keys: vec![RepoFile {
                 path: "etc/pki/rpm-gpg/RPM-GPG-KEY-test".to_string(),
                 content: "-----BEGIN PGP PUBLIC KEY BLOCK-----".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -784,7 +791,7 @@ mod tests {
                 path: "etc/dracut.conf.d/custom.conf".to_string(),
                 content: "add_drivers+=\" vfio \"".to_string(),
             }],
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_custom_profiles: vec![ConfigSnippet {
                 path: "etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=Custom profile".to_string(),
@@ -841,7 +848,7 @@ mod tests {
                 unit: "httpd.service".to_string(),
                 path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
                 content: "[Service]\nLimitNOFILE=65535".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -881,7 +888,7 @@ mod tests {
                 name: "backup".to_string(),
                 timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".to_string(),
                 service_content: "[Service]\nExecStart=/usr/bin/backup".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -937,7 +944,7 @@ mod tests {
             env_files: vec![ConfigFileEntry {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -961,7 +968,7 @@ mod tests {
             env_files: vec![ConfigFileEntry {
                 path: "/etc/environment.d/99-custom.conf".to_string(),
                 content: "MY_VAR=value".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -990,7 +997,7 @@ mod tests {
                 path: "etc/firewalld/zones/public.xml".to_string(),
                 name: "public".to_string(),
                 content: "<zone>...</zone>".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1012,7 +1019,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/excluded.conf".to_string(),
                 content: "secret".to_string(),
-                include: false, // not included
+                disposition: FindingKind::excluded(), // not included
                 ..Default::default()
             }],
         });
@@ -1036,7 +1043,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
                 content: "[connection]".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1057,7 +1064,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/containers/systemd/myapp.container".to_string(),
                 content: "[Container]".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1185,7 +1192,7 @@ mod tests {
                 unit: "sshd.service".to_string(),
                 path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1197,7 +1204,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1231,7 +1238,7 @@ mod tests {
                 path: "/etc/containers/systemd/myapp.container".to_string(),
                 name: "myapp.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1243,7 +1250,7 @@ mod tests {
                 ConfigFileEntry {
                     path: "/etc/containers/systemd/myapp.container".to_string(),
                     content: "[Container]\nImage=quay.io/test:latest".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1251,7 +1258,7 @@ mod tests {
                 ConfigFileEntry {
                     path: "/etc/httpd/conf/httpd.conf".to_string(),
                     content: "ServerRoot /etc/httpd".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1297,7 +1304,7 @@ mod tests {
                 path: "/etc/containers/systemd/excluded.container".to_string(),
                 name: "excluded.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1321,7 +1328,7 @@ mod tests {
                 path: "/etc/containers/systemd/app.container".to_string(),
                 name: "app.container".to_string(),
                 content: "[Container]\nImage=quay.io/test:latest".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1353,7 +1360,7 @@ mod tests {
                 app_id: "org.example.Excluded".to_string(),
                 origin: "flathub".to_string(),
                 branch: "stable".to_string(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 locked: false,
                 aggregate: None,
                 remote: "flathub".to_string(),
@@ -1406,7 +1413,7 @@ mod tests {
                 key: "net.ipv4.ip_forward".to_string(),
                 runtime: "1".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1417,7 +1424,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/sysctl.d/99-custom.conf".to_string(),
                 content: "net.ipv4.ip_forward = 1".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1442,7 +1449,7 @@ mod tests {
                     key: "net.ipv4.ip_forward".to_string(),
                     runtime: "1".to_string(),
                     source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -1450,7 +1457,7 @@ mod tests {
                     key: "vm.swappiness".to_string(),
                     runtime: "10".to_string(),
                     source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                    include: false, // excluded
+                    disposition: FindingKind::excluded(), // excluded
                     ..Default::default()
                 },
             ],
@@ -1483,7 +1490,7 @@ mod tests {
             files: vec![ConfigFileEntry {
                 path: "/etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=test".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1505,7 +1512,7 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".to_string(),
-            tuned_include: false,
+            tuned_disposition: FindingKind::excluded(),
             tuned_custom_profiles: vec![ConfigSnippet {
                 path: "etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=Custom".to_string(),
@@ -1529,7 +1536,7 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".to_string(),
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_custom_profiles: vec![ConfigSnippet {
                 path: "etc/tuned/my-profile/tuned.conf".to_string(),
                 content: "[main]\nsummary=Custom".to_string(),
@@ -1554,7 +1561,7 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".to_string(),
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_custom_profiles: vec![
                 ConfigSnippet {
                     path: "etc/tuned/my-profile/tuned.conf".to_string(),

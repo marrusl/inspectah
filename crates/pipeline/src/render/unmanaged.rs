@@ -17,7 +17,11 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         _ => return Vec::new(),
     };
 
-    let included: Vec<&UnmanagedFile> = section.items.iter().filter(|f| f.include).collect();
+    let included: Vec<&UnmanagedFile> = section
+        .items
+        .iter()
+        .filter(|f| f.disposition.is_included())
+        .collect();
 
     if included.is_empty() {
         return Vec::new();
@@ -86,6 +90,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 
     fn test_snapshot_with_unmanaged(items: Vec<UnmanagedFile>) -> InspectionSnapshot {
@@ -106,7 +111,7 @@ mod tests {
             path: "/opt/splunk/bin/splunkd".into(),
             size: 1024,
             file_type: FileType::ElfBinary,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }]);
         let lines = unmanaged_file_lines(&snap);
@@ -119,7 +124,7 @@ mod tests {
     fn excluded_files_not_rendered() {
         let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
             path: "/opt/app/server".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         }]);
         let lines = unmanaged_file_lines(&snap);
@@ -131,12 +136,12 @@ mod tests {
         let snap = test_snapshot_with_unmanaged(vec![
             UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/opt/splunk/bin/btool".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ]);
@@ -154,7 +159,7 @@ mod tests {
             path: "/opt/app/bin/tool".into(),
             file_type: FileType::Symlink,
             link_target: "/opt/app/lib/tool-1.2".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }]);
         let lines = unmanaged_file_lines(&snap);
@@ -173,14 +178,14 @@ mod tests {
                 path: "/opt/myapp/bin/run".into(),
                 file_type: FileType::Symlink,
                 link_target: "/opt/myapp/lib/run-2.0".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/opt/myapp/bin/debug".into(),
                 file_type: FileType::Symlink,
                 link_target: "/opt/myapp/lib/debug-2.0".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ]);
@@ -195,14 +200,14 @@ mod tests {
             UnmanagedFile {
                 path: "/opt/app/server".into(),
                 file_type: FileType::ElfBinary,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/opt/app/current".into(),
                 file_type: FileType::Symlink,
                 link_target: "/opt/app/server".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ]);

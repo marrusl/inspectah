@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
@@ -34,8 +35,8 @@ pub struct PackageEntry {
     pub arch: String,
     #[serde(default)]
     pub state: PackageState,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -84,8 +85,8 @@ pub struct EnabledModuleStream {
     pub stream: String,
     #[serde(default)]
     pub profiles: Vec<String>,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default)]
@@ -107,8 +108,8 @@ pub struct VersionLockEntry {
     pub release: String,
     #[serde(default)]
     pub arch: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -161,8 +162,8 @@ pub struct RepoFile {
     pub content: String,
     #[serde(default)]
     pub is_default_repo: bool,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -266,7 +267,7 @@ mod tests {
             release: "5.el9".into(),
             arch: "x86_64".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             source_repo: "appstream".into(),
             ..Default::default()
         };
@@ -309,7 +310,7 @@ mod tests {
             packages_added: vec![PackageEntry {
                 name: "vim-enhanced".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             version_changes: vec![VersionChange {

@@ -1,4 +1,5 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::repo_index::RepoIndex;
 use inspectah_refine::types::RepoProvenance;
@@ -12,7 +13,7 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -20,7 +21,7 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
                 arch: "noarch".into(),
                 state: PackageState::Added,
                 source_repo: "epel".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -28,13 +29,13 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
             RepoFile {
                 path: "/etc/yum.repos.d/centos.repo".into(),
                 content: "[baseos]\nname=CentOS BaseOS\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n\n[appstream]\nname=CentOS AppStream\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             RepoFile {
                 path: "/etc/yum.repos.d/epel.repo".into(),
                 content: "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -42,13 +43,13 @@ pub fn make_snap_with_repos() -> InspectionSnapshot {
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
                 content: "key-data".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -107,7 +108,7 @@ fn test_repo_index_provenance_incomplete() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "custom-internal".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     let index = RepoIndex::build(&snap);

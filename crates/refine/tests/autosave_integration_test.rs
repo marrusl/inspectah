@@ -1,5 +1,6 @@
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::autosave::{load_session, session_file_path};
@@ -15,7 +16,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -23,7 +24,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],

@@ -5,6 +5,7 @@
 //! field is perfectly formatted. Each test builds a snapshot manually (no
 //! inspector execution), calls the relevant renderer, and checks for key
 //! markers in the output.
+use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
@@ -27,7 +28,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 unit: "httpd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -37,7 +38,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 unit: "cups.service".into(),
                 current_state: ServiceUnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
                 aggregate: None,
@@ -50,7 +51,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
             unit: "httpd.service".into(),
             path: "etc/systemd/system/httpd.service.d/override.conf".into(),
             content: "[Service]\nLimitNOFILE=65535\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -97,7 +98,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
             runtime: "1".into(),
             default: "0".into(),
             source: "/etc/sysctl.d/99-custom.conf".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
         }],
@@ -483,7 +484,7 @@ fn credential_refs_in_secrets_review() {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
             content: "[Service]\nEnvironment=DB_PASSWORD=supersecret\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],

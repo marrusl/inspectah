@@ -4,6 +4,7 @@ use crate::types::{
     TriageBucket, TriageReason, TriageTag,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::redaction::RedactionState;
@@ -166,7 +167,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
 
         // Tier 1: platform plumbing — always wins, even over stronger signals
         if is_platform_plumbing(name) {
-            pkg.entry.include = false;
+            pkg.entry.disposition = FindingKind::excluded();
             pkg.entry.locked = true;
             pkg.triage = TriageTag {
                 triage: Triage::SingleHost(TriageBucket::Baseline),
@@ -198,7 +199,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
         if user_enabled_service_packages.contains(name.as_str())
             && modified_config_packages.contains(name.as_str())
         {
-            pkg.entry.include = true;
+            pkg.entry.disposition = FindingKind::included();
             pkg.triage = TriageTag {
                 triage: Triage::SingleHost(TriageBucket::Site),
                 primary_reason: TriageReason::PackageInstallerPromotedService,
@@ -209,7 +210,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
 
         // Tier 2 Path B: config-only promotion (curated list)
         if is_config_only_promotable(name) && modified_config_packages.contains(name.as_str()) {
-            pkg.entry.include = true;
+            pkg.entry.disposition = FindingKind::included();
             pkg.triage = TriageTag {
                 triage: Triage::SingleHost(TriageBucket::Site),
                 primary_reason: TriageReason::PackageInstallerPromotedConfig,
@@ -224,7 +225,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
         // promotable service/config we failed to attribute. Fall to
         // Tier 4 (include=true) instead of excluding.
         if is_installer_noise(name) && !evidence_degraded {
-            pkg.entry.include = false;
+            pkg.entry.disposition = FindingKind::excluded();
             pkg.triage = TriageTag {
                 triage: Triage::SingleHost(TriageBucket::Baseline),
                 primary_reason: TriageReason::PackageInstallerDefault,
@@ -235,7 +236,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
 
         // Tier 4: ambiguous — may be group-install or kickstart intent.
         // Also catches noise-pattern packages when evidence is degraded.
-        pkg.entry.include = true;
+        pkg.entry.disposition = FindingKind::included();
         pkg.triage = TriageTag {
             triage: Triage::SingleHost(TriageBucket::Investigate),
             primary_reason: if evidence_degraded && is_installer_noise(name) {
@@ -350,7 +351,7 @@ pub fn classify_packages(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
                     .iter()
                     .all(|p| p.starts_with("/etc/") && config_paths.contains(p.as_str()))
             {
-                refined.entry.include = false;
+                refined.entry.disposition = FindingKind::excluded();
                 refined.triage = TriageTag {
                     triage: Triage::SingleHost(TriageBucket::Site),
                     primary_reason: TriageReason::PackageConfigCaptured,
@@ -770,7 +771,7 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
             primary_reason: reason,
             annotations,
         },
-        include: kernel_boot.tuned_include,
+        include: kernel_boot.tuned_disposition.is_included(),
     }]
 }
 
@@ -1147,13 +1148,13 @@ mod tests {
                 files: vec![
                     CfgEntry {
                         path: "/etc/yum.repos.d/rpmfusion-free.repo".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
                     CfgEntry {
                         path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-9".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -1164,7 +1165,10 @@ mod tests {
 
         let result = classify_packages(&snap);
         assert_eq!(result.len(), 1);
-        assert!(!result[0].entry.include, "should be auto-excluded");
+        assert!(
+            !result[0].entry.disposition.is_included(),
+            "should be auto-excluded"
+        );
         assert_eq!(
             result[0].triage.primary_reason,
             TriageReason::PackageConfigCaptured,
@@ -1190,7 +1194,7 @@ mod tests {
             config: Some(ConfigSection {
                 files: vec![CfgEntry {
                     path: "/etc/yum.repos.d/epel.repo".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -1309,7 +1313,7 @@ mod tests {
             path: path.to_string(),
             kind,
             category: ConfigCategory::default(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }
@@ -1476,7 +1480,7 @@ mod tests {
                     release: "3.el9".into(),
                     epoch: String::new(),
                     state: PackageState::Modified,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "baseos".into(),
                     ..Default::default()
@@ -1516,7 +1520,7 @@ mod tests {
                     release: "4.el9".into(),
                     epoch: String::new(),
                     state: PackageState::Modified,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -1564,7 +1568,7 @@ mod tests {
             config: Some(ConfigSection {
                 files: vec![ConfigFileEntry {
                     path: "/etc/httpd/conf/httpd.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -1667,7 +1671,7 @@ mod anaconda_classification {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "anaconda".into(),
-            include: true, // serde default_true doesn't apply to Default::default()
+            disposition: FindingKind::included(), // serde default_true doesn't apply to Default::default()
             ..Default::default()
         }
     }
@@ -1703,7 +1707,7 @@ mod anaconda_classification {
             grub.triage.primary_reason,
             TriageReason::PackagePlatformPlumbing
         );
-        assert!(!grub.entry.include);
+        assert!(!grub.entry.disposition.is_included());
         assert!(grub.entry.locked);
     }
 
@@ -1739,7 +1743,7 @@ mod anaconda_classification {
             "Tier 1 must override stronger signals for boot-chain packages"
         );
         assert!(grub.entry.locked);
-        assert!(!grub.entry.include);
+        assert!(!grub.entry.disposition.is_included());
     }
 
     // --- Precedence: anaconda post-pass must not override version-changed or local-install ---
@@ -1808,7 +1812,7 @@ mod anaconda_classification {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     owning_package: Some("firewalld".into()),
                     locked: false,
                     aggregate: None,
@@ -1825,7 +1829,7 @@ mod anaconda_classification {
                     kind: ConfigFileKind::RpmOwnedModified,
                     category: ConfigCategory::Other,
                     content: String::new(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
             }),
@@ -1841,7 +1845,7 @@ mod anaconda_classification {
             fw.triage.primary_reason,
             TriageReason::PackageInstallerPromotedService
         );
-        assert!(fw.entry.include);
+        assert!(fw.entry.disposition.is_included());
     }
 
     // --- Tier 2 Path B: config-only promotion ---
@@ -1858,7 +1862,7 @@ mod anaconda_classification {
                     kind: ConfigFileKind::RpmOwnedModified,
                     category: ConfigCategory::Other,
                     content: String::new(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 }],
             }),
@@ -1911,7 +1915,11 @@ mod anaconda_classification {
                 "wrong reason for {}",
                 name
             );
-            assert!(!pkg.entry.include, "{} should be excluded", name);
+            assert!(
+                !pkg.entry.disposition.is_included(),
+                "{} should be excluded",
+                name
+            );
             assert!(!pkg.entry.locked, "{} should not be locked", name);
         }
     }
@@ -1939,7 +1947,11 @@ mod anaconda_classification {
                 pkg.triage.primary_reason,
                 TriageReason::PackageInstallerAmbiguous
             );
-            assert!(pkg.entry.include, "{} should be included by default", name);
+            assert!(
+                pkg.entry.disposition.is_included(),
+                "{} should be included by default",
+                name
+            );
         }
     }
 
@@ -1962,7 +1974,7 @@ mod anaconda_classification {
             TriageReason::PackageUserAdded,
             "missing evidence must preserve existing classification, not reclassify"
         );
-        assert!(fw.entry.include);
+        assert!(fw.entry.disposition.is_included());
     }
 
     #[test]
@@ -2101,12 +2113,14 @@ mod anaconda_classification {
                 name
             );
             assert_eq!(
-                r_none.entry.include, r_empty.entry.include,
+                r_none.entry.disposition.is_included(),
+                r_empty.entry.disposition.is_included(),
                 "include mismatch for {}",
                 name
             );
             assert_eq!(
-                r_none.entry.include, r_groups.entry.include,
+                r_none.entry.disposition.is_included(),
+                r_groups.entry.disposition.is_included(),
                 "include mismatch for {}",
                 name
             );
@@ -2126,7 +2140,7 @@ mod anaconda_classification {
                     unit: "mystery.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     owning_package: None, // degraded — missing attribution
                     locked: false,
                     aggregate: None,
@@ -2158,7 +2172,7 @@ mod anaconda_classification {
             "noise package with degraded evidence must not be soft-excluded"
         );
         assert!(
-            kt.entry.include,
+            kt.entry.disposition.is_included(),
             "noise package with degraded evidence must be included"
         );
 
@@ -2168,7 +2182,7 @@ mod anaconda_classification {
             cr.triage.primary_reason,
             TriageReason::PackageInstallerAmbiguous
         );
-        assert!(cr.entry.include);
+        assert!(cr.entry.disposition.is_included());
     }
 
     #[test]
@@ -2183,7 +2197,7 @@ mod anaconda_classification {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     owning_package: Some("openssh-server".into()),
                     locked: false,
                     aggregate: None,
@@ -2210,7 +2224,7 @@ mod anaconda_classification {
             TriageReason::PackageInstallerDefault,
             "noise package with clean evidence should be soft-excluded"
         );
-        assert!(!kt.entry.include);
+        assert!(!kt.entry.disposition.is_included());
     }
 }
 
@@ -2236,7 +2250,7 @@ mod service_classification {
                     unit: "sshd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("openssh-server".into()),
                     aggregate: None,
@@ -2265,7 +2279,7 @@ mod service_classification {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
@@ -2292,7 +2306,7 @@ mod service_classification {
                     unit: "mystery.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: None,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -2319,7 +2333,7 @@ mod service_classification {
                     unit: "sshd.service".into(),
                     path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
                     content: "[Service]\nTimeoutStartSec=90".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2366,7 +2380,7 @@ mod container_classification {
                     path: "/etc/containers/systemd/myapp.container".into(),
                     name: "myapp.container".into(),
                     image: "quay.io/myorg/myapp:latest".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2392,7 +2406,7 @@ mod container_classification {
                     app_id: "org.mozilla.Firefox".into(),
                     remote: "flathub".into(),
                     branch: "stable".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2425,7 +2439,7 @@ mod container_classification {
                     app_id: "org.gnome.Calculator".into(),
                     remote: String::new(),
                     branch: "stable".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2450,7 +2464,7 @@ mod container_classification {
                     app_id: "org.gnome.Calculator".into(),
                     remote: "flathub".into(),
                     branch: String::new(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -2497,7 +2511,7 @@ mod sysctl_classification {
                     runtime: "1".into(),
                     default: "0".into(),
                     source: "/etc/sysctl.d/99-custom.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
                 }],
@@ -2527,7 +2541,7 @@ mod sysctl_classification {
                     runtime: "4096".into(),
                     default: "128".into(),
                     source: "/etc/sysctl.conf".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
                 }],
@@ -2553,7 +2567,7 @@ mod sysctl_classification {
                     runtime: "1".into(),
                     default: "0".into(),
                     source: "runtime".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
                 }],
@@ -2587,7 +2601,7 @@ mod sysctl_classification {
                         runtime: "3".into(),
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         aggregate: None,
                     },
@@ -2596,7 +2610,7 @@ mod sysctl_classification {
                         runtime: "1".into(),
                         default: "0".into(),
                         source: "runtime".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         aggregate: None,
                     },
@@ -2605,7 +2619,7 @@ mod sysctl_classification {
                         runtime: "16".into(),
                         default: "0".into(),
                         source: "/etc/sysctl.d/10-sysrq.conf".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         aggregate: None,
                     },

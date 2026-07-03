@@ -1,84 +1,112 @@
+use inspectah_core::types::FindingKind;
 #[test]
 fn omitted_include_defaults_to_true() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
-        snap.rpm.as_ref().unwrap().packages_added[0].include,
+        snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included(),
         "omitted include must default to true"
     );
 }
 
 #[test]
 fn explicit_false_preserved() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": false}]}}"#;
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
-        !snap.rpm.as_ref().unwrap().packages_added[0].include,
+        !snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included(),
         "explicit include: false must be preserved"
     );
 }
 
 #[test]
 fn explicit_true_preserved() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "include": true}]}}"#;
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
-    assert!(snap.rpm.as_ref().unwrap().packages_added[0].include);
+    assert!(
+        snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included()
+    );
 }
 
 #[test]
 fn omitted_config_include_defaults_to_true() {
-    let json = r#"{"schema_version": 20, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
+    let json = r#"{"schema_version": 21, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
-        snap.config.as_ref().unwrap().files[0].include,
+        snap.config.as_ref().unwrap().files[0]
+            .disposition
+            .is_included(),
         "omitted config include must default to true"
     );
 }
 
 #[test]
 fn explicit_config_false_preserved() {
-    let json = r#"{"schema_version": 20, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "include": false}]}}"#;
+    let json = r#"{"schema_version": 21, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
-        !snap.config.as_ref().unwrap().files[0].include,
+        !snap.config.as_ref().unwrap().files[0]
+            .disposition
+            .is_included(),
         "explicit config include: false must be preserved"
     );
 }
 
 #[test]
 fn base_image_only_include_false_preserved() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "include": false}]}}"#;
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
-    assert!(!snap.rpm.as_ref().unwrap().base_image_only[0].include);
+    assert!(
+        !snap.rpm.as_ref().unwrap().base_image_only[0]
+            .disposition
+            .is_included()
+    );
 }
 
 #[test]
 fn base_image_only_omitted_include_defaults_true() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
-        snap.rpm.as_ref().unwrap().base_image_only[0].include,
+        snap.rpm.as_ref().unwrap().base_image_only[0]
+            .disposition
+            .is_included(),
         "omitted base_image_only include must default to true"
     );
 }
 
 #[test]
 fn mixed_present_and_absent_includes() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [
-        {"name": "httpd", "arch": "x86_64", "state": "added", "include": false},
-        {"name": "vim", "arch": "x86_64", "state": "added", "include": true},
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [
+        {"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": false}},
+        {"name": "vim", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}},
         {"name": "curl", "arch": "x86_64", "state": "added"}
     ]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     let pkgs = &snap.rpm.as_ref().unwrap().packages_added;
-    assert!(!pkgs[0].include, "httpd: explicit false preserved");
-    assert!(pkgs[1].include, "vim: explicit true preserved");
-    assert!(pkgs[2].include, "curl: omitted defaulted to true");
+    assert!(
+        !pkgs[0].disposition.is_included(),
+        "httpd: explicit false preserved"
+    );
+    assert!(
+        pkgs[1].disposition.is_included(),
+        "vim: explicit true preserved"
+    );
+    assert!(
+        pkgs[2].disposition.is_included(),
+        "curl: omitted defaulted to true"
+    );
 }
 
 #[test]
 fn empty_snapshot_loads() {
-    let json = r#"{"schema_version": 20}"#;
+    let json = r#"{"schema_version": 21}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(snap.rpm.is_none());
     assert!(snap.config.is_none());
@@ -100,20 +128,24 @@ fn reject_future_schema() {
 
 #[test]
 fn snapshot_with_all_sections_roundtrip() {
-    let json = r#"{"schema_version": 20, "rpm": {"packages_added": [
-        {"name": "httpd", "arch": "x86_64", "state": "added", "include": true},
-        {"name": "vim", "arch": "x86_64", "state": "added", "include": true}
+    let json = r#"{"schema_version": 21, "rpm": {"packages_added": [
+        {"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}},
+        {"name": "vim", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}}
     ], "base_image_only": [
-        {"name": "kernel", "arch": "x86_64", "state": "base_image_only", "include": false}
+        {"name": "kernel", "arch": "x86_64", "state": "base_image_only", "disposition": {"kind": "actionable", "include": false}}
     ]}, "config": {"files": [
-        {"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "include": true}
+        {"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "disposition": {"kind": "actionable", "include": true}}
     ]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(rpm.packages_added[0].include);
-    assert!(rpm.packages_added[1].include);
-    assert!(!rpm.base_image_only[0].include);
-    assert!(snap.config.as_ref().unwrap().files[0].include);
+    assert!(rpm.packages_added[0].disposition.is_included());
+    assert!(rpm.packages_added[1].disposition.is_included());
+    assert!(!rpm.base_image_only[0].disposition.is_included());
+    assert!(
+        snap.config.as_ref().unwrap().files[0]
+            .disposition
+            .is_included()
+    );
 }
 
 // --- Tier-aware normalize defaults tests ---
@@ -158,7 +190,7 @@ fn test_tier1_packages_include_true() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "baseos".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         }],
         ..Default::default()
@@ -166,7 +198,11 @@ fn test_tier1_packages_include_true() {
     snap.baseline = Some(make_baseline(&["glibc"]));
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
-    assert!(snap.rpm.as_ref().unwrap().packages_added[0].include);
+    assert!(
+        snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included()
+    );
 }
 
 #[test]
@@ -178,14 +214,18 @@ fn test_tier3_packages_include_false() {
             arch: "x86_64".into(),
             state: PackageState::LocalInstall,
             source_repo: "".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
     });
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
-    assert!(!snap.rpm.as_ref().unwrap().packages_added[0].include);
+    assert!(
+        !snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included()
+    );
 }
 
 #[test]
@@ -202,7 +242,7 @@ fn test_leaf_filtering_hides_non_leaf_site() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -210,7 +250,7 @@ fn test_leaf_filtering_hides_non_leaf_site() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -220,8 +260,14 @@ fn test_leaf_filtering_hides_non_leaf_site() {
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(rpm.packages_added[0].include, "httpd is leaf");
-    assert!(!rpm.packages_added[1].include, "apr is non-leaf, hidden");
+    assert!(
+        rpm.packages_added[0].disposition.is_included(),
+        "httpd is leaf"
+    );
+    assert!(
+        !rpm.packages_added[1].disposition.is_included(),
+        "apr is non-leaf, hidden"
+    );
 }
 
 #[test]
@@ -235,7 +281,7 @@ fn test_leaf_defaults_do_not_leak_across_arches() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
             PackageEntry {
@@ -243,7 +289,7 @@ fn test_leaf_defaults_do_not_leak_across_arches() {
                 arch: "i686".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
         ],
@@ -258,11 +304,11 @@ fn test_leaf_defaults_do_not_leak_across_arches() {
 
     let rpm = snap.rpm.as_ref().unwrap();
     assert!(
-        rpm.packages_added[0].include,
+        rpm.packages_added[0].disposition.is_included(),
         "x86_64 leaf must stay included"
     );
     assert!(
-        !rpm.packages_added[1].include,
+        !rpm.packages_added[1].disposition.is_included(),
         "i686 auto package must stay excluded"
     );
 }
@@ -275,19 +321,19 @@ fn test_tier1_configs_include_false_not_copied() {
             ConfigFileEntry {
                 path: "/etc/default.conf".into(),
                 kind: ConfigFileKind::RpmOwnedDefault,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/baseline.conf".into(),
                 kind: ConfigFileKind::BaselineMatch,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/custom.conf".into(),
                 kind: ConfigFileKind::Unowned,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -295,9 +341,15 @@ fn test_tier1_configs_include_false_not_copied() {
     let configs = classify_configs(&snap);
     normalize_config_defaults(&mut snap, &configs);
     let files = &snap.config.as_ref().unwrap().files;
-    assert!(!files[0].include, "RpmOwnedDefault must not be copied");
-    assert!(!files[1].include, "BaselineMatch must not be copied");
-    assert!(files[2].include, "Unowned must be copied");
+    assert!(
+        !files[0].disposition.is_included(),
+        "RpmOwnedDefault must not be copied"
+    );
+    assert!(
+        !files[1].disposition.is_included(),
+        "BaselineMatch must not be copied"
+    );
+    assert!(files[2].disposition.is_included(), "Unowned must be copied");
 }
 
 #[test]
@@ -307,13 +359,17 @@ fn test_orphaned_configs_include_false() {
         files: vec![ConfigFileEntry {
             path: "/etc/old.conf".into(),
             kind: ConfigFileKind::Orphaned,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
     let configs = classify_configs(&snap);
     normalize_config_defaults(&mut snap, &configs);
-    assert!(!snap.config.as_ref().unwrap().files[0].include);
+    assert!(
+        !snap.config.as_ref().unwrap().files[0]
+            .disposition
+            .is_included()
+    );
 }
 
 #[test]
@@ -328,7 +384,7 @@ fn test_site_leaf_fallback_when_no_leaf_data() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "appstream".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         }],
         leaf_packages: None, // no leaf data
@@ -337,7 +393,9 @@ fn test_site_leaf_fallback_when_no_leaf_data() {
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(
-        snap.rpm.as_ref().unwrap().packages_added[0].include,
+        snap.rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included(),
         "without leaf data, all Site packages should be visible"
     );
 }
@@ -354,7 +412,7 @@ fn test_user_added_with_baseline_is_site_leaf_filtered() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
             PackageEntry {
@@ -362,7 +420,7 @@ fn test_user_added_with_baseline_is_site_leaf_filtered() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
         ],
@@ -374,9 +432,12 @@ fn test_user_added_with_baseline_is_site_leaf_filtered() {
     let pkgs = classify_packages(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(rpm.packages_added[0].include, "httpd: Site leaf, included");
     assert!(
-        !rpm.packages_added[1].include,
+        rpm.packages_added[0].disposition.is_included(),
+        "httpd: Site leaf, included"
+    );
+    assert!(
+        !rpm.packages_added[1].disposition.is_included(),
         "apr: Site non-leaf, excluded by leaf filter"
     );
 }

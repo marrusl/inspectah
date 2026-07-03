@@ -61,8 +61,11 @@ expression: json
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "epoch": "",
-        "include": false,
         "name": "httpd",
         "release": "11.el9",
         "source_repo": "",
@@ -81,8 +84,11 @@ expression: json
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "epoch": "",
-        "include": false,
         "name": "mod_ssl",
         "release": "11.el9",
         "source_repo": "",

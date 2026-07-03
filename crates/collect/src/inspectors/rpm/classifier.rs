@@ -1,4 +1,5 @@
 use super::parser::rpmvercmp;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
 };
@@ -79,7 +80,7 @@ pub fn classify_packages(
             // All host packages get include: true — attention model decides visibility
             PackageEntry {
                 state,
-                include: true,
+                disposition: FindingKind::included(),
                 ..pkg.clone()
             }
         })
@@ -103,7 +104,7 @@ mod tests {
             release: release.to_string(),
             arch: "x86_64".to_string(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }
     }
@@ -125,7 +126,7 @@ mod tests {
         let baseline: HashMap<String, PackageEntry> = HashMap::new();
         let result = classify_packages(&host, &baseline);
         assert_eq!(result.packages[0].state, PackageState::Added);
-        assert!(result.packages[0].include);
+        assert!(result.packages[0].disposition.is_included());
     }
 
     #[test]
@@ -134,7 +135,7 @@ mod tests {
         let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
         let result = classify_packages(&host, &baseline);
         assert_eq!(result.packages[0].state, PackageState::Added);
-        assert!(result.packages[0].include);
+        assert!(result.packages[0].disposition.is_included());
     }
 
     #[test]
@@ -143,7 +144,7 @@ mod tests {
         let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
         let result = classify_packages(&host, &baseline);
         assert_eq!(result.packages[0].state, PackageState::Modified);
-        assert!(result.packages[0].include);
+        assert!(result.packages[0].disposition.is_included());
     }
 
     #[test]
@@ -156,7 +157,7 @@ mod tests {
                 .iter()
                 .all(|p| p.state == PackageState::Added)
         );
-        assert!(result.packages.iter().all(|p| p.include));
+        assert!(result.packages.iter().all(|p| p.disposition.is_included()));
     }
 
     #[test]
@@ -218,7 +219,7 @@ mod tests {
                     release: bp.release.clone(),
                     arch: bp.arch.clone(),
                     state: PackageState::BaseImageOnly,
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     ..Default::default()
                 };
                 (key, pkg)
@@ -234,7 +235,7 @@ mod tests {
                 release: "3.el9".to_string(),
                 arch: "x86_64".to_string(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -244,7 +245,7 @@ mod tests {
                 release: "101.el9".to_string(), // upgraded release
                 arch: "x86_64".to_string(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -254,7 +255,7 @@ mod tests {
                 release: "5.el9".to_string(),
                 arch: "x86_64".to_string(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ];
@@ -263,15 +264,15 @@ mod tests {
 
         // bash: same EVR -> Added (baseline match handled by attention model), include: true
         assert_eq!(result.packages[0].state, PackageState::Added);
-        assert!(result.packages[0].include);
+        assert!(result.packages[0].disposition.is_included());
 
         // glibc: different release -> Modified, include: true
         assert_eq!(result.packages[1].state, PackageState::Modified);
-        assert!(result.packages[1].include);
+        assert!(result.packages[1].disposition.is_included());
 
         // httpd: not in baseline -> Added, include: true
         assert_eq!(result.packages[2].state, PackageState::Added);
-        assert!(result.packages[2].include);
+        assert!(result.packages[2].disposition.is_included());
     }
 
     #[test]
@@ -362,7 +363,7 @@ mod tests {
             release: "503.el9".into(),
             arch: "x86_64".into(),
             state: PackageState::BaseImageOnly,
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         };
         let baseline = HashMap::from([("kernel.x86_64".to_string(), base_pkg)]);

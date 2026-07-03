@@ -284,6 +284,7 @@ fn is_empty_snapshot(snap: &InspectionSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::FindingKind;
 
     #[test]
     fn test_extract_hostname_from_meta() {
@@ -340,7 +341,7 @@ mod tests {
         crate::types::rpm::PackageEntry {
             name: name.into(),
             arch: arch.into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }
     }

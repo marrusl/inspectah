@@ -221,14 +221,18 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         lines.push("## Packages".into());
         lines.push(String::new());
 
-        let included: usize = rpm.packages_added.iter().filter(|p| p.include).count();
+        let included: usize = rpm
+            .packages_added
+            .iter()
+            .filter(|p| p.disposition.is_included())
+            .count();
         if included > 0 {
             lines.push(format!("### Added Packages ({included})"));
             lines.push(String::new());
             lines.push("| Name | Version | Release | Arch | Repo |".into());
             lines.push("|------|---------|---------|------|------|".into());
             for p in &rpm.packages_added {
-                if !p.include {
+                if !p.disposition.is_included() {
                     continue;
                 }
                 lines.push(format!(
@@ -284,7 +288,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         let non_baseline: Vec<_> = rpm
             .module_streams
             .iter()
-            .filter(|ms| ms.include && !ms.baseline_match)
+            .filter(|ms| ms.disposition.is_included() && !ms.baseline_match)
             .collect();
         if !non_baseline.is_empty() {
             lines.push(format!("### Module Streams ({})", non_baseline.len()));
@@ -306,19 +310,19 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         let modified: usize = config
             .files
             .iter()
-            .filter(|f| f.include && f.kind == ConfigFileKind::RpmOwnedModified)
+            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::RpmOwnedModified)
             .count();
         let unowned: usize = config
             .files
             .iter()
-            .filter(|f| f.include && f.kind == ConfigFileKind::Unowned)
+            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::Unowned)
             .count();
 
         if modified > 0 {
             lines.push(format!("### Modified RPM-Owned Files ({modified})"));
             lines.push(String::new());
             for f in &config.files {
-                if !f.include || f.kind != ConfigFileKind::RpmOwnedModified {
+                if !f.disposition.is_included() || f.kind != ConfigFileKind::RpmOwnedModified {
                     continue;
                 }
                 lines.push(format!("#### `{}`", f.path));
@@ -338,7 +342,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             lines.push(format!("### Unowned Config Files ({unowned})"));
             lines.push(String::new());
             for f in &config.files {
-                if !f.include || f.kind != ConfigFileKind::Unowned {
+                if !f.disposition.is_included() || f.kind != ConfigFileKind::Unowned {
                     continue;
                 }
                 let category = serde_json::to_string(&f.category)
@@ -461,8 +465,11 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 lines.push(String::new());
             }
 
-            let included_overrides: Vec<_> =
-                kb.sysctl_overrides.iter().filter(|o| o.include).collect();
+            let included_overrides: Vec<_> = kb
+                .sysctl_overrides
+                .iter()
+                .filter(|o| o.disposition.is_included())
+                .collect();
             if !included_overrides.is_empty() {
                 lines.push(format!(
                     "### Sysctl Overrides ({})",
@@ -645,7 +652,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             .users
             .iter()
             .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
-            .filter(|u| u.include)
+            .filter(|u| u.disposition.is_included())
             .collect();
 
         if !included.is_empty() {
@@ -703,6 +710,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 mod tests {
     use super::*;
     use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{
         PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
     };
@@ -758,7 +766,7 @@ mod tests {
             packages_added: vec![PackageEntry {
                 name: "httpd".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -963,7 +971,7 @@ mod tests {
                 "gid": 1000,
                 "shell": "/bin/bash",
                 "home": "/home/alice",
-                "include": true,
+                "disposition": {"kind": "actionable", "include": true},
                 "classification": "interactive",
                 "containerfile_strategy": "useradd",
                 "password_choice": "preserve",
@@ -999,7 +1007,7 @@ mod tests {
                 "gid": 1001,
                 "shell": "/bin/bash",
                 "home": "/home/bob",
-                "include": true,
+                "disposition": {"kind": "actionable", "include": true},
                 "classification": "interactive",
                 "containerfile_strategy": "useradd",
                 "password_choice": "preserve",
@@ -1045,7 +1053,7 @@ mod tests {
                 "gid": 9999,
                 "shell": "/sbin/nologin",
                 "home": "/dev/null",
-                "include": false,
+                "disposition": {"kind": "actionable", "include": false},
                 "classification": "system",
                 "containerfile_strategy": "skip",
                 "password_choice": "none"
@@ -1069,7 +1077,7 @@ mod tests {
             packages_added: vec![PackageEntry {
                 name: "httpd".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             installed_groups: Some(vec![
@@ -1130,7 +1138,7 @@ mod tests {
             packages_added: vec![PackageEntry {
                 name: "httpd".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             installed_groups: Some(vec![

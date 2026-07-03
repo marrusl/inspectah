@@ -290,7 +290,7 @@ fn dropin_files_collected() {
     assert_eq!(dropin.unit, "httpd.service");
     assert!(dropin.path.contains("override.conf"));
     assert!(dropin.content.contains("LimitNOFILE=65535"));
-    assert!(dropin.include);
+    assert!(dropin.disposition.is_included());
 }
 
 // ── Test 6: systemctl missing → Degraded ───────────────────────────

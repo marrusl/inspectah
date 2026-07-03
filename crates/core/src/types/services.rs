@@ -1,4 +1,6 @@
+use super::FindingKind;
 use super::aggregate::{AggregatePrevalence, VariantSelection};
+use super::finding::ShadowType;
 use serde::{Deserialize, Serialize};
 
 /// Durable systemd unit states that represent administrator intent.
@@ -66,8 +68,8 @@ pub struct ServiceStateChange {
     pub current_state: ServiceUnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub owning_package: Option<String>,
@@ -103,8 +105,8 @@ pub struct SystemdDropIn {
     pub path: String,
     #[serde(default)]
     pub content: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default)]
@@ -112,6 +114,10 @@ pub struct SystemdDropIn {
     pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_type: Option<ShadowType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -135,7 +141,7 @@ mod tests {
                     unit: "firewalld.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
@@ -145,7 +151,7 @@ mod tests {
                     unit: "cups.service".into(),
                     current_state: ServiceUnitState::Masked,
                     default_state: None,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("cups".into()),
                     aggregate: None,
@@ -170,7 +176,7 @@ mod tests {
             unit: "firewalld.service".into(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: Some("firewalld".into()),
             aggregate: None,
@@ -180,7 +186,7 @@ mod tests {
             unit: "sshd.service".into(),
             current_state: ServiceUnitState::Disabled,
             default_state: Some(PresetDefault::Enable),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: Some("openssh-server".into()),
             aggregate: None,
@@ -190,7 +196,7 @@ mod tests {
             unit: "cups.service".into(),
             current_state: ServiceUnitState::Masked,
             default_state: None,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: Some("cups".into()),
             aggregate: None,
@@ -208,7 +214,7 @@ mod tests {
             unit: "firewalld.service".into(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: Some("firewalld".into()),
             aggregate: None,
@@ -222,7 +228,7 @@ mod tests {
             unit: "cups.service".into(),
             current_state: ServiceUnitState::Masked,
             default_state: None,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             owning_package: Some("cups".into()),
             aggregate: None,
@@ -297,7 +303,7 @@ mod tests {
         let json = r#"{"unit":"test.service","current_state":"enabled","default_state":null}"#;
         let sc: ServiceStateChange = serde_json::from_str(json).unwrap();
         assert!(
-            sc.include,
+            sc.disposition.is_included(),
             "missing include field should deserialize as true"
         );
     }
@@ -307,7 +313,7 @@ mod tests {
         let json = r#"{"unit":"test.service","path":"/etc/systemd/system/test.service.d/override.conf","content":"[Service]\nRestart=always"}"#;
         let di: SystemdDropIn = serde_json::from_str(json).unwrap();
         assert!(
-            di.include,
+            di.disposition.is_included(),
             "missing include field should deserialize as true"
         );
     }

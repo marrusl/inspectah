@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{
@@ -483,7 +484,7 @@ fn walk_for_elf_binaries(
                 r#static: bc.is_static,
                 shared_libs: bc.shared_libs,
                 version,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
             continue;
@@ -498,7 +499,7 @@ fn walk_for_elf_binaries(
                 method: "file scan".to_string(),
                 confidence: "low".to_string(),
                 version,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
         }
@@ -581,7 +582,7 @@ fn scan_python_venvs(
                 packages: pip_packages,
                 manifest_files,
                 rpm_filtered: has_rpm_state,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
         }
@@ -838,7 +839,7 @@ fn scan_pip_packages(
                     confidence: confidence.to_string(),
                     packages,
                     rpm_filtered: has_rpm_state,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 });
             }
@@ -904,7 +905,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .to_string(),
                 method: METHOD_NPM_LOCKFILE.to_string(),
                 confidence: "high".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 packages,
                 manifest_files,
                 ..Default::default()
@@ -946,7 +947,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .to_string(),
                 method: METHOD_NPM_MANIFEST.to_string(),
                 confidence: "low".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 packages,
                 manifest_files,
                 ..Default::default()
@@ -1076,7 +1077,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .to_string(),
                 method: METHOD_GEM_LOCKFILE.to_string(),
                 confidence: "high".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 packages,
                 manifest_files,
                 ..Default::default()
@@ -1196,7 +1197,7 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
         name: "system-gems".to_string(),
         method: METHOD_GEM_SYSTEM.to_string(),
         confidence: confidence.to_string(),
-        include: true,
+        disposition: FindingKind::included(),
         packages,
         ..Default::default()
     });
@@ -1340,7 +1341,7 @@ fn find_git_configs(
                 method: "git repo".to_string(),
                 confidence: "high".to_string(),
                 git_remote: remote_url,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
             continue; // Don't recurse into .git.
@@ -1745,7 +1746,7 @@ fn walk_for_unmanaged(
                     writable_mount,
                     service_working_dir,
                 },
-                include: true,
+                disposition: FindingKind::included(),
                 under_var: false,
                 link_target,
                 ..Default::default()
@@ -1836,7 +1837,7 @@ fn walk_for_unmanaged(
                 writable_mount,
                 service_working_dir,
             },
-            include: true,
+            disposition: FindingKind::included(),
             under_var: false, // Not possible -- /var is not a scan root
             content_hash,
             ..Default::default()
@@ -2264,7 +2265,7 @@ mod tests {
         assert_eq!(item.name, "myapp");
         assert_eq!(item.method, "npm lockfile");
         assert_eq!(item.confidence, "high");
-        assert!(item.include);
+        assert!(item.disposition.is_included());
 
         // Packages vec should contain the individual npm dependencies.
         assert_eq!(item.packages.len(), 2, "should have 2 packages in vec");
@@ -2321,7 +2322,7 @@ mod tests {
         assert_eq!(item.name, "myapp");
         assert_eq!(item.method, "gem lockfile");
         assert_eq!(item.confidence, "high");
-        assert!(item.include);
+        assert!(item.disposition.is_included());
 
         // Packages vec should contain the individual gem dependencies.
         assert!(
@@ -2885,7 +2886,7 @@ mod tests {
             assert!(!section.items.is_empty(), "should have at least one item");
             for item in &section.items {
                 assert!(
-                    item.include,
+                    item.disposition.is_included(),
                     "collected NonRpmItem '{}' should have include: true",
                     item.name
                 );

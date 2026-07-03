@@ -211,6 +211,7 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::PackageState;
 
     /// Helper: build a PackageEntry with just the name set.
@@ -479,7 +480,7 @@ Repository  : baseos
             path: "/etc/yum.repos.d/test.repo".into(),
             content: content.into(),
             is_default_repo: false,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
         }

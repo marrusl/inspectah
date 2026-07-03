@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 pub mod classify;
 pub mod rpmva;
 pub mod walk;
@@ -146,7 +147,7 @@ impl Inspector for ConfigInspector {
                 rpm_va_flags: Some(flags.to_string()),
                 package: package.map(|p| p.to_string()),
                 diff_against_rpm: None, // Phase 3
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             });
         }

@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::{AggregatePrevalence, VariantSelection};
 use super::config::ConfigFileEntry;
 use serde::{Deserialize, Serialize};
@@ -24,8 +25,8 @@ pub struct NonRpmItem {
     pub method: String,
     #[serde(default)]
     pub confidence: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -136,8 +137,8 @@ pub struct UnmanagedFile {
     #[serde(default)]
     pub provenance: ProvenanceSignals,
     /// Include in export (default true — user toggles in refine)
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -198,7 +199,7 @@ mod tests {
                 name: "custom-app".to_string(),
                 method: "binary".to_string(),
                 confidence: "high".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 acknowledged: false,
                 lang: "c".to_string(),
@@ -246,7 +247,7 @@ mod tests {
                 writable_mount: false,
                 service_working_dir: false,
             },
-            include: true,
+            disposition: FindingKind::included(),
             under_var: false,
             ..Default::default()
         };
@@ -295,7 +296,7 @@ mod tests {
         assert_eq!(deser.path, "");
         assert_eq!(deser.size, 0);
         assert_eq!(deser.file_type, FileType::Other);
-        assert!(deser.include); // default_true
+        assert!(deser.disposition.is_included()); // default_true
         assert!(!deser.under_var);
         assert!(!deser.provenance.mutable);
         assert!(!deser.provenance.writable_mount);

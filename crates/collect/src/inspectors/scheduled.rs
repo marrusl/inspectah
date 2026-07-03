@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::scheduled::{
@@ -209,7 +210,7 @@ fn scan_cron_dir(
             path: strip_leading_slash(&file_path),
             source: cron_source.clone(),
             rpm_owned: is_rpm_owned,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
 
@@ -254,7 +255,7 @@ fn scan_cron_file(
         path: strip_leading_slash(file_path),
         source: source.into(),
         rpm_owned: is_rpm_owned,
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     });
 
@@ -321,7 +322,7 @@ fn parse_cron_entries(
                         cron_expr: "@reboot".into(),
                         source_path: rel_path,
                         command,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     });
                 } else {
@@ -334,7 +335,7 @@ fn parse_cron_entries(
                         cron_expr: shortcut.into(),
                         source_path: rel_path,
                         command,
-                        include: true,
+                        disposition: FindingKind::included(),
                         ..Default::default()
                     });
                 }
@@ -379,7 +380,7 @@ fn parse_cron_entries(
             cron_expr,
             source_path: rel_path,
             command,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -436,7 +437,7 @@ fn scan_cron_period_dir(
             path: rel_path.clone(),
             source: format!("cron.{period}"),
             rpm_owned: is_rpm_owned,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
 
@@ -466,7 +467,7 @@ fn scan_cron_period_dir(
             cron_expr: format!("@{period}"),
             source_path: rel_path,
             command,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -818,7 +819,7 @@ fn scan_systemd_timers(
             path: strip_leading_slash(&timer_path),
             timer_content: timer_text,
             service_content: service_text,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -862,7 +863,7 @@ fn parse_at_job(content: &str, rel_path: &str) -> AtJob {
     if content.is_empty() {
         return AtJob {
             file: rel_path.into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         };
     }
@@ -921,7 +922,7 @@ fn parse_at_job(content: &str, rel_path: &str) -> AtJob {
         command,
         user,
         working_dir,
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     }
 }
@@ -1644,14 +1645,14 @@ mod tests {
         if let SectionData::ScheduledTasks(ref section) = output.section {
             for job in &section.cron_jobs {
                 assert!(
-                    job.include,
+                    job.disposition.is_included(),
                     "collected CronJob '{}' should have include: true",
                     job.path
                 );
             }
             for timer in &section.generated_timer_units {
                 assert!(
-                    timer.include,
+                    timer.disposition.is_included(),
                     "generated timer '{}' should have include: true",
                     timer.name
                 );
@@ -1689,7 +1690,7 @@ mod tests {
         if let SectionData::ScheduledTasks(ref section) = output.section {
             for timer in &section.systemd_timers {
                 assert!(
-                    timer.include,
+                    timer.disposition.is_included(),
                     "collected SystemdTimer '{}' should have include: true",
                     timer.name
                 );
@@ -1721,7 +1722,7 @@ mod tests {
         if let SectionData::ScheduledTasks(ref section) = output.section {
             for job in &section.at_jobs {
                 assert!(
-                    job.include,
+                    job.disposition.is_included(),
                     "collected AtJob '{}' should have include: true",
                     job.file
                 );

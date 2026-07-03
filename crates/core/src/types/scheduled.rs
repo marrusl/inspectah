@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +10,8 @@ pub struct CronJob {
     pub source: String,
     #[serde(default)]
     pub rpm_owned: bool,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -34,8 +35,8 @@ pub struct SystemdTimer {
     pub timer_content: String,
     #[serde(default)]
     pub service_content: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,7 +46,7 @@ pub struct SystemdTimer {
 impl Default for SystemdTimer {
     fn default() -> Self {
         Self {
-            include: true,
+            disposition: FindingKind::included(),
             name: Default::default(),
             on_calendar: Default::default(),
             exec_start: Default::default(),
@@ -70,8 +71,8 @@ pub struct AtJob {
     pub user: String,
     #[serde(default)]
     pub working_dir: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,7 +82,7 @@ pub struct AtJob {
 impl Default for AtJob {
     fn default() -> Self {
         Self {
-            include: true,
+            disposition: FindingKind::included(),
             file: Default::default(),
             command: Default::default(),
             user: Default::default(),
@@ -106,8 +107,8 @@ pub struct GeneratedTimerUnit {
     pub source_path: String,
     #[serde(default)]
     pub command: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -135,13 +136,13 @@ mod tests {
             cron_jobs: vec![CronJob {
                 path: "/etc/cron.d/backup".into(),
                 source: "file".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             generated_timer_units: vec![GeneratedTimerUnit {
                 name: "backup.timer".into(),
                 cron_expr: "0 2 * * *".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -156,7 +157,7 @@ mod tests {
         let json = r#"{"path":"/etc/cron.d/backup","source":"file"}"#;
         let cj: CronJob = serde_json::from_str(json).unwrap();
         assert!(
-            cj.include,
+            cj.disposition.is_included(),
             "missing include field should deserialize as true"
         );
     }

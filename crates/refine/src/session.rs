@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -142,140 +143,140 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
     if let Some(ref mut rpm) = snapshot.rpm {
         for pkg in &mut rpm.packages_added {
             if pkg.locked {
-                pkg.include = false;
+                pkg.disposition = FindingKind::excluded();
             }
         }
         for ms in &mut rpm.module_streams {
             if ms.locked {
-                ms.include = false;
+                ms.disposition = FindingKind::excluded();
             }
         }
         for vl in &mut rpm.version_locks {
             if vl.locked {
-                vl.include = false;
+                vl.disposition = FindingKind::excluded();
             }
         }
         for rf in &mut rpm.repo_files {
             if rf.locked {
-                rf.include = false;
+                rf.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut config) = snapshot.config {
         for f in &mut config.files {
             if f.locked {
-                f.include = false;
+                f.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut services) = snapshot.services {
         for sc in &mut services.state_changes {
             if sc.locked {
-                sc.include = false;
+                sc.disposition = FindingKind::excluded();
             }
         }
         for di in &mut services.drop_ins {
             if di.locked {
-                di.include = false;
+                di.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut containers) = snapshot.containers {
         for q in &mut containers.quadlet_units {
             if q.locked {
-                q.include = false;
+                q.disposition = FindingKind::excluded();
             }
         }
         for cf in &mut containers.compose_files {
             if cf.locked {
-                cf.include = false;
+                cf.disposition = FindingKind::excluded();
             }
         }
         for rc in &mut containers.running_containers {
             if rc.locked {
-                rc.include = false;
+                rc.disposition = FindingKind::excluded();
             }
         }
         for f in &mut containers.flatpak_apps {
             if f.locked {
-                f.include = false;
+                f.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut storage) = snapshot.storage {
         for e in &mut storage.fstab_entries {
             if e.locked {
-                e.include = false;
+                e.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut kb) = snapshot.kernel_boot {
         for s in &mut kb.sysctl_overrides {
             if s.locked {
-                s.include = false;
+                s.disposition = FindingKind::excluded();
             }
         }
         for m in &mut kb.loaded_modules {
             if m.locked {
-                m.include = false;
+                m.disposition = FindingKind::excluded();
             }
         }
         for m in &mut kb.non_default_modules {
             if m.locked {
-                m.include = false;
+                m.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut net) = snapshot.network {
         for c in &mut net.connections {
             if c.locked {
-                c.include = false;
+                c.disposition = FindingKind::excluded();
             }
         }
         for fz in &mut net.firewall_zones {
             if fz.locked {
-                fz.include = false;
+                fz.disposition = FindingKind::excluded();
             }
         }
         for fdr in &mut net.firewall_direct_rules {
             if fdr.locked {
-                fdr.include = false;
+                fdr.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut sched) = snapshot.scheduled_tasks {
         for cj in &mut sched.cron_jobs {
             if cj.locked {
-                cj.include = false;
+                cj.disposition = FindingKind::excluded();
             }
         }
         for st in &mut sched.systemd_timers {
             if st.locked {
-                st.include = false;
+                st.disposition = FindingKind::excluded();
             }
         }
         for aj in &mut sched.at_jobs {
             if aj.locked {
-                aj.include = false;
+                aj.disposition = FindingKind::excluded();
             }
         }
         for gtu in &mut sched.generated_timer_units {
             if gtu.locked {
-                gtu.include = false;
+                gtu.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut sel) = snapshot.selinux {
         for pl in &mut sel.port_labels {
             if pl.locked {
-                pl.include = false;
+                pl.disposition = FindingKind::excluded();
             }
         }
     }
     if let Some(ref mut nonrpm) = snapshot.non_rpm_software {
         for item in &mut nonrpm.items {
             if item.locked {
-                item.include = false;
+                item.disposition = FindingKind::excluded();
             }
         }
     }
@@ -910,12 +911,12 @@ impl RefineSession {
         let mut pkg_excluded = Vec::new();
         if let (Some(orig_rpm), Some(proj_rpm)) = (&self.original.rpm, &projected.rpm) {
             for (orig, proj) in orig_rpm.packages_added.iter().zip(&proj_rpm.packages_added) {
-                if orig.include != proj.include {
+                if orig.disposition.is_included() != proj.disposition.is_included() {
                     let id = ItemId::Package {
                         name: orig.name.clone(),
                         arch: orig.arch.clone(),
                     };
-                    if proj.include {
+                    if proj.disposition.is_included() {
                         pkg_included.push(id);
                     } else {
                         pkg_excluded.push(id);
@@ -929,11 +930,11 @@ impl RefineSession {
         let mut cfg_excluded = Vec::new();
         if let (Some(orig_cfg), Some(proj_cfg)) = (&self.original.config, &projected.config) {
             for (orig, proj) in orig_cfg.files.iter().zip(&proj_cfg.files) {
-                if orig.include != proj.include {
+                if orig.disposition.is_included() != proj.disposition.is_included() {
                     let id = ItemId::Config {
                         path: orig.path.clone(),
                     };
-                    if proj.include {
+                    if proj.disposition.is_included() {
                         cfg_included.push(id);
                     } else {
                         cfg_excluded.push(id);
@@ -1254,7 +1255,12 @@ impl RefineSession {
             .map(|r| {
                 r.packages_added
                     .iter()
-                    .map(|p| (canonical_package_id(&p.name, &p.arch), p.include))
+                    .map(|p| {
+                        (
+                            canonical_package_id(&p.name, &p.arch),
+                            p.disposition.is_included(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -1345,7 +1351,7 @@ impl RefineSession {
                                 let parent_included = svc_section
                                     .state_changes
                                     .iter()
-                                    .any(|s| s.unit == dropin.unit && s.include);
+                                    .any(|s| s.unit == dropin.unit && s.disposition.is_included());
                                 if !parent_included {
                                     return Err(RefineError::BadRequest(
                                         "cannot include drop-in when parent service is excluded"
@@ -1635,13 +1641,13 @@ impl RefineSession {
                             .iter()
                             .find(|e| e.name == *name && e.arch == *arch)
                     })
-                    .map(|e| e.include == *include)
+                    .map(|e| e.disposition.is_included() == *include)
                     .unwrap_or(false),
                 ItemId::Config { path } => projected
                     .config
                     .as_ref()
                     .and_then(|c| c.files.iter().find(|e| e.path == *path))
-                    .map(|e| e.include == *include)
+                    .map(|e| e.disposition.is_included() == *include)
                     .unwrap_or(false),
                 ItemId::Repo { path: section_id } => {
                     let excluded = self.excluded_sections_at(&projected);
@@ -1670,7 +1676,7 @@ impl RefineSession {
                                 .iter()
                                 .filter(|e| member_names.contains(&e.name))
                                 .filter(|e| !(*include && e.locked))
-                                .all(|e| e.include == *include)
+                                .all(|e| e.disposition.is_included() == *include)
                         })
                         .unwrap_or(true)
                 }
@@ -1736,7 +1742,7 @@ impl RefineSession {
                                     .iter_mut()
                                     .find(|e| e.name == *name && e.arch == *arch)
                             {
-                                pkg.include = *include;
+                                pkg.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Config { path } => {
@@ -1744,7 +1750,7 @@ impl RefineSession {
                                 && let Some(entry) =
                                     config.files.iter_mut().find(|e| e.path == *path)
                             {
-                                entry.include = *include;
+                                entry.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Repo { path: section_id } => {
@@ -1756,7 +1762,7 @@ impl RefineSession {
                                     // 1. Exclude all packages from this repo (case-insensitive)
                                     for pkg in &mut rpm.packages_added {
                                         if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                            pkg.include = false;
+                                            pkg.disposition = FindingKind::excluded();
                                         }
                                     }
 
@@ -1778,7 +1784,7 @@ impl RefineSession {
                                                     .iter_mut()
                                                     .find(|r| r.path == *file_path)
                                             {
-                                                rf.include = false;
+                                                rf.disposition = FindingKind::excluded();
                                             }
                                         }
                                     }
@@ -1801,7 +1807,7 @@ impl RefineSession {
                                                         .iter_mut()
                                                         .find(|g| g.path == *key_path)
                                                 {
-                                                    k.include = false;
+                                                    k.disposition = FindingKind::excluded();
                                                 }
                                             }
                                         }
@@ -1813,7 +1819,7 @@ impl RefineSession {
                                     // 1. Include all packages from this repo (case-insensitive)
                                     for pkg in &mut rpm.packages_added {
                                         if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                            pkg.include = true;
+                                            pkg.disposition = FindingKind::included();
                                         }
                                     }
 
@@ -1827,7 +1833,7 @@ impl RefineSession {
                                                 .iter_mut()
                                                 .find(|r| r.path == *file_path)
                                             {
-                                                rf.include = true;
+                                                rf.disposition = FindingKind::included();
                                             }
                                         }
                                     }
@@ -1842,7 +1848,7 @@ impl RefineSession {
                                                 .iter_mut()
                                                 .find(|g| g.path == *key_path)
                                             {
-                                                k.include = true;
+                                                k.disposition = FindingKind::included();
                                             }
                                         }
                                     }
@@ -1854,14 +1860,14 @@ impl RefineSession {
                                 if let Some(svc) =
                                     services.state_changes.iter_mut().find(|s| s.unit == *unit)
                                 {
-                                    svc.include = *include;
+                                    svc.disposition = FindingKind::from_bool(*include);
                                 }
                                 // Symmetric cascade: toggling a service cascades
                                 // to all drop-ins for that unit.
                                 for dropin in
                                     services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
                                 {
-                                    dropin.include = *include;
+                                    dropin.disposition = FindingKind::from_bool(*include);
                                 }
                             }
                         }
@@ -1870,7 +1876,7 @@ impl RefineSession {
                                 && let Some(dropin) =
                                     services.drop_ins.iter_mut().find(|d| d.path == *path)
                             {
-                                dropin.include = *include;
+                                dropin.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Quadlet { path } => {
@@ -1880,7 +1886,7 @@ impl RefineSession {
                                     .iter_mut()
                                     .find(|q| q.path == *path)
                             {
-                                quadlet.include = *include;
+                                quadlet.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Flatpak {
@@ -1896,7 +1902,7 @@ impl RefineSession {
                                             && f.branch == *branch
                                     })
                             {
-                                flatpak.include = *include;
+                                flatpak.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Sysctl { key } => {
@@ -1904,14 +1910,14 @@ impl RefineSession {
                                 && let Some(sysctl) =
                                     kb.sysctl_overrides.iter_mut().find(|s| s.key == *key)
                             {
-                                sysctl.include = *include;
+                                sysctl.disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::TunedSelection { profile } => {
                             if let Some(ref mut kb) = snap.kernel_boot
                                 && kb.tuned_active == *profile
                             {
-                                kb.tuned_include = *include;
+                                kb.tuned_disposition = FindingKind::from_bool(*include);
                             }
                         }
                         ItemId::Group { name } => {
@@ -1930,7 +1936,7 @@ impl RefineSession {
                                             // Locked members stay excluded
                                             continue;
                                         }
-                                        pkg.include = *include;
+                                        pkg.disposition = FindingKind::from_bool(*include);
                                     }
                                 }
                             }
@@ -2135,7 +2141,7 @@ impl RefineSession {
                     .iter()
                     .find(|e| e.name == pkg.entry.name && e.arch == pkg.entry.arch)
                 {
-                    pkg.entry.include = entry.include;
+                    pkg.entry.disposition = entry.disposition.clone();
                     pkg.entry.locked = entry.locked;
                 }
             }
@@ -2217,7 +2223,7 @@ impl RefineSession {
                 r.packages_added
                     .iter()
                     .filter(|p| {
-                        if p.include {
+                        if p.disposition.is_included() {
                             return false;
                         }
                         // In aggregate mode, skip packages excluded by the merge
@@ -2243,7 +2249,12 @@ impl RefineSession {
             .map(|r| {
                 r.packages_added
                     .iter()
-                    .map(|pkg| ((pkg.name.as_str(), pkg.arch.as_str()), pkg.include))
+                    .map(|pkg| {
+                        (
+                            (pkg.name.as_str(), pkg.arch.as_str()),
+                            pkg.disposition.is_included(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -2256,7 +2267,7 @@ impl RefineSession {
             .map(|p| {
                 (
                     canonical_package_id(&p.entry.name, &p.entry.arch),
-                    p.entry.include,
+                    p.entry.disposition.is_included(),
                     p.entry.locked,
                 )
             })
@@ -2278,7 +2289,7 @@ impl RefineSession {
                 // operator never needs to see. User-excluded packages (include
                 // was true originally) stay visible. Tier 3 (NeedsReview)
                 // items stay visible even though they default to include=false.
-                if !p.entry.include
+                if !p.entry.disposition.is_included()
                     && hidden_deps.contains(&(p.entry.name.as_str(), p.entry.arch.as_str()))
                     && p.triage.bucket() != TriageBucket::Investigate
                 {
@@ -2345,11 +2356,11 @@ impl RefineSession {
                         let original_include = original_package_includes
                             .get(&(pkg.entry.name.as_str(), pkg.entry.arch.as_str()))
                             .copied()
-                            .unwrap_or(pkg.entry.include);
+                            .unwrap_or(pkg.entry.disposition.is_included());
 
                         leaf_set.contains(package_id.as_str())
                             || pkg.triage.bucket() == TriageBucket::Investigate
-                            || pkg.entry.include != original_include
+                            || pkg.entry.disposition.is_included() != original_include
                             || ungrouped_member_names.contains(pkg.entry.name.as_str())
                     })
                     .collect()
@@ -2371,7 +2382,7 @@ impl RefineSession {
             for pkg in &mut rpm.packages_added {
                 let key = canonical_package_id(&pkg.name, &pkg.arch);
                 if let Some(&(include, locked)) = state_map.get(key.as_str()) {
-                    pkg.include = include;
+                    pkg.disposition = FindingKind::from_bool(include);
                     pkg.locked = locked;
                 }
             }
@@ -2471,11 +2482,23 @@ impl RefineSession {
         drop(preview_dir);
 
         let pkg_total = packages.len();
-        let pkg_included = packages.iter().filter(|p| p.entry.include).count();
-        let pkg_excluded = packages.iter().filter(|p| !p.entry.include).count();
+        let pkg_included = packages
+            .iter()
+            .filter(|p| p.entry.disposition.is_included())
+            .count();
+        let pkg_excluded = packages
+            .iter()
+            .filter(|p| !p.entry.disposition.is_included())
+            .count();
         let cfg_total = config_files.len();
-        let cfg_included = config_files.iter().filter(|c| c.entry.include).count();
-        let cfg_excluded = config_files.iter().filter(|c| !c.entry.include).count();
+        let cfg_included = config_files
+            .iter()
+            .filter(|c| c.entry.disposition.is_included())
+            .count();
+        let cfg_excluded = config_files
+            .iter()
+            .filter(|c| !c.entry.disposition.is_included())
+            .count();
 
         let stats = RefineStats {
             sections: vec![
@@ -2842,7 +2865,7 @@ fn write_language_package_manifests(
     let redact = is_redaction_active(snap);
 
     for item in &nrs.items {
-        if !item.include || item.manifest_files.is_empty() {
+        if !item.disposition.is_included() || item.manifest_files.is_empty() {
             continue;
         }
 
@@ -2901,7 +2924,7 @@ fn extract_payload_dirs_from_tarball(
         .map(|s| {
             s.items
                 .iter()
-                .filter(|f| f.include)
+                .filter(|f| f.disposition.is_included())
                 .map(|f| f.path.trim_start_matches('/').to_string())
                 .collect()
         })
@@ -2914,7 +2937,7 @@ fn extract_payload_dirs_from_tarball(
         .map(|r| {
             r.packages_added
                 .iter()
-                .filter(|p| p.include && p.repoless_cached)
+                .filter(|p| p.disposition.is_included() && p.repoless_cached)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
                 .collect()
         })
@@ -2997,7 +3020,7 @@ fn copy_uploaded_rpms(
         .map(|rpm| {
             rpm.packages_added
                 .iter()
-                .filter(|p| p.include && p.repoless_cached)
+                .filter(|p| p.disposition.is_included() && p.repoless_cached)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
                 .collect()
         })
@@ -3367,7 +3390,7 @@ mod tests {
         rpm.packages_added = vec![PackageEntry {
             name: "httpd".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             source_repo: "appstream".into(),
             ..Default::default()
@@ -3419,7 +3442,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3427,7 +3450,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "i686".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3453,7 +3476,7 @@ mod tests {
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -3461,7 +3484,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3490,7 +3513,7 @@ mod tests {
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -3498,7 +3521,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3534,7 +3557,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3542,7 +3565,7 @@ mod tests {
             PackageEntry {
                 name: "glibc".into(),
                 arch: "i686".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3575,7 +3598,7 @@ mod tests {
             PackageEntry {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -3583,7 +3606,7 @@ mod tests {
             PackageEntry {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
@@ -3613,7 +3636,7 @@ mod tests {
             PackageEntry {
                 name: "vim".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 state: PackageState::LocalInstall,
@@ -3622,7 +3645,7 @@ mod tests {
             PackageEntry {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
@@ -3656,7 +3679,7 @@ mod tests {
             PackageEntry {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -3664,7 +3687,7 @@ mod tests {
             PackageEntry {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 state: PackageState::Modified,
@@ -3696,7 +3719,7 @@ mod tests {
             PackageEntry {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "appstream".into(),
                 ..Default::default()
@@ -3704,7 +3727,7 @@ mod tests {
             PackageEntry {
                 name: "kernel".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 source_repo: "baseos".into(),
                 ..Default::default()
@@ -3974,7 +3997,7 @@ mod tests {
                         unit: "httpd.service".into(),
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Disable),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         owning_package: Some("httpd".into()),
                         aggregate: None,
@@ -3984,7 +4007,7 @@ mod tests {
                         unit: "sshd.service".into(),
                         current_state: ServiceUnitState::Enabled,
                         default_state: Some(PresetDefault::Enable),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         owning_package: Some("openssh-server".into()),
                         aggregate: None,
@@ -3998,7 +4021,7 @@ mod tests {
                         unit: "httpd.service".into(),
                         path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
                         content: "[Service]\nLimitNOFILE=65536".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4006,7 +4029,7 @@ mod tests {
                         unit: "httpd.service".into(),
                         path: "/etc/systemd/system/httpd.service.d/timeout.conf".into(),
                         content: "[Service]\nTimeoutStartSec=120".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4040,12 +4063,15 @@ mod tests {
             .iter()
             .find(|s| s.unit == "httpd.service")
             .unwrap();
-        assert!(!httpd.include, "httpd.service must be excluded");
+        assert!(
+            !httpd.disposition.is_included(),
+            "httpd.service must be excluded"
+        );
 
         // Both drop-ins for httpd must also be excluded.
         for dropin in svc.drop_ins.iter().filter(|d| d.unit == "httpd.service") {
             assert!(
-                !dropin.include,
+                !dropin.disposition.is_included(),
                 "drop-in {} must be excluded when parent service is excluded",
                 dropin.path
             );
@@ -4057,7 +4083,10 @@ mod tests {
             .iter()
             .find(|s| s.unit == "sshd.service")
             .unwrap();
-        assert!(sshd.include, "sshd.service must remain included");
+        assert!(
+            sshd.disposition.is_included(),
+            "sshd.service must remain included"
+        );
     }
 
     #[test]
@@ -4093,11 +4122,14 @@ mod tests {
             .iter()
             .find(|s| s.unit == "httpd.service")
             .unwrap();
-        assert!(httpd.include, "httpd.service must be re-included");
+        assert!(
+            httpd.disposition.is_included(),
+            "httpd.service must be re-included"
+        );
 
         for dropin in svc.drop_ins.iter().filter(|d| d.unit == "httpd.service") {
             assert!(
-                dropin.include,
+                dropin.disposition.is_included(),
                 "drop-in {} must be re-included when parent service is re-included",
                 dropin.path
             );
@@ -4127,7 +4159,10 @@ mod tests {
             .iter()
             .find(|s| s.unit == "httpd.service")
             .unwrap();
-        assert!(httpd.include, "parent service must remain included");
+        assert!(
+            httpd.disposition.is_included(),
+            "parent service must remain included"
+        );
 
         // Only the targeted drop-in is excluded.
         let limits = svc
@@ -4135,14 +4170,20 @@ mod tests {
             .iter()
             .find(|d| d.path.contains("limits.conf"))
             .unwrap();
-        assert!(!limits.include, "limits.conf drop-in must be excluded");
+        assert!(
+            !limits.disposition.is_included(),
+            "limits.conf drop-in must be excluded"
+        );
 
         let timeout = svc
             .drop_ins
             .iter()
             .find(|d| d.path.contains("timeout.conf"))
             .unwrap();
-        assert!(timeout.include, "timeout.conf drop-in must remain included");
+        assert!(
+            timeout.disposition.is_included(),
+            "timeout.conf drop-in must remain included"
+        );
     }
 
     #[test]
@@ -4234,7 +4275,7 @@ mod tests {
                         path: "/etc/containers/systemd/myapp.container".into(),
                         name: "myapp.container".into(),
                         image: "quay.io/myorg/myapp:latest".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4242,7 +4283,7 @@ mod tests {
                         path: "/etc/containers/systemd/db.container".into(),
                         name: "db.container".into(),
                         image: "docker.io/library/postgres:16".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4252,7 +4293,7 @@ mod tests {
                         app_id: "org.mozilla.firefox".into(),
                         remote: "flathub".into(),
                         branch: "stable".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4260,7 +4301,7 @@ mod tests {
                         app_id: "org.gimp.GIMP".into(),
                         remote: "flathub".into(),
                         branch: "stable".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         ..Default::default()
                     },
@@ -4293,7 +4334,10 @@ mod tests {
             .iter()
             .find(|q| q.path.contains("myapp"))
             .unwrap();
-        assert!(!myapp.include, "myapp quadlet must be excluded");
+        assert!(
+            !myapp.disposition.is_included(),
+            "myapp quadlet must be excluded"
+        );
 
         // Other quadlet must be unaffected.
         let db = containers
@@ -4301,7 +4345,10 @@ mod tests {
             .iter()
             .find(|q| q.path.contains("db"))
             .unwrap();
-        assert!(db.include, "db quadlet must remain included");
+        assert!(
+            db.disposition.is_included(),
+            "db quadlet must remain included"
+        );
     }
 
     #[test]
@@ -4328,7 +4375,10 @@ mod tests {
             .iter()
             .find(|f| f.app_id == "org.mozilla.firefox")
             .unwrap();
-        assert!(!firefox.include, "firefox flatpak must be excluded");
+        assert!(
+            !firefox.disposition.is_included(),
+            "firefox flatpak must be excluded"
+        );
 
         // Other flatpak must be unaffected.
         let gimp = containers
@@ -4336,7 +4386,10 @@ mod tests {
             .iter()
             .find(|f| f.app_id == "org.gimp.GIMP")
             .unwrap();
-        assert!(gimp.include, "GIMP flatpak must remain included");
+        assert!(
+            gimp.disposition.is_included(),
+            "GIMP flatpak must remain included"
+        );
     }
 
     #[test]
@@ -4397,7 +4450,7 @@ mod tests {
                         runtime: "1".into(),
                         default: "0".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         aggregate: None,
                     },
@@ -4406,13 +4459,13 @@ mod tests {
                         runtime: "10".into(),
                         default: "60".into(),
                         source: "/etc/sysctl.d/99-custom.conf".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         aggregate: None,
                     },
                 ],
                 tuned_active: "throughput-performance".into(),
-                tuned_include: true,
+                tuned_disposition: FindingKind::included(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -4441,7 +4494,10 @@ mod tests {
             .iter()
             .find(|s| s.key == "net.ipv4.ip_forward")
             .unwrap();
-        assert!(!ip_fwd.include, "ip_forward sysctl must be excluded");
+        assert!(
+            !ip_fwd.disposition.is_included(),
+            "ip_forward sysctl must be excluded"
+        );
 
         // Other sysctl must be unaffected.
         let swappiness = kb
@@ -4449,7 +4505,10 @@ mod tests {
             .iter()
             .find(|s| s.key == "vm.swappiness")
             .unwrap();
-        assert!(swappiness.include, "vm.swappiness must remain included");
+        assert!(
+            swappiness.disposition.is_included(),
+            "vm.swappiness must remain included"
+        );
     }
 
     #[test]
@@ -4470,7 +4529,7 @@ mod tests {
         let kb = projected.kernel_boot.as_ref().unwrap();
 
         assert!(
-            !kb.tuned_include,
+            !kb.tuned_disposition.is_included(),
             "tuned_include must be false after excluding tuned profile"
         );
         assert_eq!(
@@ -4533,7 +4592,7 @@ mod tests {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
                 content: "[Service]\nLimitNOFILE=65535".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -4546,7 +4605,7 @@ mod tests {
                 path: "/etc/containers/systemd/myapp.container".into(),
                 name: "myapp.container".into(),
                 content: "[Container]\nImage=quay.io/test:latest".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -4554,7 +4613,7 @@ mod tests {
                 app_id: "org.example.App".into(),
                 remote: "flathub".into(),
                 branch: "stable".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 remote_url: "https://flathub.org/repo/".into(),
                 ..Default::default()
@@ -4569,11 +4628,11 @@ mod tests {
                 key: "net.ipv4.ip_forward".into(),
                 runtime: "1".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
-            tuned_include: true,
+            tuned_disposition: FindingKind::included(),
             tuned_active: "my-profile".into(),
             tuned_custom_profiles: vec![ConfigSnippet {
                 path: "etc/tuned/my-profile/tuned.conf".into(),
@@ -4689,7 +4748,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: Some("httpd".into()),
                     aggregate: None,
@@ -4729,7 +4788,7 @@ mod tests {
                     arch: "x86_64".into(),
                     version: "1.24.0".into(),
                     release: "1.el9".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
@@ -4762,7 +4821,7 @@ mod tests {
                     unit: "httpd.service".into(),
                     current_state: ServiceUnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     owning_package: Some("httpd".into()),
                     aggregate: None,
@@ -4785,7 +4844,7 @@ mod tests {
             dec_before
                 .service_states
                 .iter()
-                .any(|s| s.entry.unit == "httpd.service" && !s.entry.include),
+                .any(|s| s.entry.unit == "httpd.service" && !s.entry.disposition.is_included()),
             "httpd.service should start excluded"
         );
 
@@ -4808,7 +4867,7 @@ mod tests {
             dec_after
                 .service_states
                 .iter()
-                .any(|s| s.entry.unit == "httpd.service" && s.entry.include),
+                .any(|s| s.entry.unit == "httpd.service" && s.entry.disposition.is_included()),
             "httpd.service should now be included"
         );
 
@@ -4846,7 +4905,7 @@ mod tests {
         let mut snap = test_snapshot_with_services();
         // Lock httpd.service to simulate a semantic exclusion
         let services = snap.services.as_mut().unwrap();
-        services.state_changes[0].include = false;
+        services.state_changes[0].disposition = FindingKind::excluded();
         services.state_changes[0].locked = true;
 
         let mut session = RefineSession::new(snap);
@@ -4869,7 +4928,7 @@ mod tests {
             .find(|s| s.unit == "httpd.service")
             .unwrap();
         assert!(
-            !httpd.include,
+            !httpd.disposition.is_included(),
             "locked service must stay excluded after set-include attempt"
         );
 
@@ -4885,7 +4944,7 @@ mod tests {
         let mut snap = test_snapshot_with_services();
         let services = snap.services.as_mut().unwrap();
         // Start unlocked and excluded
-        services.state_changes[0].include = false;
+        services.state_changes[0].disposition = FindingKind::excluded();
         services.state_changes[0].locked = false;
 
         let mut session = RefineSession::new(snap);
@@ -4912,7 +4971,8 @@ mod tests {
                 .iter()
                 .find(|s| s.unit == "httpd.service")
                 .unwrap()
-                .include,
+                .disposition
+                .is_included(),
             "service must be included after unlocked set-include"
         );
 
@@ -4922,7 +4982,8 @@ mod tests {
         // forcing a recompute. This models resume_from() with a snapshot
         // where the normalize layer now locks this item.
         session.original.services.as_mut().unwrap().state_changes[0].locked = true;
-        session.original.services.as_mut().unwrap().state_changes[0].include = false;
+        session.original.services.as_mut().unwrap().state_changes[0].disposition =
+            FindingKind::excluded();
         session.cached_view = None;
         session.cached_decisions = None;
         session.recompute_view();
@@ -4938,7 +4999,7 @@ mod tests {
             .find(|s| s.unit == "httpd.service")
             .unwrap();
         assert!(
-            !httpd.include,
+            !httpd.disposition.is_included(),
             "locked service must stay excluded even with stale include op in history"
         );
     }
@@ -4950,7 +5011,7 @@ mod tests {
         let mut snap = test_snapshot_with_services();
         let services = snap.services.as_mut().unwrap();
         // Simulate a locked item that somehow has include=true
-        services.state_changes[0].include = true;
+        services.state_changes[0].disposition = FindingKind::included();
         services.state_changes[0].locked = true;
 
         clamp_locked_items(&mut snap);
@@ -4964,7 +5025,7 @@ mod tests {
             .find(|s| s.unit == "httpd.service")
             .unwrap();
         assert!(
-            !httpd.include,
+            !httpd.disposition.is_included(),
             "clamp must force locked item to include=false"
         );
 
@@ -4977,7 +5038,10 @@ mod tests {
             .iter()
             .find(|s| s.unit == "sshd.service")
             .unwrap();
-        assert!(sshd.include, "clamp must not affect unlocked items");
+        assert!(
+            sshd.disposition.is_included(),
+            "clamp must not affect unlocked items"
+        );
     }
 
     // ── Aggregate pre-filtered packages regression tests ──────────────────
@@ -5006,7 +5070,7 @@ mod tests {
         rpm.packages_added = vec![PackageEntry {
             name: "git".into(),
             arch: "x86_64".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             source_repo: "appstream".into(),
             aggregate: Some(Default::default()),
@@ -5082,7 +5146,7 @@ mod tests {
                     arch: "aarch64".into(),
                     state: PackageState::Added,
                     source_repo: "anaconda".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 }],
@@ -5119,7 +5183,7 @@ mod tests {
             .find(|p| p.entry.name == "grub2-efi-aa64-cdboot");
         if let Some(pkg) = view_pkg {
             assert!(
-                !pkg.entry.include,
+                !pkg.entry.disposition.is_included(),
                 "view: locked package must stay excluded"
             );
             assert!(pkg.entry.locked, "view: locked flag must be preserved");
@@ -5136,7 +5200,7 @@ mod tests {
             .find(|p| p.name == "grub2-efi-aa64-cdboot")
             .unwrap();
         assert!(
-            !proj_pkg.include,
+            !proj_pkg.disposition.is_included(),
             "projected: locked package must stay excluded"
         );
         assert!(proj_pkg.locked, "projected: locked flag must be preserved");
@@ -5156,7 +5220,7 @@ mod tests {
                     PackageEntry {
                         name: "podman".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5164,7 +5228,7 @@ mod tests {
                     PackageEntry {
                         name: "buildah".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5172,7 +5236,7 @@ mod tests {
                     PackageEntry {
                         name: "skopeo".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5280,7 +5344,7 @@ mod tests {
                     PackageEntry {
                         name: "podman".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5288,7 +5352,7 @@ mod tests {
                     PackageEntry {
                         name: "buildah".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: true,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5296,7 +5360,7 @@ mod tests {
                     PackageEntry {
                         name: "skopeo".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5328,7 +5392,7 @@ mod tests {
                     PackageEntry {
                         name: "podman".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5336,7 +5400,7 @@ mod tests {
                     PackageEntry {
                         name: "podman".into(),
                         arch: "i686".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5344,7 +5408,7 @@ mod tests {
                     PackageEntry {
                         name: "buildah".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5382,7 +5446,11 @@ mod tests {
         let view = session.view();
         for pkg in &view.packages {
             if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
-                assert!(!pkg.entry.include, "{} should be excluded", pkg.entry.name);
+                assert!(
+                    !pkg.entry.disposition.is_included(),
+                    "{} should be excluded",
+                    pkg.entry.name
+                );
             }
         }
     }
@@ -5413,10 +5481,13 @@ mod tests {
         for pkg in &view.packages {
             match pkg.entry.name.as_str() {
                 // buildah is locked — should stay excluded
-                "buildah" => assert!(!pkg.entry.include, "locked buildah should stay excluded"),
+                "buildah" => assert!(
+                    !pkg.entry.disposition.is_included(),
+                    "locked buildah should stay excluded"
+                ),
                 // podman and skopeo are not locked — should be re-included
                 "podman" | "skopeo" => assert!(
-                    pkg.entry.include,
+                    pkg.entry.disposition.is_included(),
                     "{} should be re-included",
                     pkg.entry.name
                 ),
@@ -5441,7 +5512,11 @@ mod tests {
         let view = session.view();
         for pkg in &view.packages {
             if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
-                assert!(pkg.entry.include, "{} should be restored", pkg.entry.name);
+                assert!(
+                    pkg.entry.disposition.is_included(),
+                    "{} should be restored",
+                    pkg.entry.name
+                );
             }
         }
     }
@@ -5462,9 +5537,10 @@ mod tests {
         for pkg in &view.packages {
             if ["podman", "buildah"].contains(&pkg.entry.name.as_str()) {
                 assert!(
-                    !pkg.entry.include,
+                    !pkg.entry.disposition.is_included(),
                     "{}.{} should be excluded",
-                    pkg.entry.name, pkg.entry.arch
+                    pkg.entry.name,
+                    pkg.entry.arch
                 );
             }
         }
@@ -5533,7 +5609,7 @@ mod tests {
             .iter()
             .find(|p| p.entry.name == "podman")
             .unwrap();
-        assert!(podman.entry.include, "individual op wins");
+        assert!(podman.entry.disposition.is_included(), "individual op wins");
     }
 
     // ── Optional-installed independence tests ─────────────────────────
@@ -5547,7 +5623,7 @@ mod tests {
                     PackageEntry {
                         name: "podman".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5555,7 +5631,7 @@ mod tests {
                     PackageEntry {
                         name: "buildah".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5563,7 +5639,7 @@ mod tests {
                     PackageEntry {
                         name: "skopeo".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5571,7 +5647,7 @@ mod tests {
                     PackageEntry {
                         name: "python3-podman".into(),
                         arch: "noarch".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5606,7 +5682,8 @@ mod tests {
             .find(|p| p.entry.name == "python3-podman")
             .unwrap()
             .entry
-            .include;
+            .disposition
+            .is_included();
         // Exclude the group
         session
             .apply(RefinementOp::SetInclude {
@@ -5623,12 +5700,17 @@ mod tests {
             .find(|p| p.entry.name == "python3-podman")
             .unwrap()
             .entry
-            .include;
+            .disposition
+            .is_included();
         assert_eq!(opt_before, opt_after, "optional member unchanged");
         // Verify regular members were excluded
         for pkg in &session.view().packages {
             if ["podman", "buildah", "skopeo"].contains(&pkg.entry.name.as_str()) {
-                assert!(!pkg.entry.include, "{} should be excluded", pkg.entry.name);
+                assert!(
+                    !pkg.entry.disposition.is_included(),
+                    "{} should be excluded",
+                    pkg.entry.name
+                );
             }
         }
     }
@@ -5842,7 +5924,7 @@ mod tests {
                     PackageEntry {
                         name: "httpd".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5850,7 +5932,7 @@ mod tests {
                     PackageEntry {
                         name: "mod_ssl".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5936,7 +6018,7 @@ mod tests {
                     PackageEntry {
                         name: "vim".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "appstream".into(),
                         ..Default::default()
@@ -5944,7 +6026,7 @@ mod tests {
                     PackageEntry {
                         name: "glibc".into(),
                         arch: "x86_64".into(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         locked: false,
                         source_repo: "baseos".into(),
                         ..Default::default()
@@ -6005,7 +6087,7 @@ mod tests {
                         PackageEntry {
                             name: "vim".into(),
                             arch: "x86_64".into(),
-                            include: true,
+                            disposition: FindingKind::included(),
                             locked: false,
                             source_repo: "appstream".into(),
                             ..Default::default()
@@ -6013,7 +6095,7 @@ mod tests {
                         PackageEntry {
                             name: "glibc".into(),
                             arch: "x86_64".into(),
-                            include: true,
+                            disposition: FindingKind::included(),
                             locked: false,
                             source_repo: "baseos".into(),
                             ..Default::default()
@@ -6070,14 +6152,14 @@ mod tests {
             PackageEntry {
                 name: "grub2-tools".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "anaconda".into(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "shim-x64".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "anaconda".into(),
                 ..Default::default()
             },
@@ -6085,7 +6167,7 @@ mod tests {
             PackageEntry {
                 name: "harfbuzz".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "anaconda".into(),
                 ..Default::default()
             },
@@ -6093,7 +6175,7 @@ mod tests {
             PackageEntry {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -6109,7 +6191,7 @@ mod tests {
                 unit: "sshd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
@@ -6163,21 +6245,21 @@ mod tests {
             PackageEntry {
                 name: "grub2-tools".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "anaconda".into(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "cronie".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "anaconda".into(),
                 ..Default::default()
             },
             PackageEntry {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 source_repo: "appstream".into(),
                 ..Default::default()
             },
@@ -6192,7 +6274,7 @@ mod tests {
                 unit: "sshd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
@@ -6232,7 +6314,7 @@ mod tests {
                 packages_added: vec![PackageEntry {
                     name: "harfbuzz".into(),
                     arch: "aarch64".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     source_repo: "anaconda".into(),
                     ..Default::default()
                 }],
@@ -6249,7 +6331,7 @@ mod tests {
                 unit: "sshd.service".into(),
                 current_state: ServiceUnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
@@ -6268,7 +6350,10 @@ mod tests {
             .iter()
             .find(|p| p.entry.name == "harfbuzz")
             .unwrap();
-        assert!(pkg.entry.include, "harfbuzz should start included");
+        assert!(
+            pkg.entry.disposition.is_included(),
+            "harfbuzz should start included"
+        );
         assert!(!pkg.entry.locked, "harfbuzz should not be locked");
 
         // User toggles harfbuzz to exclude
@@ -6291,7 +6376,7 @@ mod tests {
             .find(|p| p.entry.name == "harfbuzz")
             .unwrap();
         assert!(
-            !pkg.entry.include,
+            !pkg.entry.disposition.is_included(),
             "harfbuzz must be excluded after user toggle"
         );
     }
@@ -6387,7 +6472,7 @@ mod tests {
                     version: ver.into(),
                     release: rel.into(),
                     arch: arch.into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     repoless_annotation: "No repo source".into(),
                     ..Default::default()
                 }],
@@ -6494,7 +6579,7 @@ mod tests {
                     version: "2.4.57".into(),
                     release: "5.el9".into(),
                     arch: "x86_64".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     source_repo: "appstream".into(),
                     repoless_annotation: String::new(), // not repo-less
                     ..Default::default()

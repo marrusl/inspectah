@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::network::{
     FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry, StaticRouteFile,
@@ -191,7 +192,7 @@ fn collect_nm_connections(
                 name: stem,
                 method,
                 conn_type,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
         }
@@ -387,7 +388,7 @@ fn collect_firewall_zones(
                     services: result.services,
                     ports: result.ports,
                     rich_rules: result.rich_rules,
-                    include: true,
+                    disposition: FindingKind::included(),
                     ..Default::default()
                 });
             }
@@ -423,7 +424,7 @@ fn parse_passthrough_tag(tag_text: &str, content: &str) -> Option<FirewallDirect
         chain,
         priority: "0".to_string(),
         args,
-        include: true,
+        disposition: FindingKind::included(),
         ..Default::default()
     })
 }
@@ -1141,7 +1142,7 @@ mod tests {
 
         assert_eq!(section.connections.len(), 1);
         assert!(
-            section.connections[0].include,
+            section.connections[0].disposition.is_included(),
             "collected NMConnection should have include: true"
         );
     }
@@ -1160,7 +1161,7 @@ mod tests {
 
         assert_eq!(section.firewall_zones.len(), 1);
         assert!(
-            section.firewall_zones[0].include,
+            section.firewall_zones[0].disposition.is_included(),
             "collected FirewallZone should have include: true"
         );
     }
@@ -1176,7 +1177,7 @@ mod tests {
         assert!(!section.firewall_direct_rules.is_empty());
         for rule in &section.firewall_direct_rules {
             assert!(
-                rule.include,
+                rule.disposition.is_included(),
                 "collected FirewallDirectRule should have include: true"
             );
         }

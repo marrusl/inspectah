@@ -78,7 +78,7 @@ pub fn derive_group_state(ctx: &GroupEvalContext) -> GroupRenderState {
             };
         }
 
-        if pkg.include {
+        if pkg.disposition.is_included() {
             all_non_locked_excluded = false;
         } else {
             any_non_locked_excluded = true;
@@ -104,6 +104,7 @@ pub fn derive_group_state(ctx: &GroupEvalContext) -> GroupRenderState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
 
     fn group(name: &str, members: &[&str]) -> InstalledGroup {
         InstalledGroup {
@@ -117,7 +118,7 @@ mod tests {
         PackageEntry {
             name: name.into(),
             arch: arch.into(),
-            include,
+            disposition: FindingKind::from_bool(include),
             locked,
             ..PackageEntry::default()
         }

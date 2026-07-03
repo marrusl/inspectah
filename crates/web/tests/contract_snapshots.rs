@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 // inspectah-web/tests/contract_snapshots.rs
 //
 // Contract snapshot tests for the key API endpoints. These hit the real HTTP
@@ -60,7 +61,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             version: "2.4.57".into(),
             release: "11.el9".into(),
             state: PackageState::Added,
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -79,7 +80,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             unit: "httpd.service".into(),
             current_state: ServiceUnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
-            include: false,
+            disposition: FindingKind::excluded(),
             locked: false,
             owning_package: None,
             aggregate: None,
@@ -269,7 +270,7 @@ async fn grouped_view_contract() {
                 version: "2.4.57".into(),
                 release: "11.el9".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -279,7 +280,7 @@ async fn grouped_view_contract() {
                 version: "2.4.57".into(),
                 release: "11.el9".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },

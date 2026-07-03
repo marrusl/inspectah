@@ -1,4 +1,5 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{
     AggregatePrevalence, AggregateSnapshotMeta, PrevalenceZone, VariantSelection,
 };
@@ -77,21 +78,21 @@ fn multi_variant_path_zone_uses_most_divergent_variant() {
         files: vec![
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: aggregate_prevalence(3, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: aggregate_prevalence(1, 5),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: aggregate_prevalence(1, 5),
                 ..Default::default()
@@ -119,7 +120,7 @@ fn zone_for_partial_path_is_divergent() {
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: "/etc/app/rare.conf".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             aggregate: aggregate_prevalence(2, 5),
             ..Default::default()
@@ -146,7 +147,7 @@ fn dropin_zone_classified_on_aggregate_init() {
             unit: "httpd.service".into(),
             path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
             content: "test".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             aggregate: aggregate_prevalence(4, 5),
             ..Default::default()
@@ -173,7 +174,7 @@ fn quadlet_zone_classified_on_aggregate_init() {
         quadlet_units: vec![QuadletUnit {
             path: "/etc/containers/systemd/myapp.container".into(),
             name: "myapp".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             aggregate: aggregate_prevalence(5, 5),
             ..Default::default()
@@ -215,7 +216,7 @@ fn variants_changed_net_zero_is_clean() {
             ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_a.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: aggregate_prevalence(3, 5),
@@ -224,7 +225,7 @@ fn variants_changed_net_zero_is_clean() {
             ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 content: content_b.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: aggregate_prevalence(2, 5),
@@ -294,7 +295,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     service: "web".into(),
                     image: "nginx:1.25".into(),
                 }],
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -311,7 +312,7 @@ fn compose_multi_variant_pristine_is_clean() {
                     service: "web".into(),
                     image: "nginx:1.24".into(),
                 }],
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -360,7 +361,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
             ComposeFile {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_a,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -374,7 +375,7 @@ fn compose_select_variant_marks_dirty_then_revert_is_clean() {
             ComposeFile {
                 path: "/opt/app/docker-compose.yml".into(),
                 images: images_b,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {

@@ -3,6 +3,7 @@
 //! Verifies that COPY paths in the rendered Containerfile match the actual
 //! layout of the export tarball. The renderer and exporter both use `env_hash()`
 //! from inspectah_core::util to generate consistent directory names.
+use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
@@ -75,7 +76,7 @@ fn containerfile_copy_paths_match_export_layout() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -83,7 +84,7 @@ fn containerfile_copy_paths_match_export_layout() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -100,7 +101,7 @@ fn containerfile_copy_paths_match_export_layout() {
         name: "venv".into(),
         method: METHOD_PYTHON_VENV.into(), // Must match collector's actual output
         confidence: "high".into(),
-        include: true,
+        disposition: FindingKind::included(),
         manifest_files: pip_manifests,
         packages: vec![LanguagePackage {
             name: "flask".into(),
@@ -126,7 +127,7 @@ fn containerfile_copy_paths_match_export_layout() {
         name: "webapp".into(),
         method: METHOD_NPM_LOCKFILE.into(),
         confidence: "high".into(),
-        include: true,
+        disposition: FindingKind::included(),
         manifest_files: npm_manifests,
         ..Default::default()
     };

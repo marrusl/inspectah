@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::services::{
@@ -337,7 +338,7 @@ impl Inspector for ServicesInspector {
                     unit: unit.unit.clone(),
                     current_state,
                     default_state: preset,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -368,7 +369,7 @@ impl Inspector for ServicesInspector {
                     unit: unit.unit.clone(),
                     current_state,
                     default_state,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
                     aggregate: None,
@@ -694,7 +695,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
                 unit: unit.to_string(),
                 path: path_str,
                 content,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             });
         }
@@ -1183,7 +1184,10 @@ mod tests {
                 "masked service action must be Mask"
             );
             assert_eq!(cups.current_state, ServiceUnitState::Masked);
-            assert!(cups.include, "masked service must be included");
+            assert!(
+                cups.disposition.is_included(),
+                "masked service must be included"
+            );
         } else {
             panic!("expected SectionData::Services");
         }
@@ -1438,7 +1442,7 @@ mod tests {
             assert!(dropin.is_some(), "httpd.service drop-in must be captured");
             let dropin = dropin.unwrap();
             assert!(dropin.content.contains("Restart=always"));
-            assert!(dropin.include);
+            assert!(dropin.disposition.is_included());
         } else {
             panic!("expected SectionData::Services");
         }

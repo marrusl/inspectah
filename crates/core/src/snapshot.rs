@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -127,6 +127,7 @@ mod tests {
     use crate::baseline::{
         BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
     };
+    use crate::types::FindingKind;
     use crate::types::rpm::{PackageEntry, PackageState};
 
     #[test]
@@ -148,7 +149,7 @@ mod tests {
             packages_added: vec![PackageEntry {
                 name: "httpd".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -192,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 21, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 22, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

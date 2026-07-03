@@ -144,6 +144,7 @@ pub fn compute_tarball_hash(tarball: &Path) -> Result<ContentHash, std::io::Erro
 mod tests {
     use super::*;
     use crate::types::{ItemId, ViewDirective};
+    use inspectah_core::types::FindingKind;
 
     /// Helper: write a tiny tarball so compute_tarball_hash works.
     fn write_dummy_tarball(path: &Path) {

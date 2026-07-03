@@ -1,5 +1,6 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, QuadletUnit};
 use inspectah_core::types::nonrpm::{
@@ -24,7 +25,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -32,7 +33,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -42,7 +43,7 @@ fn test_snapshot() -> InspectionSnapshot {
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -219,7 +220,7 @@ fn export_snapshot_reflects_refinements() {
         .find(|p| p.name == "httpd")
         .unwrap();
     assert!(
-        !httpd.include,
+        !httpd.disposition.is_included(),
         "httpd must be excluded in exported snapshot"
     );
 
@@ -231,7 +232,7 @@ fn export_snapshot_reflects_refinements() {
         .iter()
         .find(|p| p.name == "vim")
         .unwrap();
-    assert!(vim.include, "vim must remain included");
+    assert!(vim.disposition.is_included(), "vim must remain included");
 }
 
 #[test]
@@ -288,7 +289,7 @@ fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -296,7 +297,7 @@ fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
                 arch: "x86_64".into(),
                 state: PackageState::LocalInstall,
                 source_repo: String::new(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
             PackageEntry {
@@ -304,7 +305,7 @@ fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: String::new(),
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
         ],
@@ -445,9 +446,11 @@ fn reimport_is_clean_and_coherent() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap()
-        .include;
+        .disposition
+        .is_included();
     assert_eq!(
-        view_httpd.entry.include, proj_httpd,
+        view_httpd.entry.disposition.is_included(),
+        proj_httpd,
         "view and projected snapshot must agree"
     );
 }
@@ -459,7 +462,7 @@ fn export_excludes_extra_config_tree_artifacts() {
         quadlet_units: vec![QuadletUnit {
             name: "myapp.container".into(),
             content: "[Container]\nImage=registry.example.com/myapp:latest\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
@@ -555,7 +558,7 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -563,7 +566,7 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -571,7 +574,7 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -669,7 +672,7 @@ fn export_includes_language_packages_root() {
             name: "myapp".into(),
             method: METHOD_NPM_LOCKFILE.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -710,7 +713,7 @@ fn export_excludes_language_packages_when_none_included() {
             name: "venv".into(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: "medium".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -746,7 +749,7 @@ fn export_redacts_manifest_files_when_snapshot_redacted() {
             name: "venv".into(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -801,7 +804,7 @@ fn export_redacts_manifest_files_in_snapshot_json() {
             name: "venv".into(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -856,7 +859,7 @@ fn export_preserves_manifest_files_when_unredacted() {
             name: "venv".into(),
             method: METHOD_PYTHON_VENV.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -901,7 +904,7 @@ fn export_redacts_package_json_registry_auth() {
             name: "myapp".into(),
             method: METHOD_NPM_LOCKFILE.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -943,7 +946,7 @@ fn export_redacts_gemfile_source_auth() {
             name: "railsapp".into(),
             method: METHOD_GEM_LOCKFILE.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -999,7 +1002,7 @@ fn export_redacts_package_lock_json_resolved_auth() {
             name: "webapp".into(),
             method: METHOD_NPM_LOCKFILE.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -1053,7 +1056,7 @@ fn export_redacts_gemfile_lock_auth() {
             name: "railsapp".into(),
             method: METHOD_GEM_LOCKFILE.into(),
             confidence: "high".into(),
-            include: true,
+            disposition: FindingKind::included(),
             manifest_files: manifests,
             ..Default::default()
         }],
@@ -1104,7 +1107,7 @@ fn export_allowlist_includes_unmanaged_root() {
             path: "/opt/myapp/server".into(),
             size: 1024,
             file_type: FileType::ElfBinary,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         total_size: 1024,
@@ -1157,14 +1160,14 @@ fn export_prunes_excluded_unmanaged_files() {
                 path: "/opt/app/included".into(),
                 size: 512,
                 file_type: FileType::DataFile,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             UnmanagedFile {
                 path: "/opt/app/excluded".into(),
                 size: 256,
                 file_type: FileType::DataFile,
-                include: false,
+                disposition: FindingKind::excluded(),
                 ..Default::default()
             },
         ],
@@ -1220,7 +1223,7 @@ fn export_allowlist_includes_repoless_packages_root() {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: String::new(),
-            include: true,
+            disposition: FindingKind::included(),
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
@@ -1281,7 +1284,7 @@ fn export_includes_uploaded_rpms() {
             release: "1.el9".into(),
             arch: "x86_64".into(),
             source_repo: String::new(),
-            include: true,
+            disposition: FindingKind::included(),
             repoless_cached: true,
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
@@ -1331,7 +1334,7 @@ fn export_merges_cached_and_uploaded_rpms() {
                 release: "1.el9".into(),
                 arch: "x86_64".into(),
                 source_repo: String::new(),
-                include: true,
+                disposition: FindingKind::included(),
                 repoless_cached: true,
                 repoless_annotation: "No repo source — cached RPM bundled".into(),
                 ..Default::default()
@@ -1342,7 +1345,7 @@ fn export_merges_cached_and_uploaded_rpms() {
                 release: "1.el9".into(),
                 arch: "x86_64".into(),
                 source_repo: String::new(),
-                include: true,
+                disposition: FindingKind::included(),
                 repoless_cached: true, // set by mark_uploaded_rpm after upload
                 repoless_annotation: "No repo source — cached RPM bundled".into(),
                 ..Default::default()
@@ -1407,7 +1410,7 @@ fn export_includes_compose_files() {
         compose_files: vec![ComposeFile {
             path: "opt/myapp/docker-compose.yml".to_string(),
             raw_content: Some("services:\n  web:\n    image: nginx\n".to_string()),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()
@@ -1437,7 +1440,7 @@ fn export_redacts_compose_secrets() {
         compose_files: vec![ComposeFile {
             path: "opt/db/docker-compose.yml".to_string(),
             raw_content: Some(yaml.to_string()),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         ..Default::default()

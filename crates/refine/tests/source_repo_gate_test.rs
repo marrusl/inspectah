@@ -1,5 +1,6 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::TriageBucket;
@@ -14,7 +15,7 @@ fn test_source_repo_proof_rust_collector_path() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -22,7 +23,7 @@ fn test_source_repo_proof_rust_collector_path() {
                 arch: "noarch".into(),
                 state: PackageState::Added,
                 source_repo: "epel".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -30,7 +31,7 @@ fn test_source_repo_proof_rust_collector_path() {
                 arch: "x86_64".into(),
                 state: PackageState::LocalInstall,
                 source_repo: "".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],

@@ -1,4 +1,5 @@
 use inspectah_core::traits::executor::Executor;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::RepoFile;
 use std::path::Path;
 
@@ -70,7 +71,7 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
             path: path_str,
             content,
             is_default_repo: is_default,
-            include: !is_default,
+            disposition: FindingKind::from_bool(!is_default),
             locked: false,
             aggregate: None,
         });
@@ -130,7 +131,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                     path: key_path.to_string(),
                     content,
                     is_default_repo: false,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
                 });
@@ -148,7 +149,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                         key_path
                     ),
                     is_default_repo: false,
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     locked: false,
                     aggregate: None,
                 });
@@ -270,7 +271,7 @@ mod tests {
         );
         // Should be excluded from inclusion
         assert!(
-            !keys[0].include,
+            !keys[0].disposition.is_included(),
             "non-PGP key file must not be included in output"
         );
     }
@@ -284,7 +285,10 @@ mod tests {
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 1);
         assert!(keys[0].content.starts_with("-----BEGIN PGP"));
-        assert!(keys[0].include, "valid PGP key must be included");
+        assert!(
+            keys[0].disposition.is_included(),
+            "valid PGP key must be included"
+        );
     }
 
     #[test]
@@ -297,10 +301,10 @@ mod tests {
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 2);
         // First key is valid
-        assert!(keys[0].include);
+        assert!(keys[0].disposition.is_included());
         assert!(keys[0].content.contains("BEGIN PGP"));
         // Second key is redacted
-        assert!(!keys[1].include);
+        assert!(!keys[1].disposition.is_included());
         assert!(keys[1].content.contains("REDACTED"));
     }
 

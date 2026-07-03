@@ -11,6 +11,7 @@
 //! Tests 14–17: Kickstart renderer
 //! Test  18:    Readme renderer
 //! Tests 19–20: Cross-cutting (empty/degraded)
+use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
@@ -34,7 +35,7 @@ fn snapshot_with_firewall() -> InspectionSnapshot {
                 path: "etc/firewalld/zones/public.xml".into(),
                 name: "public".into(),
                 content: "<zone><short>Public</short></zone>".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -42,7 +43,7 @@ fn snapshot_with_firewall() -> InspectionSnapshot {
                 path: "etc/firewalld/zones/internal.xml".into(),
                 name: "internal".into(),
                 content: "<zone><short>Internal</short></zone>".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -79,14 +80,14 @@ fn snapshot_with_quadlets() -> InspectionSnapshot {
             QuadletUnit {
                 name: "webapp.container".into(),
                 content: "[Container]\nImage=quay.io/myorg/webapp:latest\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
             QuadletUnit {
                 name: "db.volume".into(),
                 content: "[Volume]\nDevice=tmpfs\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             },
@@ -101,7 +102,7 @@ fn snapshot_with_compose_only() -> InspectionSnapshot {
     snap.containers = Some(ContainerSection {
         compose_files: vec![ComposeFile {
             path: "/opt/app/docker-compose.yml".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -117,7 +118,7 @@ fn snapshot_with_flatpaks() -> InspectionSnapshot {
             app_id: "org.mozilla.firefox".into(),
             remote: "flathub".into(),
             branch: "stable".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
@@ -211,13 +212,13 @@ fn snapshot_with_quadlets_and_compose() -> InspectionSnapshot {
         quadlet_units: vec![QuadletUnit {
             name: "app.container".into(),
             content: "[Container]\nImage=registry.io/app:v1\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],
         compose_files: vec![ComposeFile {
             path: "/opt/stack/docker-compose.yml".into(),
-            include: true,
+            disposition: FindingKind::included(),
             locked: false,
             ..Default::default()
         }],

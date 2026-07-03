@@ -1,3 +1,4 @@
+use inspectah_core::types::FindingKind;
 mod helpers;
 
 use inspectah_core::baseline::BaselineData;
@@ -20,7 +21,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -28,7 +29,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -36,7 +37,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 arch: "i686".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -46,7 +47,7 @@ fn test_snapshot() -> InspectionSnapshot {
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     });
@@ -272,8 +273,8 @@ fn multiarch_targeting() {
         .find(|p| p.entry.name == "glibc" && p.entry.arch == "i686")
         .unwrap();
 
-    assert!(glibc_x86.entry.include);
-    assert!(!glibc_i686.entry.include);
+    assert!(glibc_x86.entry.disposition.is_included());
+    assert!(!glibc_i686.entry.disposition.is_included());
 }
 
 #[test]
@@ -490,7 +491,7 @@ fn test_non_leaf_tier2_excluded_from_view() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -498,7 +499,7 @@ fn test_non_leaf_tier2_excluded_from_view() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -528,7 +529,7 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -536,7 +537,7 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: String::new(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -554,7 +555,7 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
         .expect("needs-review package must stay visible");
 
     assert!(
-        !mystery.entry.include,
+        !mystery.entry.disposition.is_included(),
         "needs-review package stays excluded by default"
     );
     assert_eq!(view.stats.total_packages(), 2);
@@ -574,7 +575,7 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -582,7 +583,7 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -617,7 +618,7 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
         .iter()
         .find(|pkg| pkg.entry.name == "apr" && pkg.entry.arch == "x86_64")
         .expect("manually included non-leaf package must stay visible");
-    assert!(apr.entry.include);
+    assert!(apr.entry.disposition.is_included());
 }
 
 #[test]
@@ -630,7 +631,7 @@ fn test_leaf_data_unavailable_shows_all_packages_in_view() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -638,7 +639,7 @@ fn test_leaf_data_unavailable_shows_all_packages_in_view() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -663,7 +664,7 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             PackageEntry {
@@ -671,7 +672,7 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
                 arch: "i686".into(),
                 state: PackageState::Added,
                 source_repo: "baseos".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
         ],
@@ -719,7 +720,7 @@ fn test_aggregate_snapshot_skips_leaf_only_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 aggregate: Some(aggregate(3, 5, &["host-a", "host-b", "host-c"])),
                 ..Default::default()
             },
@@ -728,7 +729,7 @@ fn test_aggregate_snapshot_skips_leaf_only_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 aggregate: Some(aggregate(2, 5, &["host-d", "host-e"])),
                 ..Default::default()
             },
@@ -776,7 +777,7 @@ fn test_aggregate_snapshot_preview_skips_leaf_only_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 aggregate: Some(aggregate(3, 5, &["host-a", "host-b", "host-c"])),
                 ..Default::default()
             },
@@ -785,7 +786,7 @@ fn test_aggregate_snapshot_preview_skips_leaf_only_filter() {
                 arch: "x86_64".into(),
                 state: PackageState::Added,
                 source_repo: "appstream".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 aggregate: Some(aggregate(2, 5, &["host-d", "host-e"])),
                 ..Default::default()
             },
@@ -840,7 +841,7 @@ fn test_session_normalizes_at_construction() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "baseos".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         }],
         baseline_package_names: Some(vec!["glibc".into()]),
@@ -849,11 +850,13 @@ fn test_session_normalizes_at_construction() {
     let session = RefineSession::new(snap);
     let view = session.view();
     assert!(
-        view.packages[0].entry.include,
+        view.packages[0].entry.disposition.is_included(),
         "Tier 1 should be auto-included after normalization"
     );
     assert!(
-        session.snapshot().rpm.as_ref().unwrap().packages_added[0].include,
+        session.snapshot().rpm.as_ref().unwrap().packages_added[0]
+            .disposition
+            .is_included(),
         "Original snapshot must reflect normalized state"
     );
 }
@@ -868,7 +871,7 @@ fn test_session_preview_export_parity() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "appstream".into(),
-            include: false,
+            disposition: FindingKind::excluded(),
             ..Default::default()
         }],
         baseline_package_names: Some(vec![]),
@@ -876,7 +879,7 @@ fn test_session_preview_export_parity() {
     });
     let session = RefineSession::new(snap);
     assert!(
-        session.view().packages[0].entry.include,
+        session.view().packages[0].entry.disposition.is_included(),
         "View should show Tier 2 as included"
     );
     assert!(
@@ -886,7 +889,8 @@ fn test_session_preview_export_parity() {
             .as_ref()
             .unwrap()
             .packages_added[0]
-            .include,
+            .disposition
+            .is_included(),
         "Projected snapshot must agree with view"
     );
     assert!(
@@ -918,13 +922,13 @@ fn test_tier1_configs_not_in_containerfile() {
             ConfigFileEntry {
                 path: "/etc/default.conf".into(),
                 kind: ConfigFileKind::RpmOwnedDefault,
-                include: true,
+                disposition: FindingKind::included(),
                 ..Default::default()
             },
             ConfigFileEntry {
                 path: "/etc/custom.conf".into(),
                 kind: ConfigFileKind::Unowned,
-                include: true,
+                disposition: FindingKind::included(),
                 content: "custom content".into(),
                 ..Default::default()
             },
@@ -959,7 +963,7 @@ fn test_exclude_repo_cascades_packages_in_view() {
         .find(|p| p.entry.name == "epel-release")
         .unwrap();
     assert!(
-        !epel_pkg.entry.include,
+        !epel_pkg.entry.disposition.is_included(),
         "epel package must be excluded in view"
     );
 }
@@ -986,7 +990,7 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
         .find(|p| p.name == "epel-release")
         .unwrap();
     assert!(
-        !epel_pkg.include,
+        !epel_pkg.disposition.is_included(),
         "epel package must be excluded in projected snapshot"
     );
     let orig_pkg = session
@@ -998,7 +1002,10 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
         .iter()
         .find(|p| p.name == "epel-release")
         .unwrap();
-    assert!(orig_pkg.include, "original snapshot must be unchanged");
+    assert!(
+        orig_pkg.disposition.is_included(),
+        "original snapshot must be unchanged"
+    );
 }
 
 #[test]
@@ -1026,7 +1033,7 @@ fn test_exclude_repo_rejects_incomplete_provenance() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "no-repo-file".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         });
     let mut session = RefineSession::new(snap);
@@ -1080,7 +1087,7 @@ fn test_shared_repo_file_retained_until_last_section() {
         .find(|rf| rf.path.contains("custom-multi"))
         .unwrap();
     assert!(
-        repo_file.include,
+        repo_file.disposition.is_included(),
         "shared repo file must stay while custom-b is enabled"
     );
     let gpg = projected
@@ -1092,7 +1099,7 @@ fn test_shared_repo_file_retained_until_last_section() {
         .find(|k| k.path.contains("RPM-GPG-KEY-custom"))
         .unwrap();
     assert!(
-        gpg.include,
+        gpg.disposition.is_included(),
         "shared GPG key must stay while custom-b is enabled"
     );
 
@@ -1113,7 +1120,10 @@ fn test_shared_repo_file_retained_until_last_section() {
         .iter()
         .find(|k| k.path.contains("RPM-GPG-KEY-custom"))
         .unwrap();
-    assert!(!gpg2.include, "GPG key excluded once all sections excluded");
+    assert!(
+        !gpg2.disposition.is_included(),
+        "GPG key excluded once all sections excluded"
+    );
 }
 
 #[test]
@@ -1136,7 +1146,8 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
 
     session
@@ -1156,7 +1167,8 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
 
     session
@@ -1175,7 +1187,8 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
 
     session.undo().unwrap();
@@ -1187,7 +1200,8 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include,
+            .disposition
+            .is_included(),
         "per-package include is still active after undoing repo include"
     );
 }
@@ -1212,7 +1226,8 @@ fn test_exclude_repo_undo_redo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
     session.undo().unwrap();
     assert!(
@@ -1223,7 +1238,8 @@ fn test_exclude_repo_undo_redo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
     session.redo().unwrap();
     assert!(
@@ -1234,7 +1250,8 @@ fn test_exclude_repo_undo_redo() {
             .find(|p| p.entry.name == "epel-release")
             .unwrap()
             .entry
-            .include
+            .disposition
+            .is_included()
     );
 }
 
@@ -1249,13 +1266,13 @@ fn test_exclude_repo_case_insensitive() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "Epel-Testing".into(), // Mixed case
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         repo_files: vec![RepoFile {
             path: "/etc/yum.repos.d/epel-testing.repo".into(),
             content: "[epel-testing]\nname=EPEL Testing\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         baseline_package_names: Some(vec![]),
@@ -1281,7 +1298,7 @@ fn test_exclude_repo_case_insensitive() {
         .find(|p| p.name == "httpd")
         .unwrap();
     assert!(
-        !httpd.include,
+        !httpd.disposition.is_included(),
         "SetInclude(exclude repo) must match case-insensitively"
     );
 }
@@ -1296,13 +1313,13 @@ fn test_include_repo_case_insensitive() {
             arch: "x86_64".into(),
             state: PackageState::Added,
             source_repo: "Epel-Testing".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         repo_files: vec![RepoFile {
             path: "/etc/yum.repos.d/epel-testing.repo".into(),
             content: "[epel-testing]\nname=EPEL Testing\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL\n".into(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
         baseline_package_names: Some(vec![]),
@@ -1335,7 +1352,7 @@ fn test_include_repo_case_insensitive() {
         .find(|p| p.name == "nginx")
         .unwrap();
     assert!(
-        nginx.include,
+        nginx.disposition.is_included(),
         "SetInclude(include repo) must match case-insensitively after SetInclude(exclude repo)"
     );
 }

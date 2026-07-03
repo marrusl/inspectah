@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{
     AggregatePrevalence, AggregateSnapshotMeta, VariantSelection,
 };
@@ -359,7 +360,7 @@ fn aggregate_state_with_variants() -> Arc<AppState> {
                 path: "/etc/app/config.conf".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: VARIANT_A_CONTENT.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -374,7 +375,7 @@ fn aggregate_state_with_variants() -> Arc<AppState> {
                 path: "/etc/app/config.conf".into(),
                 kind: ConfigFileKind::RpmOwnedModified,
                 content: VARIANT_B_CONTENT.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -541,7 +542,7 @@ async fn aggregate_diff_422_binary() {
                 path: "/etc/binary.conf".into(),
                 kind: ConfigFileKind::Unowned,
                 content: binary_content.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -556,7 +557,7 @@ async fn aggregate_diff_422_binary() {
                 path: "/etc/binary.conf".into(),
                 kind: ConfigFileKind::Unowned,
                 content: text_content.into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -619,7 +620,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
                 path: "/etc/containers/systemd/app.container".into(),
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v1\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
@@ -634,7 +635,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
                 path: "/etc/containers/systemd/app.container".into(),
                 name: "app.container".into(),
                 content: "[Container]\nImage=quay.io/app:v2\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
@@ -656,9 +657,11 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
                 unit: "httpd.service".into(),
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nRestart=always\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Selected,
                 aggregate: Some(AggregatePrevalence {
                     count: 2,
@@ -671,9 +674,11 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
                 unit: "httpd.service".into(),
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 content: "[Service]\nRestart=on-failure\n".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
                 variant_selection: VariantSelection::Alternative,
                 aggregate: Some(AggregatePrevalence {
                     count: 1,
@@ -803,7 +808,7 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
                     arch: "x86_64".into(),
                     state: PackageState::Added,
                     source_repo: "appstream".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -812,7 +817,7 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
                     arch: "noarch".into(),
                     state: PackageState::Added,
                     source_repo: "epel".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -822,7 +827,7 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
                     state: PackageState::Added,
                     source_repo: nginx_repo.into(),
                     version: nginx_version.into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
@@ -832,14 +837,14 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
                     path: "/etc/yum.repos.d/centos.repo".into(),
                     content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
                         .into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },
                 RepoFile {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     content: "[epel]\nname=EPEL 9\n".into(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     ..Default::default()
                 },

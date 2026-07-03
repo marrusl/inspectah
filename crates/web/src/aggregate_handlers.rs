@@ -581,7 +581,7 @@ fn build_aggregate_sections(
                 });
                 AggregateItem {
                     item_id,
-                    include: pkg.entry.include,
+                    include: pkg.entry.disposition.is_included(),
                     locked: pkg.entry.locked,
                     attention_reason: None,
                     triage: build_triage_dto(&pkg.triage, fp, ctx),
@@ -657,7 +657,7 @@ fn build_aggregate_sections(
 
                 AggregateItem {
                     item_id,
-                    include: cfg.entry.include,
+                    include: cfg.entry.disposition.is_included(),
                     locked: cfg.entry.locked,
                     attention_reason: cfg.entry.attention_reason.clone(),
                     triage: build_triage_dto(&cfg.triage, fp, ctx),
@@ -693,7 +693,7 @@ fn build_aggregate_sections(
                 let fp = s.entry.aggregate.as_ref();
                 AggregateItem {
                     item_id,
-                    include: s.entry.include,
+                    include: s.entry.disposition.is_included(),
                     locked: s.entry.locked,
                     attention_reason: s.entry.attention_reason.clone(),
                     triage: build_triage_dto(&s.triage, fp, ctx),
@@ -752,7 +752,7 @@ fn build_aggregate_sections(
                 };
                 items.push(AggregateItem {
                     item_id,
-                    include: d.entry.include,
+                    include: d.entry.disposition.is_included(),
                     locked: d.entry.locked,
                     attention_reason: d.entry.attention_reason.clone(),
                     triage: build_triage_dto(&d.triage, fp, ctx),
@@ -822,7 +822,7 @@ fn build_aggregate_sections(
                 };
                 items.push(AggregateItem {
                     item_id,
-                    include: q.entry.include,
+                    include: q.entry.disposition.is_included(),
                     locked: q.entry.locked,
                     attention_reason: None,
                     triage: build_triage_dto(&q.triage, fp, ctx),
@@ -846,7 +846,7 @@ fn build_aggregate_sections(
             };
             items.push(AggregateItem {
                 item_id,
-                include: f.entry.include,
+                include: f.entry.disposition.is_included(),
                 locked: f.entry.locked,
                 attention_reason: None,
                 triage: build_triage_dto(&f.triage, None, ctx),
@@ -904,7 +904,7 @@ fn build_aggregate_sections(
 
             items.push(AggregateItem {
                 item_id,
-                include: representative.entry.include,
+                include: representative.entry.disposition.is_included(),
                 locked: representative.entry.locked,
                 attention_reason: None,
                 triage: build_triage_dto(&representative.triage, fp, ctx),
@@ -935,7 +935,7 @@ fn build_aggregate_sections(
         let tuned_include = snap
             .kernel_boot
             .as_ref()
-            .map(|kb| kb.tuned_include)
+            .map(|kb| kb.tuned_disposition.is_included())
             .unwrap_or(false);
         // Tuned is a scalar merged via most_prevalent_scalar; no per-item
         // AggregatePrevalence exists. Derive prevalence from tuned_include:
@@ -1087,7 +1087,7 @@ fn build_reference_sections(
                 };
                 items.push(AggregateItem {
                     item_id,
-                    include: c.include,
+                    include: c.disposition.is_included(),
                     locked: c.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
@@ -1122,7 +1122,7 @@ fn build_reference_sections(
             let fp = conn.aggregate.as_ref();
             items.push(AggregateItem {
                 item_id,
-                include: conn.include,
+                include: conn.disposition.is_included(),
                 locked: conn.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
@@ -1141,7 +1141,7 @@ fn build_reference_sections(
             let fp = zone.aggregate.as_ref();
             items.push(AggregateItem {
                 item_id,
-                include: zone.include,
+                include: zone.disposition.is_included(),
                 locked: zone.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
@@ -1170,7 +1170,7 @@ fn build_reference_sections(
                 let fp = entry.aggregate.as_ref();
                 AggregateItem {
                     item_id,
-                    include: entry.include,
+                    include: entry.disposition.is_included(),
                     locked: entry.locked,
                     attention_reason: entry.attention_reason.clone(),
                     triage: default_context_triage(fp, ctx),
@@ -1198,7 +1198,7 @@ fn build_reference_sections(
             let fp = cron.aggregate.as_ref();
             items.push(AggregateItem {
                 item_id,
-                include: cron.include,
+                include: cron.disposition.is_included(),
                 locked: cron.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
@@ -1217,7 +1217,7 @@ fn build_reference_sections(
             let fp = timer.aggregate.as_ref();
             items.push(AggregateItem {
                 item_id,
-                include: timer.include,
+                include: timer.disposition.is_included(),
                 locked: timer.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
@@ -1252,7 +1252,7 @@ fn build_reference_sections(
                 let fp = port.aggregate.as_ref();
                 AggregateItem {
                     item_id,
-                    include: port.include,
+                    include: port.disposition.is_included(),
                     locked: port.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
@@ -1281,7 +1281,7 @@ fn build_reference_sections(
             let fp = module.aggregate.as_ref();
             items.push(AggregateItem {
                 item_id,
-                include: module.include,
+                include: module.disposition.is_included(),
                 locked: module.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
@@ -1316,7 +1316,7 @@ fn build_reference_sections(
                 let fp = entry.aggregate.as_ref();
                 AggregateItem {
                     item_id,
-                    include: entry.include,
+                    include: entry.disposition.is_included(),
                     locked: entry.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
@@ -1372,7 +1372,7 @@ fn build_reference_sections(
 
                     AggregateItem {
                         item_id: item_id.clone(),
-                        include: entry.include,
+                        include: entry.disposition.is_included(),
                         locked: entry.locked,
                         attention_reason: None,
                         triage: default_context_triage(fp, ctx),
@@ -1433,7 +1433,7 @@ fn build_reference_sections(
 
                 AggregateItem {
                     item_id,
-                    include: f.include,
+                    include: f.disposition.is_included(),
                     locked: f.locked,
                     attention_reason: None,
                     triage: default_context_triage(fp, ctx),
@@ -1624,7 +1624,7 @@ fn build_language_package_variants(
                 hash,
                 hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
-                selected: entry.include,
+                selected: entry.disposition.is_included(),
             }
         })
         .collect();
@@ -1658,7 +1658,7 @@ fn build_language_package_variant_payload(
                 content_hash,
                 hosts: fp.map(|f| f.hosts.clone()).unwrap_or_default(),
                 host_count: fp.map(|f| f.count.max(0) as usize).unwrap_or(0),
-                selected: entry.include,
+                selected: entry.disposition.is_included(),
                 packages: entry
                     .packages
                     .iter()
@@ -2015,6 +2015,7 @@ fn build_sysctl_variants(entries: &[&inspectah_refine::types::RefinedSysctl]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind;
     use std::collections::{BTreeMap, HashMap};
 
     /// Aggregate handlers must read the stored `include` value from snapshot entries,
@@ -2030,7 +2031,7 @@ mod tests {
         // Build a snapshot with one NMConnection: include=true, prevalence=2/5.
         let conn = NMConnection {
             path: "/etc/NetworkManager/test.nmconnection".to_string(),
-            include: true, // stored value — should pass through
+            disposition: FindingKind::included(), // stored value — should pass through
             aggregate: Some(AggregatePrevalence {
                 count: 2,
                 total: 5,
@@ -2106,7 +2107,7 @@ mod tests {
             app_id: "org.gnome.Calculator".into(),
             origin: "flathub".into(),
             branch: "stable".into(),
-            include: true,
+            disposition: FindingKind::included(),
             remote: "flathub".into(),
             aggregate: Some(AggregatePrevalence {
                 count: 2,
@@ -2178,7 +2179,7 @@ mod tests {
             schema_version: 1,
             kernel_boot: Some(KernelBootSection {
                 tuned_active: "my-custom-profile".into(),
-                tuned_include: true,
+                tuned_disposition: FindingKind::included(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2225,7 +2226,7 @@ mod tests {
             schema_version: 1,
             kernel_boot: Some(KernelBootSection {
                 tuned_active: "my-custom-profile".into(),
-                tuned_include: false,
+                tuned_disposition: FindingKind::excluded(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2269,7 +2270,7 @@ mod tests {
                     path: "/opt/myapp/venv".to_string(),
                     method: "venv".to_string(),
                     confidence: "high".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
                         total: 3,
@@ -2325,7 +2326,7 @@ mod tests {
                     path: "/opt/myapp/venv".to_string(),
                     method: "venv".to_string(),
                     confidence: "high".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
                         total: 3,
@@ -2387,7 +2388,7 @@ mod tests {
                     path: "/opt/stale/venv".to_string(),
                     method: "pip list".to_string(),
                     confidence: "high".to_string(),
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     aggregate: Some(AggregatePrevalence {
                         count: 1,
                         total: 3,
@@ -2449,7 +2450,7 @@ mod tests {
                     path: "/usr/local/bin/custom".to_string(),
                     method: "binary".to_string(),
                     confidence: "medium".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
                         total: 3,
@@ -2499,7 +2500,7 @@ mod tests {
                 items: vec![UnmanagedFile {
                     path: "/opt/splunk/bin/splunkd".to_string(),
                     size: 52_000_000,
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 2,
                         total: 3,
@@ -2552,7 +2553,7 @@ mod tests {
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 10_000,
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 2,
                         total: 2,
@@ -2620,7 +2621,7 @@ mod tests {
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 10_000,
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     aggregate: Some(AggregatePrevalence {
                         count: 1,
                         total: 3,
@@ -2694,7 +2695,7 @@ mod tests {
                     path: "/opt/myapp/venv".to_string(),
                     method: "venv".to_string(),
                     confidence: "high".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     packages: vec![
                         LanguagePackage {
                             name: "flask".to_string(),
@@ -2789,7 +2790,7 @@ mod tests {
                         writable_mount: true,
                         service_working_dir: false,
                     },
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
                         total: 3,
@@ -2875,7 +2876,7 @@ mod tests {
                     path: "/opt/tool".to_string(),
                     method: "binary-detection".to_string(),
                     confidence: "medium".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     aggregate: Some(AggregatePrevalence {
                         count: 2,
                         total: 2,
@@ -2942,7 +2943,7 @@ mod tests {
                         path: "/opt/app/venv".to_string(),
                         method: "venv".to_string(),
                         confidence: "high".to_string(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         packages: vec![
                             LanguagePackage {
                                 name: "flask".to_string(),
@@ -2971,7 +2972,7 @@ mod tests {
                         path: "/opt/app/venv".to_string(),
                         method: "venv".to_string(),
                         confidence: "high".to_string(),
-                        include: true,
+                        disposition: FindingKind::included(),
                         packages: vec![
                             LanguagePackage {
                                 name: "flask".to_string(),
@@ -3082,7 +3083,7 @@ mod tests {
                     path: "/opt/app/venv".to_string(),
                     method: "venv".to_string(),
                     confidence: "high".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     packages: vec![LanguagePackage {
                         name: "flask".to_string(),
                         version: "2.3.0".to_string(),
@@ -3146,7 +3147,7 @@ mod tests {
                     UnmanagedFile {
                         path: "/opt/app/server".to_string(),
                         size: 1_000_000,
-                        include: true,
+                        disposition: FindingKind::included(),
                         content_hash: "aaa111".to_string(),
                         aggregate: Some(AggregatePrevalence {
                             count: 2,
@@ -3164,7 +3165,7 @@ mod tests {
                     UnmanagedFile {
                         path: "/opt/app/server".to_string(),
                         size: 1_200_000,
-                        include: true,
+                        disposition: FindingKind::included(),
                         content_hash: "bbb222".to_string(),
                         aggregate: Some(AggregatePrevalence {
                             count: 1,
@@ -3260,7 +3261,7 @@ mod tests {
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 1_000_000,
-                    include: true,
+                    disposition: FindingKind::included(),
                     content_hash: "aaa111".to_string(),
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
@@ -3325,7 +3326,7 @@ mod tests {
                     path: "/usr/lib/python3.9/site-packages".to_string(),
                     method: "pip dist-info".to_string(),
                     confidence: "medium".to_string(),
-                    include: true,
+                    disposition: FindingKind::included(),
                     packages: vec![LanguagePackage {
                         name: "setuptools".to_string(),
                         version: "53.0.0".to_string(),

@@ -1366,6 +1366,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::FindingKind as SnapshotFindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
     use inspectah_core::types::users::UserGroupSection;
 
@@ -1553,7 +1554,7 @@ mod tests {
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/custom.repo".into(),
                 content: "password = s3cretP@ss\nbaseurl=https://repo.example.com/\n".into(),
-                include: true,
+                disposition: SnapshotFindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1582,7 +1583,7 @@ mod tests {
             gpg_keys: vec![RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom".into(),
                 content: "password = hunter2\n".into(),
-                include: true,
+                disposition: SnapshotFindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()

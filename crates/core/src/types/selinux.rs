@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +10,8 @@ pub struct SelinuxPortLabel {
     pub port: String,
     #[serde(default, rename = "type")]
     pub label_type: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -78,7 +79,7 @@ mod tests {
                 protocol: "tcp".to_string(),
                 port: "8080".to_string(),
                 label_type: "http_port_t".to_string(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             }],

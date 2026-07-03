@@ -1,3 +1,4 @@
+use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +12,8 @@ pub struct NMConnection {
     pub method: String,
     #[serde(default, rename = "type")]
     pub conn_type: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -24,7 +25,7 @@ pub struct NMConnection {
 impl Default for NMConnection {
     fn default() -> Self {
         Self {
-            include: true,
+            disposition: FindingKind::included(),
             path: Default::default(),
             name: Default::default(),
             method: Default::default(),
@@ -50,8 +51,8 @@ pub struct FirewallZone {
     pub ports: Vec<String>,
     #[serde(default)]
     pub rich_rules: Vec<String>,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
@@ -69,8 +70,8 @@ pub struct FirewallDirectRule {
     pub priority: String,
     #[serde(default)]
     pub args: String,
-    #[serde(default = "crate::default_true")]
-    pub include: bool,
+    #[serde(default)]
+    pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
 }

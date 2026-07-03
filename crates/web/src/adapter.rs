@@ -80,7 +80,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .map(|s| ServiceDecisionDto {
             unit: s.entry.unit.clone(),
             triage: s.triage.clone(),
-            include: s.entry.include,
+            include: s.entry.disposition.is_included(),
             locked: s.entry.locked,
             attention_reason: s.entry.attention_reason.clone(),
             owning_package: s.entry.owning_package.clone(),
@@ -96,7 +96,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             unit: d.entry.unit.clone(),
             path: d.entry.path.clone(),
             triage: d.triage.clone(),
-            include: d.entry.include,
+            include: d.entry.disposition.is_included(),
             locked: d.entry.locked,
             attention_reason: d.entry.attention_reason.clone(),
         })
@@ -117,7 +117,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 name: q.entry.name.clone(),
                 image: q.entry.image.clone(),
                 triage: q.triage.clone(),
-                include: q.entry.include,
+                include: q.entry.disposition.is_included(),
                 locked: q.entry.locked,
                 content,
             }
@@ -132,7 +132,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             remote: f.entry.remote.clone(),
             branch: f.entry.branch.clone(),
             triage: f.triage.clone(),
-            include: f.entry.include,
+            include: f.entry.disposition.is_included(),
             locked: f.entry.locked,
             lifecycle: "first_boot".to_string(),
         })
@@ -148,7 +148,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             default: s.entry.default.clone(),
             source: s.entry.source.clone(),
             triage: s.triage.clone(),
-            include: s.entry.include,
+            include: s.entry.disposition.is_included(),
             locked: s.entry.locked,
         })
         .collect();
@@ -331,7 +331,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                         packages: item.packages.iter().map(|p| p.name.clone()).collect(),
                         confidence: item.confidence.clone(),
                         manifest_basis,
-                        include: item.include,
+                        include: item.disposition.is_included(),
                     }
                 })
                 .collect()
@@ -357,7 +357,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                     path: file.path.clone(),
                     size: file.size,
                     is_var_path: file.under_var,
-                    include: file.include,
+                    include: file.disposition.is_included(),
                     provenance: ProvenanceSignalsDto {
                         file_type: file_type_str(&file.file_type),
                         last_modified: file.provenance.last_modified,
@@ -1306,6 +1306,7 @@ pub fn build_web_sections(ref_proj: &ReferenceProjection) -> Vec<ReferenceSectio
 mod tests {
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::FindingKind;
 
     #[test]
     fn build_web_view_empty_snapshot() {
@@ -1334,7 +1335,7 @@ mod tests {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 ..Default::default()
             }],
@@ -1421,7 +1422,7 @@ mod tests {
                     name: "gcc".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -1430,7 +1431,7 @@ mod tests {
                     name: "make".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -1484,7 +1485,7 @@ mod tests {
                     name: "httpd".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -1493,7 +1494,7 @@ mod tests {
                     name: "mod_ssl".into(),
                     arch: "x86_64".into(),
                     state: PackageState::Added,
-                    include: true,
+                    disposition: FindingKind::included(),
                     locked: false,
                     source_repo: "appstream".into(),
                     ..Default::default()
@@ -1646,7 +1647,7 @@ mod tests {
                 name: "app-venv".into(),
                 method: "pip-freeze".into(),
                 confidence: "high".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 lang: "pip".into(),
                 packages: vec![LanguagePackage {
                     name: "flask".into(),
@@ -1693,7 +1694,7 @@ mod tests {
                         writable_mount: false,
                         service_working_dir: false,
                     },
-                    include: true,
+                    disposition: FindingKind::included(),
                     under_var: false,
                     ..Default::default()
                 },
@@ -1711,7 +1712,7 @@ mod tests {
                         writable_mount: false,
                         service_working_dir: false,
                     },
-                    include: false,
+                    disposition: FindingKind::excluded(),
                     under_var: false,
                     ..Default::default()
                 },

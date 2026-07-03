@@ -3,6 +3,7 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::kernelboot::{
     ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
@@ -137,7 +138,7 @@ impl Inspector for KernelbootInspector {
                 .map_or_else(|_| Vec::new(), |v| v.clone()),
             loaded_modules,
             non_default_modules: Vec::new(),
-            tuned_include: !tuned_active.is_empty(),
+            tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
             tuned_active,
             tuned_custom_profiles: Vec::new(),
             locale,
@@ -232,7 +233,7 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
                 name: parts[0].to_string(),
                 size: parts[1].to_string(),
                 used_by,
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             });
@@ -286,7 +287,7 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
                 runtime: runtime_val.to_string(),
                 default: file_val.clone(),
                 source: source.clone(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
                 aggregate: None,
             });

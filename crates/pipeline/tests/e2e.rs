@@ -2,6 +2,7 @@
 //!
 //! Uses MockExecutor exclusively — these tests run offline on any platform.
 //! Proves RPM-section correctness via round-trip validation.
+use inspectah_core::types::FindingKind;
 
 use std::sync::atomic::AtomicBool;
 
@@ -241,7 +242,7 @@ fn test_no_secrets_in_any_artifact() {
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".to_string(),
             content: secret.to_string(),
-            include: true,
+            disposition: FindingKind::included(),
             ..Default::default()
         }],
     };
