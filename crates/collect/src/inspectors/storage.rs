@@ -273,53 +273,86 @@ fn collect_lvs(exec: &dyn Executor) -> Result<Vec<LvmVolume>, String> {
         .collect())
 }
 
+/// Check if a path (or any parent up to /var) has tmpfiles.d backing.
+///
+/// Walks up from the exact path toward /var, checking each ancestor for
+/// a matching tmpfiles.d config entry. This catches cases where a
+/// tmpfiles.d entry creates a parent directory that implicitly covers
+/// subdirectories.
+fn check_tmpfiles_backing(exec: &dyn Executor, path: &str) -> bool {
+    let mut current = path.to_string();
+    loop {
+        let check = exec.run(
+            "grep",
+            &[
+                "-r",
+                "--include=*.conf",
+                "-l",
+                &current,
+                "/etc/tmpfiles.d/",
+                "/usr/lib/tmpfiles.d/",
+            ],
+        );
+        if check.exit_code == 0 && !check.stdout.trim().is_empty() {
+            return true;
+        }
+        match current.rsplit_once('/') {
+            Some((parent, _)) if parent.starts_with("/var") && parent != "/var" => {
+                current = parent.to_string();
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 /// Determine the backing mechanism for a /var directory.
 ///
-/// Checks, in order: tmpfiles.d configs, systemd directory directives
-/// (StateDirectory, CacheDirectory, LogsDirectory), RPM ownership.
-/// Falls back to `Unbacked` if no backing is found.
+/// Checks, in order: tmpfiles.d configs (including parent directories),
+/// systemd directory directives (StateDirectory, CacheDirectory,
+/// LogsDirectory), RPM ownership. Falls back to `Unbacked` if no
+/// backing is found.
 fn detect_var_dir_backing(
     exec: &dyn Executor,
     path: &str,
     rpm_owned: &HashSet<String>,
 ) -> VarDirBacking {
-    // Check tmpfiles.d (both /etc and /usr/lib)
-    let tmpfiles_check = exec.run(
-        "grep",
-        &[
-            "-r",
-            "--include=*.conf",
-            "-l",
-            path,
-            "/etc/tmpfiles.d/",
-            "/usr/lib/tmpfiles.d/",
-        ],
-    );
-    if tmpfiles_check.exit_code == 0 && !tmpfiles_check.stdout.trim().is_empty() {
+    // Check tmpfiles.d (both /etc and /usr/lib), walking up parents
+    if check_tmpfiles_backing(exec, path) {
         return VarDirBacking::Tmpfiles;
     }
 
-    // Check all three systemd directory directives
-    let dir_name = path.rsplit('/').next().unwrap_or("");
-    for (directive, backing) in [
-        ("StateDirectory", VarDirBacking::StateDirectory),
-        ("CacheDirectory", VarDirBacking::CacheDirectory),
-        ("LogsDirectory", VarDirBacking::LogsDirectory),
+    // Check systemd directory directives using the relative path
+    // under each directive's base prefix.
+    for (prefix, directive, backing) in [
+        ("/var/lib/", "StateDirectory", VarDirBacking::StateDirectory),
+        (
+            "/var/cache/",
+            "CacheDirectory",
+            VarDirBacking::CacheDirectory,
+        ),
+        ("/var/log/", "LogsDirectory", VarDirBacking::LogsDirectory),
     ] {
-        let grep = exec.run(
-            "grep",
-            &[
-                "-r",
-                "--include=*.service",
-                "--include=*.socket",
-                "-l",
-                &format!("{}={}", directive, dir_name),
-                "/usr/lib/systemd/system/",
-                "/etc/systemd/system/",
-            ],
-        );
-        if grep.exit_code == 0 && !grep.stdout.trim().is_empty() {
-            return backing;
+        if let Some(relative) = path.strip_prefix(prefix) {
+            if relative.is_empty() {
+                continue;
+            }
+            let pattern = format!(r"{}\s*=\s*{}", directive, relative);
+            let grep = exec.run(
+                "grep",
+                &[
+                    "-rE",
+                    "--include=*.service",
+                    "--include=*.socket",
+                    "-l",
+                    &pattern,
+                    "/usr/lib/systemd/system/",
+                    "/etc/systemd/system/",
+                ],
+            );
+            if grep.exit_code == 0 && !grep.stdout.trim().is_empty() {
+                return backing;
+            }
         }
     }
 
@@ -334,28 +367,149 @@ fn detect_var_dir_backing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::mock::MockExecutor;
+    use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::types::storage::VarDirectory;
 
-    #[test]
-    fn test_unbacked_var_dir_stays_actionable() {
-        // Unbacked dirs keep Actionable disposition for Containerfile
-        let dir = VarDirectory {
-            path: "/var/lib/pgsql/data".into(),
-            backing: Some(VarDirBacking::Unbacked),
-            ..Default::default()
-        };
-        // VarDirectory doesn't have disposition, so this test verifies
-        // the advisory is separate from the directory entries
-        assert_eq!(dir.backing, Some(VarDirBacking::Unbacked));
+    fn grep_success(stdout: &str) -> ExecResult {
+        ExecResult {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        }
     }
 
     #[test]
-    fn test_grouped_advisory_created_for_unbacked() {
+    fn tmpfiles_direct_match() {
+        let exec = MockExecutor::new().with_command(
+            "grep -r --include=*.conf -l /var/lib/pgsql/data /etc/tmpfiles.d/ /usr/lib/tmpfiles.d/",
+            grep_success("/etc/tmpfiles.d/pgsql.conf\n"),
+        );
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/lib/pgsql/data", &rpm_owned);
+        assert_eq!(result, VarDirBacking::Tmpfiles);
+    }
+
+    #[test]
+    fn tmpfiles_parent_directory_fallback() {
+        // Only the parent path has a tmpfiles.d entry, not the exact path.
+        // The walker should find the parent and return Tmpfiles.
+        let exec = MockExecutor::new().with_command(
+            "grep -r --include=*.conf -l /var/lib/pgsql /etc/tmpfiles.d/ /usr/lib/tmpfiles.d/",
+            grep_success("/usr/lib/tmpfiles.d/pgsql.conf\n"),
+        );
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/lib/pgsql/data", &rpm_owned);
+        assert_eq!(result, VarDirBacking::Tmpfiles);
+    }
+
+    #[test]
+    fn state_directory_uses_relative_path() {
+        // /var/lib/postgresql/data should search for StateDirectory=postgresql/data
+        // (not just "data" which the old rsplit('/').next() code produced).
+        let exec = MockExecutor::new().with_command(
+            r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*postgresql/data /usr/lib/systemd/system/ /etc/systemd/system/",
+            grep_success("/usr/lib/systemd/system/postgresql.service\n"),
+        );
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/lib/postgresql/data", &rpm_owned);
+        assert_eq!(result, VarDirBacking::StateDirectory);
+    }
+
+    #[test]
+    fn cache_directory_detected() {
+        let exec = MockExecutor::new().with_command(
+            r"grep -rE --include=*.service --include=*.socket -l CacheDirectory\s*=\s*httpd /usr/lib/systemd/system/ /etc/systemd/system/",
+            grep_success("/usr/lib/systemd/system/httpd.service\n"),
+        );
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/cache/httpd", &rpm_owned);
+        assert_eq!(result, VarDirBacking::CacheDirectory);
+    }
+
+    #[test]
+    fn logs_directory_detected() {
+        let exec = MockExecutor::new().with_command(
+            r"grep -rE --include=*.service --include=*.socket -l LogsDirectory\s*=\s*nginx /usr/lib/systemd/system/ /etc/systemd/system/",
+            grep_success("/usr/lib/systemd/system/nginx.service\n"),
+        );
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/log/nginx", &rpm_owned);
+        assert_eq!(result, VarDirBacking::LogsDirectory);
+    }
+
+    #[test]
+    fn rpm_owned_backing() {
+        let mut rpm_owned = HashSet::new();
+        rpm_owned.insert("/var/lib/rpm".to_string());
+        let exec = MockExecutor::new();
+        let result = detect_var_dir_backing(&exec, "/var/lib/rpm", &rpm_owned);
+        assert_eq!(result, VarDirBacking::RpmOwned);
+    }
+
+    #[test]
+    fn unbacked_fallback() {
+        let exec = MockExecutor::new();
+        let rpm_owned = HashSet::new();
+        let result = detect_var_dir_backing(&exec, "/var/lib/custom-app/data", &rpm_owned);
+        assert_eq!(result, VarDirBacking::Unbacked);
+    }
+
+    #[test]
+    fn unbacked_var_dir_in_advisory() {
+        let section = StorageSection {
+            var_directories: vec![VarDirectory {
+                path: "/var/lib/pgsql/data".into(),
+                backing: Some(VarDirBacking::Unbacked),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let unbacked: Vec<String> = section
+            .var_directories
+            .iter()
+            .filter(|d| d.backing == Some(VarDirBacking::Unbacked))
+            .map(|d| d.path.clone())
+            .collect();
+
+        assert!(!unbacked.is_empty());
+        assert!(unbacked.contains(&"/var/lib/pgsql/data".to_string()));
+
         let advisory = UnbackedVarAdvisory {
             disposition: FindingKind::advisory(AdvisoryType::UnbackedVarDir, "test rationale"),
-            paths: vec!["/var/lib/pgsql/data".into()],
+            paths: unbacked,
         };
         assert!(advisory.disposition.is_advisory());
-        assert_eq!(advisory.paths.len(), 1);
+    }
+
+    #[test]
+    fn backed_tmpfiles_not_in_advisory() {
+        let section = StorageSection {
+            var_directories: vec![
+                VarDirectory {
+                    path: "/var/lib/backed".into(),
+                    backing: Some(VarDirBacking::Tmpfiles),
+                    ..Default::default()
+                },
+                VarDirectory {
+                    path: "/var/lib/unbacked".into(),
+                    backing: Some(VarDirBacking::Unbacked),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let unbacked: Vec<String> = section
+            .var_directories
+            .iter()
+            .filter(|d| d.backing == Some(VarDirBacking::Unbacked))
+            .map(|d| d.path.clone())
+            .collect();
+
+        assert_eq!(unbacked.len(), 1);
+        assert_eq!(unbacked[0], "/var/lib/unbacked");
+        assert!(!unbacked.contains(&"/var/lib/backed".to_string()));
     }
 }
