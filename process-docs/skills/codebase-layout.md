@@ -59,6 +59,8 @@ Each module defines the data model for a snapshot section:
 - `repo.rs` — Repository definitions
 - `subscription.rs` — RHSM entitlement types
 - `system.rs`, `os.rs` — System metadata
+- `finding.rs` — `FindingKind` enum (Actionable/Advisory/Inventory), `ShadowType`, `AdvisoryType`
+- `symlink_allowlist.rs` — Cross-tree symlink allowlist for /usr → /etc paths
 - `redaction.rs`, `completeness.rs`, `preflight.rs`, `warnings.rs`, `progress.rs`
 
 **Core traits:** `crates/core/src/traits/` — Inspector, Executor, Renderer, Detector, Progress
@@ -74,7 +76,11 @@ Each inspector implements the `Inspector` trait (`collect()` → section data):
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
 - `config/` — Modified config files via `rpm -Va`
 - `services.rs`, `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
+- `modernization.rs` — Modernization advisories (ifcfg, xinetd, etc.)
 - `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
+
+**Helper modules:** `crates/collect/src/`
+- `rpm_ownership.rs` — RPM file ownership queries for /var directory backing classification
 
 **Executor abstraction:** `crates/collect/src/executor/` — `real.rs` (live system), `mock.rs` (test doubles)
 
@@ -100,6 +106,8 @@ Artifact generators invoked after triage decisions finalized:
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
 - `readme.rs` — Auto-generated README for output directory
+
+**Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 
 **Pipeline orchestration:** `crates/pipeline/src/orchestrate.rs` — runs inspectors in order
 

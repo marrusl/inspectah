@@ -394,7 +394,41 @@ impl Inspector for ServicesInspector {
         });
 
         // 5. Scan drop-in directories
-        let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
+        let (mut drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
+
+        // 5b. Detect full shadows for services that have no drop-in coverage.
+        // A full shadow at /etc/systemd/system/<unit> that overrides
+        // /usr/lib/systemd/system/<unit> should be surfaced even when no
+        // .service.d/ directory exists for that unit.
+        {
+            let dropin_units: std::collections::HashSet<&str> =
+                drop_ins.iter().map(|d| d.unit.as_str()).collect();
+            let mut shadow_entries = Vec::new();
+            for sc in &state_changes {
+                if dropin_units.contains(sc.unit.as_str()) {
+                    continue;
+                }
+                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, &sc.unit) {
+                    let etc_path = format!("/etc/systemd/system/{}", sc.unit);
+                    let content = exec.read_file(Path::new(&etc_path)).unwrap_or_default();
+                    shadow_entries.push(SystemdDropIn {
+                        unit: sc.unit.clone(),
+                        path: etc_path,
+                        content,
+                        disposition: FindingKind::included(),
+                        shadow_type: Some(ShadowType::FullShadow),
+                        shadow_rationale: Some(
+                            "Full shadow: this unit file in /etc/systemd/system/ overrides \
+                             the vendor unit in /usr/lib/systemd/system/. Base image updates \
+                             to this unit will be silently ignored."
+                                .to_string(),
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+            drop_ins.extend(shadow_entries);
+        }
 
         // 6. Build result
         let section = ServiceSection {

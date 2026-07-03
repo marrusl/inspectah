@@ -258,8 +258,32 @@ fn test_nm_connection_identity_is_path() {
 }
 
 #[test]
-fn test_nm_connection_set_include() {
+fn test_nm_connection_set_include_preserves_inventory() {
+    // NMConnection defaults to Inventory — set_include must preserve
+    // that semantic rather than collapsing to Actionable.
     let mut n = NMConnection::default();
+    assert!(n.disposition.is_inventory());
+    n.set_include(true);
+    assert!(
+        n.disposition.is_inventory(),
+        "Inventory must not be coerced to Actionable by set_include"
+    );
+    n.set_include(false);
+    assert!(
+        n.disposition.is_inventory(),
+        "Inventory must not be coerced to Actionable by set_include"
+    );
+}
+
+#[test]
+fn test_nm_connection_actionable_set_include() {
+    // An NMConnection with explicit Actionable disposition should
+    // still have its include flag toggled normally.
+    let mut n = NMConnection {
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    assert!(n.disposition.is_included());
     n.set_include(false);
     assert!(!n.disposition.is_included());
     n.set_include(true);

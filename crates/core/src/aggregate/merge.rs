@@ -47,7 +47,7 @@ impl AggregateMergeable for PackageEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -61,7 +61,7 @@ impl AggregateMergeable for RepoFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -75,7 +75,7 @@ impl AggregateMergeable for EnabledModuleStream {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -89,7 +89,7 @@ impl AggregateMergeable for VersionLockEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -109,7 +109,7 @@ impl AggregateMergeable for ConfigFileEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -141,7 +141,7 @@ impl AggregateMergeable for ServiceStateChange {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -155,7 +155,7 @@ impl AggregateMergeable for SystemdDropIn {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -187,7 +187,7 @@ impl AggregateMergeable for QuadletUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -213,7 +213,7 @@ impl AggregateMergeable for ComposeFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -240,7 +240,7 @@ impl AggregateMergeable for FlatpakApp {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -260,7 +260,7 @@ impl AggregateMergeable for NMConnection {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -274,7 +274,7 @@ impl AggregateMergeable for FirewallZone {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -294,7 +294,7 @@ impl AggregateMergeable for SelinuxPortLabel {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -314,7 +314,7 @@ impl AggregateMergeable for KernelModule {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -328,7 +328,7 @@ impl AggregateMergeable for SysctlOverride {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -392,7 +392,7 @@ impl AggregateMergeable for NonRpmItem {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -407,7 +407,7 @@ impl AggregateMergeable for UnmanagedFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
@@ -441,7 +441,7 @@ impl AggregateMergeable for CronJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -455,7 +455,7 @@ impl AggregateMergeable for SystemdTimer {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -469,7 +469,7 @@ impl AggregateMergeable for AtJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -483,7 +483,7 @@ impl AggregateMergeable for GeneratedTimerUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -503,7 +503,7 @@ impl AggregateMergeable for FstabEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 

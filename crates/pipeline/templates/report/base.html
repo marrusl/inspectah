@@ -71,6 +71,12 @@
     {% endcall %}
     {% endif %}
 
+    {% if has_network or network_state == "failed" %}
+    {% call group("network-group", "Network", count=group_network_count) %}
+      {% include "report/network.html" %}
+    {% endcall %}
+    {% endif %}
+
     {% call group("secrets", "Secrets & Subscription", count=group_secrets_count) %}
       {% include "report/redactions.html" %}
     {% endcall %}

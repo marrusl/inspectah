@@ -51,6 +51,16 @@ impl FindingKind {
         }
     }
 
+    /// Merge-safe include setter: preserves Advisory and Inventory semantics.
+    /// Only Actionable findings have their include flag changed; Advisory and
+    /// Inventory findings are non-toggleable and pass through unchanged.
+    pub fn with_include(&self, val: bool) -> Self {
+        match self {
+            Self::Advisory { .. } | Self::Inventory => self.clone(),
+            _ => Self::from_bool(val),
+        }
+    }
+
     pub fn is_included(&self) -> bool {
         matches!(self, Self::Actionable { include: true })
     }

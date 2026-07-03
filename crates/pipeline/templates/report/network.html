@@ -1,0 +1,45 @@
+{% from "report/section.html" import section %}
+
+{% call section("network", "Network", count=network_count, state=network_state) %}
+
+{% if network_count > 0 %}
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Connection</th>
+      <th>Type</th>
+      <th>Method</th>
+      <th>Path</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in network_connections %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td>{{ c.conn_type }}</td>
+      <td>{{ c.method }}</td>
+      <td><code>{{ c.path }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if has_ifcfg %}
+<div class="advisory-list" role="list" aria-label="Network advisory">
+  <div class="advisory-item" role="listitem" tabindex="0">
+    <div class="advisory-item__header">
+      <span class="advisory-badge">
+        <span aria-hidden="true">&#x2139;</span> Advisory
+      </span>
+      <span>ifcfg deprecation</span>
+    </div>
+    <div class="advisory-rationale">{{ ifcfg_note }}</div>
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<p class="empty-state">No network connections detected</p>
+{% endif %}
+
+{% endcall %}

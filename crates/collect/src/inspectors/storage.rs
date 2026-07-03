@@ -115,8 +115,8 @@ impl Inspector for StorageInspector {
         // 3. Run lvs --reportformat json — optional, proceed without.
         let lvm_info = collect_lvs(exec).unwrap_or_default();
 
-        // 4. Detect backing for var directories.
-        let mut var_directories: Vec<inspectah_core::types::storage::VarDirectory> = Vec::new();
+        // 4. Discover and classify var directories.
+        let mut var_directories = discover_var_directories(exec);
         let rpm_owned = build_rpm_owned_set(exec);
         for dir in &mut var_directories {
             dir.backing = Some(detect_var_dir_backing(exec, &dir.path, &rpm_owned));
@@ -156,6 +156,51 @@ impl Inspector for StorageInspector {
             redaction_hints,
         })
     }
+}
+
+/// Discover non-trivial /var directories for backing analysis.
+///
+/// Scans /var/lib/, /var/log/, /var/cache/ for first-level subdirectories
+/// that are non-empty, producing candidates for backing classification.
+fn discover_var_directories(
+    exec: &dyn Executor,
+) -> Vec<inspectah_core::types::storage::VarDirectory> {
+    use inspectah_core::types::storage::VarDirectory;
+
+    let mut dirs = Vec::new();
+
+    for base in &["/var/lib", "/var/log", "/var/cache"] {
+        let result = exec.run(
+            "find",
+            &[
+                base,
+                "-mindepth",
+                "1",
+                "-maxdepth",
+                "1",
+                "-type",
+                "d",
+                "!",
+                "-empty",
+            ],
+        );
+        if result.exit_code != 0 {
+            continue;
+        }
+
+        for line in result.stdout.lines() {
+            let path = line.trim();
+            if path.is_empty() {
+                continue;
+            }
+            dirs.push(VarDirectory {
+                path: path.to_string(),
+                ..Default::default()
+            });
+        }
+    }
+
+    dirs
 }
 
 /// Parse /etc/fstab content into FstabEntry list, credential refs, and redaction hints.

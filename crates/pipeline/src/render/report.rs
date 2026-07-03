@@ -53,6 +53,10 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../templates/report/kernel.html"),
     ),
     (
+        "report/network.html",
+        include_str!("../../templates/report/network.html"),
+    ),
+    (
         "report/nonrpm.html",
         include_str!("../../templates/report/nonrpm.html"),
     ),
@@ -587,6 +591,39 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         SectionState::Failed => "failed",
     };
 
+    // ── Network section data (conditional) ────────────────────
+    let has_network = snap.network.is_some();
+    let network_connections: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.connections
+                .iter()
+                .map(|c| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": c.name,
+                        "conn_type": c.conn_type,
+                        "method": c.method,
+                        "path": c.path,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let network_count = network_connections.len();
+    let network_state = section_state(InspectorId::Network, &snap.completeness);
+    let network_state_str = match network_state {
+        SectionState::Normal => "normal",
+        SectionState::Degraded => "degraded",
+        SectionState::Failed => "failed",
+    };
+    let has_ifcfg = snap
+        .network
+        .as_ref()
+        .map(|n| n.has_ifcfg_connections())
+        .unwrap_or(false);
+    let ifcfg_note = inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
+
     // ── Kernel & Boot section data (conditional) ────────────────
     let has_kernelboot = snap.kernel_boot.is_some();
     let kernel_cmdline = snap
@@ -961,6 +998,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let group_identity_count = users_count;
     let group_storage_count = storage_count;
     let group_software_count = nonrpm_count;
+    let group_network_count = network_count;
     let group_secrets_count = redaction_count;
 
     let tmpl = env
@@ -988,6 +1026,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let systemd_timers_val = Value::from(systemd_timers);
     let generated_timers_val = Value::from(generated_timers);
     let at_jobs_val = Value::from(at_jobs);
+    let network_connections_val = Value::from(network_connections);
     let nonrpm_items_val = Value::from(nonrpm_items);
     let users_list_val = Value::from(users_list);
     let warnings_list_val = Value::from(warnings_list);
@@ -1036,6 +1075,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         storage_items => storage_items_val,
         storage_count,
         storage_state => storage_state_str,
+        // Network (conditional)
+        has_network,
+        network_connections => network_connections_val,
+        network_count,
+        network_state => network_state_str,
+        has_ifcfg,
+        ifcfg_note,
         // Kernel & Boot (conditional)
         has_kernelboot,
         kernel_cmdline,
@@ -1084,6 +1130,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         group_identity_count,
         group_storage_count,
         group_software_count,
+        group_network_count,
         group_secrets_count,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,

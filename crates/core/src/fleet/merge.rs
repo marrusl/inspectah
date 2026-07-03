@@ -47,7 +47,7 @@ impl FleetMergeable for PackageEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -61,7 +61,7 @@ impl FleetMergeable for RepoFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -75,7 +75,7 @@ impl FleetMergeable for EnabledModuleStream {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -89,7 +89,7 @@ impl FleetMergeable for VersionLockEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -109,7 +109,7 @@ impl FleetMergeable for ConfigFileEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -141,7 +141,7 @@ impl FleetMergeable for ServiceStateChange {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -155,7 +155,7 @@ impl FleetMergeable for SystemdDropIn {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -187,7 +187,7 @@ impl FleetMergeable for QuadletUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -213,7 +213,7 @@ impl FleetMergeable for ComposeFile {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 
     fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
@@ -240,7 +240,7 @@ impl FleetMergeable for FlatpakApp {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -260,7 +260,7 @@ impl FleetMergeable for NMConnection {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -274,7 +274,7 @@ impl FleetMergeable for FirewallZone {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -294,7 +294,7 @@ impl FleetMergeable for SelinuxPortLabel {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -314,7 +314,7 @@ impl FleetMergeable for KernelModule {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -328,7 +328,7 @@ impl FleetMergeable for SysctlOverride {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -348,7 +348,7 @@ impl FleetMergeable for NonRpmItem {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -368,7 +368,7 @@ impl FleetMergeable for CronJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -382,7 +382,7 @@ impl FleetMergeable for SystemdTimer {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -396,7 +396,7 @@ impl FleetMergeable for AtJob {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -410,7 +410,7 @@ impl FleetMergeable for GeneratedTimerUnit {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
@@ -430,7 +430,7 @@ impl FleetMergeable for FstabEntry {
     }
 
     fn set_include(&mut self, val: bool) {
-        self.disposition = FindingKind::from_bool(val);
+        self.disposition = self.disposition.with_include(val);
     }
 }
 
