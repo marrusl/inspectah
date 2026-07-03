@@ -6,7 +6,9 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
+use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::users::UserGroupDecision;
 use minijinja::{Environment, Value, context};
 
@@ -101,6 +103,10 @@ const TEMPLATES: &[(&str, &str)] = &[
     (
         "report/warnings.html",
         include_str!("../../templates/report/warnings.html"),
+    ),
+    (
+        "report/group.html",
+        include_str!("../../templates/report/group.html"),
     ),
 ];
 
@@ -243,7 +249,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             }
         }
 
-        // Always-rendered sections: present even when count is 0.
+        // Summary cards — original flat order
         let always_rendered = [
             InspectorId::Rpm,
             InspectorId::Config,
@@ -257,8 +263,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         ];
 
         let mut cards: Vec<Value> = Vec::new();
-        let mut toc: Vec<Value> = Vec::new();
-
         for &id in &always_rendered {
             let (title, html_id) = inspector_display(id);
             let state = section_state(id, &snap.completeness);
@@ -274,31 +278,69 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 "id": html_id,
             });
             cards.push(Value::from_serialize(&entry));
-            toc.push(Value::from_serialize(&entry));
         }
-
-        // Redactions — always rendered
+        // Redactions card
         {
             let count = snap.redactions.len().to_string();
-            let entry = serde_json::json!({
+            cards.push(Value::from_serialize(serde_json::json!({
                 "title": "Redactions",
                 "count": count,
                 "state": "normal",
                 "id": "redactions",
-            });
-            cards.push(Value::from_serialize(&entry));
-            toc.push(Value::from_serialize(&entry));
+            })));
         }
 
-        // Warnings — TOC only, NOT in summary cards
+        // TOC entries — grouped order with group labels
+        let grouped_sections: &[(InspectorId, &str, bool)] = &[
+            // (inspector, group_label, new_group)
+            (InspectorId::Rpm, "Packages", true),
+            (InspectorId::Config, "System Configuration", true),
+            (InspectorId::KernelBoot, "System Configuration", false),
+            (InspectorId::Selinux, "System Configuration", false),
+            (InspectorId::Services, "Services & Scheduling", true),
+            (InspectorId::ScheduledTasks, "Services & Scheduling", false),
+            (InspectorId::UsersGroups, "Users & Identity", true),
+            (InspectorId::Storage, "Storage", true),
+            (InspectorId::NonRpmSoftware, "Software & Files", true),
+        ];
+
+        let mut toc: Vec<Value> = Vec::new();
+        for &(id, group_label, new_group) in grouped_sections {
+            let (title, html_id) = inspector_display(id);
+            let state = section_state(id, &snap.completeness);
+            let count = if state == SectionState::Failed {
+                "n/a".to_string()
+            } else {
+                section_count(id, snap).unwrap_or(0).to_string()
+            };
+            toc.push(Value::from_serialize(serde_json::json!({
+                "title": title,
+                "count": count,
+                "state": state_str(state),
+                "id": html_id,
+                "group_label": group_label,
+                "new_group": new_group,
+            })));
+        }
+        // Redactions (Secrets & Subscription group)
+        toc.push(Value::from_serialize(serde_json::json!({
+            "title": "Redactions",
+            "count": snap.redactions.len().to_string(),
+            "state": "normal",
+            "id": "redactions",
+            "group_label": "Secrets & Subscription",
+            "new_group": true,
+        })));
+        // Warnings — ungrouped
         if !snap.warnings.is_empty() {
-            let entry = serde_json::json!({
+            toc.push(Value::from_serialize(serde_json::json!({
                 "title": "Warnings",
                 "count": snap.warnings.len().to_string(),
                 "state": "normal",
                 "id": "warnings",
-            });
-            toc.push(Value::from_serialize(&entry));
+                "group_label": "",
+                "new_group": false,
+            })));
         }
 
         (cards, toc)
@@ -414,6 +456,23 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or(0);
 
     // ── Services section data ────────────────────────────────────
+    // Build shadow rationale lookup: unit name → rationale string
+    let shadow_rationales: std::collections::HashMap<String, String> = snap
+        .services
+        .as_ref()
+        .map(|svc| {
+            svc.drop_ins
+                .iter()
+                .filter(|d| matches!(d.shadow_type, Some(ShadowType::FullShadow)))
+                .filter_map(|d| {
+                    d.shadow_rationale
+                        .as_ref()
+                        .map(|r| (d.unit.clone(), r.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let services: Vec<Value> = snap
         .services
         .as_ref()
@@ -426,11 +485,30 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         .as_ref()
                         .map(|d| d.to_string())
                         .unwrap_or_else(|| "n/a".to_string());
+                    let is_advisory = s.disposition.is_advisory();
+                    let (advisory_type_str, rationale_str) = match &s.disposition {
+                        FindingKind::Advisory {
+                            advisory_type,
+                            rationale,
+                        } => {
+                            let type_str = serde_json::to_string(advisory_type)
+                                .unwrap_or_default()
+                                .trim_matches('"')
+                                .to_string();
+                            (type_str, rationale.clone())
+                        }
+                        _ => (String::new(), String::new()),
+                    };
+                    let shadow_rat = shadow_rationales.get(&s.unit).cloned().unwrap_or_default();
                     Value::from_serialize(serde_json::json!({
                         "unit": s.unit,
                         "current_state": s.current_state.to_string(),
                         "default_state": default_str,
                         "include": s.disposition.is_included(),
+                        "is_advisory": is_advisory,
+                        "advisory_type": advisory_type_str,
+                        "rationale": rationale_str,
+                        "shadow_rationale": shadow_rat,
                     }))
                 })
                 .collect()
@@ -438,6 +516,16 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or_default();
 
     let svc_count = services.len();
+    let svc_advisory_count = snap
+        .services
+        .as_ref()
+        .map(|svc| {
+            svc.state_changes
+                .iter()
+                .filter(|s| s.disposition.is_advisory())
+                .count()
+        })
+        .unwrap_or(0);
     let svc_state = section_state(InspectorId::Services, &snap.completeness);
     let svc_state_str = match svc_state {
         SectionState::Normal => "normal",
@@ -865,6 +953,16 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
+    // ── Section group counts ────────────────────────────────────
+    let group_packages_count = pkg_count;
+    let group_sysconfig_count = config_count + kernelboot_count + security_count;
+    let group_services_count = svc_count + sched_count;
+    let group_services_advisory = svc_advisory_count;
+    let group_identity_count = users_count;
+    let group_storage_count = storage_count;
+    let group_software_count = nonrpm_count;
+    let group_secrets_count = redaction_count;
+
     let tmpl = env
         .get_template("report/base.html")
         .expect("base template must exist at inspectah-pipeline/templates/report/base.html");
@@ -930,6 +1028,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         has_config_packages,
         services => services_val,
         svc_count,
+        svc_advisory_count,
         svc_state => svc_state_str,
         svc_extra_badge,
         // Storage (conditional)
@@ -977,6 +1076,15 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         warnings_list => warnings_list_val,
         // Redactions (always rendered)
         redaction_count,
+        // Section group counts
+        group_packages_count,
+        group_sysconfig_count,
+        group_services_count,
+        group_services_advisory,
+        group_identity_count,
+        group_storage_count,
+        group_software_count,
+        group_secrets_count,
         patternfly_css => PF_CSS,
         report_css => REPORT_CSS,
         report_js => REPORT_JS,

@@ -1,6 +1,9 @@
 {% if toc_entries | length > 0 %}
 <nav class="report-toc" aria-label="Section navigation">
   {% for entry in toc_entries %}
+  {% if entry.new_group and entry.group_label %}
+  <span class="toc-group-label">{{ entry.group_label }}</span>
+  {% endif %}
   <a href="#{{ entry.id }}">
     {{ entry.title }}
     <span class="badge{% if entry.state == 'failed' %} badge-failed{% elif entry.state == 'degraded' %} badge-degraded{% endif %}">

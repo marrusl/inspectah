@@ -20,6 +20,7 @@
   {% endif %}
 
   <main>
+    {% from "report/group.html" import group %}
     {% include "report/summary-cards.html" %}
     {% include "report/toc.html" %}
 
@@ -30,31 +31,51 @@
     {% if baseline_ref %}
       {% include "report/baseline.html" %}
     {% endif %}
-    {% include "report/packages.html" %}
-    {% include "report/config.html" %}
-    {% include "report/services.html" %}
+
+    {% call group("packages-group", "Packages", count=group_packages_count) %}
+      {% include "report/packages.html" %}
+    {% endcall %}
+
+    {% call group("system-config", "System Configuration", count=group_sysconfig_count) %}
+      {% include "report/config.html" %}
+      {% if has_kernelboot or kernelboot_state == "failed" %}
+        {% include "report/kernel.html" %}
+      {% endif %}
+      {% if has_security or security_state == "failed" %}
+        {% include "report/security.html" %}
+      {% endif %}
+    {% endcall %}
+
+    {% call group("services-scheduling", "Services & Scheduling", count=group_services_count, advisory_count=group_services_advisory) %}
+      {% include "report/services.html" %}
+      {% if has_scheduled or sched_state == "failed" %}
+        {% include "report/scheduled.html" %}
+      {% endif %}
+    {% endcall %}
+
+    {% if has_users or users_state == "failed" %}
+    {% call group("identity", "Users & Identity", count=group_identity_count) %}
+      {% include "report/users.html" %}
+    {% endcall %}
+    {% endif %}
 
     {% if has_storage or storage_state == "failed" %}
+    {% call group("storage-group", "Storage", count=group_storage_count) %}
       {% include "report/storage.html" %}
-    {% endif %}
-    {% if has_kernelboot or kernelboot_state == "failed" %}
-      {% include "report/kernel.html" %}
-    {% endif %}
-    {% if has_security or security_state == "failed" %}
-      {% include "report/security.html" %}
+    {% endcall %}
     {% endif %}
 
-    {% if has_scheduled or sched_state == "failed" %}
-      {% include "report/scheduled.html" %}
-    {% endif %}
     {% if has_nonrpm or nonrpm_state == "failed" %}
+    {% call group("software", "Software & Files", count=group_software_count) %}
       {% include "report/nonrpm.html" %}
+    {% endcall %}
     {% endif %}
-    {% if has_users or users_state == "failed" %}
-      {% include "report/users.html" %}
-    {% endif %}
+
+    {% call group("secrets", "Secrets & Subscription", count=group_secrets_count) %}
+      {% include "report/redactions.html" %}
+    {% endcall %}
+
     {% include "report/warnings.html" %}
-    {% include "report/redactions.html" %}
   </main>
 
   <footer class="report-footer">

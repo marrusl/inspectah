@@ -21,16 +21,44 @@
     </tr>
   </thead>
   <tbody>
-    {% for s in services %}
+    {% for s in services if not s.is_advisory %}
     <tr>
       <td>{{ s.unit }}</td>
       <td>{{ s.current_state }}</td>
       <td>{{ s.default_state }}</td>
       <td>{% if s.include %}include{% else %}exclude{% endif %}</td>
     </tr>
+    {% if s.shadow_rationale %}
+    <tr class="shadow-rationale-row">
+      <td colspan="4">
+        <small class="shadow-rationale">
+          <span class="shadow-icon" aria-hidden="true">&#x26A0;</span> {{ s.shadow_rationale }}
+        </small>
+      </td>
+    </tr>
+    {% endif %}
     {% endfor %}
   </tbody>
 </table>
+
+{% if svc_advisory_count > 0 %}
+<div class="advisory-list" role="list" aria-label="Advisory findings">
+  {% for s in services if s.is_advisory %}
+  <div class="advisory-item" role="listitem"
+       aria-label="Advisory: {{ s.advisory_type }} - {{ s.rationale }}"
+       tabindex="0">
+    <div class="advisory-item__header">
+      <span class="advisory-badge">
+        <span aria-hidden="true">&#x2139;</span> Advisory
+      </span>
+      <span>{{ s.unit }}</span>
+    </div>
+    <div class="advisory-rationale">{{ s.rationale }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% else %}
 <p class="empty-state">No service state changes detected</p>
 {% endif %}

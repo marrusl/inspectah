@@ -67,12 +67,39 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
+  // ── Section group disclosure ──────────────────────────────────
+  document.querySelectorAll(".section-group__toggle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var expanded = btn.getAttribute("aria-expanded") === "true";
+      btn.setAttribute("aria-expanded", String(!expanded));
+      var content = document.getElementById(btn.getAttribute("aria-controls"));
+      if (content) content.hidden = expanded;
+      var summary = btn.parentElement.querySelector(".section-group__collapsed-summary");
+      if (summary) summary.hidden = !expanded;
+      if (!expanded && content) {
+        var firstItem = content.querySelector("summary, [tabindex='0'], button");
+        if (firstItem) firstItem.focus();
+      }
+    });
+  });
+
   // ── TOC navigation ──────────────────────────────────────────
   function openHashTarget() {
     var hash = window.location.hash;
     if (!hash) return;
     var target = document.querySelector(hash);
     if (!target) return;
+    // Expand containing section group if collapsed
+    var groupContent = target.closest(".section-group__content");
+    if (groupContent && groupContent.hidden) {
+      groupContent.hidden = false;
+      var toggle = groupContent.parentElement.querySelector(".section-group__toggle");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", "true");
+        var groupSummary = toggle.parentElement.querySelector(".section-group__collapsed-summary");
+        if (groupSummary) groupSummary.hidden = true;
+      }
+    }
     var details = target.closest("details");
     if (details) {
       details.open = true;
@@ -90,15 +117,33 @@ document.addEventListener("DOMContentLoaded", function () {
 
   window.addEventListener("beforeprint", function () {
     savedStates = [];
-    document.querySelectorAll("details.report-section").forEach(function (d) {
-      savedStates.push({ el: d, wasOpen: d.open });
+    // Save and expand section groups
+    document.querySelectorAll(".section-group__toggle").forEach(function (btn) {
+      var content = document.getElementById(btn.getAttribute("aria-controls"));
+      savedStates.push({
+        el: btn,
+        kind: "group",
+        wasExpanded: btn.getAttribute("aria-expanded") === "true"
+      });
+      btn.setAttribute("aria-expanded", "true");
+      if (content) content.hidden = false;
+    });
+    // Save and expand details sections
+    document.querySelectorAll("details").forEach(function (d) {
+      savedStates.push({ el: d, kind: "details", wasOpen: d.open });
       d.open = true;
     });
   });
 
   window.addEventListener("afterprint", function () {
     savedStates.forEach(function (s) {
-      s.el.open = s.wasOpen;
+      if (s.kind === "group") {
+        s.el.setAttribute("aria-expanded", String(s.wasExpanded));
+        var content = document.getElementById(s.el.getAttribute("aria-controls"));
+        if (content) content.hidden = !s.wasExpanded;
+      } else if (s.kind === "details") {
+        s.el.open = s.wasOpen;
+      }
     });
     savedStates = [];
   });

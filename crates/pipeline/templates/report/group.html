@@ -1,0 +1,23 @@
+{% macro group(id, label, count, advisory_count=0) %}
+<div class="section-group" id="group-{{ id }}">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-{{ id }}-content"
+          aria-label="{{ label }}">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">{{ label }}</span>
+    <span class="badge">{{ count }}</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    {% if advisory_count > 0 %}
+      [{{ count - advisory_count }} actionable, {{ advisory_count }} advisories]
+    {% else %}
+      [{{ count }} items]
+    {% endif %}
+  </span>
+  <div class="section-group__content" id="group-{{ id }}-content">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}

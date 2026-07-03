@@ -150,6 +150,151 @@ body {
   }
 }
 
+/* ── Section groups (collapsible disclosure) ─────────────────── */
+.section-group {
+  margin: var(--pf-t--global--spacer--lg, 1.5rem) var(--pf-t--global--spacer--xl, 2rem) 0;
+}
+
+.section-group__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  width: 100%;
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) var(--pf-t--global--spacer--md, 1rem);
+  background: none;
+  border: none;
+  border-bottom: 2px solid var(--pf-t--global--border--color--default, #e0e0e0);
+  cursor: pointer;
+  font-family: var(--pf-t--global--font--family--heading, 'RedHatDisplay', 'Helvetica Neue', Arial, sans-serif);
+  font-size: var(--pf-t--global--font--size--xl, 1.25rem);
+  font-weight: var(--pf-t--global--font--weight--heading--default, 700);
+  color: var(--pf-t--global--text--color--regular, #1a1a1a);
+  text-align: left;
+}
+
+.section-group__toggle:hover {
+  background: var(--pf-t--global--background--color--primary--hover, #e8e8e8);
+}
+
+.section-group__toggle:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default, #06c);
+  outline-offset: 2px;
+}
+
+.section-group__toggle-icon {
+  transition: transform 0.2s ease;
+  font-size: 0.6em;
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  flex-shrink: 0;
+}
+
+.section-group__toggle-icon::before {
+  content: "\25B6";
+}
+
+.section-group__toggle[aria-expanded="true"] .section-group__toggle-icon {
+  transform: rotate(90deg);
+}
+
+.section-group__label {
+  flex: 1;
+}
+
+.section-group__collapsed-summary {
+  display: inline-block;
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--md, 1rem);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+}
+
+.section-group__content .report-section {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* ── Advisory rows ───────────────────────────────────────────── */
+.advisory-list {
+  border-top: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+}
+
+.advisory-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem);
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) var(--pf-t--global--spacer--md, 1rem);
+  border-bottom: var(--pf-t--global--border--width--box--default, 1px) solid
+    var(--pf-t--global--border--color--default, #e0e0e0);
+  background: var(--pf-t--global--color--status--info--100, #e7f1fa);
+}
+
+.advisory-item:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default, #06c);
+  outline-offset: -2px;
+}
+
+.advisory-item__header {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+}
+
+.advisory-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.1rem var(--pf-t--global--spacer--sm, 0.5rem);
+  border-radius: var(--pf-t--global--border--radius--pill, 999px);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  background: var(--pf-t--global--color--status--info--default, #2b9af3);
+  color: var(--pf-t--global--text--color--on-brand--default, #fff);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.advisory-rationale {
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  padding-left: var(--pf-t--global--spacer--lg, 1.5rem);
+}
+
+/* Shadow rationale sub-row */
+.shadow-rationale-row td {
+  padding-top: 0;
+}
+
+.shadow-rationale {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  font-style: italic;
+}
+
+.shadow-icon {
+  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+
+/* ── TOC group labels ─────────────────────────────────────────── */
+.toc-group-label {
+  width: 100%;
+  display: block;
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  color: var(--pf-t--global--text--color--subtle, #6a6a6a);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: var(--pf-t--global--spacer--sm, 0.5rem);
+  padding: 0 var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.toc-group-label:first-child {
+  margin-top: 0;
+}
+
 /* ── Sections (details/summary) ──────────────────────────────── */
 .report-section {
   border: var(--pf-t--global--border--width--box--default, 1px) solid
@@ -622,6 +767,22 @@ details.report-section-inner[open] > summary::before {
   .report-toc,
   .report-filter {
     display: none;
+  }
+
+  .section-group__toggle {
+    border-bottom: 1px solid #ccc;
+  }
+
+  .section-group__collapsed-summary {
+    display: none !important;
+  }
+
+  .section-group__content {
+    display: block !important;
+  }
+
+  .section-group__content[hidden] {
+    display: block !important;
   }
 
   .report-header {

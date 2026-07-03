@@ -1,5 +1,5 @@
 ---
-source: inspectah-pipeline/src/render/report.rs
+source: crates/pipeline/src/render/report.rs
 expression: stable
 ---
 <!DOCTYPE html>
@@ -37,6 +37,7 @@ expression: stable
   
 
   <main>
+    
     
 <div class="report-cards">
   
@@ -115,55 +116,80 @@ expression: stable
     
 <nav class="report-toc" aria-label="Section navigation">
   
+  
+  <span class="toc-group-label">Packages</span>
+  
   <a href="#packages">
     Packages
     <span class="badge">1</span>
   </a>
+  
+  
+  <span class="toc-group-label">System Configuration</span>
   
   <a href="#config-files">
     Configuration Files
     <span class="badge">1</span>
   </a>
   
-  <a href="#services">
-    Service State Changes
-    <span class="badge">1</span>
-  </a>
-  
-  <a href="#storage">
-    Storage
-    <span class="badge">1</span>
-  </a>
   
   <a href="#kernel-boot">
     Kernel &amp; Boot
     <span class="badge">1</span>
   </a>
   
+  
   <a href="#security">
     Security &amp; Access Control
     <span class="badge">1</span>
   </a>
+  
+  
+  <span class="toc-group-label">Services &amp; Scheduling</span>
+  
+  <a href="#services">
+    Service State Changes
+    <span class="badge">1</span>
+  </a>
+  
   
   <a href="#scheduled-tasks">
     Scheduled Tasks
     <span class="badge">1</span>
   </a>
   
-  <a href="#nonrpm">
-    Non-RPM Software
-    <span class="badge">1</span>
-  </a>
+  
+  <span class="toc-group-label">Users &amp; Identity</span>
   
   <a href="#users-groups">
     Users &amp; Groups
     <span class="badge">1</span>
   </a>
   
+  
+  <span class="toc-group-label">Storage</span>
+  
+  <a href="#storage">
+    Storage
+    <span class="badge">1</span>
+  </a>
+  
+  
+  <span class="toc-group-label">Software &amp; Files</span>
+  
+  <a href="#nonrpm">
+    Non-RPM Software
+    <span class="badge">1</span>
+  </a>
+  
+  
+  <span class="toc-group-label">Secrets &amp; Subscription</span>
+  
   <a href="#redactions">
     Redactions
     <span class="badge">1</span>
   </a>
+  
   
   <a href="#warnings">
     Warnings
@@ -176,7 +202,26 @@ expression: stable
     
 
     
+
     
+<div class="section-group" id="group-packages-group">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-packages-group-content"
+          aria-label="Packages">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Packages</span>
+    <span class="badge">1</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [1 items]
+    
+  </span>
+  <div class="section-group__content" id="group-packages-group-content">
+    
+      
 
 
 <div class="report-section">
@@ -226,6 +271,29 @@ expression: stable
 </div>
 
     
+  </div>
+</div>
+
+
+    
+<div class="section-group" id="group-system-config">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-system-config-content"
+          aria-label="System Configuration">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">System Configuration</span>
+    <span class="badge">2</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [2 items]
+    
+  </span>
+  <div class="section-group__content" id="group-system-config-content">
+    
+      
 
 
 <div class="report-section">
@@ -270,101 +338,8 @@ expression: stable
 </details>
 </div>
 
-    
-
-
-<div class="report-section">
-<details id="services">
-  <summary>
-    Service State Changes
-    
-      <span class="badge">(1)</span>
-    
-    
-      <span class="badge-extra">1 enabled</span>
-    
-  </summary>
-  
-    
-
-
-
-
-<table class="report-table" data-filterable="services">
-  <thead>
-    <tr>
-      <th>Unit</th>
-      <th>Current State</th>
-      <th>Default State</th>
-      <th>Action</th>
-    </tr>
-  </thead>
-  <tbody>
-    
-    <tr>
-      <td>httpd.service</td>
-      <td>enabled</td>
-      <td>n&#x2f;a</td>
-      <td>include</td>
-    </tr>
-    
-  </tbody>
-</table>
-
-
-
-  
-</details>
-</div>
-
-
-    
       
-
-
-<div class="report-section">
-<details id="storage">
-  <summary>
-    Storage
-    
-      <span class="badge">(1)</span>
-    
-    
-  </summary>
-  
-    
-
-
-<table class="report-table">
-  <thead>
-    <tr>
-      <th>Device</th>
-      <th>Mount Point</th>
-      <th>Type</th>
-      <th>Options</th>
-    </tr>
-  </thead>
-  <tbody>
-    
-    <tr>
-      <td>&#x2f;dev&#x2f;sda1</td>
-      <td><code>&#x2f;boot</code></td>
-      <td>xfs</td>
-      <td><code></code></td>
-    </tr>
-    
-  </tbody>
-</table>
-
-
-
-  
-</details>
-</div>
-
-    
-    
-      
+        
 
 
 <div class="report-section">
@@ -416,9 +391,9 @@ expression: stable
 </details>
 </div>
 
-    
-    
       
+      
+        
 
 
 <div class="report-section">
@@ -453,10 +428,83 @@ expression: stable
 </details>
 </div>
 
+      
     
+  </div>
+</div>
+
 
     
+<div class="section-group" id="group-services-scheduling">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-services-scheduling-content"
+          aria-label="Services &amp; Scheduling">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Services &amp; Scheduling</span>
+    <span class="badge">2</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [2 items]
+    
+  </span>
+  <div class="section-group__content" id="group-services-scheduling-content">
+    
       
+
+
+<div class="report-section">
+<details id="services">
+  <summary>
+    Service State Changes
+    
+      <span class="badge">(1)</span>
+    
+    
+      <span class="badge-extra">1 enabled</span>
+    
+  </summary>
+  
+    
+
+
+
+
+<table class="report-table" data-filterable="services">
+  <thead>
+    <tr>
+      <th>Unit</th>
+      <th>Current State</th>
+      <th>Default State</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>httpd.service</td>
+      <td>enabled</td>
+      <td>n&#x2f;a</td>
+      <td>include</td>
+    </tr>
+    
+    
+  </tbody>
+</table>
+
+
+
+
+
+
+  
+</details>
+</div>
+
+      
+        
 
 
 <div class="report-section">
@@ -506,56 +554,30 @@ expression: stable
 </details>
 </div>
 
-    
-    
       
-
-
-<div class="report-section">
-<details id="nonrpm">
-  <summary>
-    Non-RPM Software
     
-      <span class="badge">(1)</span>
-    
-    
-  </summary>
-  
-    
-
-
-<table class="report-table">
-  <thead>
-    <tr>
-      <th>Name</th>
-      <th>Path</th>
-      <th>Detection</th>
-      <th>Confidence</th>
-      <th>Language</th>
-      <th>Version</th>
-    </tr>
-  </thead>
-  <tbody>
-    
-    <tr>
-      <td>node</td>
-      <td><code>&#x2f;usr&#x2f;local&#x2f;bin&#x2f;node</code></td>
-      <td>path</td>
-      <td></td>
-      <td></td>
-      <td></td>
-    </tr>
-    
-  </tbody>
-</table>
-
-
-
-  
-</details>
+  </div>
 </div>
 
+
     
+    
+<div class="section-group" id="group-identity">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-identity-content"
+          aria-label="Users &amp; Identity">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Users &amp; Identity</span>
+    <span class="badge">1</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [1 items]
+    
+  </span>
+  <div class="section-group__content" id="group-identity-content">
     
       
 
@@ -613,6 +635,196 @@ expression: stable
 </div>
 
     
+  </div>
+</div>
+
+    
+
+    
+    
+<div class="section-group" id="group-storage-group">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-storage-group-content"
+          aria-label="Storage">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Storage</span>
+    <span class="badge">1</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [1 items]
+    
+  </span>
+  <div class="section-group__content" id="group-storage-group-content">
+    
+      
+
+
+<div class="report-section">
+<details id="storage">
+  <summary>
+    Storage
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Device</th>
+      <th>Mount Point</th>
+      <th>Type</th>
+      <th>Options</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>&#x2f;dev&#x2f;sda1</td>
+      <td><code>&#x2f;boot</code></td>
+      <td>xfs</td>
+      <td><code></code></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+  </div>
+</div>
+
+    
+
+    
+    
+<div class="section-group" id="group-software">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-software-content"
+          aria-label="Software &amp; Files">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Software &amp; Files</span>
+    <span class="badge">1</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [1 items]
+    
+  </span>
+  <div class="section-group__content" id="group-software-content">
+    
+      
+
+
+<div class="report-section">
+<details id="nonrpm">
+  <summary>
+    Non-RPM Software
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Path</th>
+      <th>Detection</th>
+      <th>Confidence</th>
+      <th>Language</th>
+      <th>Version</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>node</td>
+      <td><code>&#x2f;usr&#x2f;local&#x2f;bin&#x2f;node</code></td>
+      <td>path</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+
+  
+</details>
+</div>
+
+    
+  </div>
+</div>
+
+    
+
+    
+<div class="section-group" id="group-secrets">
+  <button class="section-group__toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="group-secrets-content"
+          aria-label="Secrets &amp; Subscription">
+    <span class="section-group__toggle-icon" aria-hidden="true"></span>
+    <span class="section-group__label">Secrets &amp; Subscription</span>
+    <span class="badge">1</span>
+  </button>
+  <span class="section-group__collapsed-summary" hidden>
+    
+      [1 items]
+    
+  </span>
+  <div class="section-group__content" id="group-secrets-content">
+    
+      
+
+
+<div class="report-section">
+<details id="redactions">
+  <summary>
+    Redactions
+    
+      <span class="badge">(1)</span>
+    
+    
+  </summary>
+  
+    
+
+<p class="text-muted">1 item(s) redacted. See secrets-review.md for details.</p>
+
+
+  
+</details>
+</div>
+
+    
+  </div>
+</div>
+
+
     
 
 
@@ -646,28 +858,6 @@ expression: stable
   </tbody>
 </table>
 
-
-
-  
-</details>
-</div>
-
-    
-
-
-<div class="report-section">
-<details id="redactions">
-  <summary>
-    Redactions
-    
-      <span class="badge">(1)</span>
-    
-    
-  </summary>
-  
-    
-
-<p class="text-muted">1 item(s) redacted. See secrets-review.md for details.</p>
 
 
   
