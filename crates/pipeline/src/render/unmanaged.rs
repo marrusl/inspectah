@@ -99,6 +99,7 @@ mod tests {
         let mut snap = InspectionSnapshot::default();
         snap.unmanaged_files = Some(UnmanagedFileSection {
             items,
+            usr_entries: Vec::new(),
             total_size,
             total_count,
         });

@@ -132,6 +132,7 @@ fn containerfile_unmanaged_copy_paths_match_export_layout() {
                 ..Default::default()
             },
         ],
+        usr_entries: Vec::new(),
         total_size: 1024 * 1024 + 512 * 1024 + 4096,
         total_count: 3,
     });
@@ -327,6 +328,7 @@ fn excluded_items_absent_from_both_containerfile_and_export() {
             disposition: FindingKind::excluded(), // Excluded
             ..Default::default()
         }],
+        usr_entries: Vec::new(),
         total_size: 1024,
         total_count: 1,
     });

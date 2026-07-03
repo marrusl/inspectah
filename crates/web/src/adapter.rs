@@ -1717,6 +1717,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            usr_entries: Vec::new(),
             total_size: 52429824,
             total_count: 2,
         });

@@ -172,10 +172,33 @@ pub struct UnmanagedFile {
     pub variant_selection: VariantSelection,
 }
 
+/// A collapsed directory (or single file) under /usr that is not owned
+/// by any installed RPM package. Produced by the /usr walk with ancestor
+/// collapse: the shallowest unowned directory is reported rather than
+/// individual files, reducing noise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnmanagedUsrEntry {
+    /// Absolute path of the collapsed directory or individual file.
+    pub path: String,
+    /// Number of unmanaged files rolled up under this entry.
+    pub file_count: u32,
+    /// Total size in bytes of all rolled-up files.
+    pub total_size_bytes: u64,
+    /// Detected file type (meaningful for single-file entries; `Other`
+    /// for collapsed directories).
+    pub file_type: FileType,
+    /// Always `FindingKind::included()` — /usr findings are actionable
+    /// (they need COPY into the container image).
+    pub disposition: FindingKind,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnmanagedFileSection {
     #[serde(default)]
     pub items: Vec<UnmanagedFile>,
+    /// Collapsed /usr entries from the RPM-dump diff walk.
+    #[serde(default)]
+    pub usr_entries: Vec<UnmanagedUsrEntry>,
     /// Total size of all cataloged files in bytes
     #[serde(default)]
     pub total_size: u64,
@@ -282,6 +305,7 @@ mod tests {
                 file_type: FileType::ElfBinary,
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 1024,
             total_count: 1,
         };

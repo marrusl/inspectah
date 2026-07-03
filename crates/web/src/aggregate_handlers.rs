@@ -2509,6 +2509,7 @@ mod tests {
                     }),
                     ..Default::default()
                 }],
+                usr_entries: Vec::new(),
                 total_size: 52_000_000,
                 total_count: 1,
             }),
@@ -2562,6 +2563,7 @@ mod tests {
                     }),
                     ..Default::default()
                 }],
+                usr_entries: Vec::new(),
                 total_size: 10_000,
                 total_count: 1,
             }),
@@ -2630,6 +2632,7 @@ mod tests {
                     }),
                     ..Default::default()
                 }],
+                usr_entries: Vec::new(),
                 total_size: 10_000,
                 total_count: 1,
             }),
@@ -3181,6 +3184,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                usr_entries: Vec::new(),
                 total_size: 2_200_000,
                 total_count: 2,
             }),
@@ -3271,6 +3275,7 @@ mod tests {
                     }),
                     ..Default::default()
                 }],
+                usr_entries: Vec::new(),
                 total_size: 1_000_000,
                 total_count: 1,
             }),

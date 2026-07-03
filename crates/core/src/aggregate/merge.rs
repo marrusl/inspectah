@@ -1817,6 +1817,7 @@ pub fn merge_unmanaged_file_sections(
 
     Some(UnmanagedFileSection {
         items,
+        usr_entries: Vec::new(),
         total_size,
         total_count,
     })
@@ -2934,6 +2935,7 @@ mod tests {
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
         });
@@ -2945,6 +2947,7 @@ mod tests {
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
         });
@@ -2981,6 +2984,7 @@ mod tests {
                 content_hash: "aaa111".to_string(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
         });
@@ -2992,6 +2996,7 @@ mod tests {
                 content_hash: "bbb222".to_string(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
         });
@@ -3028,6 +3033,7 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
         });
@@ -3038,6 +3044,7 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
         });
@@ -3071,11 +3078,13 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
         });
         let section_b = Some(UnmanagedFileSection {
             items: vec![],
+            usr_entries: Vec::new(),
             total_size: 0,
             total_count: 0,
         });

@@ -8,7 +8,7 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::nonrpm::{
     FileType, LanguagePackage, NonRpmItem, NonRpmSoftwareSection, PipPackage, ProvenanceSignals,
-    UnmanagedFile, UnmanagedFileSection,
+    UnmanagedFile, UnmanagedFileSection, UnmanagedUsrEntry,
 };
 use inspectah_core::types::progress::{ProbeId, ProbeOutcome, ProgressEvent};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
@@ -18,7 +18,7 @@ use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_LOCKFILE, METHOD_NPM_MANIFEST,
     METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 /// Directories to prune during recursive walks (build artifacts, caches).
@@ -1640,6 +1640,9 @@ fn is_rpm_owned_path(exec: &dyn Executor, path: &str) -> bool {
 /// 2. RPM-owned paths via `rpm -qf` (direct query, not RpmState.owned_paths
 ///    which is /etc-only)
 /// 3. Tier 1 language environment paths (no double-counting with Plan 1)
+///
+/// Also performs the /usr walk with RPM-dump diff and ancestor collapse
+/// to populate `usr_entries`.
 pub fn scan_unmanaged_files(
     exec: &dyn Executor,
     language_env_paths: &[String],
@@ -1667,9 +1670,15 @@ pub fn scan_unmanaged_files(
         );
     }
 
+    // /usr walk: build full RPM-owned set via rpm --dump, then walk /usr
+    // with walkdir and collapse to shallowest unowned ancestors.
+    let rpm_owned = crate::rpm_ownership::build_rpm_owned_set(exec);
+    let usr_entries = walk_usr_for_unmanaged(&rpm_owned);
+
     let total_count = items.len();
     UnmanagedFileSection {
         items,
+        usr_entries,
         total_size,
         total_count,
     }
@@ -1843,6 +1852,172 @@ fn walk_for_unmanaged(
             ..Default::default()
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// /usr walk with RPM-dump diff and ancestor collapse
+// ---------------------------------------------------------------------------
+
+/// Directories to prune during /usr walk. These are RPM-managed metadata
+/// directories that generate large volumes of noise without actionable
+/// migration findings.
+const USR_PRUNE_DIRS: &[&str] = &[
+    "/usr/share/doc/",
+    "/usr/share/man/",
+    "/usr/share/locale/",
+    "/usr/share/info/",
+    "/usr/share/licenses/",
+    "/usr/share/icons/",
+    "/usr/share/pixmaps/",
+    "/usr/share/fonts/",
+    "/usr/share/mime/",
+    "/usr/share/zoneinfo/",
+    "/usr/lib/.build-id/",
+];
+
+/// File patterns to prune from /usr walk results (caches, compiled bytecode).
+const USR_PRUNE_FILE_PATTERNS: &[&str] = &[
+    ".pyc",
+    "__pycache__",
+    ".cache",
+    ".fontconfig",
+    "fonts.cache",
+    "ld.so.cache",
+];
+
+/// Check if a file path matches any prune pattern.
+fn is_pruned_file(path: &str) -> bool {
+    USR_PRUNE_FILE_PATTERNS
+        .iter()
+        .any(|pat| path.ends_with(pat) || path.contains(pat))
+}
+
+/// Walk /usr using `walkdir` and diff against the RPM-owned set to find
+/// unmanaged files, then collapse them to their shallowest unowned ancestor.
+///
+/// Key rules:
+/// - `follow_links(false)`: check the symlink's own path against the RPM
+///   set, NOT the resolved target. A symlink at `/usr/bin/custom-link`
+///   pointing to RPM-owned `/usr/bin/bash` is still unmanaged if the
+///   symlink path itself is not RPM-owned.
+/// - Prune directories are filtered at the walker level for efficiency.
+/// - File metadata (size) is read from `walkdir::DirEntry::metadata()`.
+fn walk_usr_for_unmanaged(rpm_owned: &HashSet<String>) -> Vec<UnmanagedUsrEntry> {
+    use walkdir::WalkDir;
+
+    let mut unmanaged: Vec<(String, u64)> = Vec::new();
+
+    for entry in WalkDir::new("/usr")
+        .follow_links(false) // check symlink's own path, not target
+        .into_iter()
+        .filter_entry(|e| {
+            let path = e.path().to_string_lossy();
+            // Prune directories from the walk itself
+            !USR_PRUNE_DIRS.iter().any(|p| path.starts_with(p))
+        })
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.file_type().is_dir() {
+            continue;
+        }
+
+        let path = entry.path().to_string_lossy();
+        let normalized = path.trim_end_matches('/').replace("//", "/");
+
+        if is_pruned_file(&normalized) {
+            continue;
+        }
+
+        // Check ONLY the symlink's own path, not resolved target
+        if !rpm_owned.contains(&normalized) {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            unmanaged.push((normalized, size));
+        }
+    }
+
+    collapse_to_ancestors(&unmanaged, rpm_owned)
+}
+
+/// Collapse a list of unmanaged file paths to their shallowest unowned
+/// ancestor directories. Files whose parent is RPM-owned are reported
+/// individually; files under a shared unowned ancestor are grouped.
+fn collapse_to_ancestors(
+    unmanaged_files: &[(String, u64)],
+    rpm_owned: &HashSet<String>,
+) -> Vec<UnmanagedUsrEntry> {
+    let mut dir_groups: BTreeMap<String, (Vec<String>, u64)> = BTreeMap::new();
+
+    for (file_path, size) in unmanaged_files {
+        let ancestor = find_shallowest_unowned_ancestor(file_path, rpm_owned);
+        let entry = dir_groups
+            .entry(ancestor)
+            .or_insert_with(|| (Vec::new(), 0));
+        entry.0.push(file_path.clone());
+        entry.1 += size;
+    }
+
+    dir_groups
+        .into_iter()
+        .map(|(ancestor, (children, total_size))| {
+            let file_type = if children.len() == 1 && children[0] == ancestor {
+                // Single file directly under an RPM-owned parent
+                classify_usr_file_type(&children[0])
+            } else {
+                // Directory grouping
+                FileType::Other
+            };
+
+            UnmanagedUsrEntry {
+                path: ancestor,
+                file_count: children.len() as u32,
+                total_size_bytes: total_size,
+                file_type,
+                disposition: FindingKind::included(),
+            }
+        })
+        .collect()
+}
+
+/// Classify a /usr file's type based on extension/path patterns.
+fn classify_usr_file_type(path: &str) -> FileType {
+    if path.ends_with(".so") || path.contains(".so.") {
+        FileType::ElfBinary
+    } else if path.ends_with(".jar") {
+        FileType::Jar
+    } else {
+        // Conservative default for /usr files — most custom files placed
+        // in /usr are scripts or executables.
+        FileType::Script
+    }
+}
+
+/// Walk up from a file path to find the shallowest directory component
+/// that is NOT in the RPM-owned set. This is the ancestor that should
+/// be reported as unmanaged.
+///
+/// Example: given `/usr/lib64/myapp/libfoo.so` where `/usr/lib64` is
+/// RPM-owned but `/usr/lib64/myapp` is not, returns `/usr/lib64/myapp`.
+///
+/// If all ancestors up to root are RPM-owned, returns the file path
+/// itself (it's a single unmanaged file under an owned directory).
+fn find_shallowest_unowned_ancestor(file_path: &str, rpm_owned: &HashSet<String>) -> String {
+    let parts: Vec<&str> = file_path.split('/').collect();
+    // Start from depth 3 to skip: ["", "usr", "<top-dir>"]
+    // /usr is always RPM-owned, so checking it is pointless and would
+    // cause every unmanaged file to collapse to "/usr".
+    for i in 3..parts.len() {
+        let dir = parts[..i].join("/");
+        if dir.is_empty() {
+            continue;
+        }
+        if !rpm_owned.contains(&dir) {
+            return dir;
+        }
+    }
+    file_path.to_string()
 }
 
 // ===========================================================================
@@ -3249,5 +3424,185 @@ mod tests {
             gem_item.name, "system-gems",
             "name should remain 'system-gems' for display"
         );
+    }
+
+    // ---- /usr walk: ancestor collapse tests ----
+
+    fn owned_set(paths: &[&str]) -> HashSet<String> {
+        paths.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_collapse_direct_child_of_owned() {
+        // /usr/bin is RPM-owned, /usr/bin/custom-tool is not.
+        // The file itself is the shallowest unowned path.
+        let rpm = owned_set(&["/usr/bin"]);
+        let result = find_shallowest_unowned_ancestor("/usr/bin/custom-tool", &rpm);
+        assert_eq!(result, "/usr/bin/custom-tool");
+    }
+
+    #[test]
+    fn test_collapse_unowned_subdir() {
+        // /usr/lib64 is RPM-owned, /usr/lib64/myapp is not.
+        // File at /usr/lib64/myapp/libfoo.so should collapse to /usr/lib64/myapp.
+        let rpm = owned_set(&["/usr/lib64"]);
+        let result = find_shallowest_unowned_ancestor("/usr/lib64/myapp/libfoo.so", &rpm);
+        assert_eq!(result, "/usr/lib64/myapp");
+    }
+
+    #[test]
+    fn test_collapse_owned_intermediate() {
+        // Both /usr/lib64 and /usr/lib64/myapp are RPM-owned,
+        // but /usr/lib64/myapp/custom is not.
+        let rpm = owned_set(&["/usr/lib64", "/usr/lib64/myapp"]);
+        let result = find_shallowest_unowned_ancestor("/usr/lib64/myapp/custom/x.so", &rpm);
+        assert_eq!(result, "/usr/lib64/myapp/custom");
+    }
+
+    #[test]
+    fn test_symlink_own_path_only() {
+        // /usr/bin/custom-link -> /usr/bin/bash
+        // bash is RPM-owned, but custom-link is NOT.
+        // Must report custom-link as unmanaged (check own path, not target).
+        let rpm = owned_set(&["/usr/bin", "/usr/bin/bash"]);
+        let normalized = "/usr/bin/custom-link";
+        assert!(
+            !rpm.contains(normalized),
+            "symlink's own path should not be in RPM set"
+        );
+    }
+
+    #[test]
+    fn test_collapse_groups_siblings() {
+        // Two files under the same unowned ancestor should collapse.
+        let rpm = owned_set(&["/usr/lib64"]);
+        let files = vec![
+            ("/usr/lib64/myapp/libfoo.so".to_string(), 1024u64),
+            ("/usr/lib64/myapp/libbar.so".to_string(), 2048u64),
+        ];
+        let result = collapse_to_ancestors(&files, &rpm);
+        assert_eq!(result.len(), 1, "siblings should collapse to one entry");
+        assert_eq!(result[0].path, "/usr/lib64/myapp");
+        assert_eq!(result[0].file_count, 2);
+        assert_eq!(result[0].total_size_bytes, 3072);
+        assert_eq!(result[0].file_type, FileType::Other); // directory grouping
+    }
+
+    #[test]
+    fn test_collapse_single_file_gets_type() {
+        // A single file under an RPM-owned parent should get a file type.
+        let rpm = owned_set(&["/usr/bin"]);
+        let files = vec![("/usr/bin/custom-tool".to_string(), 512u64)];
+        let result = collapse_to_ancestors(&files, &rpm);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, "/usr/bin/custom-tool");
+        assert_eq!(result[0].file_count, 1);
+        assert_eq!(result[0].total_size_bytes, 512);
+        assert_eq!(result[0].file_type, FileType::Script); // default for /usr files
+        assert!(result[0].disposition.is_included());
+    }
+
+    #[test]
+    fn test_collapse_so_file_classified_as_elf() {
+        let rpm = owned_set(&["/usr/lib64"]);
+        let files = vec![("/usr/lib64/libcustom.so".to_string(), 4096u64)];
+        let result = collapse_to_ancestors(&files, &rpm);
+        assert_eq!(result[0].file_type, FileType::ElfBinary);
+    }
+
+    #[test]
+    fn test_collapse_jar_file_classified() {
+        // Include /usr/share in owned set (realistic: owned by `filesystem` RPM)
+        let rpm = owned_set(&["/usr/share", "/usr/share/java"]);
+        let files = vec![("/usr/share/java/custom.jar".to_string(), 8192u64)];
+        let result = collapse_to_ancestors(&files, &rpm);
+        assert_eq!(result[0].file_type, FileType::Jar);
+    }
+
+    // ---- /usr walk: prune tests ----
+
+    #[test]
+    fn test_prune_pyc() {
+        assert!(is_pruned_file(
+            "/usr/lib/python3.9/__pycache__/foo.cpython-39.pyc"
+        ));
+    }
+
+    #[test]
+    fn test_prune_font_cache() {
+        assert!(is_pruned_file("/usr/share/fonts/.fontconfig"));
+    }
+
+    #[test]
+    fn test_prune_ldcache() {
+        assert!(is_pruned_file("/etc/ld.so.cache"));
+    }
+
+    #[test]
+    fn test_prune_fonts_cache_file() {
+        assert!(is_pruned_file("/usr/share/fonts/fonts.cache"));
+    }
+
+    #[test]
+    fn test_prune_generic_cache() {
+        assert!(is_pruned_file("/usr/lib/something/.cache"));
+    }
+
+    #[test]
+    fn test_no_prune_real_file() {
+        assert!(!is_pruned_file("/usr/bin/custom-tool"));
+    }
+
+    #[test]
+    fn test_no_prune_lib() {
+        assert!(!is_pruned_file("/usr/lib64/libcustom.so.1"));
+    }
+
+    #[test]
+    fn test_no_prune_share_file() {
+        assert!(!is_pruned_file("/usr/share/myapp/config.yaml"));
+    }
+
+    // ---- UnmanagedUsrEntry serde roundtrip ----
+
+    #[test]
+    fn test_unmanaged_usr_entry_roundtrip() {
+        let entry = UnmanagedUsrEntry {
+            path: "/usr/lib64/myapp".to_string(),
+            file_count: 5,
+            total_size_bytes: 10240,
+            file_type: FileType::Other,
+            disposition: FindingKind::included(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: UnmanagedUsrEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, parsed);
+    }
+
+    #[test]
+    fn test_unmanaged_file_section_with_usr_entries_roundtrip() {
+        let section = UnmanagedFileSection {
+            items: vec![],
+            usr_entries: vec![UnmanagedUsrEntry {
+                path: "/usr/lib64/custom".to_string(),
+                file_count: 3,
+                total_size_bytes: 4096,
+                file_type: FileType::ElfBinary,
+                disposition: FindingKind::included(),
+            }],
+            total_size: 0,
+            total_count: 0,
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        let deser: UnmanagedFileSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, deser);
+    }
+
+    #[test]
+    fn test_unmanaged_file_section_defaults_have_empty_usr_entries() {
+        // Backward compat: old JSON without usr_entries should deserialize fine.
+        let json = r#"{"items":[],"total_size":0,"total_count":0}"#;
+        let deser: UnmanagedFileSection = serde_json::from_str(json).unwrap();
+        assert!(deser.usr_entries.is_empty());
     }
 }

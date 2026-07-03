@@ -1110,6 +1110,7 @@ fn export_allowlist_includes_unmanaged_root() {
             disposition: FindingKind::included(),
             ..Default::default()
         }],
+        usr_entries: Vec::new(),
         total_size: 1024,
         total_count: 1,
     });
@@ -1171,6 +1172,7 @@ fn export_prunes_excluded_unmanaged_files() {
                 ..Default::default()
             },
         ],
+        usr_entries: Vec::new(),
         total_size: 768,
         total_count: 2,
     });
