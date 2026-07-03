@@ -19,6 +19,7 @@ pub mod selinux;
 pub mod services;
 pub mod storage;
 pub mod subscription;
+pub mod symlink_allowlist;
 pub mod system;
 pub mod users;
 pub mod warnings;

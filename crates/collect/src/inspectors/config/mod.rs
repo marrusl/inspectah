@@ -1,4 +1,5 @@
-use inspectah_core::types::FindingKind;
+use inspectah_core::types::symlink_allowlist::{crosses_tree_boundary, is_allowlisted};
+use inspectah_core::types::{AdvisoryType, FindingKind};
 pub mod classify;
 pub mod rpmva;
 pub mod walk;
@@ -193,6 +194,49 @@ impl Inspector for ConfigInspector {
                     // Skip DHCP connections
                     if dhcp_paths.contains(&abs_path) {
                         continue;
+                    }
+
+                    // Cross-tree symlink detection: advisories for symlinks
+                    // that cross /etc→/var or /etc→/usr boundaries
+                    if exec.read_link(Path::new(&abs_path)).is_ok() {
+                        match exec.resolve_final_target(Path::new(&abs_path)) {
+                            Err(_) => {
+                                section.files.push(ConfigFileEntry {
+                                    path: abs_path,
+                                    kind: ConfigFileKind::Unowned,
+                                    category: classify_config_path(&format!("/etc/{rel_path}")),
+                                    content: String::new(),
+                                    disposition: FindingKind::advisory(
+                                        AdvisoryType::CrossTreeSymlink,
+                                        "Broken cross-tree symlink",
+                                    ),
+                                    ..Default::default()
+                                });
+                                continue;
+                            }
+                            Ok(resolved) => {
+                                let resolved_str = resolved.to_string_lossy();
+                                if is_allowlisted(&abs_path, &resolved_str) {
+                                    continue;
+                                }
+                                if let Some(rationale) =
+                                    crosses_tree_boundary(&abs_path, &resolved_str)
+                                {
+                                    section.files.push(ConfigFileEntry {
+                                        path: abs_path,
+                                        kind: ConfigFileKind::Unowned,
+                                        category: classify_config_path(&format!("/etc/{rel_path}")),
+                                        content: String::new(),
+                                        disposition: FindingKind::advisory(
+                                            AdvisoryType::CrossTreeSymlink,
+                                            rationale,
+                                        ),
+                                        ..Default::default()
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
                     }
 
                     let content = read_config_content(exec, &abs_path, &mut degraded_reasons);
@@ -1514,5 +1558,151 @@ mod tests {
             !section.files.iter().any(|f| f.path.contains("mod_proxy")),
             "mod_proxy.so should not appear (directory symlink outside /etc)"
         );
+    }
+
+    // ---- Cross-tree symlink advisory tests ----
+
+    #[test]
+    fn test_cross_tree_symlink_etc_to_var_emits_advisory() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["mydb"])
+            .with_dir("/etc/mydb", vec!["config"])
+            .with_link("/etc/mydb/config", "/var/lib/mydb/config")
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ConfigInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::Config(ref section) = output.section {
+            let entry = section
+                .files
+                .iter()
+                .find(|f| f.path.contains("mydb/config"))
+                .expect("should find cross-tree symlink entry");
+            assert!(
+                entry.disposition.is_advisory(),
+                "cross-tree symlink should be advisory"
+            );
+            match &entry.disposition {
+                FindingKind::Advisory {
+                    advisory_type,
+                    rationale,
+                } => {
+                    assert_eq!(*advisory_type, AdvisoryType::CrossTreeSymlink);
+                    assert!(
+                        rationale.contains("/etc \u{2192} /var"),
+                        "rationale should mention /etc \u{2192} /var, got: {rationale}"
+                    );
+                }
+                _ => panic!("expected Advisory disposition"),
+            }
+        } else {
+            panic!("expected Config section");
+        }
+    }
+
+    #[test]
+    fn test_allowlisted_symlink_skipped() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["localtime", "custom.conf"])
+            .with_link("/etc/localtime", "/usr/share/zoneinfo/UTC")
+            .with_file("/etc/custom.conf", "custom content")
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ConfigInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::Config(ref section) = output.section {
+            assert!(
+                !section.files.iter().any(|f| f.path.contains("localtime")),
+                "allowlisted symlink should be suppressed"
+            );
+            assert!(
+                section.files.iter().any(|f| f.path.contains("custom.conf")),
+                "non-symlink file should still appear"
+            );
+        } else {
+            panic!("expected Config section");
+        }
+    }
+
+    #[test]
+    fn test_broken_symlink_emits_advisory() {
+        // Symlink loop simulates a broken resolve (resolve_final_target fails)
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["broken-link"])
+            .with_link("/etc/broken-link", "/etc/broken-link")
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let inspector = ConfigInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        let output = result.expect("should succeed");
+        if let SectionData::Config(ref section) = output.section {
+            let entry = section
+                .files
+                .iter()
+                .find(|f| f.path.contains("broken-link"))
+                .expect("should find broken symlink entry");
+            assert!(
+                entry.disposition.is_advisory(),
+                "broken symlink should be advisory"
+            );
+            match &entry.disposition {
+                FindingKind::Advisory { rationale, .. } => {
+                    assert!(
+                        rationale.contains("Broken"),
+                        "rationale should mention broken, got: {rationale}"
+                    );
+                }
+                _ => panic!("expected Advisory disposition"),
+            }
+        } else {
+            panic!("expected Config section");
+        }
     }
 }
