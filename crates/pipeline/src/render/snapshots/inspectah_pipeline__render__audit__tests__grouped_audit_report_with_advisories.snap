@@ -1,0 +1,28 @@
+---
+source: crates/pipeline/src/render/audit.rs
+expression: md
+---
+# Audit Report
+
+## Packages
+
+### Packages
+
+### Added Packages (1)
+
+| Name | Version | Release | Arch | Repo |
+|------|---------|---------|------|------|
+| httpd |  |  |  |  |
+
+## Services & Scheduling
+
+### Advisories
+
+- ℹ **/etc/systemd/system/httpd.service.d/override.conf** — Full shadow replaces base unit; review for conflicts
+
+## Storage
+
+### Advisories
+
+- ℹ **/var/lib/foo** — No tmpfiles.d backing for ephemeral directories
+- ℹ **/var/cache/bar** — No tmpfiles.d backing for ephemeral directories

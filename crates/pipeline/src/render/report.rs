@@ -2874,18 +2874,16 @@ mod tests {
         let re = regex::Regex::new(r#"<details id="([^"]+)">"#).unwrap();
         let html_ids: Vec<String> = re.captures_iter(&html).map(|c| c[1].to_string()).collect();
 
-        // Parity table: markdown heading → HTML section ID.
-        // All 11 data sections present in both renderers.
+        // Parity table: markdown GROUP heading → HTML section ID.
+        // Markdown uses grouped architecture (h2 = groups, h3 = sections).
+        // HTML uses flat sections. Map group names to their section IDs.
         let expected_mappings = vec![
             ("Packages", "packages"),
-            ("Configuration Files", "config-files"),
-            ("Service State Changes", "services"),
+            ("System Configuration", "config-files"), // Group contains config, kernel, selinux
+            ("Services & Scheduling", "services"),    // Group contains services, scheduled_tasks
+            ("Users & Identity", "users-groups"),
             ("Storage", "storage"),
-            ("Kernel & Boot", "kernel-boot"),
-            ("Scheduled Tasks", "scheduled-tasks"),
-            ("Security & Access Control", "security"),
-            ("Non-RPM Software", "nonrpm"),
-            ("Users & Groups", "users-groups"),
+            ("Software & Files", "nonrpm"),
             ("Redactions", "redactions"),
             ("Warnings", "warnings"),
         ];

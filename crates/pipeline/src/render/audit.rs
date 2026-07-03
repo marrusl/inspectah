@@ -5,9 +5,18 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
+use crate::section_group::SectionGroup;
+
+/// Advisory entry for the Advisories section within a group.
+#[derive(Debug, Clone)]
+struct Advisory {
+    path_or_pattern: String,
+    rationale: String,
+}
 
 /// Finds packages that appear in multiple groups.
 /// Returns a map from package name to the list of group names containing it.
@@ -46,6 +55,47 @@ fn find_package_overlaps(
     }
 
     overlaps
+}
+
+/// Collect advisories for a given group from the snapshot.
+fn collect_group_advisories(snap: &InspectionSnapshot, group: SectionGroup) -> Vec<Advisory> {
+    let mut advisories = Vec::new();
+
+    match group {
+        SectionGroup::Storage => {
+            // Unbacked /var advisory
+            if let Some(storage) = &snap.storage
+                && let Some(ref unbacked) = storage.unbacked_var_advisory
+                && let inspectah_core::types::FindingKind::Advisory { rationale, .. } =
+                    &unbacked.disposition
+            {
+                for path in &unbacked.paths {
+                    advisories.push(Advisory {
+                        path_or_pattern: path.clone(),
+                        rationale: rationale.clone(),
+                    });
+                }
+            }
+        }
+        SectionGroup::Services => {
+            // Service drop-ins with FullShadow
+            if let Some(services) = &snap.services {
+                for drop_in in &services.drop_ins {
+                    if drop_in.shadow_type == Some(ShadowType::FullShadow)
+                        && let Some(ref rationale) = drop_in.shadow_rationale
+                    {
+                        advisories.push(Advisory {
+                            path_or_pattern: drop_in.path.clone(),
+                            rationale: rationale.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    advisories
 }
 
 /// Render the audit report markdown from a snapshot.
@@ -216,467 +266,65 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
     }
 
-    // Packages
-    if let Some(rpm) = &snap.rpm {
-        lines.push("## Packages".into());
-        lines.push(String::new());
+    // Grouped sections
+    for group in SectionGroup::all_in_order() {
+        let mut group_lines = Vec::new();
 
-        let included: usize = rpm
-            .packages_added
-            .iter()
-            .filter(|p| p.disposition.is_included())
-            .count();
-        if included > 0 {
-            lines.push(format!("### Added Packages ({included})"));
-            lines.push(String::new());
-            lines.push("| Name | Version | Release | Arch | Repo |".into());
-            lines.push("|------|---------|---------|------|------|".into());
-            for p in &rpm.packages_added {
-                if !p.disposition.is_included() {
-                    continue;
+        // Collect section content for this group
+        match group {
+            SectionGroup::Packages => {
+                if let Some(rpm) = &snap.rpm {
+                    group_lines.push("### Packages".into());
+                    group_lines.push(String::new());
+                    render_packages_section(rpm, &mut group_lines);
                 }
-                lines.push(format!(
-                    "| {} | {} | {} | {} | {} |",
-                    p.name, p.version, p.release, p.arch, p.source_repo
-                ));
             }
-            lines.push(String::new());
+            SectionGroup::SystemConfig => {
+                render_system_config_sections(snap, &mut group_lines);
+            }
+            SectionGroup::Services => {
+                render_services_sections(snap, &mut group_lines);
+            }
+            SectionGroup::Identity => {
+                render_identity_section(snap, &mut group_lines);
+            }
+            SectionGroup::Network => {
+                // Network section (currently empty in the original code)
+            }
+            SectionGroup::Storage => {
+                render_storage_section(snap, &mut group_lines);
+            }
+            SectionGroup::Software => {
+                render_software_sections(snap, &mut group_lines);
+            }
+            SectionGroup::Secrets => {
+                render_secrets_section(snap, &mut group_lines);
+            }
         }
 
-        // Group overlap annotations
-        if let Some(ref groups) = rpm.installed_groups {
-            let overlaps = find_package_overlaps(groups);
-            if !overlaps.is_empty() {
-                for (pkg_name, group_names) in overlaps {
-                    let group_list = group_names
-                        .iter()
-                        .map(|g| format!("'{}'", g))
-                        .collect::<Vec<_>>()
-                        .join(" and ");
+        // Collect advisories for this group
+        let advisories = collect_group_advisories(snap, *group);
+
+        // Only emit group if it has content or advisories
+        if !group_lines.is_empty() || !advisories.is_empty() {
+            lines.push(format!("## {}", group.label()));
+            lines.push(String::new());
+
+            // Section content
+            lines.extend(group_lines);
+
+            // Advisories subsection
+            if !advisories.is_empty() {
+                lines.push("### Advisories".into());
+                lines.push(String::new());
+                for advisory in advisories {
                     lines.push(format!(
-                        "**Note:** `{}` appears in both {} — DNF handles this correctly, no action needed.",
-                        pkg_name, group_list
+                        "- ℹ **{}** — {}",
+                        advisory.path_or_pattern, advisory.rationale
                     ));
                 }
                 lines.push(String::new());
             }
-        }
-
-        // Version changes
-        if !rpm.version_changes.is_empty() {
-            lines.push(format!(
-                "### Version Changes ({})",
-                rpm.version_changes.len()
-            ));
-            lines.push(String::new());
-            lines.push("| Package | Host Version | Base Version | Direction |".into());
-            lines.push("|---------|--------------|--------------|-----------|".into());
-            for vc in &rpm.version_changes {
-                let dir = serde_json::to_string(&vc.direction)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string();
-                lines.push(format!(
-                    "| {} | {} | {} | {} |",
-                    vc.name, vc.host_version, vc.base_version, dir
-                ));
-            }
-            lines.push(String::new());
-        }
-
-        // Module streams
-        let non_baseline: Vec<_> = rpm
-            .module_streams
-            .iter()
-            .filter(|ms| ms.disposition.is_included() && !ms.baseline_match)
-            .collect();
-        if !non_baseline.is_empty() {
-            lines.push(format!("### Module Streams ({})", non_baseline.len()));
-            lines.push(String::new());
-            for ms in &non_baseline {
-                lines.push(format!("- {}:{}", ms.module_name, ms.stream));
-            }
-            lines.push(String::new());
-        }
-    }
-
-    // Config files
-    if let Some(config) = &snap.config
-        && !config.files.is_empty()
-    {
-        lines.push("## Configuration Files".into());
-        lines.push(String::new());
-
-        let modified: usize = config
-            .files
-            .iter()
-            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::RpmOwnedModified)
-            .count();
-        let unowned: usize = config
-            .files
-            .iter()
-            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::Unowned)
-            .count();
-
-        if modified > 0 {
-            lines.push(format!("### Modified RPM-Owned Files ({modified})"));
-            lines.push(String::new());
-            for f in &config.files {
-                if !f.disposition.is_included() || f.kind != ConfigFileKind::RpmOwnedModified {
-                    continue;
-                }
-                lines.push(format!("#### `{}`", f.path));
-                lines.push(String::new());
-                if let Some(ref diff) = f.diff_against_rpm
-                    && !diff.is_empty()
-                {
-                    lines.push("```diff".into());
-                    lines.push(diff.clone());
-                    lines.push("```".into());
-                    lines.push(String::new());
-                }
-            }
-        }
-
-        if unowned > 0 {
-            lines.push(format!("### Unowned Config Files ({unowned})"));
-            lines.push(String::new());
-            for f in &config.files {
-                if !f.disposition.is_included() || f.kind != ConfigFileKind::Unowned {
-                    continue;
-                }
-                let category = serde_json::to_string(&f.category)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string();
-                lines.push(format!("- `{}` ({})", f.path, category));
-            }
-            lines.push(String::new());
-        }
-    }
-
-    // Services
-    if let Some(services) = &snap.services
-        && !services.state_changes.is_empty()
-    {
-        lines.push("## Service State Changes".into());
-        lines.push(String::new());
-        lines.push("| Unit | Current | Default | Action |".into());
-        lines.push("|------|---------|---------|--------|".into());
-        for sc in &services.state_changes {
-            let state_str = match sc.current_state {
-                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
-                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
-                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
-            };
-            let default_str = match sc.default_state {
-                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
-                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
-                None => "unknown",
-            };
-            let action_str = match sc.implied_action() {
-                inspectah_core::types::services::ServiceAction::Enable => "enable",
-                inspectah_core::types::services::ServiceAction::Disable => "disable",
-                inspectah_core::types::services::ServiceAction::Mask => "mask",
-            };
-            lines.push(format!(
-                "| {} | {} | {} | {} |",
-                sc.unit, state_str, default_str, action_str
-            ));
-        }
-        lines.push(String::new());
-    }
-
-    // Storage
-    if let Some(storage) = &snap.storage {
-        let has_content = !storage.fstab_entries.is_empty()
-            || !storage.lvm_info.is_empty()
-            || !storage.credential_refs.is_empty();
-
-        if has_content {
-            lines.push("## Storage".into());
-            lines.push(String::new());
-
-            if !storage.fstab_entries.is_empty() {
-                lines.push(format!(
-                    "### Fstab Entries ({})",
-                    storage.fstab_entries.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Device | Mount Point | Type | Options |".into());
-                lines.push("|--------|-------------|------|---------|".into());
-                for entry in &storage.fstab_entries {
-                    lines.push(format!(
-                        "| {} | {} | {} | {} |",
-                        entry.device, entry.mount_point, entry.fstype, entry.options
-                    ));
-                }
-                lines.push(String::new());
-            }
-
-            if !storage.lvm_info.is_empty() {
-                lines.push(format!("### LVM Volumes ({})", storage.lvm_info.len()));
-                lines.push(String::new());
-                lines.push("| LV Name | VG Name | Size |".into());
-                lines.push("|---------|---------|------|".into());
-                for lv in &storage.lvm_info {
-                    lines.push(format!(
-                        "| {} | {} | {} |",
-                        lv.lv_name, lv.vg_name, lv.lv_size
-                    ));
-                }
-                lines.push(String::new());
-            }
-
-            if !storage.credential_refs.is_empty() {
-                lines.push(format!(
-                    "### Credential References ({})",
-                    storage.credential_refs.len()
-                ));
-                lines.push(String::new());
-                for cr in &storage.credential_refs {
-                    lines.push(format!(
-                        "- `{}` references `{}` (source: {})",
-                        cr.mount_point, cr.credential_path, cr.source
-                    ));
-                }
-                lines.push(String::new());
-            }
-        }
-    }
-
-    // Kernel & Boot
-    if let Some(kb) = &snap.kernel_boot {
-        let has_content = !kb.cmdline.is_empty()
-            || !kb.sysctl_overrides.is_empty()
-            || !kb.modules_load_d.is_empty()
-            || !kb.modprobe_d.is_empty()
-            || !kb.dracut_conf.is_empty()
-            || !kb.non_default_modules.is_empty();
-
-        if has_content {
-            lines.push("## Kernel & Boot".into());
-            lines.push(String::new());
-
-            if !kb.cmdline.is_empty() {
-                lines.push("### Kernel Command Line".into());
-                lines.push(String::new());
-                lines.push(format!("`{}`", kb.cmdline));
-                lines.push(String::new());
-            }
-
-            let included_overrides: Vec<_> = kb
-                .sysctl_overrides
-                .iter()
-                .filter(|o| o.disposition.is_included())
-                .collect();
-            if !included_overrides.is_empty() {
-                lines.push(format!(
-                    "### Sysctl Overrides ({})",
-                    included_overrides.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Key | Runtime Value | Default Value | Source |".into());
-                lines.push("|-----|---------------|---------------|--------|".into());
-                for o in &included_overrides {
-                    lines.push(format!(
-                        "| {} | {} | {} | {} |",
-                        o.key, o.runtime, o.default, o.source
-                    ));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.modules_load_d.is_empty() {
-                lines.push(format!(
-                    "### Loaded Module Configs ({})",
-                    kb.modules_load_d.len()
-                ));
-                lines.push(String::new());
-                for m in &kb.modules_load_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.modprobe_d.is_empty() {
-                lines.push(format!("### Modprobe Configs ({})", kb.modprobe_d.len()));
-                lines.push(String::new());
-                for m in &kb.modprobe_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.dracut_conf.is_empty() {
-                lines.push(format!("### Dracut Configs ({})", kb.dracut_conf.len()));
-                lines.push(String::new());
-                for d in &kb.dracut_conf {
-                    lines.push(format!("- `{}`", d.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.non_default_modules.is_empty() {
-                lines.push(format!(
-                    "### Non-Default Kernel Modules ({})",
-                    kb.non_default_modules.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Module | Size | Used By |".into());
-                lines.push("|--------|------|---------|".into());
-                for m in &kb.non_default_modules {
-                    lines.push(format!("| {} | {} | {} |", m.name, m.size, m.used_by));
-                }
-                lines.push(String::new());
-            }
-        }
-    }
-
-    // Scheduled Tasks
-    if let Some(st) = &snap.scheduled_tasks {
-        let cron_count = st.cron_jobs.len();
-        let timer_count = st.systemd_timers.len() + st.generated_timer_units.len();
-        let at_count = st.at_jobs.len();
-
-        if cron_count > 0 || timer_count > 0 || at_count > 0 {
-            lines.push("## Scheduled Tasks".into());
-            lines.push(String::new());
-            lines.push(format!("- **Cron jobs:** {cron_count}"));
-            lines.push(format!("- **Systemd timers:** {timer_count}"));
-            lines.push(format!("- **At jobs:** {at_count}"));
-
-            // Detect @reboot entries from generated timer units where the
-            // real cron expression is stored, not from CronJob.source (which
-            // holds the collector source label like "cron.d" or "crontab").
-            let reboot_count = st
-                .generated_timer_units
-                .iter()
-                .filter(|g| g.cron_expr == "@reboot")
-                .count();
-            if reboot_count > 0 {
-                lines.push(String::new());
-                lines.push(format!(
-                    "**Warning:** {} `@reboot` cron job(s) detected. These cannot be converted \
-                     to systemd timers and require manual handling \
-                     (boot-triggered oneshot service).",
-                    reboot_count
-                ));
-            }
-            lines.push(String::new());
-        }
-    }
-
-    // SELinux
-    if let Some(sel) = &snap.selinux {
-        let has_content = !sel.mode.is_empty()
-            || !sel.custom_modules.is_empty()
-            || !sel.boolean_overrides.is_empty()
-            || !sel.fcontext_rules.is_empty();
-
-        if has_content {
-            lines.push("## Security & Access Control".into());
-            lines.push(String::new());
-            lines.push(format!("- **Mode:** {}", sel.mode));
-            if !sel.custom_modules.is_empty() {
-                lines.push(format!(
-                    "- **Custom modules:** {}",
-                    sel.custom_modules.len()
-                ));
-            }
-            let non_default_booleans = sel.boolean_overrides.len();
-            if non_default_booleans > 0 {
-                lines.push(format!(
-                    "- **Non-default booleans:** {non_default_booleans}"
-                ));
-            }
-            if !sel.fcontext_rules.is_empty() {
-                lines.push(format!(
-                    "- **File context rules:** {}",
-                    sel.fcontext_rules.len()
-                ));
-            }
-            if sel.fips_mode {
-                lines.push("- **FIPS mode:** enabled".into());
-            }
-            lines.push(String::new());
-        }
-    }
-
-    // Non-RPM Software
-    if let Some(nrs) = &snap.non_rpm_software {
-        let item_count = nrs.items.len();
-        let env_count = nrs.env_files.len();
-
-        if item_count > 0 || env_count > 0 {
-            lines.push("## Non-RPM Software".into());
-            lines.push(String::new());
-
-            if item_count > 0 {
-                // Count by method
-                let mut by_method: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-                for item in &nrs.items {
-                    *by_method
-                        .entry(if item.method.is_empty() {
-                            "unknown".to_string()
-                        } else {
-                            item.method.clone()
-                        })
-                        .or_insert(0) += 1;
-                }
-                let mut methods: Vec<_> = by_method.into_iter().collect();
-                methods.sort_by_key(|b| std::cmp::Reverse(b.1));
-                lines.push(format!("### Items ({item_count})"));
-                lines.push(String::new());
-                for (method, count) in &methods {
-                    lines.push(format!("- {method}: {count}"));
-                }
-                lines.push(String::new());
-            }
-
-            if env_count > 0 {
-                lines.push(format!(
-                    "**Warning:** {env_count} `.env` file(s) detected. These are high-probability \
-                     secret carriers and require operator review before inclusion."
-                ));
-                lines.push(String::new());
-            }
-        }
-    }
-
-    // Users & Groups — safe-field whitelist only (same as HTML renderer).
-    // EXCLUDED: password_hash, ssh_keys contents, shadow_entries, gshadow_entries, sudoers_rules.
-    if let Some(ug) = &snap.users_groups {
-        let included: Vec<UserGroupDecision> = ug
-            .users
-            .iter()
-            .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
-            .filter(|u| u.disposition.is_included())
-            .collect();
-
-        if !included.is_empty() {
-            lines.push(format!("## Users & Groups ({})", included.len()));
-            lines.push(String::new());
-            lines.push("| Name | UID | Shell | Classification | Sudo | SSH Keys |".into());
-            lines.push("|------|-----|-------|----------------|------|----------|".into());
-            for u in &included {
-                let sudo = if u.has_sudo.unwrap_or(false) {
-                    "yes"
-                } else {
-                    "no"
-                };
-                let ssh = match u.ssh_key_count.unwrap_or(0) {
-                    0 => "none".to_string(),
-                    1 => "1 key".to_string(),
-                    n => format!("{n} keys"),
-                };
-                lines.push(format!(
-                    "| {} | {} | {} | {} | {} | {} |",
-                    u.name, u.uid, u.shell, u.classification, sudo, ssh
-                ));
-            }
-            lines.push(String::new());
         }
     }
 
@@ -704,6 +352,479 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
     }
 
     lines.join("\n")
+}
+
+/// Render the Packages section content (not including the section heading).
+fn render_packages_section(rpm: &inspectah_core::types::rpm::RpmSection, lines: &mut Vec<String>) {
+    let included: usize = rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.disposition.is_included())
+        .count();
+    if included > 0 {
+        lines.push(format!("### Added Packages ({included})"));
+        lines.push(String::new());
+        lines.push("| Name | Version | Release | Arch | Repo |".into());
+        lines.push("|------|---------|---------|------|------|".into());
+        for p in &rpm.packages_added {
+            if !p.disposition.is_included() {
+                continue;
+            }
+            lines.push(format!(
+                "| {} | {} | {} | {} | {} |",
+                p.name, p.version, p.release, p.arch, p.source_repo
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    // Group overlap annotations
+    if let Some(ref groups) = rpm.installed_groups {
+        let overlaps = find_package_overlaps(groups);
+        if !overlaps.is_empty() {
+            for (pkg_name, group_names) in overlaps {
+                let group_list = group_names
+                    .iter()
+                    .map(|g| format!("'{}'", g))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                lines.push(format!(
+                        "**Note:** `{}` appears in both {} — DNF handles this correctly, no action needed.",
+                        pkg_name, group_list
+                    ));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // Version changes
+    if !rpm.version_changes.is_empty() {
+        lines.push(format!(
+            "### Version Changes ({})",
+            rpm.version_changes.len()
+        ));
+        lines.push(String::new());
+        lines.push("| Package | Host Version | Base Version | Direction |".into());
+        lines.push("|---------|--------------|--------------|-----------|".into());
+        for vc in &rpm.version_changes {
+            let dir = serde_json::to_string(&vc.direction)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string();
+            lines.push(format!(
+                "| {} | {} | {} | {} |",
+                vc.name, vc.host_version, vc.base_version, dir
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    // Module streams
+    let non_baseline: Vec<_> = rpm
+        .module_streams
+        .iter()
+        .filter(|ms| ms.disposition.is_included() && !ms.baseline_match)
+        .collect();
+    if !non_baseline.is_empty() {
+        lines.push(format!("### Module Streams ({})", non_baseline.len()));
+        lines.push(String::new());
+        for ms in &non_baseline {
+            lines.push(format!("- {}:{}", ms.module_name, ms.stream));
+        }
+        lines.push(String::new());
+    }
+}
+
+/// Render System Configuration sections (config, kernel_boot, selinux).
+fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    // Config files
+    if let Some(config) = &snap.config
+        && !config.files.is_empty()
+    {
+        lines.push("### Configuration Files".into());
+        lines.push(String::new());
+
+        let modified: usize = config
+            .files
+            .iter()
+            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::RpmOwnedModified)
+            .count();
+        let unowned: usize = config
+            .files
+            .iter()
+            .filter(|f| f.disposition.is_included() && f.kind == ConfigFileKind::Unowned)
+            .count();
+
+        if modified > 0 {
+            lines.push(format!("#### Modified RPM-Owned Files ({modified})"));
+            lines.push(String::new());
+            for f in &config.files {
+                if !f.disposition.is_included() || f.kind != ConfigFileKind::RpmOwnedModified {
+                    continue;
+                }
+                lines.push(format!("**`{}`**", f.path));
+                lines.push(String::new());
+                if let Some(ref diff) = f.diff_against_rpm
+                    && !diff.is_empty()
+                {
+                    lines.push("```diff".into());
+                    lines.push(diff.clone());
+                    lines.push("```".into());
+                    lines.push(String::new());
+                }
+            }
+        }
+
+        if unowned > 0 {
+            lines.push(format!("#### Unowned Config Files ({unowned})"));
+            lines.push(String::new());
+            for f in &config.files {
+                if !f.disposition.is_included() || f.kind != ConfigFileKind::Unowned {
+                    continue;
+                }
+                let category = serde_json::to_string(&f.category)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string();
+                lines.push(format!("- `{}` ({})", f.path, category));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // Kernel & Boot
+    if let Some(kb) = &snap.kernel_boot {
+        let has_content = !kb.cmdline.is_empty()
+            || !kb.sysctl_overrides.is_empty()
+            || !kb.modules_load_d.is_empty()
+            || !kb.modprobe_d.is_empty()
+            || !kb.dracut_conf.is_empty()
+            || !kb.non_default_modules.is_empty();
+
+        if has_content {
+            lines.push("### Kernel & Boot".into());
+            lines.push(String::new());
+
+            if !kb.cmdline.is_empty() {
+                lines.push("#### Kernel Command Line".into());
+                lines.push(String::new());
+                lines.push(format!("`{}`", kb.cmdline));
+                lines.push(String::new());
+            }
+
+            let included_overrides: Vec<_> = kb
+                .sysctl_overrides
+                .iter()
+                .filter(|o| o.disposition.is_included())
+                .collect();
+            if !included_overrides.is_empty() {
+                lines.push(format!(
+                    "#### Sysctl Overrides ({})",
+                    included_overrides.len()
+                ));
+                lines.push(String::new());
+                lines.push("| Key | Runtime Value | Default Value | Source |".into());
+                lines.push("|-----|---------------|---------------|--------|".into());
+                for o in &included_overrides {
+                    lines.push(format!(
+                        "| {} | {} | {} | {} |",
+                        o.key, o.runtime, o.default, o.source
+                    ));
+                }
+                lines.push(String::new());
+            }
+
+            if !kb.modules_load_d.is_empty() {
+                lines.push(format!(
+                    "#### Loaded Module Configs ({})",
+                    kb.modules_load_d.len()
+                ));
+                lines.push(String::new());
+                for m in &kb.modules_load_d {
+                    lines.push(format!("- `{}`", m.path));
+                }
+                lines.push(String::new());
+            }
+
+            if !kb.modprobe_d.is_empty() {
+                lines.push(format!("#### Modprobe Configs ({})", kb.modprobe_d.len()));
+                lines.push(String::new());
+                for m in &kb.modprobe_d {
+                    lines.push(format!("- `{}`", m.path));
+                }
+                lines.push(String::new());
+            }
+
+            if !kb.dracut_conf.is_empty() {
+                lines.push(format!("#### Dracut Configs ({})", kb.dracut_conf.len()));
+                lines.push(String::new());
+                for d in &kb.dracut_conf {
+                    lines.push(format!("- `{}`", d.path));
+                }
+                lines.push(String::new());
+            }
+
+            if !kb.non_default_modules.is_empty() {
+                lines.push(format!(
+                    "#### Non-Default Kernel Modules ({})",
+                    kb.non_default_modules.len()
+                ));
+                lines.push(String::new());
+                lines.push("| Module | Size | Used By |".into());
+                lines.push("|--------|------|---------|".into());
+                for m in &kb.non_default_modules {
+                    lines.push(format!("| {} | {} | {} |", m.name, m.size, m.used_by));
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+
+    // SELinux
+    if let Some(sel) = &snap.selinux {
+        let has_content = !sel.mode.is_empty()
+            || !sel.custom_modules.is_empty()
+            || !sel.boolean_overrides.is_empty()
+            || !sel.fcontext_rules.is_empty();
+
+        if has_content {
+            lines.push("### Security & Access Control".into());
+            lines.push(String::new());
+            lines.push(format!("- **Mode:** {}", sel.mode));
+            if !sel.custom_modules.is_empty() {
+                lines.push(format!(
+                    "- **Custom modules:** {}",
+                    sel.custom_modules.len()
+                ));
+            }
+            let non_default_booleans = sel.boolean_overrides.len();
+            if non_default_booleans > 0 {
+                lines.push(format!(
+                    "- **Non-default booleans:** {non_default_booleans}"
+                ));
+            }
+            if !sel.fcontext_rules.is_empty() {
+                lines.push(format!(
+                    "- **File context rules:** {}",
+                    sel.fcontext_rules.len()
+                ));
+            }
+            if sel.fips_mode {
+                lines.push("- **FIPS mode:** enabled".into());
+            }
+            lines.push(String::new());
+        }
+    }
+}
+
+/// Render Services sections (services, scheduled_tasks).
+fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    // Service State Changes
+    if let Some(services) = &snap.services
+        && !services.state_changes.is_empty()
+    {
+        lines.push("### Service State Changes".into());
+        lines.push(String::new());
+        lines.push("| Unit | Current | Default | Action |".into());
+        lines.push("|------|---------|---------|--------|".into());
+        for sc in &services.state_changes {
+            let state_str = match sc.current_state {
+                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
+                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
+                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
+            };
+            let default_str = match sc.default_state {
+                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
+                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
+                None => "unknown",
+            };
+            let action_str = match sc.implied_action() {
+                inspectah_core::types::services::ServiceAction::Enable => "enable",
+                inspectah_core::types::services::ServiceAction::Disable => "disable",
+                inspectah_core::types::services::ServiceAction::Mask => "mask",
+            };
+            lines.push(format!(
+                "| {} | {} | {} | {} |",
+                sc.unit, state_str, default_str, action_str
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    // Scheduled Tasks
+    if let Some(st) = &snap.scheduled_tasks {
+        let cron_count = st.cron_jobs.len();
+        let timer_count = st.systemd_timers.len() + st.generated_timer_units.len();
+        let at_count = st.at_jobs.len();
+
+        if cron_count > 0 || timer_count > 0 || at_count > 0 {
+            lines.push("### Scheduled Tasks".into());
+            lines.push(String::new());
+            lines.push(format!("- **Cron jobs:** {cron_count}"));
+            lines.push(format!("- **Systemd timers:** {timer_count}"));
+            lines.push(format!("- **At jobs:** {at_count}"));
+
+            let reboot_count = st
+                .generated_timer_units
+                .iter()
+                .filter(|g| g.cron_expr == "@reboot")
+                .count();
+            if reboot_count > 0 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "**Warning:** {} `@reboot` cron job(s) detected. These cannot be converted \
+                     to systemd timers and require manual handling \
+                     (boot-triggered oneshot service).",
+                    reboot_count
+                ));
+            }
+            lines.push(String::new());
+        }
+    }
+}
+
+/// Render Identity section (users_groups).
+fn render_identity_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    if let Some(ug) = &snap.users_groups {
+        let included: Vec<UserGroupDecision> = ug
+            .users
+            .iter()
+            .filter_map(|v| serde_json::from_value::<UserGroupDecision>(v.clone()).ok())
+            .filter(|u| u.disposition.is_included())
+            .collect();
+
+        if !included.is_empty() {
+            lines.push(format!("### Users & Groups ({})", included.len()));
+            lines.push(String::new());
+            lines.push("| Name | UID | Shell | Classification | Sudo | SSH Keys |".into());
+            lines.push("|------|-----|-------|----------------|------|----------|".into());
+            for u in &included {
+                let sudo = if u.has_sudo.unwrap_or(false) {
+                    "yes"
+                } else {
+                    "no"
+                };
+                let ssh = match u.ssh_key_count.unwrap_or(0) {
+                    0 => "none".to_string(),
+                    1 => "1 key".to_string(),
+                    n => format!("{n} keys"),
+                };
+                lines.push(format!(
+                    "| {} | {} | {} | {} | {} | {} |",
+                    u.name, u.uid, u.shell, u.classification, sudo, ssh
+                ));
+            }
+            lines.push(String::new());
+        }
+    }
+}
+
+/// Render Storage section.
+fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    if let Some(storage) = &snap.storage {
+        let has_content = !storage.fstab_entries.is_empty()
+            || !storage.lvm_info.is_empty()
+            || !storage.credential_refs.is_empty();
+
+        if has_content {
+            lines.push("### Storage".into());
+            lines.push(String::new());
+
+            if !storage.fstab_entries.is_empty() {
+                lines.push(format!(
+                    "#### Fstab Entries ({})",
+                    storage.fstab_entries.len()
+                ));
+                lines.push(String::new());
+                lines.push("| Device | Mount Point | Type | Options |".into());
+                lines.push("|--------|-------------|------|---------|".into());
+                for entry in &storage.fstab_entries {
+                    lines.push(format!(
+                        "| {} | {} | {} | {} |",
+                        entry.device, entry.mount_point, entry.fstype, entry.options
+                    ));
+                }
+                lines.push(String::new());
+            }
+
+            if !storage.lvm_info.is_empty() {
+                lines.push(format!("#### LVM Volumes ({})", storage.lvm_info.len()));
+                lines.push(String::new());
+                lines.push("| LV Name | VG Name | Size |".into());
+                lines.push("|---------|---------|------|".into());
+                for lv in &storage.lvm_info {
+                    lines.push(format!(
+                        "| {} | {} | {} |",
+                        lv.lv_name, lv.vg_name, lv.lv_size
+                    ));
+                }
+                lines.push(String::new());
+            }
+
+            if !storage.credential_refs.is_empty() {
+                lines.push(format!(
+                    "#### Credential References ({})",
+                    storage.credential_refs.len()
+                ));
+                lines.push(String::new());
+                for cr in &storage.credential_refs {
+                    lines.push(format!(
+                        "- `{}` references `{}` (source: {})",
+                        cr.mount_point, cr.credential_path, cr.source
+                    ));
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+}
+
+/// Render Software sections (non_rpm_software, unmanaged_files).
+fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    if let Some(nrs) = &snap.non_rpm_software {
+        let item_count = nrs.items.len();
+        let env_count = nrs.env_files.len();
+
+        if item_count > 0 || env_count > 0 {
+            lines.push("### Non-RPM Software".into());
+            lines.push(String::new());
+
+            if item_count > 0 {
+                let mut by_method: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for item in &nrs.items {
+                    *by_method
+                        .entry(if item.method.is_empty() {
+                            "unknown".to_string()
+                        } else {
+                            item.method.clone()
+                        })
+                        .or_insert(0) += 1;
+                }
+                let mut methods: Vec<_> = by_method.into_iter().collect();
+                methods.sort_by_key(|b| std::cmp::Reverse(b.1));
+                lines.push(format!("#### Items ({item_count})"));
+                lines.push(String::new());
+                for (method, count) in &methods {
+                    lines.push(format!("- {method}: {count}"));
+                }
+                lines.push(String::new());
+            }
+
+            if env_count > 0 {
+                lines.push(format!(
+                    "**Warning:** {env_count} `.env` file(s) detected. These are high-probability \
+                     secret carriers and require operator review before inclusion."
+                ));
+                lines.push(String::new());
+            }
+        }
+    }
+}
+
+/// Render Secrets section (secrets, subscription).
+fn render_secrets_section(_snap: &InspectionSnapshot, _lines: &mut Vec<String>) {
+    // Currently empty - placeholder for future content
 }
 
 #[cfg(test)]
@@ -1163,5 +1284,100 @@ mod tests {
             !md.contains("appears in both"),
             "must not show overlap annotations when no overlaps exist"
         );
+    }
+
+    #[test]
+    fn test_grouped_audit_report_with_advisories() {
+        use inspectah_core::types::finding::AdvisoryType;
+        use inspectah_core::types::rpm::InstalledGroup;
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::storage::{StorageSection, UnbackedVarAdvisory};
+
+        let mut snap = InspectionSnapshot::new();
+
+        // Packages section
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Web Server".into(),
+                members: vec!["httpd".into()],
+                optional_installed: vec![],
+            }]),
+            ..Default::default()
+        });
+
+        // Storage section with unbacked /var advisory
+        snap.storage = Some(StorageSection {
+            unbacked_var_advisory: Some(UnbackedVarAdvisory {
+                disposition: FindingKind::advisory(
+                    AdvisoryType::UnbackedVarDir,
+                    "No tmpfiles.d backing for ephemeral directories",
+                ),
+                paths: vec!["/var/lib/foo".into(), "/var/cache/bar".into()],
+            }),
+            ..Default::default()
+        });
+
+        // Services section with FullShadow drop-in
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
+                disposition: FindingKind::included(),
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some(
+                    "Full shadow replaces base unit; review for conflicts".into(),
+                ),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let md = render_audit(&snap);
+
+        // Group headings must be h2
+        assert!(
+            md.contains("## Packages"),
+            "must have Packages group heading"
+        );
+        assert!(md.contains("## Storage"), "must have Storage group heading");
+        assert!(
+            md.contains("## Services & Scheduling"),
+            "must have Services group heading"
+        );
+
+        // Section headings within groups must be h3
+        assert!(
+            md.contains("### Packages"),
+            "must have Packages section heading"
+        );
+
+        // Advisories section within groups
+        assert!(
+            md.contains("### Advisories"),
+            "must have Advisories subsection"
+        );
+
+        // Unbacked /var advisory entries
+        assert!(
+            md.contains("- ℹ **/var/lib/foo** — No tmpfiles.d backing for ephemeral directories"),
+            "must show unbacked /var advisory for /var/lib/foo"
+        );
+        assert!(
+            md.contains("- ℹ **/var/cache/bar** — No tmpfiles.d backing for ephemeral directories"),
+            "must show unbacked /var advisory for /var/cache/bar"
+        );
+
+        // FullShadow service advisory
+        assert!(
+            md.contains("- ℹ **/etc/systemd/system/httpd.service.d/override.conf** — Full shadow replaces base unit; review for conflicts"),
+            "must show FullShadow service advisory with rationale"
+        );
+
+        insta::assert_snapshot!(md);
     }
 }
