@@ -108,6 +108,7 @@ impl Inspector for KernelbootInspector {
 
         // 6. Tuned profile — OPTIONAL (tuned not installed is fine)
         let tuned_active = collect_tuned(exec);
+        let tuned_custom_profiles = collect_custom_tuned_profiles(exec);
 
         // 7. Config snippets from /etc/modprobe.d/, /etc/modules-load.d/, /etc/dracut.conf.d/
         let (modprobe_d, modprobe_failures) =
@@ -140,7 +141,7 @@ impl Inspector for KernelbootInspector {
             non_default_modules: Vec::new(),
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
             tuned_active,
-            tuned_custom_profiles: Vec::new(),
+            tuned_custom_profiles,
             locale,
             timezone,
             alternatives: Vec::new(),
@@ -401,6 +402,43 @@ fn collect_tuned(exec: &dyn Executor) -> String {
     }
 
     String::new()
+}
+
+/// Collect custom tuned profile directories from /etc/tuned.
+/// Returns ConfigSnippet entries for each custom profile's tuned.conf.
+fn collect_custom_tuned_profiles(exec: &dyn Executor) -> Vec<ConfigSnippet> {
+    let mut profiles = Vec::new();
+
+    // List /etc/tuned subdirectories
+    let entries = match exec.read_dir(Path::new("/etc/tuned")) {
+        Ok(e) => e,
+        Err(_) => return profiles, // /etc/tuned doesn't exist or not readable
+    };
+
+    for entry in entries {
+        // Skip . and .. entries
+        if entry.starts_with('.') {
+            continue;
+        }
+
+        // Check for tuned.conf in this profile directory
+        let conf_path = format!("/etc/tuned/{}/tuned.conf", entry);
+        match exec.read_file(Path::new(&conf_path)) {
+            Ok(content) => {
+                profiles.push(ConfigSnippet {
+                    path: conf_path,
+                    content,
+                });
+            }
+            Err(_) => {
+                // Profile directory exists but no tuned.conf, or entry
+                // is not a directory - skip
+                continue;
+            }
+        }
+    }
+
+    profiles
 }
 
 /// Collect config snippets from a directory. Tolerates unreadable dirs.
@@ -726,5 +764,49 @@ mod tests {
             result.is_ok(),
             "all files readable → must succeed, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_custom_tuned_profile_detected() {
+        // Acceptance test: custom tuned profile directories are detected
+        // and preserved in the snapshot (spec §3.4 + §7 acceptance matrix)
+        let exec = kb_base_mock()
+            .with_dir("/etc/sysctl.d", vec![])
+            .with_dir("/usr/lib/sysctl.d", vec![])
+            .with_dir("/etc/modprobe.d", vec![])
+            .with_dir("/etc/modules-load.d", vec![])
+            .with_dir("/etc/tuned", vec!["myapp"])
+            .with_file(
+                "/etc/tuned/myapp/tuned.conf",
+                "[main]\nsummary=Custom profile for myapp\n\n[cpu]\ngovernor=performance\n",
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: kb_test_os_release(),
+        };
+        let inspector = KernelbootInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
+        if let SectionData::KernelBoot(kb) = result.section {
+            // Verify the custom tuned profile was collected
+            assert_eq!(kb.tuned_custom_profiles.len(), 1);
+            assert_eq!(
+                kb.tuned_custom_profiles[0].path,
+                "/etc/tuned/myapp/tuned.conf"
+            );
+            assert!(
+                kb.tuned_custom_profiles[0]
+                    .content
+                    .contains("summary=Custom profile for myapp")
+            );
+        } else {
+            panic!("Expected KernelBoot section, got: {:?}", result.section);
+        }
     }
 }
