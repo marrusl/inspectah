@@ -1546,6 +1546,7 @@ pub fn merge_storage_sections(
         lvm_info,
         var_directories,
         credential_refs,
+        unbacked_var_advisory: None,
     })
 }
 

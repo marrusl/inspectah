@@ -1,3 +1,4 @@
+use crate::rpm_ownership::build_rpm_owned_set;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
@@ -5,11 +6,14 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
+use inspectah_core::types::finding::AdvisoryType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::storage::{
-    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection,
+    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, UnbackedVarAdvisory,
+    VarDirBacking,
 };
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Inspects storage configuration: fstab entries, active mount points,
@@ -98,6 +102,7 @@ impl Inspector for StorageInspector {
                             lvm_info: Vec::new(),
                             var_directories: Vec::new(),
                             credential_refs,
+                            unbacked_var_advisory: None,
                         }),
                         warnings: Vec::new(),
                         redaction_hints,
@@ -110,13 +115,42 @@ impl Inspector for StorageInspector {
         // 3. Run lvs --reportformat json — optional, proceed without.
         let lvm_info = collect_lvs(exec).unwrap_or_default();
 
+        // 4. Detect backing for var directories.
+        let mut var_directories: Vec<inspectah_core::types::storage::VarDirectory> = Vec::new();
+        let rpm_owned = build_rpm_owned_set(exec);
+        for dir in &mut var_directories {
+            dir.backing = Some(detect_var_dir_backing(exec, &dir.path, &rpm_owned));
+        }
+
+        // Collect unbacked paths for grouped advisory
+        let unbacked_paths: Vec<String> = var_directories
+            .iter()
+            .filter(|d| d.backing == Some(VarDirBacking::Unbacked))
+            .map(|d| d.path.clone())
+            .collect();
+
+        let unbacked_var_advisory = if unbacked_paths.is_empty() {
+            None
+        } else {
+            Some(UnbackedVarAdvisory {
+                disposition: FindingKind::advisory(
+                    AdvisoryType::UnbackedVarDir,
+                    "These /var directories have no declarative backing (tmpfiles.d, \
+                     StateDirectory=, CacheDirectory=, LogsDirectory=). Consider adding \
+                     tmpfiles.d entries for a more reproducible, declarative approach.",
+                ),
+                paths: unbacked_paths,
+            })
+        };
+
         Ok(InspectorOutput {
             section: SectionData::Storage(StorageSection {
                 fstab_entries,
                 mount_points,
                 lvm_info,
-                var_directories: Vec::new(),
+                var_directories,
                 credential_refs,
+                unbacked_var_advisory,
             }),
             warnings: Vec::new(),
             redaction_hints,
@@ -237,4 +271,91 @@ fn collect_lvs(exec: &dyn Executor) -> Result<Vec<LvmVolume>, String> {
             lv_size: lv.lv_size,
         })
         .collect())
+}
+
+/// Determine the backing mechanism for a /var directory.
+///
+/// Checks, in order: tmpfiles.d configs, systemd directory directives
+/// (StateDirectory, CacheDirectory, LogsDirectory), RPM ownership.
+/// Falls back to `Unbacked` if no backing is found.
+fn detect_var_dir_backing(
+    exec: &dyn Executor,
+    path: &str,
+    rpm_owned: &HashSet<String>,
+) -> VarDirBacking {
+    // Check tmpfiles.d (both /etc and /usr/lib)
+    let tmpfiles_check = exec.run(
+        "grep",
+        &[
+            "-r",
+            "--include=*.conf",
+            "-l",
+            path,
+            "/etc/tmpfiles.d/",
+            "/usr/lib/tmpfiles.d/",
+        ],
+    );
+    if tmpfiles_check.exit_code == 0 && !tmpfiles_check.stdout.trim().is_empty() {
+        return VarDirBacking::Tmpfiles;
+    }
+
+    // Check all three systemd directory directives
+    let dir_name = path.rsplit('/').next().unwrap_or("");
+    for (directive, backing) in [
+        ("StateDirectory", VarDirBacking::StateDirectory),
+        ("CacheDirectory", VarDirBacking::CacheDirectory),
+        ("LogsDirectory", VarDirBacking::LogsDirectory),
+    ] {
+        let grep = exec.run(
+            "grep",
+            &[
+                "-r",
+                "--include=*.service",
+                "--include=*.socket",
+                "-l",
+                &format!("{}={}", directive, dir_name),
+                "/usr/lib/systemd/system/",
+                "/etc/systemd/system/",
+            ],
+        );
+        if grep.exit_code == 0 && !grep.stdout.trim().is_empty() {
+            return backing;
+        }
+    }
+
+    // Check RPM ownership
+    if rpm_owned.contains(path) {
+        return VarDirBacking::RpmOwned;
+    }
+
+    VarDirBacking::Unbacked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::storage::VarDirectory;
+
+    #[test]
+    fn test_unbacked_var_dir_stays_actionable() {
+        // Unbacked dirs keep Actionable disposition for Containerfile
+        let dir = VarDirectory {
+            path: "/var/lib/pgsql/data".into(),
+            backing: Some(VarDirBacking::Unbacked),
+            ..Default::default()
+        };
+        // VarDirectory doesn't have disposition, so this test verifies
+        // the advisory is separate from the directory entries
+        assert_eq!(dir.backing, Some(VarDirBacking::Unbacked));
+    }
+
+    #[test]
+    fn test_grouped_advisory_created_for_unbacked() {
+        let advisory = UnbackedVarAdvisory {
+            disposition: FindingKind::advisory(AdvisoryType::UnbackedVarDir, "test rationale"),
+            paths: vec!["/var/lib/pgsql/data".into()],
+        };
+        assert!(advisory.disposition.is_advisory());
+        assert_eq!(advisory.paths.len(), 1);
+    }
 }

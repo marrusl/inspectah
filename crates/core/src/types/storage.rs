@@ -72,6 +72,23 @@ pub struct LvmVolume {
     pub lv_size: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VarDirBacking {
+    Tmpfiles,
+    StateDirectory,
+    CacheDirectory,
+    LogsDirectory,
+    RpmOwned,
+    Unbacked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnbackedVarAdvisory {
+    pub disposition: FindingKind,
+    pub paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VarDirectory {
     #[serde(default)]
@@ -80,6 +97,8 @@ pub struct VarDirectory {
     pub size_estimate: String,
     #[serde(default)]
     pub recommendation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backing: Option<VarDirBacking>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -94,6 +113,8 @@ pub struct StorageSection {
     pub var_directories: Vec<VarDirectory>,
     #[serde(default)]
     pub credential_refs: Vec<CredentialRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unbacked_var_advisory: Option<UnbackedVarAdvisory>,
 }
 
 #[cfg(test)]

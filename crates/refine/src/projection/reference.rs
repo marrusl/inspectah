@@ -2192,6 +2192,7 @@ mod tests {
                     path: "/var/lib/pgsql".into(),
                     size_estimate: "12G".into(),
                     recommendation: "mount as separate volume".into(),
+                    backing: None,
                 }],
                 ..Default::default()
             }),
@@ -2269,12 +2270,14 @@ mod tests {
                     path: "/var/log".into(),
                     size_estimate: "2G".into(),
                     recommendation: "keep on root".into(),
+                    backing: None,
                 }],
                 credential_refs: vec![CredentialRef {
                     credential_path: "/etc/cifs-creds".into(),
                     mount_point: "/mnt/share".into(),
                     source: "fstab".into(),
                 }],
+                unbacked_var_advisory: None,
             }),
             ..Default::default()
         };
