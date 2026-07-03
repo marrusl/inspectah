@@ -147,9 +147,12 @@ pub fn check_modernization_patterns(
             }
             DetectionRule::FileHasCustomEntries {
                 path,
-                default_marker,
+                default_marker: _,
             } => {
                 if let Ok(content) = exec.read_file(Path::new(path)) {
+                    // Check if ANY data line has a non-default job identifier.
+                    // anacrontab format: period  delay  job-identifier  command
+                    // Default identifiers: cron.daily, cron.weekly, cron.monthly
                     let has_custom = content
                         .lines()
                         .map(|l| l.trim())
@@ -159,7 +162,15 @@ pub fn check_modernization_patterns(
                         .filter(|l| {
                             l.starts_with(|c: char| c.is_ascii_digit()) || l.starts_with('@')
                         })
-                        .any(|l| !l.contains(default_marker));
+                        .any(|l| {
+                            let fields: Vec<&str> = l.split_whitespace().collect();
+                            if fields.len() >= 3 {
+                                let job_id = fields[2];
+                                !matches!(job_id, "cron.daily" | "cron.weekly" | "cron.monthly")
+                            } else {
+                                false
+                            }
+                        });
                     if has_custom {
                         advisories.push((
                             path.to_string(),
@@ -316,6 +327,20 @@ mod tests {
         assert!(
             !advisories.iter().any(|(p, _)| p.contains("anacrontab")),
             "missing anacrontab should produce no advisory"
+        );
+    }
+
+    #[test]
+    fn test_anacrontab_custom_entry_with_cron_substring() {
+        // Custom job identifier that contains "cron." as a substring should still fire
+        let exec = MockExecutor::new().with_file(
+            "/etc/anacrontab",
+            "1\t5\tbackup-cron.log\t/usr/local/bin/cleanup.sh\n",
+        );
+        let advisories = check_modernization_patterns(&exec, 9);
+        assert!(
+            advisories.iter().any(|(p, _)| p.contains("anacrontab")),
+            "custom job with 'cron.' in name should still fire"
         );
     }
 
