@@ -73,19 +73,45 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .collect();
 
-    // Map service decisions from Refined types to DTOs
+    // Map service decisions from Refined types to DTOs.
+    // For each service, look up associated full-shadow drop-ins to surface
+    // shadow rationale on the service toggle row.
     let service_states: Vec<ServiceDecisionDto> = decisions
         .service_states
         .iter()
-        .map(|s| ServiceDecisionDto {
-            unit: s.entry.unit.clone(),
-            triage: s.triage.clone(),
-            include: s.entry.disposition.is_included(),
-            locked: s.entry.locked,
-            attention_reason: s.entry.attention_reason.clone(),
-            owning_package: s.entry.owning_package.clone(),
-            default_state: s.entry.default_state.map(|d| d.to_string()),
-            current_state: s.entry.current_state.to_string(),
+        .map(|s| {
+            // Find the first full-shadow drop-in for this unit, if any.
+            let full_shadow = decisions.service_dropins.iter().find(|d| {
+                d.entry.unit == s.entry.unit
+                    && d.entry
+                        .shadow_type
+                        .as_ref()
+                        .map(|st| matches!(st, inspectah_core::types::ShadowType::FullShadow))
+                        .unwrap_or(false)
+            });
+            let (shadow_type, shadow_rationale) = match full_shadow {
+                Some(d) => (
+                    d.entry
+                        .shadow_type
+                        .as_ref()
+                        .and_then(|st| serde_json::to_value(st).ok())
+                        .and_then(|v| v.as_str().map(|s| s.to_string())),
+                    d.entry.shadow_rationale.clone(),
+                ),
+                None => (None, None),
+            };
+            ServiceDecisionDto {
+                unit: s.entry.unit.clone(),
+                triage: s.triage.clone(),
+                include: s.entry.disposition.is_included(),
+                locked: s.entry.locked,
+                attention_reason: s.entry.attention_reason.clone(),
+                owning_package: s.entry.owning_package.clone(),
+                default_state: s.entry.default_state.map(|d| d.to_string()),
+                current_state: s.entry.current_state.to_string(),
+                shadow_type,
+                shadow_rationale,
+            }
         })
         .collect();
 
@@ -99,6 +125,13 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             include: d.entry.disposition.is_included(),
             locked: d.entry.locked,
             attention_reason: d.entry.attention_reason.clone(),
+            shadow_type: d
+                .entry
+                .shadow_type
+                .as_ref()
+                .and_then(|st| serde_json::to_value(st).ok())
+                .and_then(|v| v.as_str().map(|s| s.to_string())),
+            shadow_rationale: d.entry.shadow_rationale.clone(),
         })
         .collect();
 

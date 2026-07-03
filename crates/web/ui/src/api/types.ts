@@ -400,6 +400,10 @@ export interface ServiceDecisionDto {
   owning_package?: string | null;
   default_state?: string | null;
   current_state: string;
+  /** Present when a full-shadow drop-in overrides this service unit. */
+  shadow_type?: string | null;
+  /** Rationale text for the shadow override (displayed below the toggle). */
+  shadow_rationale?: string | null;
 }
 
 /** A classified service drop-in override, projected for the view response. */
@@ -410,6 +414,10 @@ export interface DropInDecisionDto {
   include: boolean;
   locked?: boolean;
   attention_reason?: string | null;
+  /** Shadow type (e.g. "full_shadow", "drop_in"). */
+  shadow_type?: string | null;
+  /** Rationale text for the shadow override. */
+  shadow_rationale?: string | null;
 }
 
 // --- Sysctl decision types (inspectah-web/src/handlers.rs) ---

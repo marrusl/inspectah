@@ -126,6 +126,12 @@ pub struct ServiceDecisionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_state: Option<String>,
     pub current_state: String,
+    /// Present when a full-shadow drop-in overrides this service unit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_type: Option<String>,
+    /// Rationale text for the shadow override (displayed below the toggle).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_rationale: Option<String>,
 }
 
 /// A classified service drop-in override, projected for the view response.
@@ -138,6 +144,13 @@ pub struct DropInDecisionDto {
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+    /// Shadow type (e.g. "full_shadow", "drop_in") when this drop-in
+    /// overrides a service unit file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_type: Option<String>,
+    /// Rationale text for the shadow override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_rationale: Option<String>,
 }
 
 /// A classified quadlet unit, projected for the view response.

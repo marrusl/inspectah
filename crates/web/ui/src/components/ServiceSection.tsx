@@ -241,6 +241,22 @@ export function ServiceSection({
                   </div>
                 )}
               </div>
+              {/* Full-shadow rationale below the service toggle row */}
+              {svc.shadow_type === "full_shadow" && svc.shadow_rationale && (
+                <div
+                  className="inspectah-decision-row__helper-text"
+                  data-testid={`shadow-rationale-${svc.unit}`}
+                  style={{
+                    paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
+                    paddingBottom: "var(--pf-t--global--spacer--xs)",
+                    fontSize: "var(--pf-t--global--font--size--xs)",
+                    color: "var(--pf-t--global--text--color--subtle)",
+                    fontStyle: "italic",
+                  }}
+                >
+                  {svc.shadow_rationale}
+                </div>
+              )}
             </div>
 
             {/* Drop-in children */}

@@ -3043,6 +3043,15 @@ fn copy_uploaded_rpms(
     Ok(())
 }
 
+/// Check whether a finding should be included in the generated Containerfile.
+///
+/// **Contract:** Only `Actionable { include: true }` items produce Containerfile
+/// lines. Advisory items are display-only and never appear in generated output.
+/// This is the single source of truth for the Containerfile inclusion gate.
+pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
+    matches!(disposition, FindingKind::Actionable { include: true })
+}
+
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,

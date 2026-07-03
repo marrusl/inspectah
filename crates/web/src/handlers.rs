@@ -627,6 +627,99 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
     })
 }
 
+// -- Batch toggle ---------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct BatchTogglePayload {
+    pub include: bool,
+}
+
+/// Batch-toggle all actionable items in a named section group.
+///
+/// Advisory items are left unchanged. Returns the updated view response.
+/// `group_name` is one of: packages, configs, services, containers.
+pub async fn batch_toggle_group(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(group_name): axum::extract::Path<String>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let payload: BatchTogglePayload = serde_json::from_slice(&body).map_err(|e| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid batch toggle payload: {e}"
+        )))
+    })?;
+    let mut session = state.session.lock().unwrap();
+    let snap = session.snapshot().clone();
+
+    // Collect item IDs for actionable (non-advisory) items in the section.
+    let mut ops: Vec<inspectah_refine::types::RefinementOp> = Vec::new();
+
+    match group_name.as_str() {
+        "packages" => {
+            if let Some(ref rpm) = snap.rpm {
+                for pkg in &rpm.packages_added {
+                    if pkg.disposition.is_advisory() || pkg.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Package {
+                            name: pkg.name.clone(),
+                            arch: pkg.arch.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+        }
+        "configs" => {
+            if let Some(ref config) = snap.config {
+                for file in &config.files {
+                    if file.disposition.is_advisory() || file.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Config {
+                            path: file.path.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+        }
+        "services" => {
+            if let Some(ref svc) = snap.services {
+                for sc in &svc.state_changes {
+                    if sc.disposition.is_advisory() || sc.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Service {
+                            unit: sc.unit.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+        }
+        other => {
+            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                format!(
+                    "unknown batch toggle group: {other} (expected packages, configs, or services)"
+                ),
+            )));
+        }
+    }
+
+    for op in ops {
+        // Errors on individual items are silently skipped (locked, noop).
+        let _ = session.apply(op);
+    }
+
+    Ok(Json(
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
+    ))
+}
+
 // -- New Phase 4 endpoints ------------------------------------------------
 
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1093,5 +1186,105 @@ mod tests {
             LEGACY_ACK_SENSITIVE_HEADER, "x-acknowledge-sensitive",
             "Legacy header name must be preserved for backward compatibility"
         );
+    }
+
+    // -- Containerfile advisory exclusion contract ----------------------------
+
+    /// Verify the Containerfile contract: Actionable { include: true } items
+    /// are included, Advisory items are excluded, and Actionable { include: false }
+    /// items are excluded.
+    #[test]
+    fn should_include_in_containerfile_contract() {
+        use inspectah_core::types::finding::AdvisoryType;
+        use inspectah_refine::session::should_include_in_containerfile;
+
+        // Actionable included → true
+        assert!(should_include_in_containerfile(&FindingKind::included()));
+
+        // Actionable excluded → false
+        assert!(!should_include_in_containerfile(&FindingKind::excluded()));
+
+        // Advisory → false (regardless of type)
+        assert!(!should_include_in_containerfile(&FindingKind::advisory(
+            AdvisoryType::UnbackedVarDir,
+            "no tmpfiles.d backing"
+        )));
+        assert!(!should_include_in_containerfile(&FindingKind::advisory(
+            AdvisoryType::CrossTreeSymlink,
+            "symlink crosses tree boundary"
+        )));
+        assert!(!should_include_in_containerfile(&FindingKind::advisory(
+            AdvisoryType::Modernization,
+            "xinetd is deprecated"
+        )));
+    }
+
+    /// Verify the view response includes shadow fields for services with
+    /// full-shadow drop-ins.
+    #[test]
+    fn view_response_includes_shadow_fields_for_services() {
+        use inspectah_core::types::ShadowType;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceSection as SvcSection, ServiceStateChange, ServiceUnitState,
+            SystemdDropIn,
+        };
+
+        let mut snap = empty_snapshot();
+        snap.services = Some(SvcSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Enable),
+                disposition: FindingKind::included(),
+                locked: false,
+                owning_package: Some("openssh-server".into()),
+                aggregate: None,
+                attention_reason: None,
+            }],
+            drop_ins: vec![SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: "/etc/systemd/system/sshd.service".into(),
+                content: "[Service]\nExecStart=...".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
+                ..Default::default()
+            }],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            preset_matched_units: vec![],
+        });
+
+        let session = RefineSession::new(snap);
+        let response = crate::adapter::build_web_view(&session);
+
+        // Service DTO should have shadow fields from its full-shadow drop-in
+        let sshd = response
+            .service_states
+            .iter()
+            .find(|s| s.unit == "sshd.service")
+            .expect("sshd.service should be in service_states");
+        assert_eq!(
+            sshd.shadow_type.as_deref(),
+            Some("full_shadow"),
+            "shadow_type should be populated from full-shadow drop-in"
+        );
+        assert!(
+            sshd.shadow_rationale
+                .as_ref()
+                .map(|r| r.contains("Full unit override"))
+                .unwrap_or(false),
+            "shadow_rationale should be populated from full-shadow drop-in"
+        );
+
+        // Drop-in DTO should also carry shadow fields
+        let dropin = response
+            .service_dropins
+            .iter()
+            .find(|d| d.unit == "sshd.service")
+            .expect("sshd.service drop-in should be in service_dropins");
+        assert_eq!(dropin.shadow_type.as_deref(), Some("full_shadow"));
+        assert!(dropin.shadow_rationale.is_some());
     }
 }
