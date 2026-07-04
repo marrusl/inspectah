@@ -27,4 +27,27 @@
 <p class="empty-state">No fstab entries detected</p>
 {% endif %}
 
+{% if has_unbacked_var_advisory %}
+<div class="advisory-list" role="list" aria-label="Storage advisory">
+  <div class="advisory-item" role="listitem" tabindex="0">
+    <div class="advisory-item__header">
+      <span class="advisory-badge">
+        <span aria-hidden="true">&#x2139;</span> Advisory
+      </span>
+      <span>Unbacked /var directories</span>
+    </div>
+    <div class="advisory-rationale">
+      The following /var directories have no tmpfiles.d or systemd backing and will
+      not survive a reboot on an image-mode system. Provision them in your
+      Containerfile or add tmpfiles.d drop-ins.
+    </div>
+    <ul>
+      {% for path in unbacked_var_paths %}
+      <li><code>{{ path }}</code></li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
 {% endcall %}

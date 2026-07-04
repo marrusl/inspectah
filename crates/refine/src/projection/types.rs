@@ -292,6 +292,8 @@ pub struct RefStorage {
     pub lvm_volumes: Vec<RefLvmVolume>,
     pub var_directories: Vec<RefVarDirectory>,
     pub credential_refs: Vec<RefCredentialRef>,
+    /// Paths with no tmpfiles.d or systemd backing — ephemeral on reboot.
+    pub unbacked_var_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

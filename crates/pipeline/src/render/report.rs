@@ -591,6 +591,19 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         SectionState::Failed => "failed",
     };
 
+    // Unbacked /var advisory — surface in storage section
+    let has_unbacked_var_advisory = snap
+        .storage
+        .as_ref()
+        .and_then(|s| s.unbacked_var_advisory.as_ref())
+        .is_some();
+    let unbacked_var_paths: Vec<Value> = snap
+        .storage
+        .as_ref()
+        .and_then(|s| s.unbacked_var_advisory.as_ref())
+        .map(|adv| adv.paths.iter().map(|p| Value::from(p.clone())).collect())
+        .unwrap_or_default();
+
     // ── Network section data (conditional) ────────────────────
     let has_network = snap.network.is_some();
     let network_connections: Vec<Value> = snap
@@ -1016,6 +1029,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let config_files_val = Value::from(config_files);
     let services_val = Value::from(services);
     let storage_items_val = Value::from(storage_items);
+    let unbacked_var_paths_val = Value::from(unbacked_var_paths);
     let sysctl_overrides_val = Value::from(sysctl_overrides);
     let modules_load_d_val = Value::from(modules_load_d);
     let modprobe_d_val = Value::from(modprobe_d);
@@ -1075,6 +1089,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         storage_items => storage_items_val,
         storage_count,
         storage_state => storage_state_str,
+        has_unbacked_var_advisory,
+        unbacked_var_paths => unbacked_var_paths_val,
         // Network (conditional)
         has_network,
         network_connections => network_connections_val,

@@ -552,12 +552,19 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
         })
         .collect();
 
+    let unbacked_var_paths = st
+        .unbacked_var_advisory
+        .as_ref()
+        .map(|adv| adv.paths.clone())
+        .unwrap_or_default();
+
     RefStorage {
         fstab_entries,
         mount_points,
         lvm_volumes,
         var_directories,
         credential_refs,
+        unbacked_var_paths,
     }
 }
 

@@ -13,6 +13,7 @@
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
+//! 12b. /var directory provisioning (unbacked dirs)
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -233,6 +234,9 @@ fn render_containerfile_inner(
 
     // 12. Secrets comments
     lines.extend(secrets_comment_lines(snap));
+
+    // 12b. /var directory provisioning (unbacked dirs need mkdir -p)
+    lines.extend(var_dir_section_lines(snap));
 
     // 13. Epilogue
     lines.extend(tmpfiles_lines());
@@ -1548,6 +1552,26 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
         lines.extend(section("Secrets: Flagged for Review", body));
     }
     lines
+}
+
+// --- /var directory provisioning ---
+
+fn var_dir_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    use inspectah_core::types::storage::VarDirBacking;
+
+    let storage = match &snap.storage {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let mut body = Vec::new();
+    for d in &storage.var_directories {
+        if d.backing == Some(VarDirBacking::Unbacked) {
+            body.push(format!("RUN mkdir -p {}", d.path));
+        }
+    }
+
+    section("/var directory provisioning", body)
 }
 
 // --- Epilogue ---

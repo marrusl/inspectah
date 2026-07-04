@@ -1009,6 +1009,20 @@ pub fn build_list_items(
                     None,
                 ));
             }
+            // Unbacked /var advisory — show as advisory items
+            if !st.unbacked_var_paths.is_empty() {
+                let summary = format!(
+                    "{} unbacked /var dir(s) \u{2014} no tmpfiles.d or systemd backing",
+                    st.unbacked_var_paths.len()
+                );
+                let detail = st.unbacked_var_paths.join(", ");
+                items.push(RawItem::advisory(
+                    summary,
+                    detail,
+                    TriageGroup::Site,
+                    "Unbacked /var directories will not survive a reboot on an image-mode system",
+                ));
+            }
 
             items
         }
