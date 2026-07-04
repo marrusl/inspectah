@@ -402,29 +402,18 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
     let version_id = os_release.version_id.as_str();
     let major = version_id.split('.').next().unwrap_or("");
 
-    // EL8 hosts have no bootc image — map up to the closest available
-    // bootc base (EL9). The source minor version is meaningless across
-    // major boundaries, so we use :latest instead of a pinned tag.
+    // EL8 hosts have no bootc image — map up to EL9.
     let effective_major = if major == "8" { "9" } else { major };
-    let is_mapped_up = major == "8";
 
     match id {
         "rhel" => {
-            // EL8→EL9: use :latest (source minor has no meaning in target major).
-            // Same-major: clamp to the minimum available bootc tag.
-            let tag = if is_mapped_up {
-                "latest".to_string()
-            } else {
-                RHEL_BOOTC_MIN
-                    .iter()
-                    .find(|(maj, _)| *maj == effective_major)
-                    .map(|(_, min)| clamp_version(version_id, min))
-                    .unwrap_or_else(|| version_id.to_string())
-            };
+            // All RHEL targets use :latest — the bootc ecosystem tracks
+            // the latest available minor within a major. Pinning to a
+            // specific minor version tag is fragile and unnecessary.
             Ok(BaseImageResolution {
                 image_ref: format!(
-                    "registry.redhat.io/rhel{}/rhel-bootc:{}",
-                    effective_major, tag
+                    "registry.redhat.io/rhel{}/rhel-bootc:latest",
+                    effective_major
                 ),
                 strategy: ResolutionStrategy::OsRelease,
             })
@@ -437,9 +426,10 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
             strategy: ResolutionStrategy::OsRelease,
         }),
         "fedora" => {
-            let effective = clamp_version(major, &FEDORA_BOOTC_MIN.to_string());
+            // Fedora bootc images use :latest — always track the current
+            // stable release rather than pinning to a version number.
             Ok(BaseImageResolution {
-                image_ref: format!("quay.io/fedora/fedora-bootc:{}", effective),
+                image_ref: "quay.io/fedora/fedora-bootc:latest".to_string(),
                 strategy: ResolutionStrategy::OsRelease,
             })
         }
@@ -834,7 +824,7 @@ mod tests {
     fn resolution_generic_fedora_no_variant() {
         let os = make_os_release("fedora", "42", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:42");
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:latest");
         assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
     }
 
@@ -853,7 +843,10 @@ mod tests {
     fn resolution_rhel() {
         let os = make_os_release("rhel", "9.6", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel9/rhel-bootc:latest"
+        );
         assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
     }
 
@@ -882,54 +875,52 @@ mod tests {
     }
 
     #[test]
-    fn resolution_el9_rhel_unchanged() {
-        // EL9 stays EL9 — no version-up mapping
+    fn resolution_el9_rhel_uses_latest() {
+        // All RHEL targets use :latest
         let os = make_os_release("rhel", "9.6", "");
-        let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
-    }
-
-    #[test]
-    fn resolution_rhel_version_floor_clamped() {
-        // RHEL 9.4 → clamped to 9.6
-        let os = make_os_release("rhel", "9.4", "");
-        let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
-    }
-
-    #[test]
-    fn resolution_rhel_version_floor_at_minimum() {
-        // RHEL 9.6 → no clamping
-        let os = make_os_release("rhel", "9.6", "");
-        let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
-    }
-
-    #[test]
-    fn resolution_rhel10_version_floor() {
-        // RHEL 10.0 → at floor, no clamping
-        let os = make_os_release("rhel", "10.0", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
         assert_eq!(
             result.image_ref,
-            "registry.redhat.io/rhel10/rhel-bootc:10.0"
+            "registry.redhat.io/rhel9/rhel-bootc:latest"
         );
     }
 
     #[test]
-    fn resolution_fedora_version_floor_clamped() {
-        // Fedora 40 → clamped to 41
-        let os = make_os_release("fedora", "40", "");
+    fn resolution_rhel_94_uses_latest() {
+        // RHEL 9.4 → :latest (no version pinning)
+        let os = make_os_release("rhel", "9.4", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:41");
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel9/rhel-bootc:latest"
+        );
     }
 
     #[test]
-    fn resolution_fedora_version_floor_above() {
-        // Fedora 42 → above floor, no clamping
+    fn resolution_rhel10_uses_latest() {
+        // RHEL 10.x → :latest
+        let os = make_os_release("rhel", "10.0", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel10/rhel-bootc:latest"
+        );
+    }
+
+    #[test]
+    fn resolution_fedora_uses_latest() {
+        // Fedora → :latest
+        let os = make_os_release("fedora", "40", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:latest");
+    }
+
+    #[test]
+    fn resolution_fedora_42_uses_latest() {
+        // All Fedora versions → :latest
         let os = make_os_release("fedora", "42", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:42");
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:latest");
     }
 
     #[test]
