@@ -3,6 +3,9 @@
 {% call section("network", "Network", count=network_count, state=network_state) %}
 
 {% if network_count > 0 %}
+
+{% if network_connections %}
+<h4>Connections</h4>
 <table class="report-table">
   <thead>
     <tr>
@@ -23,6 +26,7 @@
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
 
 {% if has_ifcfg %}
 <div class="advisory-list" role="list" aria-label="Network advisory">
@@ -38,8 +42,126 @@
 </div>
 {% endif %}
 
+{% if firewall_zones %}
+<h4>Firewall Zones</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Zone</th>
+      <th>Path</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for z in firewall_zones %}
+    <tr>
+      <td>{{ z.name }}</td>
+      <td><code>{{ z.path }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if firewall_direct_rules %}
+<h4>Firewall Direct Rules</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Table</th>
+      <th>Chain</th>
+      <th>IPv</th>
+      <th>Priority</th>
+      <th>Rule</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in firewall_direct_rules %}
+    <tr>
+      <td>{{ r.table }}</td>
+      <td>{{ r.chain }}</td>
+      <td>{{ r.ipv }}</td>
+      <td>{{ r.priority }}</td>
+      <td><code>{{ r.args }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if static_routes %}
+<h4>Static Routes</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Path</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in static_routes %}
+    <tr>
+      <td>{{ r.name }}</td>
+      <td><code>{{ r.path }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if ip_routes %}
+<h4>IP Routes</h4>
+<ul>
+  {% for r in ip_routes %}
+  <li><code>{{ r }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if ip_rules %}
+<h4>IP Rules</h4>
+<ul>
+  {% for r in ip_rules %}
+  <li><code>{{ r }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if resolv_provenance %}
+<h4>Resolv.conf Provenance</h4>
+<p><code>{{ resolv_provenance }}</code></p>
+{% endif %}
+
+{% if hosts_additions %}
+<h4>/etc/hosts Additions</h4>
+<ul>
+  {% for h in hosts_additions %}
+  <li><code>{{ h }}</code></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if proxy_entries %}
+<h4>Proxy Configuration</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Source</th>
+      <th>Line</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in proxy_entries %}
+    <tr>
+      <td>{{ p.source }}</td>
+      <td><code>{{ p.line }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% else %}
-<p class="empty-state">No network connections detected</p>
+<p class="empty-state">No network configuration detected</p>
 {% endif %}
 
 {% endcall %}

@@ -623,7 +623,121 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let network_count = network_connections.len();
+    // Firewall zones
+    let firewall_zones: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.firewall_zones
+                .iter()
+                .map(|z| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": z.name,
+                        "path": z.path,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Firewall direct rules
+    let firewall_direct_rules: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.firewall_direct_rules
+                .iter()
+                .map(|r| {
+                    Value::from_serialize(serde_json::json!({
+                        "table": r.table,
+                        "chain": r.chain,
+                        "ipv": r.ipv,
+                        "priority": r.priority,
+                        "args": r.args,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Static routes
+    let static_routes: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.static_routes
+                .iter()
+                .map(|r| {
+                    Value::from_serialize(serde_json::json!({
+                        "name": r.name,
+                        "path": r.path,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // IP routes, IP rules, hosts additions (string lists)
+    let ip_routes: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.ip_routes
+                .iter()
+                .map(|r| Value::from(r.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let ip_rules: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.ip_rules
+                .iter()
+                .map(|r| Value::from(r.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let hosts_additions: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.hosts_additions
+                .iter()
+                .map(|h| Value::from(h.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Resolv.conf provenance
+    let resolv_provenance = snap
+        .network
+        .as_ref()
+        .map(|net| net.resolv_provenance.clone())
+        .unwrap_or_default();
+    // Proxy entries
+    let proxy_entries: Vec<Value> = snap
+        .network
+        .as_ref()
+        .map(|net| {
+            net.proxy
+                .iter()
+                .map(|p| {
+                    Value::from_serialize(serde_json::json!({
+                        "source": p.source,
+                        "line": p.line,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Total network count includes ALL network item types
+    let network_count = network_connections.len()
+        + firewall_zones.len()
+        + firewall_direct_rules.len()
+        + static_routes.len()
+        + ip_routes.len()
+        + ip_rules.len()
+        + hosts_additions.len()
+        + proxy_entries.len()
+        + if resolv_provenance.is_empty() { 0 } else { 1 };
     let network_state = section_state(InspectorId::Network, &snap.completeness);
     let network_state_str = match network_state {
         SectionState::Normal => "normal",
@@ -1041,6 +1155,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let generated_timers_val = Value::from(generated_timers);
     let at_jobs_val = Value::from(at_jobs);
     let network_connections_val = Value::from(network_connections);
+    let firewall_zones_val = Value::from(firewall_zones);
+    let firewall_direct_rules_val = Value::from(firewall_direct_rules);
+    let static_routes_val = Value::from(static_routes);
+    let ip_routes_val = Value::from(ip_routes);
+    let ip_rules_val = Value::from(ip_rules);
+    let hosts_additions_val = Value::from(hosts_additions);
+    let proxy_entries_val = Value::from(proxy_entries);
     let nonrpm_items_val = Value::from(nonrpm_items);
     let users_list_val = Value::from(users_list);
     let warnings_list_val = Value::from(warnings_list);
@@ -1094,6 +1215,14 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         // Network (conditional)
         has_network,
         network_connections => network_connections_val,
+        firewall_zones => firewall_zones_val,
+        firewall_direct_rules => firewall_direct_rules_val,
+        static_routes => static_routes_val,
+        ip_routes => ip_routes_val,
+        ip_rules => ip_rules_val,
+        hosts_additions => hosts_additions_val,
+        resolv_provenance,
+        proxy_entries => proxy_entries_val,
         network_count,
         network_state => network_state_str,
         has_ifcfg,
