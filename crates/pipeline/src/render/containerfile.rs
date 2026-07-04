@@ -13,7 +13,7 @@
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
-//! 12b. /var directory provisioning (unbacked dirs)
+//!     12b. /var directory provisioning (unbacked dirs)
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
 
 use inspectah_core::snapshot::InspectionSnapshot;
