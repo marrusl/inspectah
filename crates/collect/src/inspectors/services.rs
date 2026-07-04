@@ -430,6 +430,52 @@ impl Inspector for ServicesInspector {
             drop_ins.extend(shadow_entries);
         }
 
+        // 5c. Independent full-shadow scan of /etc/systemd/system/.
+        // Step 5b only checks units in state_changes. Services that match
+        // their preset (e.g., sshd enabled with preset=enable) go into
+        // preset_matched_units, not state_changes, so a full shadow at
+        // /etc/systemd/system/sshd.service would be invisible. This scan
+        // catches those by listing /etc/systemd/system/ directly.
+        {
+            let already_covered: std::collections::HashSet<String> =
+                drop_ins.iter().map(|d| d.unit.clone()).collect();
+
+            if let Ok(etc_entries) = exec.read_dir(Path::new("/etc/systemd/system")) {
+                for entry in &etc_entries {
+                    // Only bare .service files — skip .d dirs, .wants, etc.
+                    if !entry.ends_with(".service") {
+                        continue;
+                    }
+                    // Skip units already covered by drop-in or step 5b.
+                    if already_covered.contains(entry.as_str()) {
+                        continue;
+                    }
+                    // Check if a vendor counterpart exists — if so, it's a shadow.
+                    let usr_path = format!("/usr/lib/systemd/system/{}", entry);
+                    if exec.run("test", &["-f", &usr_path]).exit_code == 0 {
+                        let etc_path = format!("/etc/systemd/system/{}", entry);
+                        let content = exec.read_file(Path::new(&etc_path)).unwrap_or_default();
+                        drop_ins.push(SystemdDropIn {
+                            unit: entry.clone(),
+                            path: etc_path,
+                            content,
+                            disposition: FindingKind::included(),
+                            shadow_type: Some(ShadowType::FullShadow),
+                            shadow_rationale: Some(
+                                "Full shadow: this unit file in /etc/systemd/system/ overrides \
+                                 the vendor unit in /usr/lib/systemd/system/. Base image updates \
+                                 to this unit will be silently ignored."
+                                    .to_string(),
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            // If /etc/systemd/system is unreadable, step 5 already recorded
+            // the failure via collect_drop_ins — no need to duplicate.
+        }
+
         // 6. Build result
         let section = ServiceSection {
             state_changes,
@@ -1779,6 +1825,91 @@ mod tests {
             let dropin = dropin.unwrap();
             assert_eq!(dropin.shadow_type, Some(ShadowType::DropIn));
             assert_eq!(dropin.shadow_rationale, None);
+        } else {
+            panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_full_shadow_detected_for_preset_matched_service() {
+        // sshd is enabled with preset=enable → goes into preset_matched_units,
+        // NOT state_changes. A full shadow at /etc/systemd/system/sshd.service
+        // must still be detected by the independent scan (step 5c).
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\ndisable *\n",
+            )
+            // /etc/systemd/system has the bare sshd.service file (full shadow)
+            .with_dir("/etc/systemd/system", vec!["sshd.service"])
+            .with_file(
+                "/etc/systemd/system/sshd.service",
+                "[Unit]\nDescription=Custom sshd\n[Service]\nExecStart=/usr/sbin/sshd -D\n",
+            )
+            // Vendor counterpart exists
+            .with_command(
+                "test -f /usr/lib/systemd/system/sshd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            // sshd matches preset — must NOT be in state_changes
+            assert!(
+                !svc.state_changes.iter().any(|sc| sc.unit == "sshd.service"),
+                "sshd.service matches preset, must not be in state_changes"
+            );
+            // sshd must be in preset_matched_units
+            assert!(
+                svc.preset_matched_units
+                    .contains(&"sshd.service".to_string()),
+                "sshd.service must be in preset_matched_units"
+            );
+            // The full shadow must be detected via the independent scan
+            let shadow = svc.drop_ins.iter().find(|d| {
+                d.unit == "sshd.service" && d.shadow_type == Some(ShadowType::FullShadow)
+            });
+            assert!(
+                shadow.is_some(),
+                "full shadow for preset-matched sshd.service must be detected, got drop_ins: {:?}",
+                svc.drop_ins
+            );
+            let shadow = shadow.unwrap();
+            assert!(
+                shadow.shadow_rationale.is_some(),
+                "full shadow must carry a rationale"
+            );
+            assert!(
+                shadow.content.contains("Custom sshd"),
+                "shadow content must be read from /etc/systemd/system/sshd.service"
+            );
         } else {
             panic!("expected SectionData::Services");
         }
