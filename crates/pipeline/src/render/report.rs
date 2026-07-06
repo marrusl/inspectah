@@ -477,7 +477,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
-    let services: Vec<Value> = snap
+    let mut services: Vec<Value> = snap
         .services
         .as_ref()
         .map(|svc| {
@@ -519,15 +519,58 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or_default();
 
+    // Synthesize advisory entries for orphan full-shadow drop-ins.
+    // These are preset-matched services with full shadows — they have no
+    // state_changes entry, so the loop above misses them entirely.
+    if let Some(svc) = snap.services.as_ref() {
+        let state_change_units: std::collections::HashSet<&str> =
+            svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
+        for d in &svc.drop_ins {
+            if !matches!(d.shadow_type, Some(ShadowType::FullShadow)) {
+                continue;
+            }
+            if state_change_units.contains(d.unit.as_str()) {
+                continue;
+            }
+            let rationale = d
+                .shadow_rationale
+                .as_deref()
+                .unwrap_or("Full shadow overrides vendor unit");
+            services.push(Value::from_serialize(serde_json::json!({
+                "unit": d.unit,
+                "current_state": "preset-matched",
+                "default_state": "n/a",
+                "include": false,
+                "is_advisory": true,
+                "advisory_type": "FullShadow",
+                "rationale": rationale,
+                "shadow_rationale": rationale,
+            })));
+        }
+    }
+
     let svc_count = services.len();
     let svc_advisory_count = snap
         .services
         .as_ref()
         .map(|svc| {
-            svc.state_changes
+            let state_change_advisory = svc
+                .state_changes
                 .iter()
                 .filter(|s| s.disposition.is_advisory())
-                .count()
+                .count();
+            // Count orphan full-shadow drop-ins as advisories too
+            let state_change_units: std::collections::HashSet<&str> =
+                svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
+            let orphan_shadow_count = svc
+                .drop_ins
+                .iter()
+                .filter(|d| {
+                    matches!(d.shadow_type, Some(ShadowType::FullShadow))
+                        && !state_change_units.contains(d.unit.as_str())
+                })
+                .count();
+            state_change_advisory + orphan_shadow_count
         })
         .unwrap_or(0);
     let svc_state = section_state(InspectorId::Services, &snap.completeness);
@@ -3097,6 +3140,36 @@ mod tests {
     // -----------------------------------------------------------------------
     // Structure snapshot test (T13 — spec proof #11)
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_orphan_full_shadow_dropin_appears_in_services() {
+        // A preset-matched service with a full shadow has no state_changes
+        // entry, only a drop_in. It must appear in the HTML advisory section.
+        let mut snap = test_snapshot();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![], // No state changes — sshd matches preset
+            enabled_units: vec!["sshd.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![inspectah_core::types::services::SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: "/etc/systemd/system/sshd.service".into(),
+                content: "[Service]\nExecStart=/usr/sbin/sshd -D\n".into(),
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("Full shadow: overrides vendor unit".to_string()),
+                ..Default::default()
+            }],
+            preset_matched_units: vec!["sshd.service".into()],
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(
+            html.contains("sshd.service"),
+            "orphan full-shadow drop-in must appear in services section"
+        );
+        assert!(
+            html.contains("Advisory"),
+            "orphan shadow entry must be rendered as advisory"
+        );
+    }
 
     #[test]
     fn test_report_html_structure_snapshot() {
