@@ -76,7 +76,7 @@ Each inspector implements the `Inspector` trait (`collect()` → section data):
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
 - `config/` — Modified config files via `rpm -Va`
 - `services.rs`, `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
-- `modernization.rs` — Modernization advisories (ifcfg, xinetd, etc.)
+- `modernization.rs` — Modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.
 - `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
 
 **Helper modules:** `crates/collect/src/`
