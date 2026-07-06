@@ -1020,7 +1020,7 @@ pub fn build_list_items(
                     summary,
                     detail,
                     TriageGroup::Site,
-                    "Unbacked /var directories will not survive a reboot on an image-mode system",
+                    "Unbacked /var dir(s) \u{2014} no declarative lifecycle management (tmpfiles.d, StateDirectory=)",
                 ));
             }
 

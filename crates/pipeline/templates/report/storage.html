@@ -37,9 +37,10 @@
       <span>Unbacked /var directories</span>
     </div>
     <div class="advisory-rationale">
-      The following /var directories have no tmpfiles.d or systemd backing and will
-      not survive a reboot on an image-mode system. Provision them in your
-      Containerfile or add tmpfiles.d drop-ins.
+      The following /var directories have no declarative backing (tmpfiles.d,
+      StateDirectory=, CacheDirectory=, LogsDirectory=). They may be created
+      by Containerfile <code>mkdir</code> but have no lifecycle management.
+      Consider adding tmpfiles.d entries for reproducible provisioning.
     </div>
     <ul>
       {% for path in unbacked_var_paths %}
