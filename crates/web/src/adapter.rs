@@ -1268,6 +1268,23 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
         });
     }
 
+    // Unbacked /var paths — advisory items for directories with no
+    // declarative backing (tmpfiles.d, StateDirectory=, etc.)
+    for path in &data.unbacked_var_paths {
+        items.push(ContextItem {
+            id: format!("unbacked:{}", path),
+            title: path.clone(),
+            subtitle: Some("advisory: unbacked /var directory".to_string()),
+            detail: Some(
+                "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
+                 LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
+                 provisioning."
+                    .to_string(),
+            ),
+            searchable_text: format!("{} unbacked var advisory", path),
+        });
+    }
+
     crate::web_types::reference_section("storage", "Storage", items)
 }
 
