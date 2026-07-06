@@ -394,7 +394,7 @@ impl Inspector for ServicesInspector {
         });
 
         // 5. Scan drop-in directories
-        let (mut drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
+        let (mut drop_ins, redaction_hints, mut dropin_read_failures) = collect_drop_ins(exec);
 
         // 5b. Detect full shadows for services that have no drop-in coverage.
         // A full shadow at /etc/systemd/system/<unit> that overrides
@@ -410,7 +410,13 @@ impl Inspector for ServicesInspector {
                 }
                 if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, &sc.unit) {
                     let etc_path = format!("/etc/systemd/system/{}", sc.unit);
-                    let content = exec.read_file(Path::new(&etc_path)).unwrap_or_default();
+                    let content = match exec.read_file(Path::new(&etc_path)) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            dropin_read_failures.push(etc_path);
+                            continue;
+                        }
+                    };
                     shadow_entries.push(SystemdDropIn {
                         unit: sc.unit.clone(),
                         path: etc_path,
@@ -454,7 +460,13 @@ impl Inspector for ServicesInspector {
                     let usr_path = format!("/usr/lib/systemd/system/{}", entry);
                     if exec.run("test", &["-f", &usr_path]).exit_code == 0 {
                         let etc_path = format!("/etc/systemd/system/{}", entry);
-                        let content = exec.read_file(Path::new(&etc_path)).unwrap_or_default();
+                        let content = match exec.read_file(Path::new(&etc_path)) {
+                            Ok(c) => c,
+                            Err(_) => {
+                                dropin_read_failures.push(etc_path);
+                                continue;
+                            }
+                        };
                         drop_ins.push(SystemdDropIn {
                             unit: entry.clone(),
                             path: etc_path,
@@ -1912,6 +1924,67 @@ mod tests {
             );
         } else {
             panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_unreadable_shadow_file_degrades_inspector() {
+        // A full shadow file that cannot be read should degrade the inspector,
+        // not silently produce an empty content entry.
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\ndisable *\n",
+            )
+            .with_dir("/etc/systemd/system", vec!["sshd.service"])
+            // Shadow file exists but is unreadable
+            .with_file_error(
+                "/etc/systemd/system/sshd.service",
+                std::io::ErrorKind::PermissionDenied,
+            )
+            // Vendor counterpart exists
+            .with_command(
+                "test -f /usr/lib/systemd/system/sshd.service",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx, &NullProgress);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("drop-in conf read failures"),
+                    "degradation reason should mention read failures, got: {reason}"
+                );
+            }
+            Ok(_) => panic!("expected Degraded error for unreadable shadow file"),
+            Err(e) => panic!("expected Degraded, got: {e:?}"),
         }
     }
 }
