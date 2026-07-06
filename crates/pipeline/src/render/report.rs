@@ -540,10 +540,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 "unit": d.unit,
                 "current_state": "preset-matched",
                 "default_state": "n/a",
-                "include": false,
-                "is_advisory": true,
-                "advisory_type": "FullShadow",
-                "rationale": rationale,
+                "include": true,
+                "is_advisory": false,
                 "shadow_rationale": rationale,
             })));
         }
@@ -554,23 +552,10 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .services
         .as_ref()
         .map(|svc| {
-            let state_change_advisory = svc
-                .state_changes
+            svc.state_changes
                 .iter()
                 .filter(|s| s.disposition.is_advisory())
-                .count();
-            // Count orphan full-shadow drop-ins as advisories too
-            let state_change_units: std::collections::HashSet<&str> =
-                svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
-            let orphan_shadow_count = svc
-                .drop_ins
-                .iter()
-                .filter(|d| {
-                    matches!(d.shadow_type, Some(ShadowType::FullShadow))
-                        && !state_change_units.contains(d.unit.as_str())
-                })
-                .count();
-            state_change_advisory + orphan_shadow_count
+                .count()
         })
         .unwrap_or(0);
     let svc_state = section_state(InspectorId::Services, &snap.completeness);
