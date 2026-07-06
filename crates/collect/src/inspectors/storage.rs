@@ -160,14 +160,15 @@ impl Inspector for StorageInspector {
 
 /// Discover non-trivial /var directories for backing analysis.
 ///
-/// Scans /var/lib/, /var/log/, /var/cache/ for first-level subdirectories
-/// that are non-empty, producing candidates for backing classification.
+/// Scans /var/lib/, /var/log/, /var/cache/ up to depth 2 for non-empty
+/// subdirectories, then deduplicates by keeping only leaf directories
+/// (removing any path that is a prefix of a deeper discovered path).
 fn discover_var_directories(
     exec: &dyn Executor,
 ) -> Vec<inspectah_core::types::storage::VarDirectory> {
     use inspectah_core::types::storage::VarDirectory;
 
-    let mut dirs = Vec::new();
+    let mut paths = Vec::new();
 
     for base in &["/var/lib", "/var/log", "/var/cache"] {
         let result = exec.run(
@@ -177,7 +178,7 @@ fn discover_var_directories(
                 "-mindepth",
                 "1",
                 "-maxdepth",
-                "1",
+                "2",
                 "-type",
                 "d",
                 "!",
@@ -193,14 +194,26 @@ fn discover_var_directories(
             if path.is_empty() {
                 continue;
             }
-            dirs.push(VarDirectory {
-                path: path.to_string(),
-                ..Default::default()
-            });
+            paths.push(path.to_string());
         }
     }
 
-    dirs
+    // Deduplicate: remove any path that is a proper prefix of another path.
+    // This keeps leaf directories (e.g., /var/lib/pgsql/data) and drops
+    // their parents (/var/lib/pgsql) when both are discovered.
+    let all_paths = paths.clone();
+    paths.retain(|p| {
+        let prefix = format!("{}/", p);
+        !all_paths.iter().any(|other| other.starts_with(&prefix))
+    });
+
+    paths
+        .into_iter()
+        .map(|path| VarDirectory {
+            path,
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Parse /etc/fstab content into FstabEntry list, credential refs, and redaction hints.
@@ -526,6 +539,57 @@ mod tests {
             paths: unbacked,
         };
         assert!(advisory.disposition.is_advisory());
+    }
+
+    #[test]
+    fn discover_var_dirs_depth2_with_dedup() {
+        // find under /var/lib returns both depth-1 and depth-2 entries;
+        // the parent should be deduplicated away when a child exists.
+        let exec = MockExecutor::new()
+            .with_command(
+                "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/lib/pgsql\n/var/lib/pgsql/data\n/var/lib/rpm\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/log -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/log/myapp\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/cache -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            );
+
+        let dirs = discover_var_directories(&exec);
+        let paths: Vec<&str> = dirs.iter().map(|d| d.path.as_str()).collect();
+
+        assert!(
+            !paths.contains(&"/var/lib/pgsql"),
+            "parent should be deduplicated when child exists"
+        );
+        assert!(
+            paths.contains(&"/var/lib/pgsql/data"),
+            "depth-2 leaf should be kept"
+        );
+        assert!(
+            paths.contains(&"/var/lib/rpm"),
+            "depth-1 leaf with no children should be kept"
+        );
+        assert!(
+            paths.contains(&"/var/log/myapp"),
+            "depth-1 entry from another base should be kept"
+        );
     }
 
     #[test]
