@@ -940,6 +940,20 @@ pub fn build_list_items(
                 ));
             }
 
+            // ifcfg deprecation advisory
+            if net
+                .connections
+                .iter()
+                .any(|c| c.path.contains("network-scripts"))
+            {
+                items.push(RawItem::advisory(
+                    "ifcfg deprecation".to_string(),
+                    inspectah_core::types::network::IFCFG_DEPRECATION_NOTE.to_string(),
+                    TriageGroup::Site,
+                    "ifcfg network scripts are deprecated in RHEL 9 and removed in RHEL 10",
+                ));
+            }
+
             items
         }
         SectionId::Storage => {
@@ -1477,6 +1491,47 @@ mod tests {
         assert!(result[3].is_group_header);
         assert_eq!(result[3].group, TriageGroup::Baseline);
         assert!(result[3].is_collapsed);
+    }
+
+    #[test]
+    fn ifcfg_deprecation_advisory_renders_in_grouped_output() {
+        // Verifies the ifcfg deprecation advisory item construction
+        // matches the pattern used in SectionId::Network and renders
+        // correctly through build_grouped_items.
+        let items: Vec<RawItem> = vec![
+            RawItem::new(
+                "eth0",
+                "ethernet (auto)",
+                TriageGroup::Site,
+                None,
+                None,
+                false,
+                false,
+                None,
+            ),
+            RawItem::advisory(
+                "ifcfg deprecation".to_string(),
+                inspectah_core::types::network::IFCFG_DEPRECATION_NOTE.to_string(),
+                TriageGroup::Site,
+                "ifcfg network scripts are deprecated in RHEL 9 and removed in RHEL 10",
+            ),
+        ];
+        let state = TuiState::new(14);
+        let result = build_grouped_items(&items, &state, SectionId::Network);
+
+        // Header + 1 normal item + 1 advisory item.
+        assert_eq!(result.len(), 3);
+        let advisory = &result[2];
+        assert!(advisory.is_advisory, "ifcfg item must be advisory");
+        assert_eq!(advisory.name, "ifcfg deprecation");
+        assert!(
+            advisory
+                .advisory_rationale
+                .as_ref()
+                .unwrap()
+                .contains("deprecated in RHEL 9"),
+            "rationale must mention RHEL 9 deprecation"
+        );
     }
 
     #[test]
