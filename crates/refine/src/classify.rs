@@ -6,13 +6,14 @@ use crate::types::{
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
 };
 use inspectah_core::types::services::{
-    PresetDefault, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
 };
 
 const SENSITIVE_PATHS: &[&str] = &[
@@ -535,6 +536,62 @@ pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
     }
 
     configs
+}
+
+/// Inject synthetic `ServiceStateChange` entries for orphan full-shadow
+/// services — units with `/etc/systemd/system/foo.service` shadowing a
+/// vendor unit but no corresponding state divergence entry.
+///
+/// Only synthesizes when durable host state is known (`enabled_units` or
+/// `disabled_units`). Skips when state is unavailable — the current
+/// `ServiceStateChange` contract requires a non-optional `current_state`.
+pub fn synthesize_orphan_shadows(services: &mut ServiceSection) {
+    let existing_units: std::collections::HashSet<&str> = services
+        .state_changes
+        .iter()
+        .map(|s| s.unit.as_str())
+        .collect();
+
+    let mut synthetics = Vec::new();
+    for dropin in &services.drop_ins {
+        if dropin.shadow_type == Some(ShadowType::FullShadow)
+            && !existing_units.contains(dropin.unit.as_str())
+        {
+            // Derive durable host state from the existing service inventory.
+            // Only synthesize when the current ServiceStateChange contract can
+            // represent that state faithfully.
+            let current_state = if services.disabled_units.contains(&dropin.unit) {
+                Some(ServiceUnitState::Disabled)
+            } else if services.enabled_units.contains(&dropin.unit) {
+                Some(ServiceUnitState::Enabled)
+            } else {
+                None
+            };
+
+            let Some(current_state) = current_state else {
+                // The current contract cannot encode "state unavailable" without
+                // changing ServiceStateChange.current_state, so skip synthesis for
+                // orphan full-shadow units whose durable state is not known.
+                continue;
+            };
+
+            synthetics.push(ServiceStateChange {
+                unit: dropin.unit.clone(),
+                current_state,
+                default_state: None,
+                disposition: FindingKind::included(),
+                locked: false,
+                owning_package: None,
+                aggregate: None,
+                attention_reason: None,
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some(
+                    "base image updates to this unit will be silently ignored".to_string(),
+                ),
+            });
+        }
+    }
+    services.state_changes.extend(synthetics);
 }
 
 /// Classify service state changes and drop-ins into triage buckets.
@@ -2796,5 +2853,230 @@ mod tuned_classification {
         };
         let result = classify_tuned(&snap);
         assert!(result.is_empty());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_update)]
+mod orphan_shadow_synthesis {
+    use super::*;
+    use crate::session::RefineSession;
+    use crate::types::{ItemId, RefinementOp};
+    use inspectah_core::types::finding::ShadowType;
+    use inspectah_core::types::services::{
+        ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    };
+
+    /// Build a snapshot with an orphan full-shadow drop-in for the given unit.
+    /// The unit is placed in `enabled_units` so synthesis has durable state.
+    fn test_snapshot_with_orphan_shadow(unit: &str) -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection {
+                state_changes: vec![],
+                enabled_units: vec![unit.to_string()],
+                disabled_units: vec![],
+                drop_ins: vec![SystemdDropIn {
+                    unit: unit.to_string(),
+                    path: format!("/etc/systemd/system/{unit}"),
+                    shadow_type: Some(ShadowType::FullShadow),
+                    shadow_rationale: Some(
+                        "base image updates to this unit will be silently ignored".into(),
+                    ),
+                    ..Default::default()
+                }],
+                preset_matched_units: vec![],
+            }),
+            ..Default::default()
+        }
+    }
+
+    // -- Step 3: Basic synthesis -------------------------------------------------
+
+    #[test]
+    fn orphan_full_shadow_gets_synthetic_state_change() {
+        let mut services = ServiceSection {
+            state_changes: vec![],
+            enabled_units: vec!["sshd.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: "/etc/systemd/system/sshd.service".into(),
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("base image updates...".into()),
+                ..Default::default()
+            }],
+            preset_matched_units: vec![],
+        };
+        synthesize_orphan_shadows(&mut services);
+        assert_eq!(services.state_changes.len(), 1);
+        assert_eq!(services.state_changes[0].unit, "sshd.service");
+        assert_eq!(
+            services.state_changes[0].shadow_type,
+            Some(ShadowType::FullShadow)
+        );
+        assert_eq!(
+            services.state_changes[0].current_state,
+            ServiceUnitState::Enabled
+        );
+    }
+
+    #[test]
+    fn non_orphan_full_shadow_not_duplicated() {
+        let mut services = ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sshd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: None,
+                disposition: FindingKind::included(),
+                locked: false,
+                owning_package: None,
+                aggregate: None,
+                attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
+            }],
+            enabled_units: vec!["sshd.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![SystemdDropIn {
+                unit: "sshd.service".into(),
+                shadow_type: Some(ShadowType::FullShadow),
+                ..Default::default()
+            }],
+            preset_matched_units: vec![],
+        };
+        synthesize_orphan_shadows(&mut services);
+        assert_eq!(services.state_changes.len(), 1, "should not duplicate");
+    }
+
+    // -- Step 4: Unavailable-state boundary --------------------------------------
+
+    #[test]
+    fn orphan_shadow_without_durable_state_is_not_synthesized() {
+        let mut snap = InspectionSnapshot {
+            services: Some(ServiceSection {
+                state_changes: vec![],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![SystemdDropIn {
+                    unit: "sshd.service".into(),
+                    shadow_type: Some(ShadowType::FullShadow),
+                    ..Default::default()
+                }],
+                preset_matched_units: vec![],
+            }),
+            ..Default::default()
+        };
+        let (states, _) = classify_services(&snap);
+        assert!(
+            states.is_empty(),
+            "skip synthesis when durable state is unavailable"
+        );
+        // Also verify direct call leaves state_changes empty
+        synthesize_orphan_shadows(snap.services.as_mut().unwrap());
+        assert!(snap.services.unwrap().state_changes.is_empty());
+    }
+
+    // -- Step 5: Full lifecycle round-trip ----------------------------------------
+
+    #[test]
+    fn orphan_shadow_survives_full_lifecycle() {
+        // RefineSession::new() calls synthesize_orphan_shadows internally,
+        // so the synthetic entry is a real toggle target.
+        let snap = test_snapshot_with_orphan_shadow("sshd.service");
+        let mut session = RefineSession::new(snap);
+
+        // Verify the synthetic entry exists in the view's containerfile
+        let containerfile = &session.view().containerfile_preview;
+        assert!(
+            containerfile.contains("sshd.service"),
+            "synthetic shadow must appear in Containerfile before exclusion"
+        );
+
+        // Toggle mutation — exclude the shadow service
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "sshd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Verify the exclude decision survives in the projected view
+        let containerfile = &session.view().containerfile_preview;
+        assert!(
+            !containerfile.contains("sshd.service"),
+            "excluded synthetic shadow must not appear in Containerfile"
+        );
+    }
+
+    // -- Step 6: Export omission -------------------------------------------------
+
+    #[test]
+    fn excluded_orphan_shadow_omitted_from_containerfile() {
+        let snap = test_snapshot_with_orphan_shadow("sshd.service");
+        let mut session = RefineSession::new(snap);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "sshd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Verify via projected snapshot rendered through the pipeline
+        let projected = session.snapshot_projected();
+        let containerfile =
+            inspectah_pipeline::render::containerfile::render_containerfile(&projected, None, None);
+        assert!(
+            !containerfile.contains("sshd.service"),
+            "excluded shadow must not appear in Containerfile"
+        );
+    }
+
+    // -- Step 7: Stale-session reconciliation ------------------------------------
+
+    #[test]
+    fn stale_shadow_decision_pruned_on_rescan() {
+        // First scan: orphan shadow exists, user excludes it
+        let snap1 = test_snapshot_with_orphan_shadow("sshd.service");
+        let mut session = RefineSession::new(snap1);
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Service {
+                    unit: "sshd.service".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+
+        // Re-scan: shadow file is gone — no full-shadow drop-ins
+        let snap2 = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            services: Some(ServiceSection::default()),
+            ..Default::default()
+        };
+
+        // Verify synthesis produces nothing when shadow is absent
+        let mut services = snap2.services.clone().unwrap();
+        synthesize_orphan_shadows(&mut services);
+        assert!(
+            services.state_changes.is_empty(),
+            "no synthesis when shadow is gone"
+        );
+
+        // A fresh session from the new snapshot has no stale entries
+        let session2 = RefineSession::new(snap2);
+        let projected = session2.snapshot_projected();
+        assert!(
+            projected
+                .services
+                .as_ref()
+                .map(|s| s.state_changes.is_empty())
+                .unwrap_or(true),
+            "stale shadow must not appear in fresh session from new snapshot"
+        );
     }
 }

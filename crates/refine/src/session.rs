@@ -12,7 +12,7 @@ use inspectah_pipeline::render::containerfile::{
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
-use crate::classify::{classify_configs, classify_packages};
+use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
 use crate::group_state::{GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
@@ -307,6 +307,12 @@ impl RefineSession {
         normalize_config_defaults(&mut snapshot, &configs);
         normalize_inspectah_repo_files(&mut snapshot);
         normalize_language_env_defaults(&mut snapshot);
+
+        // Synthesize orphan full-shadow service entries so they are real
+        // toggle targets throughout the session lifecycle.
+        if let Some(services) = snapshot.services.as_mut() {
+            synthesize_orphan_shadows(services);
+        }
 
         // Detect aggregate mode from snapshot metadata.
         let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
