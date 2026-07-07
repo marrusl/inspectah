@@ -4,6 +4,10 @@
 //! This enum lives in the pipeline crate because grouping is a presentation
 //! decision; other renderers (TUI, web) may define their own groupings.
 
+/// Section IDs that existed in prior sidebar versions but are no longer
+/// live. They are not routed to any group in the web UI.
+const RETIRED_SECTION_IDS: &[&str] = &["system_tuning", "version_changes"];
+
 /// Logical group that collects related report sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SectionGroup {
@@ -32,18 +36,36 @@ impl SectionGroup {
         }
     }
 
+    /// Check if a section ID is retired (no longer live in the web UI).
+    pub fn is_retired(section_id: &str) -> bool {
+        RETIRED_SECTION_IDS.contains(&section_id)
+    }
+
     /// Map a snapshot section name to its group.
     pub fn for_section(section_name: &str) -> Self {
         match section_name {
-            "rpm" => Self::Packages,
-            "config" | "kernel_boot" | "selinux" => Self::SystemConfig,
-            "services" | "scheduled_tasks" | "containers" => Self::Services,
+            "rpm" | "packages" => Self::Packages,
+            "config" | "configs" | "kernel_boot" | "selinux" => Self::SystemConfig,
+            "services" | "scheduled_tasks" | "containers" | "compose" => Self::Services,
             "users_groups" => Self::Identity,
             "network" => Self::Network,
             "storage" => Self::Storage,
-            "non_rpm_software" | "unmanaged_files" => Self::Software,
+            "non_rpm_software" | "unmanaged_files" | "language_packages" => Self::Software,
             "secrets" | "subscription" => Self::Secrets,
-            _ => Self::SystemConfig,
+            _ => Self::SystemConfig, // truly unknown IDs (not retired — retired IDs are caught by is_retired() before reaching this)
+        }
+    }
+
+    /// Check if this group contains sections that have actionable findings
+    /// (triage sections). Reference-only groups return false.
+    pub fn has_actionable_sections(&self) -> bool {
+        match self {
+            Self::Packages
+            | Self::SystemConfig
+            | Self::Services
+            | Self::Identity
+            | Self::Software => true,
+            Self::Network | Self::Storage | Self::Secrets => false,
         }
     }
 
@@ -161,5 +183,89 @@ mod tests {
         deduped.sort();
         deduped.dedup();
         assert_eq!(slugs.len(), deduped.len(), "group slugs must be unique");
+    }
+
+    #[test]
+    fn web_section_ids_all_resolve() {
+        let web_ids = [
+            "packages",
+            "configs",
+            "kernel_boot",
+            "selinux",
+            "services",
+            "containers",
+            "scheduled_tasks",
+            "compose",
+            "users_groups",
+            "network",
+            "storage",
+            "non_rpm_software",
+            "unmanaged_files",
+            "language_packages",
+            "secrets",
+            "subscription",
+        ];
+        for id in web_ids {
+            let _ = SectionGroup::for_section(id);
+        }
+    }
+
+    #[test]
+    fn retired_ids_are_explicitly_retired() {
+        assert!(SectionGroup::is_retired("system_tuning"));
+        assert!(SectionGroup::is_retired("version_changes"));
+    }
+
+    #[test]
+    fn live_section_ids_are_not_retired() {
+        let live_ids = [
+            "packages",
+            "configs",
+            "kernel_boot",
+            "selinux",
+            "services",
+            "containers",
+            "scheduled_tasks",
+            "compose",
+            "users_groups",
+            "network",
+            "storage",
+            "non_rpm_software",
+            "unmanaged_files",
+            "language_packages",
+            "secrets",
+            "subscription",
+        ];
+        for id in live_ids {
+            assert!(!SectionGroup::is_retired(id), "{id} should not be retired");
+        }
+    }
+
+    #[test]
+    fn reference_only_groups_are_not_actionable() {
+        assert!(!SectionGroup::Network.has_actionable_sections());
+        assert!(!SectionGroup::Storage.has_actionable_sections());
+        assert!(!SectionGroup::Secrets.has_actionable_sections());
+    }
+
+    #[test]
+    fn triage_groups_are_actionable() {
+        assert!(SectionGroup::Packages.has_actionable_sections());
+        assert!(SectionGroup::SystemConfig.has_actionable_sections());
+        assert!(SectionGroup::Services.has_actionable_sections());
+        assert!(SectionGroup::Identity.has_actionable_sections());
+        assert!(SectionGroup::Software.has_actionable_sections());
+    }
+
+    #[test]
+    fn slugs_are_unique_and_stable() {
+        let slugs: Vec<&str> = SectionGroup::all_in_order()
+            .iter()
+            .map(|g| g.slug())
+            .collect();
+        let mut deduped = slugs.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(slugs.len(), deduped.len(), "slugs must be unique");
     }
 }
