@@ -1526,8 +1526,8 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
             }],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),
@@ -1547,7 +1547,7 @@ mod tests {
         let session = RefineSession::new(snap);
         let response = crate::adapter::build_web_view(&session);
 
-        // Service DTO should have shadow fields from its full-shadow drop-in
+        // Service DTO should have shadow fields from the service entry
         let sshd = response
             .service_states
             .iter()
@@ -1555,15 +1555,15 @@ mod tests {
             .expect("sshd.service should be in service_states");
         assert_eq!(
             sshd.shadow_type.as_deref(),
-            Some("full_shadow"),
-            "shadow_type should be populated from full-shadow drop-in"
+            Some("fullshadow"),
+            "shadow_type should be populated from service entry"
         );
         assert!(
             sshd.shadow_rationale
                 .as_ref()
                 .map(|r| r.contains("Full unit override"))
                 .unwrap_or(false),
-            "shadow_rationale should be populated from full-shadow drop-in"
+            "shadow_rationale should be populated from service entry"
         );
 
         // Drop-in DTO should also carry shadow fields

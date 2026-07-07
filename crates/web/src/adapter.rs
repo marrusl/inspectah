@@ -75,44 +75,25 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .collect();
 
     // Map service decisions from Refined types to DTOs.
-    // For each service, look up associated full-shadow drop-ins to surface
-    // shadow rationale on the service toggle row.
+    // Shadow fields flow from the service entry itself.
     let service_states: Vec<ServiceDecisionDto> = decisions
         .service_states
         .iter()
-        .map(|s| {
-            // Find the first full-shadow drop-in for this unit, if any.
-            let full_shadow = decisions.service_dropins.iter().find(|d| {
-                d.entry.unit == s.entry.unit
-                    && d.entry
-                        .shadow_type
-                        .as_ref()
-                        .map(|st| matches!(st, inspectah_core::types::ShadowType::FullShadow))
-                        .unwrap_or(false)
-            });
-            let (shadow_type, shadow_rationale) = match full_shadow {
-                Some(d) => (
-                    d.entry
-                        .shadow_type
-                        .as_ref()
-                        .and_then(|st| serde_json::to_value(st).ok())
-                        .and_then(|v| v.as_str().map(|s| s.to_string())),
-                    d.entry.shadow_rationale.clone(),
-                ),
-                None => (None, None),
-            };
-            ServiceDecisionDto {
-                unit: s.entry.unit.clone(),
-                triage: s.triage.clone(),
-                include: s.entry.disposition.is_included(),
-                locked: s.entry.locked,
-                attention_reason: s.entry.attention_reason.clone(),
-                owning_package: s.entry.owning_package.clone(),
-                default_state: s.entry.default_state.map(|d| d.to_string()),
-                current_state: s.entry.current_state.to_string(),
-                shadow_type,
-                shadow_rationale,
-            }
+        .map(|s| ServiceDecisionDto {
+            unit: s.entry.unit.clone(),
+            triage: s.triage.clone(),
+            include: s.entry.disposition.is_included(),
+            locked: s.entry.locked,
+            attention_reason: s.entry.attention_reason.clone(),
+            owning_package: s.entry.owning_package.clone(),
+            default_state: s.entry.default_state.map(|d| d.to_string()),
+            current_state: s.entry.current_state.to_string(),
+            shadow_type: s
+                .entry
+                .shadow_type
+                .as_ref()
+                .map(|st| format!("{:?}", st).to_lowercase()),
+            shadow_rationale: s.entry.shadow_rationale.clone(),
         })
         .collect();
 
@@ -1989,6 +1970,42 @@ mod tests {
         assert_eq!(
             item.shadow_rationale.as_deref(),
             Some("full override by custom unit")
+        );
+    }
+
+    #[test]
+    fn service_decision_dto_wires_shadow_fields() {
+        use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+        use inspectah_core::types::{FindingKind, ShadowType};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "httpd.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Disable),
+                owning_package: Some("httpd".into()),
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+                attention_reason: None,
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("Custom unit file overrides package default".into()),
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        let json = serde_json::to_value(&response).expect("serialize");
+
+        let states = json["service_states"].as_array().unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0]["unit"], "httpd.service");
+        assert_eq!(states[0]["shadow_type"], "fullshadow");
+        assert_eq!(
+            states[0]["shadow_rationale"],
+            "Custom unit file overrides package default"
         );
     }
 }
