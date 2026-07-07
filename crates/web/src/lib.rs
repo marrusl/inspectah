@@ -90,7 +90,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             post(aggregate_handlers::aggregate_diff),
         )
         .route(
-            "/api/batch-toggle/{group_name}",
+            "/api/batch-toggle/{group_slug}",
             post(handlers::batch_toggle_group),
         )
         .route("/api/snapshot/sections", get(handlers::get_sections))

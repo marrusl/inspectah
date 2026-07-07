@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
@@ -637,25 +638,46 @@ pub struct BatchTogglePayload {
 /// Batch-toggle all actionable items in a named section group.
 ///
 /// Advisory items are left unchanged. Returns the updated view response.
-/// `group_name` is one of: packages, configs, services, containers.
+/// Route parameter is a `SectionGroup::slug()` value. Reference-only groups
+/// (network, storage, secrets) return 404 — no batch operations allowed.
 pub async fn batch_toggle_group(
     State(state): State<Arc<AppState>>,
-    axum::extract::Path(group_name): axum::extract::Path<String>,
+    axum::extract::Path(group_slug): axum::extract::Path<String>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    use inspectah_pipeline::section_group::SectionGroup;
+
     let payload: BatchTogglePayload = serde_json::from_slice(&body).map_err(|e| {
         AppError(inspectah_refine::types::RefineError::BadRequest(format!(
             "invalid batch toggle payload: {e}"
         )))
     })?;
+
+    // Lookup group by slug
+    let group = SectionGroup::all_in_order()
+        .iter()
+        .find(|g| g.slug() == group_slug)
+        .ok_or_else(|| {
+            AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+                "unknown batch toggle group: {group_slug}"
+            )))
+        })?;
+
+    // Reject reference-only groups
+    if !group.has_actionable_sections() {
+        return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+            format!("batch toggle not supported for reference-only group: {group_slug}"),
+        )));
+    }
+
     let mut session = state.session.lock().unwrap();
     let snap = session.snapshot().clone();
 
-    // Collect item IDs for actionable (non-advisory) items in the section.
+    // Collect item IDs for actionable (non-advisory) items in the group.
     let mut ops: Vec<inspectah_refine::types::RefinementOp> = Vec::new();
 
-    match group_name.as_str() {
-        "packages" => {
+    match group {
+        SectionGroup::Packages => {
             if let Some(ref rpm) = snap.rpm {
                 for pkg in &rpm.packages_added {
                     if pkg.disposition.is_advisory() || pkg.locked {
@@ -671,7 +693,8 @@ pub async fn batch_toggle_group(
                 }
             }
         }
-        "configs" => {
+        SectionGroup::SystemConfig => {
+            // Config files
             if let Some(ref config) = snap.config {
                 for file in &config.files {
                     if file.disposition.is_advisory() || file.locked {
@@ -685,8 +708,70 @@ pub async fn batch_toggle_group(
                     });
                 }
             }
+            // Kernel boot items
+            if let Some(ref kernel) = snap.kernel_boot {
+                // Loaded modules
+                for kmod in &kernel.loaded_modules {
+                    if kmod.disposition.is_advisory() || kmod.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::KernelModule {
+                            name: kmod.name.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                // Non-default modules
+                for kmod in &kernel.non_default_modules {
+                    if kmod.disposition.is_advisory() || kmod.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::KernelModule {
+                            name: kmod.name.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                // Sysctls
+                for sysctl in &kernel.sysctl_overrides {
+                    if sysctl.disposition.is_advisory() || sysctl.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Sysctl {
+                            key: sysctl.key.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                // Tuned
+                if !kernel.tuned_disposition.is_advisory() {
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::TunedSelection {
+                            profile: kernel.tuned_active.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+            // SELinux ports
+            if let Some(ref selinux) = snap.selinux {
+                for port in &selinux.port_labels {
+                    if port.disposition.is_advisory() || port.locked {
+                        continue;
+                    }
+                    let protocol_port = format!("{}/{}", port.protocol, port.port);
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::SelinuxPort { protocol_port },
+                        include: payload.include,
+                    });
+                }
+            }
         }
-        "services" => {
+        SectionGroup::Services => {
+            // Service state changes
             if let Some(ref svc) = snap.services {
                 for sc in &svc.state_changes {
                     if sc.disposition.is_advisory() || sc.locked {
@@ -699,16 +784,184 @@ pub async fn batch_toggle_group(
                         include: payload.include,
                     });
                 }
+                // Drop-ins
+                for di in &svc.drop_ins {
+                    if di.disposition.is_advisory() || di.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::DropIn {
+                            path: di.path.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+            // Containers (quadlets, flatpaks)
+            if let Some(ref containers) = snap.containers {
+                for quadlet in &containers.quadlet_units {
+                    if quadlet.disposition.is_advisory() || quadlet.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Quadlet {
+                            path: quadlet.path.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                for flatpak in &containers.flatpak_apps {
+                    if flatpak.disposition.is_advisory() || flatpak.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Flatpak {
+                            app_id: flatpak.app_id.clone(),
+                            remote: flatpak.remote.clone(),
+                            branch: flatpak.branch.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+            // Scheduled tasks
+            if let Some(ref sched) = snap.scheduled_tasks {
+                for cron in &sched.cron_jobs {
+                    if cron.disposition.is_advisory() || cron.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::CronJob {
+                            path: cron.path.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                for timer in &sched.systemd_timers {
+                    if timer.disposition.is_advisory() || timer.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::SystemdTimer {
+                            name: timer.name.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                for at_job in &sched.at_jobs {
+                    if at_job.disposition.is_advisory() || at_job.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::AtJob {
+                            file: at_job.file.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+                for gen_timer in &sched.generated_timer_units {
+                    if gen_timer.disposition.is_advisory() || gen_timer.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::GeneratedTimer {
+                            name: gen_timer.name.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
             }
         }
-        // Network items are inventory — non-toggleable across all surfaces.
-        "network" => {}
-        other => {
-            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
-                format!(
-                    "unknown batch toggle group: {other} (expected packages, configs, services, or network)"
-                ),
-            )));
+        SectionGroup::Identity => {
+            // Users and groups
+            if let Some(ref ug) = snap.users_groups {
+                for user in &ug.users {
+                    let disp = user
+                        .get("disposition")
+                        .and_then(|v| serde_json::from_value::<FindingKind>(v.clone()).ok())
+                        .unwrap_or_else(FindingKind::included);
+                    let locked = user
+                        .get("locked")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if disp.is_advisory() || locked {
+                        continue;
+                    }
+                    // Users don't have a dedicated ItemId variant yet — skip for now
+                    // TODO: Add ItemId::User when user triage is implemented
+                }
+                for group in &ug.groups {
+                    let name = group
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let disp = group
+                        .get("disposition")
+                        .and_then(|v| serde_json::from_value::<FindingKind>(v.clone()).ok())
+                        .unwrap_or_else(FindingKind::included);
+                    let locked = group
+                        .get("locked")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if disp.is_advisory() || locked || name.is_empty() {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::Group { name },
+                        include: payload.include,
+                    });
+                }
+            }
+        }
+        SectionGroup::Software => {
+            // Non-RPM software (includes language packages)
+            if let Some(ref nonrpm) = snap.non_rpm_software {
+                for item in &nonrpm.items {
+                    if item.disposition.is_advisory() || item.locked {
+                        continue;
+                    }
+                    // Language packages detected by method prefix
+                    if item.method.starts_with("pip_")
+                        || item.method.starts_with("npm_")
+                        || item.method.starts_with("gem_")
+                        || item.method.starts_with("python_venv")
+                    {
+                        ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                            item_id: inspectah_refine::types::ItemId::LanguageEnv {
+                                ecosystem: item.lang.clone(),
+                                path: item.path.clone(),
+                            },
+                            include: payload.include,
+                        });
+                    } else {
+                        ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                            item_id: inspectah_refine::types::ItemId::NonRpm {
+                                name: item.name.clone(),
+                            },
+                            include: payload.include,
+                        });
+                    }
+                }
+            }
+            // Unmanaged files
+            if let Some(ref unmanaged) = snap.unmanaged_files {
+                for file in &unmanaged.items {
+                    if file.disposition.is_advisory() || file.locked {
+                        continue;
+                    }
+                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                        item_id: inspectah_refine::types::ItemId::UnmanagedFile {
+                            path: file.path.clone(),
+                        },
+                        include: payload.include,
+                    });
+                }
+            }
+        }
+        // Reference-only groups are already rejected above
+        SectionGroup::Network | SectionGroup::Storage | SectionGroup::Secrets => {
+            unreachable!("reference-only groups rejected earlier")
         }
     }
 
@@ -1293,5 +1546,143 @@ mod tests {
             .expect("sshd.service drop-in should be in service_dropins");
         assert_eq!(dropin.shadow_type.as_deref(), Some("full_shadow"));
         assert!(dropin.shadow_rationale.is_some());
+    }
+
+    // -- Batch toggle handler slug migration tests ---------------------------
+
+    #[tokio::test]
+    async fn batch_toggle_actionable_groups_return_200() {
+        use inspectah_pipeline::section_group::SectionGroup;
+
+        let snap = empty_snapshot();
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let actionable_slugs = SectionGroup::all_in_order()
+            .iter()
+            .filter(|g| g.has_actionable_sections())
+            .map(|g| g.slug())
+            .collect::<Vec<_>>();
+
+        let payload = serde_json::json!({ "include": true });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        for slug in actionable_slugs {
+            let result = batch_toggle_group(
+                State(state.clone()),
+                axum::extract::Path(slug.to_string()),
+                body.clone(),
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "actionable group slug {slug} should return 200"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_toggle_reference_only_groups_return_error() {
+        use inspectah_pipeline::section_group::SectionGroup;
+
+        let snap = empty_snapshot();
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let reference_slugs = SectionGroup::all_in_order()
+            .iter()
+            .filter(|g| !g.has_actionable_sections())
+            .map(|g| g.slug())
+            .collect::<Vec<_>>();
+
+        let payload = serde_json::json!({ "include": true });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        for slug in reference_slugs {
+            let result = batch_toggle_group(
+                State(state.clone()),
+                axum::extract::Path(slug.to_string()),
+                body.clone(),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "reference-only group slug {slug} should return error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_toggle_unknown_slugs_return_error() {
+        let snap = empty_snapshot();
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let unknown_slugs = vec![
+            "foobar",
+            "system_tuning",
+            "version_changes",
+            "unknown-group",
+        ];
+        let payload = serde_json::json!({ "include": true });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        for slug in unknown_slugs {
+            let result = batch_toggle_group(
+                State(state.clone()),
+                axum::extract::Path(slug.to_string()),
+                body.clone(),
+            )
+            .await;
+            assert!(result.is_err(), "unknown slug {slug} should return error");
+        }
+    }
+
+    #[test]
+    fn section_group_slugs_are_unique() {
+        use inspectah_pipeline::section_group::SectionGroup;
+
+        let slugs: Vec<&str> = SectionGroup::all_in_order()
+            .iter()
+            .map(|g| g.slug())
+            .collect();
+        let mut deduped = slugs.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(slugs.len(), deduped.len(), "all group slugs must be unique");
+    }
+
+    #[tokio::test]
+    async fn batch_toggle_zero_actionable_items_returns_200() {
+        // Empty snapshot → zero items to toggle, but not an error
+        let snap = empty_snapshot();
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let payload = serde_json::json!({ "include": true });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        let result = batch_toggle_group(
+            State(state),
+            axum::extract::Path("packages-group".to_string()),
+            body,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "batch toggle with zero actionable items should return 200"
+        );
     }
 }
