@@ -587,8 +587,8 @@ impl App {
                 } else {
                     let items = self.current_items();
                     if let Some(item) = items.get(self.state.cursor) {
-                        if item.is_advisory {
-                            // Advisory items are informational and cannot be toggled.
+                        if item.is_advisory || item.is_inventory {
+                            // Advisory and inventory items are informational and cannot be toggled.
                         } else if item.locked {
                             let reason = item.lock_reason.as_deref().unwrap_or("item is locked");
                             self.state.flash =

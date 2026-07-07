@@ -1417,10 +1417,15 @@ impl RefineSession {
                             return Err(RefineError::UnknownTarget(profile.clone()));
                         }
                     }
+                    // Inventory items: not toggleable
+                    ItemId::NMConnection { .. } | ItemId::FirewallZone { .. } => {
+                        return Err(RefineError::InventoryNotToggleable(format!(
+                            "{:?}",
+                            item_id
+                        )));
+                    }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
-                    | ItemId::NMConnection { .. }
-                    | ItemId::FirewallZone { .. }
                     | ItemId::KernelModule { .. }
                     | ItemId::CronJob { .. }
                     | ItemId::SystemdTimer { .. }
@@ -6618,5 +6623,39 @@ mod tests {
             "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
         );
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn validate_target_rejects_inventory_nm_connection() {
+        let snap = test_snapshot();
+        let session = RefineSession::new(snap);
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::NMConnection {
+                path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+            },
+            include: true,
+        };
+        let result = session.validate_target(&op);
+        assert!(
+            matches!(result, Err(RefineError::InventoryNotToggleable(_))),
+            "NMConnection should be rejected as inventory"
+        );
+    }
+
+    #[test]
+    fn validate_target_rejects_inventory_firewall_zone() {
+        let snap = test_snapshot();
+        let session = RefineSession::new(snap);
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::FirewallZone {
+                path: "/etc/firewalld/zones/public.xml".into(),
+            },
+            include: false,
+        };
+        let result = session.validate_target(&op);
+        assert!(
+            matches!(result, Err(RefineError::InventoryNotToggleable(_))),
+            "FirewallZone should be rejected as inventory"
+        );
     }
 }

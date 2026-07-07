@@ -210,6 +210,8 @@ impl ListItem {
         detail: impl Into<String>,
         group: TriageGroup,
         group_index: usize,
+        item_id: Option<ItemId>,
+        has_content: bool,
     ) -> Self {
         Self {
             name: name.into(),
@@ -220,8 +222,8 @@ impl ListItem {
             group_index,
             is_collapsed: false,
             group_count: 0,
-            item_id: None,
-            has_content: false,
+            item_id,
+            has_content,
             is_repo_bar: false,
             locked: false,
             lock_reason: None,
@@ -732,10 +734,20 @@ mod tests {
 
     #[test]
     fn inventory_item_is_non_toggleable() {
-        let item = ListItem::inventory("eth0", "dhcp / ethernet", TriageGroup::Investigate, 0);
+        let item = ListItem::inventory(
+            "eth0",
+            "dhcp / ethernet",
+            TriageGroup::Investigate,
+            0,
+            None,
+            false,
+        );
         assert!(item.is_inventory);
         assert!(!item.is_advisory, "inventory is not advisory");
-        assert!(item.item_id.is_none(), "inventory items have no item_id");
+        assert!(
+            item.item_id.is_none(),
+            "inventory items may have no item_id"
+        );
         assert!(
             item.included.is_none(),
             "inventory items have no include state"
@@ -746,7 +758,14 @@ mod tests {
     fn inventory_item_renders_with_info_prefix() {
         let items = vec![
             ListItem::header(TriageGroup::Investigate, 1, false),
-            ListItem::inventory("eth0", "dhcp / ethernet", TriageGroup::Investigate, 0),
+            ListItem::inventory(
+                "eth0",
+                "dhcp / ethernet",
+                TriageGroup::Investigate,
+                0,
+                None,
+                false,
+            ),
         ];
         let widget = TriageListWidget::new(
             &items,

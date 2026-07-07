@@ -650,6 +650,8 @@ pub enum RefineError {
     BadRequest(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("inventory item is not toggleable: {0}")]
+    InventoryNotToggleable(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

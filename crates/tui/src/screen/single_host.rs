@@ -37,6 +37,7 @@ struct RawItem {
     lock_reason: Option<String>,
     is_advisory: bool,
     advisory_rationale: Option<String>,
+    is_inventory: bool,
 }
 
 impl RawItem {
@@ -62,6 +63,7 @@ impl RawItem {
             lock_reason,
             is_advisory: false,
             advisory_rationale: None,
+            is_inventory: false,
         }
     }
 
@@ -82,6 +84,29 @@ impl RawItem {
             lock_reason: None,
             is_advisory: true,
             advisory_rationale: Some(rationale.into()),
+            is_inventory: false,
+        }
+    }
+
+    fn inventory(
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        group: TriageGroup,
+        item_id: Option<ItemId>,
+        has_content: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
+            group,
+            included: None,
+            item_id,
+            has_content,
+            locked: false,
+            lock_reason: None,
+            is_advisory: false,
+            advisory_rationale: None,
+            is_inventory: true,
         }
     }
 }
@@ -828,115 +853,88 @@ pub fn build_list_items(
             let mut items: Vec<RawItem> = Vec::new();
 
             for c in &net.connections {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     c.name.clone(),
                     format!("{} ({})", c.conn_type, c.method),
                     TriageGroup::Site,
-                    None,
                     Some(ItemId::NMConnection {
                         path: c.path.clone(),
                     }),
                     false,
-                    false,
-                    None,
                 ));
             }
             for z in &net.firewall_zones {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     z.name.clone(),
                     format!("zone ({})", z.path),
                     TriageGroup::Site,
-                    None,
                     Some(ItemId::FirewallZone {
                         path: z.path.clone(),
                     }),
                     !z.content.is_empty(),
-                    false,
-                    None,
                 ));
             }
             for r in &net.firewall_direct_rules {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     format!("{}/{}", r.table, r.chain),
                     format!("ipv{} prio={}", r.ipv, r.priority),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             for r in &net.static_routes {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     r.name.clone(),
                     r.path.clone(),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             for route in &net.ip_routes {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     "ip route",
                     route.clone(),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             for rule in &net.ip_rules {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     "ip rule",
                     rule.clone(),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             if !net.resolv_provenance.is_empty() {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     "resolv.conf",
                     net.resolv_provenance.clone(),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             for h in &net.hosts_additions {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     "/etc/hosts",
                     h.clone(),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
             for p in &net.proxy_env {
-                items.push(RawItem::new(
+                items.push(RawItem::inventory(
                     "proxy",
                     format!("{}: {}", p.source, p.line),
                     TriageGroup::Site,
                     None,
-                    None,
                     false,
-                    false,
-                    None,
                 ));
             }
 
@@ -1362,6 +1360,15 @@ fn build_grouped_items(items: &[RawItem], state: &TuiState, _section: SectionId)
                         idx,
                         item.advisory_rationale.as_deref().unwrap_or(""),
                     ));
+                } else if item.is_inventory {
+                    result.push(ListItem::inventory(
+                        item.name.clone(),
+                        item.detail.clone(),
+                        bucket,
+                        idx,
+                        item.item_id.clone(),
+                        item.has_content,
+                    ));
                 } else {
                     let mut li = if item.has_content {
                         ListItem::item_with_content(
@@ -1550,5 +1557,52 @@ mod tests {
         assert!(result[0].is_group_header);
         assert!(result[1].is_advisory);
         assert!(result[1].advisory_rationale.is_some());
+    }
+
+    #[test]
+    fn inventory_items_are_marked_non_toggleable() {
+        let items: Vec<RawItem> = vec![RawItem::inventory(
+            "eth0",
+            "dhcp / ethernet",
+            TriageGroup::Site,
+            Some(ItemId::NMConnection {
+                path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+            }),
+            false,
+        )];
+        let state = TuiState::new(14);
+        let result = build_grouped_items(&items, &state, SectionId::Network);
+
+        // Header + 1 inventory item.
+        assert_eq!(result.len(), 2);
+        assert!(result[0].is_group_header);
+        assert!(result[1].is_inventory, "network items should be inventory");
+        assert!(
+            result[1].included.is_none(),
+            "inventory items have no include state"
+        );
+        assert!(
+            result[1].item_id.is_some(),
+            "inventory items may have ItemId for detail view"
+        );
+    }
+
+    #[test]
+    fn network_items_use_inventory_builder() {
+        // Verify RawItem::inventory() constructs items correctly
+        let item = RawItem::inventory(
+            "firewall-zone",
+            "public",
+            TriageGroup::Site,
+            Some(ItemId::FirewallZone {
+                path: "/etc/firewalld/zones/public.xml".into(),
+            }),
+            true,
+        );
+        assert!(item.is_inventory);
+        assert!(!item.is_advisory);
+        assert!(item.included.is_none());
+        assert!(item.has_content);
+        assert!(item.item_id.is_some());
     }
 }
