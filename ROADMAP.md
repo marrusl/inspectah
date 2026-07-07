@@ -5,7 +5,7 @@
 ```
 Group Rendering: Refine UI (spec'd)
     |
-    +-- Classification Logic Developer Docs
+    +-- Internals Documentation
     |
 Aggregate Spec 3: Factor
     |
@@ -36,9 +36,15 @@ Modernizes the HTML audit report output.
 
 - **Status:** Spec approved, plan written
 
-### Classification Logic Developer Docs
+### Internals Documentation
 
-Developer-facing explanation covering the full classification pipeline: baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, aggregate consensus. Location: `docs/explanation/classification-logic.md`.
+Plain-English documentation of all inspectah logic for technical users and contributors. Structured as a `docs/internals/` set, tiered by priority:
+
+- **Tier 1 (ship at 1.0):** Classification engine (baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, aggregate consensus), inspector logic reference (all 12 inspectors), pipeline overview (end-to-end scan flow)
+- **Tier 2 (backfill on demand):** Rendering pipeline, baseline extraction, data model/schema reference
+- **Tier 3 (write if asked):** Refine session state, aggregate/fleet logic, build pipeline, redaction engine
+
+Estimated 12K-18K lines across 10 documents, 11-16 writing sessions. Scoping assessment: PKA `marks-inbox/project/2026-07-07-inspectah-logic-docs-scoping.md`.
 
 ## Needs Spec
 
