@@ -4,6 +4,15 @@
 //! This enum lives in the pipeline crate because grouping is a presentation
 //! decision; other renderers (TUI, web) may define their own groupings.
 
+/// A single section within a group, with its canonical ID, display label,
+/// and whether it carries triage decisions (include/exclude toggles).
+#[derive(Debug, Clone, Copy)]
+pub struct SectionMeta {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub is_triage: bool,
+}
+
 /// Section IDs that existed in prior sidebar versions but are no longer
 /// live. They are not routed to any group in the web UI.
 const RETIRED_SECTION_IDS: &[&str] = &["system_tuning", "version_changes"];
@@ -97,6 +106,93 @@ impl SectionGroup {
             Self::Storage => "storage-group",
             Self::Software => "software",
             Self::Secrets => "secrets",
+        }
+    }
+
+    /// Canonical member sections for this group, in display order.
+    ///
+    /// Each entry carries the section's web-facing ID, its human-readable
+    /// label, and whether the section appears in the triage (decision) view.
+    pub fn member_sections(&self) -> &'static [SectionMeta] {
+        match self {
+            Self::Packages => &[SectionMeta {
+                id: "packages",
+                label: "Packages",
+                is_triage: true,
+            }],
+            Self::SystemConfig => &[
+                SectionMeta {
+                    id: "config",
+                    label: "Configuration Files",
+                    is_triage: true,
+                },
+                SectionMeta {
+                    id: "kernel_boot",
+                    label: "Kernel & Boot",
+                    is_triage: false,
+                },
+                SectionMeta {
+                    id: "selinux",
+                    label: "Security & Access Control",
+                    is_triage: false,
+                },
+            ],
+            Self::Services => &[
+                SectionMeta {
+                    id: "services",
+                    label: "Services",
+                    is_triage: true,
+                },
+                SectionMeta {
+                    id: "scheduled_tasks",
+                    label: "Scheduled Tasks",
+                    is_triage: false,
+                },
+                SectionMeta {
+                    id: "containers",
+                    label: "Containers",
+                    is_triage: true,
+                },
+            ],
+            Self::Identity => &[SectionMeta {
+                id: "users_groups",
+                label: "Users & Groups",
+                is_triage: true,
+            }],
+            Self::Network => &[SectionMeta {
+                id: "network",
+                label: "Network",
+                is_triage: false,
+            }],
+            Self::Storage => &[SectionMeta {
+                id: "storage",
+                label: "Storage",
+                is_triage: false,
+            }],
+            Self::Software => &[
+                SectionMeta {
+                    id: "non_rpm_software",
+                    label: "Non-RPM Software",
+                    is_triage: true,
+                },
+                SectionMeta {
+                    id: "unmanaged_files",
+                    label: "Unmanaged Files",
+                    is_triage: true,
+                },
+            ],
+            Self::Secrets => &[
+                SectionMeta {
+                    id: "secrets",
+                    label: "Secrets",
+                    is_triage: false,
+                },
+                SectionMeta {
+                    id: "subscription",
+                    label: "Subscription",
+                    is_triage: false,
+                },
+            ],
         }
     }
 }
@@ -267,5 +363,47 @@ mod tests {
         deduped.sort();
         deduped.dedup();
         assert_eq!(slugs.len(), deduped.len(), "slugs must be unique");
+    }
+
+    #[test]
+    fn member_sections_non_empty_for_all_groups() {
+        for group in SectionGroup::all_in_order() {
+            assert!(
+                !group.member_sections().is_empty(),
+                "{:?} must have at least one member section",
+                group
+            );
+        }
+    }
+
+    #[test]
+    fn member_section_ids_map_back_to_parent_group() {
+        for group in SectionGroup::all_in_order() {
+            for section in group.member_sections() {
+                assert_eq!(
+                    SectionGroup::for_section(section.id),
+                    *group,
+                    "section '{}' should map back to {:?}",
+                    section.id,
+                    group
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn member_section_ids_are_unique_across_all_groups() {
+        let all_ids: Vec<&str> = SectionGroup::all_in_order()
+            .iter()
+            .flat_map(|g| g.member_sections().iter().map(|s| s.id))
+            .collect();
+        let mut deduped = all_ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(
+            all_ids.len(),
+            deduped.len(),
+            "section IDs must be unique across groups"
+        );
     }
 }

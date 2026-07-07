@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
+use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
@@ -668,6 +669,8 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
         items,
         subsections,
         empty_reason: None,
+        has_ifcfg: false,
+        ifcfg_note: None,
     }
 }
 
@@ -716,6 +719,8 @@ pub fn web_version_changes_section(data: &RefVersionChanges) -> ReferenceSection
             items: Vec::new(),
             subsections: Vec::new(),
             empty_reason: reason,
+            has_ifcfg: false,
+            ifcfg_note: None,
         };
     }
 
@@ -754,6 +759,8 @@ pub fn web_version_changes_section(data: &RefVersionChanges) -> ReferenceSection
         items,
         subsections: Vec::new(),
         empty_reason: None,
+        has_ifcfg: false,
+        ifcfg_note: None,
     }
 }
 
@@ -1025,6 +1032,8 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
         items: Vec::new(),
         subsections,
         empty_reason: None,
+        has_ifcfg: false,
+        ifcfg_note: None,
     }
 }
 
@@ -1190,12 +1199,20 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
         });
     }
 
+    let ifcfg_note = if data.has_ifcfg {
+        Some(IFCFG_DEPRECATION_NOTE.to_string())
+    } else {
+        None
+    };
+
     ReferenceSection {
         id: "network".to_string(),
         display_name: "Network".to_string(),
         items: Vec::new(),
         subsections,
         empty_reason: None,
+        has_ifcfg: data.has_ifcfg,
+        ifcfg_note,
     }
 }
 
@@ -1646,6 +1663,7 @@ mod tests {
                 source: "/etc/environment".into(),
                 line: "http_proxy=http://proxy:3128".into(),
             }],
+            has_ifcfg: false,
         };
         let section = web_network_section(&data);
         assert!(section.items.is_empty(), "top-level items must be empty");
@@ -1821,6 +1839,7 @@ mod tests {
             resolv_provenance: String::new(),
             hosts_additions: vec![],
             proxy_env: vec![],
+            has_ifcfg: false,
         };
         let section = web_network_section(&data);
         assert_eq!(section.subsections.len(), 1);
@@ -1890,5 +1909,86 @@ mod tests {
         let section = web_kernel_boot_section(&data);
         assert_eq!(section.subsections.len(), 1, "only non-empty subsections");
         assert_eq!(section.subsections[0].id, "defaults_context");
+    }
+
+    #[test]
+    fn web_network_section_ifcfg_fields() {
+        use inspectah_refine::projection::{RefNMConnection, RefNetwork};
+
+        // Network with ifcfg connections
+        let data = RefNetwork {
+            connections: vec![RefNMConnection {
+                name: "eth0".into(),
+                conn_type: "ethernet".into(),
+                method: "auto".into(),
+                path: "/etc/sysconfig/network-scripts/ifcfg-eth0".into(),
+            }],
+            has_ifcfg: true,
+            ..Default::default()
+        };
+        let section = web_network_section(&data);
+        assert!(section.has_ifcfg, "has_ifcfg must be true");
+        assert!(section.ifcfg_note.is_some(), "ifcfg_note must be populated");
+        assert!(
+            section
+                .ifcfg_note
+                .as_deref()
+                .unwrap()
+                .contains("ifcfg network scripts"),
+            "note must reference ifcfg"
+        );
+
+        // Network without ifcfg connections
+        let data_no_ifcfg = RefNetwork {
+            connections: vec![RefNMConnection {
+                name: "eth0".into(),
+                conn_type: "ethernet".into(),
+                method: "auto".into(),
+                path: "/etc/NetworkManager/system-connections/eth0.nmconnection".into(),
+            }],
+            has_ifcfg: false,
+            ..Default::default()
+        };
+        let section_no = web_network_section(&data_no_ifcfg);
+        assert!(!section_no.has_ifcfg, "has_ifcfg must be false");
+        assert!(section_no.ifcfg_note.is_none(), "no note when no ifcfg");
+    }
+
+    #[test]
+    fn web_network_section_ifcfg_skipped_in_json_when_false() {
+        use inspectah_refine::projection::RefNetwork;
+
+        let data = RefNetwork::default();
+        let section = web_network_section(&data);
+        let json = serde_json::to_value(&section).unwrap();
+        assert!(
+            json.get("has_ifcfg").is_none(),
+            "has_ifcfg false must be skipped in serialization"
+        );
+        assert!(
+            json.get("ifcfg_note").is_none(),
+            "ifcfg_note None must be skipped in serialization"
+        );
+    }
+
+    #[test]
+    fn ref_service_item_carries_shadow_fields() {
+        use inspectah_core::types::ShadowType;
+        use inspectah_refine::projection::RefServiceItem;
+
+        let item = RefServiceItem {
+            unit: "httpd.service".into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            owning_package: Some("httpd".into()),
+            dropin_contents: vec![],
+            shadow_type: Some(ShadowType::FullShadow),
+            shadow_rationale: Some("full override by custom unit".into()),
+        };
+        assert!(item.shadow_type.is_some());
+        assert_eq!(
+            item.shadow_rationale.as_deref(),
+            Some("full override by custom unit")
+        );
     }
 }

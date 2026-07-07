@@ -5,6 +5,7 @@ use crate::types::{
     RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState, RefinedSysctl,
     RefinedTunedSelection, RepoProvenance, RepoTier,
 };
+use inspectah_core::types::ShadowType;
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
@@ -74,6 +75,8 @@ pub struct RefServiceItem {
     pub default_state: Option<PresetDefault>,
     pub owning_package: Option<String>,
     pub dropin_contents: Vec<String>,
+    pub shadow_type: Option<ShadowType>,
+    pub shadow_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +245,9 @@ pub struct RefNetwork {
     pub resolv_provenance: String,
     pub hosts_additions: Vec<String>,
     pub proxy_env: Vec<RefProxyEnv>,
+    /// True when any connection was collected from ifcfg format
+    /// (`/etc/sysconfig/network-scripts/`).
+    pub has_ifcfg: bool,
 }
 
 #[derive(Debug, Clone)]

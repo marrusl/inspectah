@@ -93,6 +93,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             "/api/batch-toggle/{group_slug}",
             post(handlers::batch_toggle_group),
         )
+        .route("/api/groups", get(handlers::get_groups))
         .route("/api/snapshot/sections", get(handlers::get_sections))
         .route(
             "/api/viewed",

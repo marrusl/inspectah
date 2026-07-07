@@ -975,6 +975,34 @@ pub async fn batch_toggle_group(
     ))
 }
 
+// -- Group metadata endpoint ----------------------------------------------
+
+pub async fn get_groups() -> impl IntoResponse {
+    use inspectah_pipeline::section_group::SectionGroup;
+
+    let groups: Vec<crate::web_types::GroupMetaDto> = SectionGroup::all_in_order()
+        .iter()
+        .map(|g| {
+            let sections = g
+                .member_sections()
+                .iter()
+                .map(|s| crate::web_types::SectionMetaDto {
+                    id: s.id.to_string(),
+                    label: s.label.to_string(),
+                    is_triage: s.is_triage,
+                })
+                .collect();
+            crate::web_types::GroupMetaDto {
+                slug: g.slug().to_string(),
+                label: g.label().to_string(),
+                sections,
+                has_actionable_sections: g.has_actionable_sections(),
+            }
+        })
+        .collect();
+    Json(json!(groups))
+}
+
 // -- New Phase 4 endpoints ------------------------------------------------
 
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1684,5 +1712,53 @@ mod tests {
             result.is_ok(),
             "batch toggle with zero actionable items should return 200"
         );
+    }
+
+    // -- Group metadata endpoint -------------------------------------------
+
+    #[tokio::test]
+    async fn get_groups_returns_all_groups_in_order() {
+        use inspectah_pipeline::section_group::SectionGroup;
+
+        let response = get_groups().await;
+        let json = response.into_response();
+        let body = axum::body::to_bytes(json.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let groups: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            groups.len(),
+            SectionGroup::all_in_order().len(),
+            "must return all groups"
+        );
+
+        // First group is packages
+        assert_eq!(groups[0]["slug"], "packages-group");
+        assert_eq!(groups[0]["label"], "Packages");
+        assert_eq!(groups[0]["has_actionable_sections"], true);
+
+        // Each group has non-empty sections
+        for group in &groups {
+            let sections = group["sections"].as_array().unwrap();
+            assert!(
+                !sections.is_empty(),
+                "group {} must have sections",
+                group["slug"]
+            );
+            // Each section has id, label, is_triage
+            for section in sections {
+                assert!(section.get("id").is_some());
+                assert!(section.get("label").is_some());
+                assert!(section.get("is_triage").is_some());
+            }
+        }
+
+        // Network group is reference-only
+        let network = groups
+            .iter()
+            .find(|g| g["slug"] == "network-group")
+            .unwrap();
+        assert_eq!(network["has_actionable_sections"], false);
     }
 }

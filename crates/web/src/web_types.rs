@@ -58,6 +58,11 @@ pub struct UnmanagedFileGroupDto {
 
 // -- Reference section DTOs (presentation layer only) ---------------------
 
+/// Serde helper: skip serializing `false` booleans.
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ReferenceSection {
     pub id: String,
@@ -67,6 +72,13 @@ pub struct ReferenceSection {
     pub subsections: Vec<ContextSubsection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_reason: Option<String>,
+    /// True when the network section has ifcfg-format connections.
+    /// Only meaningful for the `network` section; false for all others.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_ifcfg: bool,
+    /// Deprecation note text when ifcfg connections are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ifcfg_note: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -97,6 +109,8 @@ pub fn reference_section(
         items,
         subsections: Vec::new(),
         empty_reason: None,
+        has_ifcfg: false,
+        ifcfg_note: None,
     }
 }
 
@@ -272,4 +286,23 @@ pub struct VersionChangeEntry {
     pub host_epoch: String,
     pub base_epoch: String,
     pub direction: String,
+}
+
+// -- Group metadata DTOs (sidebar section groups for the frontend) --------
+
+/// Metadata for a single section group, consumed by the frontend sidebar.
+#[derive(Serialize, Clone, Debug)]
+pub struct GroupMetaDto {
+    pub slug: String,
+    pub label: String,
+    pub sections: Vec<SectionMetaDto>,
+    pub has_actionable_sections: bool,
+}
+
+/// Metadata for a single section within a group.
+#[derive(Serialize, Clone, Debug)]
+pub struct SectionMetaDto {
+    pub id: String,
+    pub label: String,
+    pub is_triage: bool,
 }
