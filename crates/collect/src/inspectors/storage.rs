@@ -209,9 +209,27 @@ fn discover_var_directories(
 
     paths
         .into_iter()
-        .map(|path| VarDirectory {
-            path,
-            ..Default::default()
+        .map(|path| {
+            let mut var_dir = VarDirectory {
+                path: path.clone(),
+                ..Default::default()
+            };
+
+            // Capture ownership and mode via stat
+            let stat_result = exec.run("stat", &["-c", "%04a %u %g %U %G", &path]);
+            if stat_result.exit_code == 0 {
+                let parts: Vec<&str> = stat_result.stdout.trim().splitn(5, ' ').collect();
+                if parts.len() == 5 {
+                    var_dir.mode = Some(parts[0].to_string());
+                    var_dir.owner_uid = parts[1].parse().ok();
+                    var_dir.owner_gid = parts[2].parse().ok();
+                    var_dir.owner_name = Some(parts[3].to_string());
+                    var_dir.group_name = Some(parts[4].to_string());
+                }
+            }
+            // If stat fails, fields remain None — renderer falls back to RUN mkdir
+
+            var_dir
         })
         .collect()
 }
@@ -620,5 +638,195 @@ mod tests {
         assert_eq!(unbacked.len(), 1);
         assert_eq!(unbacked[0], "/var/lib/unbacked");
         assert!(!unbacked.contains(&"/var/lib/backed".to_string()));
+    }
+
+    #[test]
+    fn discover_var_directories_captures_ownership_root() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/lib/rpm\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/log -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "find /var/cache -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "stat -c %04a %u %g %U %G /var/lib/rpm",
+                ExecResult {
+                    stdout: "0755 0 0 root root\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            );
+
+        let dirs = discover_var_directories(&exec);
+        assert_eq!(dirs.len(), 1);
+        let dir = &dirs[0];
+        assert_eq!(dir.path, "/var/lib/rpm");
+        assert_eq!(dir.mode, Some("0755".to_string()));
+        assert_eq!(dir.owner_uid, Some(0));
+        assert_eq!(dir.owner_gid, Some(0));
+        assert_eq!(dir.owner_name, Some("root".to_string()));
+        assert_eq!(dir.group_name, Some("root".to_string()));
+    }
+
+    #[test]
+    fn discover_var_directories_captures_ownership_service_account() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/lib/pgsql/data\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/log -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "find /var/cache -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "stat -c %04a %u %g %U %G /var/lib/pgsql/data",
+                ExecResult {
+                    stdout: "0750 26 26 postgres postgres\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            );
+
+        let dirs = discover_var_directories(&exec);
+        assert_eq!(dirs.len(), 1);
+        let dir = &dirs[0];
+        assert_eq!(dir.path, "/var/lib/pgsql/data");
+        assert_eq!(dir.mode, Some("0750".to_string()));
+        assert_eq!(dir.owner_uid, Some(26));
+        assert_eq!(dir.owner_gid, Some(26));
+        assert_eq!(dir.owner_name, Some("postgres".to_string()));
+        assert_eq!(dir.group_name, Some("postgres".to_string()));
+    }
+
+    #[test]
+    fn discover_var_directories_captures_non_default_mode() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/lib/shared\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/log -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "find /var/cache -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "stat -c %04a %u %g %U %G /var/lib/shared",
+                ExecResult {
+                    stdout: "2770 1000 100 webadmin webgroup\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            );
+
+        let dirs = discover_var_directories(&exec);
+        assert_eq!(dirs.len(), 1);
+        let dir = &dirs[0];
+        assert_eq!(dir.path, "/var/lib/shared");
+        assert_eq!(dir.mode, Some("2770".to_string()));
+        assert_eq!(dir.owner_uid, Some(1000));
+        assert_eq!(dir.owner_gid, Some(100));
+        assert_eq!(dir.owner_name, Some("webadmin".to_string()));
+        assert_eq!(dir.group_name, Some("webgroup".to_string()));
+    }
+
+    #[test]
+    fn discover_var_directories_stat_failure_degradation() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: "/var/lib/missing\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            )
+            .with_command(
+                "find /var/log -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "find /var/cache -mindepth 1 -maxdepth 2 -type d ! -empty",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 1,
+                },
+            )
+            .with_command(
+                "stat -c %04a %u %g %U %G /var/lib/missing",
+                ExecResult {
+                    stdout: String::new(),
+                    stderr: "stat: cannot stat '/var/lib/missing': No such file or directory\n"
+                        .to_string(),
+                    exit_code: 1,
+                },
+            );
+
+        let dirs = discover_var_directories(&exec);
+        assert_eq!(dirs.len(), 1);
+        let dir = &dirs[0];
+        assert_eq!(dir.path, "/var/lib/missing");
+        // All ownership/mode fields should be None on stat failure
+        assert_eq!(dir.mode, None);
+        assert_eq!(dir.owner_uid, None);
+        assert_eq!(dir.owner_gid, None);
+        assert_eq!(dir.owner_name, None);
+        assert_eq!(dir.group_name, None);
     }
 }
