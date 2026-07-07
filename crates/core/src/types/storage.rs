@@ -99,6 +99,16 @@ pub struct VarDirectory {
     pub recommendation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backing: Option<VarDirBacking>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_gid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -136,5 +146,14 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: StorageSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn var_directory_without_ownership_deserializes() {
+        let json = r#"{"path":"/var/lib/test","size_estimate":"10M","recommendation":"review"}"#;
+        let dir: VarDirectory = serde_json::from_str(json).unwrap();
+        assert_eq!(dir.path, "/var/lib/test");
+        assert!(dir.owner_uid.is_none());
+        assert!(dir.mode.is_none());
     }
 }

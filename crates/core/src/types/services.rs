@@ -76,6 +76,10 @@ pub struct ServiceStateChange {
     pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_type: Option<ShadowType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_rationale: Option<String>,
 }
 
 fn require_explicit_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -146,6 +150,8 @@ mod tests {
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "cups.service".into(),
@@ -156,6 +162,8 @@ mod tests {
                     owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             enabled_units: vec!["firewalld.service".into()],
@@ -181,6 +189,8 @@ mod tests {
             owning_package: Some("firewalld".into()),
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         };
         let disabled = ServiceStateChange {
             unit: "sshd.service".into(),
@@ -191,6 +201,8 @@ mod tests {
             owning_package: Some("openssh-server".into()),
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         };
         let masked = ServiceStateChange {
             unit: "cups.service".into(),
@@ -201,6 +213,8 @@ mod tests {
             owning_package: Some("cups".into()),
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         };
 
         assert_eq!(enabled.implied_action(), ServiceAction::Enable);
@@ -219,6 +233,8 @@ mod tests {
             owning_package: Some("firewalld".into()),
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         };
         let json = serde_json::to_string(&with_preset).unwrap();
         let parsed: ServiceStateChange = serde_json::from_str(&json).unwrap();
@@ -233,6 +249,8 @@ mod tests {
             owning_package: Some("cups".into()),
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         };
         let json = serde_json::to_string(&without_preset).unwrap();
         let parsed: ServiceStateChange = serde_json::from_str(&json).unwrap();
@@ -316,5 +334,13 @@ mod tests {
             di.disposition.is_included(),
             "missing include field should deserialize as true"
         );
+    }
+
+    #[test]
+    fn service_state_change_without_shadow_deserializes() {
+        let json = r#"{"unit":"sshd.service","current_state":"enabled","default_state":null,"disposition":{"kind":"actionable","include":true}}"#;
+        let ssc: ServiceStateChange = serde_json::from_str(json).unwrap();
+        assert_eq!(ssc.current_state, ServiceUnitState::Enabled);
+        assert!(ssc.shadow_type.is_none());
     }
 }

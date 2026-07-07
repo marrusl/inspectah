@@ -1048,6 +1048,8 @@ mod tests {
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: vec!["firewalld.service".into()],
                 disabled_units: Vec::new(),
@@ -1212,6 +1214,8 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
                 disabled_units: Vec::new(),
@@ -1253,6 +1257,8 @@ mod tests {
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: vec!["firewalld.service".into(), "custom.service".into()],
                 disabled_units: vec!["unused.service".into()],
@@ -1323,6 +1329,8 @@ mod tests {
                     owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: Vec::new(),
                 disabled_units: Vec::new(),
@@ -2200,6 +2208,7 @@ mod tests {
                     size_estimate: "12G".into(),
                     recommendation: "mount as separate volume".into(),
                     backing: None,
+                    ..Default::default()
                 }],
                 ..Default::default()
             }),
@@ -2278,6 +2287,7 @@ mod tests {
                     size_estimate: "2G".into(),
                     recommendation: "keep on root".into(),
                     backing: None,
+                    ..Default::default()
                 }],
                 credential_refs: vec![CredentialRef {
                     credential_path: "/etc/cifs-creds".into(),

@@ -444,6 +444,8 @@ fn rich_snapshot() -> InspectionSnapshot {
             owning_package: None,
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         }],
         drop_ins: vec![
             SystemdDropIn {
@@ -1314,6 +1316,8 @@ fn service_subsection_state() -> Arc<AppState> {
                 owning_package: Some("custom-app".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
             ServiceStateChange {
                 unit: "sssd-kcm.service".into(),
@@ -1324,6 +1328,8 @@ fn service_subsection_state() -> Arc<AppState> {
                 owning_package: Some("sssd".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
         ],
         enabled_units: vec![],

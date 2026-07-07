@@ -1245,6 +1245,8 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             }],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),

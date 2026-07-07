@@ -1783,6 +1783,8 @@ mod tests {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -1860,6 +1862,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
@@ -1870,6 +1874,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "cups.service".into(),
@@ -1880,6 +1886,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             // enabled_units/disabled_units are full inventory — not used by renderer
@@ -2300,6 +2308,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
@@ -2310,6 +2320,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "chronyd.service".into(),
@@ -2320,6 +2332,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "firewalld.service".into(),
@@ -2330,6 +2344,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -2363,6 +2379,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
@@ -2373,6 +2391,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -2401,6 +2421,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "httpd.service".into(),
@@ -2411,6 +2433,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -2444,6 +2468,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "avahi-daemon.service".into(),
@@ -2454,6 +2480,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "bluetooth.service".into(),
@@ -2464,6 +2492,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "ModemManager.service".into(),
@@ -2474,6 +2504,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -2745,6 +2777,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "excluded.service".into(),
@@ -2755,6 +2789,8 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -2795,6 +2831,8 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "cups.service".into(),
@@ -2805,6 +2843,8 @@ mod tests {
                     owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
                 ServiceStateChange {
                     unit: "avahi-daemon.service".into(),
@@ -2815,6 +2855,8 @@ mod tests {
                     owning_package: Some("avahi".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 },
             ],
             ..Default::default()

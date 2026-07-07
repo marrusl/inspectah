@@ -4012,6 +4012,8 @@ mod tests {
                         owning_package: Some("httpd".into()),
                         aggregate: None,
                         attention_reason: None,
+                        shadow_type: None,
+                        shadow_rationale: None,
                     },
                     ServiceStateChange {
                         unit: "sshd.service".into(),
@@ -4022,6 +4024,8 @@ mod tests {
                         owning_package: Some("openssh-server".into()),
                         aggregate: None,
                         attention_reason: None,
+                        shadow_type: None,
+                        shadow_rationale: None,
                     },
                 ],
                 enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
@@ -4763,6 +4767,8 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
                 disabled_units: vec![],
@@ -4836,6 +4842,8 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 }],
                 enabled_units: vec!["httpd.service".into()],
                 disabled_units: vec![],
@@ -6206,6 +6214,8 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -6289,6 +6299,8 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -6346,6 +6358,8 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             }],
             ..Default::default()
         });

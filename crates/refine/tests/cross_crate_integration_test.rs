@@ -208,6 +208,8 @@ fn service_surface_agreement() {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
             ServiceStateChange {
                 unit: "httpd.service".into(),
@@ -218,6 +220,8 @@ fn service_surface_agreement() {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
         ],
         enabled_units: vec!["dnf-makecache.service".into(), "httpd.service".into()],

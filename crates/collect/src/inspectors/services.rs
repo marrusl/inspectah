@@ -344,6 +344,8 @@ impl Inspector for ServicesInspector {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 });
                 continue;
             }
@@ -375,6 +377,8 @@ impl Inspector for ServicesInspector {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
                 });
             } else if preset.is_some() {
                 // State matches preset — no operator action

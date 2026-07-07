@@ -92,6 +92,8 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
             owning_package: None,
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         })
         .collect();
     snap.services = Some(ServiceSection {

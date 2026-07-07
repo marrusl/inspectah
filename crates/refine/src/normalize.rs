@@ -396,6 +396,8 @@ mod tests {
             owning_package: None,
             aggregate: None,
             attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
         }
     }
 

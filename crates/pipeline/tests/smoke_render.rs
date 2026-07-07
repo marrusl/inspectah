@@ -33,6 +33,8 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
             ServiceStateChange {
                 unit: "cups.service".into(),
@@ -43,6 +45,8 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
             },
         ],
         enabled_units: vec!["httpd.service".into()],
