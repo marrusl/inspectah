@@ -331,6 +331,10 @@ export interface ReferenceSection {
   items: ContextItem[];
   subsections?: ContextSubsection[];
   empty_reason?: string;
+  /** True when the network section has ifcfg-format connections. */
+  has_ifcfg?: boolean;
+  /** Deprecation note text when ifcfg connections are present. */
+  ifcfg_note?: string;
 }
 
 /** Rust: #[serde(rename_all = "snake_case")] */

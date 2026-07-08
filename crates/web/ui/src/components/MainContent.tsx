@@ -731,6 +731,16 @@ export function MainContent({
         <Content>
           <h2>{heading}</h2>
         </Content>
+        {section.has_ifcfg && section.ifcfg_note && (
+          <Alert
+            variant="info"
+            isInline
+            title="ifcfg Deprecation"
+            style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
+          >
+            {section.ifcfg_note}
+          </Alert>
+        )}
         <ContextList key={lookupId} section={section} />
       </>
     );
