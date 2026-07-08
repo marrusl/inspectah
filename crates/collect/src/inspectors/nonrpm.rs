@@ -571,6 +571,14 @@ fn scan_python_venvs(
                 "low"
             };
 
+            // Detect C extensions in the venv's site-packages.
+            let sp_path = find_site_packages_path(exec, &venv.path);
+            let has_c_extensions = if !sp_path.is_empty() {
+                detect_c_extensions(exec, &sp_path)
+            } else {
+                false
+            };
+
             section.items.push(NonRpmItem {
                 path: rel_path,
                 name: Path::new(&venv.path)
@@ -583,6 +591,7 @@ fn scan_python_venvs(
                 packages: pip_packages,
                 manifest_files,
                 rpm_filtered: has_rpm_state,
+                has_c_extensions,
                 disposition: FindingKind::included(),
                 ..Default::default()
             });
@@ -751,6 +760,23 @@ fn parse_dist_info_name(s: &str) -> (String, String) {
     }
 }
 
+/// Detect if a pip environment has C extensions (.so files).
+fn detect_c_extensions(exec: &dyn Executor, site_packages_path: &str) -> bool {
+    let result = exec.run(
+        "find",
+        &[
+            site_packages_path,
+            "-name",
+            "*.so",
+            "-type",
+            "f",
+            "-print",
+            "-quit",
+        ],
+    );
+    result.exit_code == 0 && !result.stdout.trim().is_empty()
+}
+
 // ---------------------------------------------------------------------------
 // pip system-level scanning
 // ---------------------------------------------------------------------------
@@ -842,6 +868,9 @@ fn scan_pip_packages(
                 // - "low": no RPM filtering available
                 let confidence = if !has_rpm_state { "low" } else { "medium" };
 
+                // Detect C extensions in system site-packages.
+                let has_c_extensions = detect_c_extensions(exec, &sp_dir);
+
                 section.items.push(NonRpmItem {
                     path: rel_path,
                     name: "system-pip".to_string(),
@@ -849,6 +878,7 @@ fn scan_pip_packages(
                     confidence: confidence.to_string(),
                     packages,
                     rpm_filtered: has_rpm_state,
+                    has_c_extensions,
                     disposition: FindingKind::included(),
                     ..Default::default()
                 });
@@ -4303,6 +4333,154 @@ mod tests {
             section.items.len(),
             0,
             "empty prefix should not produce an item"
+        );
+    }
+
+    // ---- Task 3: C-extension detection tests ----
+
+    #[test]
+    fn test_c_extension_package_subdirectory() {
+        // Venv with .so in package subdirectory (e.g., numpy/core/_multiarray.so).
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["venv"])
+            .with_dir("/opt/myapp/venv", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/venv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
+            .with_dir("/opt/myapp/venv/lib", vec!["python3.9"])
+            .with_dir("/opt/myapp/venv/lib/python3.9", vec!["site-packages"])
+            .with_dir(
+                "/opt/myapp/venv/lib/python3.9/site-packages",
+                vec!["numpy-1.24.0.dist-info"],
+            )
+            .with_command(
+                "pip list --path /opt/myapp/venv/lib/python3.9/site-packages --format json",
+                ExecResult {
+                    stdout: r#"[{"name":"numpy","version":"1.24.0"}]"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // find detects .so file in numpy/core subdirectory.
+            .with_command(
+                "find /opt/myapp/venv/lib/python3.9/site-packages -name *.so -type f -print -quit",
+                ExecResult {
+                    stdout:
+                        "/opt/myapp/venv/lib/python3.9/site-packages/numpy/core/_multiarray.so\n"
+                            .to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+        assert!(
+            item.has_c_extensions,
+            "should detect C extension in package subdirectory"
+        );
+    }
+
+    #[test]
+    fn test_c_extension_top_level() {
+        // Venv with top-level .so (e.g., ujson.cpython-311-x86_64-linux-gnu.so).
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["venv"])
+            .with_dir("/opt/myapp/venv", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/venv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.11.5\n",
+            )
+            .with_dir("/opt/myapp/venv/lib", vec!["python3.11"])
+            .with_dir("/opt/myapp/venv/lib/python3.11", vec!["site-packages"])
+            .with_dir(
+                "/opt/myapp/venv/lib/python3.11/site-packages",
+                vec!["ujson-5.8.0.dist-info"],
+            )
+            .with_command(
+                "pip list --path /opt/myapp/venv/lib/python3.11/site-packages --format json",
+                ExecResult {
+                    stdout: r#"[{"name":"ujson","version":"5.8.0"}]"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // find detects top-level .so in site-packages.
+            .with_command(
+                "find /opt/myapp/venv/lib/python3.11/site-packages -name *.so -type f -print -quit",
+                ExecResult {
+                    stdout: "/opt/myapp/venv/lib/python3.11/site-packages/ujson.cpython-311-x86_64-linux-gnu.so\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+        assert!(item.has_c_extensions, "should detect top-level C extension");
+    }
+
+    #[test]
+    fn test_no_c_extensions() {
+        // Venv with pure Python packages only (no .so files).
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["myapp"])
+            .with_dir("/opt/myapp", vec!["venv"])
+            .with_dir("/opt/myapp/venv", vec!["pyvenv.cfg", "lib"])
+            .with_file(
+                "/opt/myapp/venv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
+            .with_dir("/opt/myapp/venv/lib", vec!["python3.9"])
+            .with_dir("/opt/myapp/venv/lib/python3.9", vec!["site-packages"])
+            .with_dir(
+                "/opt/myapp/venv/lib/python3.9/site-packages",
+                vec!["flask-2.3.3.dist-info"],
+            )
+            .with_command(
+                "pip list --path /opt/myapp/venv/lib/python3.9/site-packages --format json",
+                ExecResult {
+                    stdout: r#"[{"name":"flask","version":"2.3.3"}]"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // find returns no output (no .so files found).
+            .with_command(
+                "find /opt/myapp/venv/lib/python3.9/site-packages -name *.so -type f -print -quit",
+                ExecResult {
+                    stdout: "".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        let mut warnings = Vec::new();
+        let rpm_state = empty_rpm_state();
+
+        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+        assert!(
+            !item.has_c_extensions,
+            "should not detect C extensions when none present"
         );
     }
 }
