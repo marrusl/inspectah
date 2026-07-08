@@ -104,9 +104,6 @@ describe("VersionChanges integration in MainContent", () => {
   });
 
   it("plain section entry focuses first data row, not group header", () => {
-    const viewData = makeViewData([downgrade, upgrade]);
-    const sections = makeSections(2);
-
     render(<VersionChangesTable entries={[downgrade, upgrade]} />);
 
     // The data rows (context-item-*) should be focusable (tabIndex=-1),
@@ -125,9 +122,6 @@ describe("VersionChanges integration in MainContent", () => {
   });
 
   it("reveal navigation highlights the targeted data row", () => {
-    const viewData = makeViewData([downgrade, upgrade]);
-    const sections = makeSections(2);
-
     render(
       <VersionChangesTable
         entries={[downgrade, upgrade]}
@@ -144,9 +138,6 @@ describe("VersionChanges integration in MainContent", () => {
   });
 
   it("delegates empty state to VersionChangesTable", () => {
-    const viewData = makeViewData([]);
-    const sections = makeSections(0, "zero_drift");
-
     render(
       <VersionChangesTable
         entries={[]}

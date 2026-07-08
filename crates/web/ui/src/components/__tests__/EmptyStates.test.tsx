@@ -354,7 +354,6 @@ describe("Packages section renders unified components", () => {
 
 describe("Version Changes empty states", () => {
   it("renders zero_drift empty state", async () => {
-    const { MainContent } = await import("../MainContent");
     const { VersionChangesTable } = await import("../VersionChangesTable");
 
     // Version changes is now embedded in packages view

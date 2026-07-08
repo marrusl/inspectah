@@ -1581,12 +1581,61 @@ fn collect_materialized_usernames(snap: &InspectionSnapshot) -> std::collections
         .collect()
 }
 
-/// Collect names of RPM packages being replicated (included in the Containerfile).
+/// Well-known RPM packages and the system accounts their scriptlets create.
 ///
-/// Package scriptlets create system accounts, so if an owner name matches a
-/// replicated package, the account is likely to exist at build time.
-fn collect_replicated_rpm_names(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
-    snap.rpm
+/// Many RPM packages create system accounts whose names differ from the package
+/// name (e.g., `postgresql-server` creates `postgres`). This table maps package
+/// names to the accounts they provide so tmpfiles.d entries can use symbolic
+/// names instead of falling through to numeric UID:GID.
+///
+/// The table is intentionally conservative — only widely-deployed packages with
+/// stable account names are listed. Unknown packages fall through to the numeric
+/// path safely.
+const KNOWN_PACKAGE_ACCOUNTS: &[(&str, &[&str])] = &[
+    ("postgresql-server", &["postgres"]),
+    ("bind", &["named"]),
+    ("mysql-server", &["mysql"]),
+    ("mariadb-server", &["mysql"]),
+    ("httpd", &["apache"]),
+    ("nginx", &["nginx"]),
+    ("redis", &["redis"]),
+    ("mongodb-server", &["mongod"]),
+    ("rabbitmq-server", &["rabbitmq"]),
+    ("elasticsearch", &["elasticsearch"]),
+    ("grafana", &["grafana"]),
+    ("prometheus", &["prometheus"]),
+    ("tomcat", &["tomcat"]),
+    ("dovecot", &["dovecot"]),
+    ("postfix", &["postfix"]),
+    ("chrony", &["chrony"]),
+    ("openssh-server", &["sshd"]),
+    ("rpcbind", &["rpc"]),
+    ("nfs-utils", &["nfsnobody"]),
+    ("haproxy", &["haproxy"]),
+    ("squid", &["squid"]),
+    ("memcached", &["memcached"]),
+];
+
+/// Collect system account names provided by replicated RPMs.
+///
+/// Builds a map from account name to providing package name. Uses two sources:
+/// 1. `KNOWN_PACKAGE_ACCOUNTS` — static mapping for packages whose account
+///    names differ from the package name.
+/// 2. Direct identity — if the package name itself is an account name (e.g.,
+///    `redis` creates `redis`), the direct match in `resolve_tmpfiles_ownership`
+///    still works via the original `replicated_rpms` set.
+///
+/// Returns `(rpm_accounts, replicated_rpms)`:
+/// - `rpm_accounts`: account name -> package name (from the static mapping)
+/// - `replicated_rpms`: set of package names (for direct-match fallback)
+fn collect_rpm_provided_accounts(
+    snap: &InspectionSnapshot,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashSet<String>,
+) {
+    let replicated: std::collections::HashSet<String> = snap
+        .rpm
         .as_ref()
         .map(|rpm| {
             rpm.packages_added
@@ -1595,7 +1644,18 @@ fn collect_replicated_rpm_names(snap: &InspectionSnapshot) -> std::collections::
                 .map(|p| p.name.clone())
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let mut accounts = std::collections::HashMap::new();
+    for &(pkg, accts) in KNOWN_PACKAGE_ACCOUNTS {
+        if replicated.contains(pkg) {
+            for &acct in accts {
+                accounts.insert(acct.to_string(), pkg.to_string());
+            }
+        }
+    }
+
+    (accounts, replicated)
 }
 
 /// Resolve ownership fields for a tmpfiles.d entry.
@@ -1607,11 +1667,14 @@ fn collect_replicated_rpm_names(snap: &InspectionSnapshot) -> std::collections::
 /// 1. Root (UID 0) -> `root root`
 /// 2. Account materialized via useradd -> name
 /// 3. Account created by a replicated RPM -> name + package comment
+///    (uses KNOWN_PACKAGE_ACCOUNTS mapping for package!=account cases,
+///    plus direct package-name==account-name match as fallback)
 /// 4. Name available but not guaranteed -> numeric UID:GID + warning comment
 /// 5. Name unavailable -> numeric UID:GID
 fn resolve_tmpfiles_ownership(
     d: &inspectah_core::types::storage::VarDirectory,
     materialized_users: &std::collections::HashSet<String>,
+    rpm_accounts: &std::collections::HashMap<String, String>,
     replicated_rpms: &std::collections::HashSet<String>,
 ) -> (String, String, String) {
     let uid = d.owner_uid.unwrap_or(0);
@@ -1636,17 +1699,32 @@ fn resolve_tmpfiles_ownership(
     }
 
     // Case 3: RPM-provided user (package scriptlets create the account)
-    if !owner_name.is_empty() && replicated_rpms.contains(owner_name) {
-        let group = if !group_name.is_empty() {
-            group_name.to_string()
-        } else {
-            owner_name.to_string()
-        };
-        return (
-            owner_name.into(),
-            group,
-            format!("created by package: {owner_name}"),
-        );
+    // Check the package-account mapping first (handles postgres->postgresql-server etc.),
+    // then fall back to direct package-name==account-name match (handles redis->redis etc.)
+    if !owner_name.is_empty() {
+        let providing_package = rpm_accounts
+            .get(owner_name)
+            .map(|s| s.as_str())
+            .or_else(|| {
+                if replicated_rpms.contains(owner_name) {
+                    Some(owner_name)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(pkg) = providing_package {
+            let group = if !group_name.is_empty() {
+                group_name.to_string()
+            } else {
+                owner_name.to_string()
+            };
+            return (
+                owner_name.into(),
+                group,
+                format!("created by package: {pkg}"),
+            );
+        }
     }
 
     // Case 4: name known but not guaranteed in the image
@@ -1676,7 +1754,7 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
 
     let storage = snap.storage.as_ref()?;
     let materialized_users = collect_materialized_usernames(snap);
-    let replicated_rpms = collect_replicated_rpm_names(snap);
+    let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut lines = Vec::new();
 
     for d in &storage.var_directories {
@@ -1690,7 +1768,7 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
             None => continue,
         };
         let (owner, group, comment) =
-            resolve_tmpfiles_ownership(d, &materialized_users, &replicated_rpms);
+            resolve_tmpfiles_ownership(d, &materialized_users, &rpm_accounts, &replicated_rpms);
         if !comment.is_empty() {
             lines.push(format!("# {comment}"));
         }
@@ -4598,5 +4676,140 @@ mod tests {
         let output = render_containerfile(&snap, None, None);
         assert!(!output.contains("RUN mkdir -p /var/log"));
         assert!(!output.contains("RUN mkdir -p /var/cache"));
+    }
+
+    // --- tmpfiles ownership resolution tests ---
+
+    /// Helper: build a snapshot with specific packages and a var directory owned
+    /// by the given user, then render tmpfiles.d and return the output.
+    fn tmpfiles_for_owner_and_packages(
+        owner_name: &str,
+        group_name: &str,
+        uid: u32,
+        gid: u32,
+        packages: &[&str],
+    ) -> Option<String> {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: packages
+                .iter()
+                .map(|n| PackageEntry {
+                    name: n.to_string(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/testdir",
+                "0755",
+                uid,
+                gid,
+                Some(owner_name),
+                Some(group_name),
+            )],
+            ..Default::default()
+        });
+        render_tmpfiles_conf(&snap)
+    }
+
+    #[test]
+    fn tmpfiles_ownership_mapped_account_postgres() {
+        // postgres account is created by postgresql-server, not a package called "postgres"
+        let content =
+            tmpfiles_for_owner_and_packages("postgres", "postgres", 26, 26, &["postgresql-server"])
+                .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("postgres postgres"),
+            "must use symbolic name 'postgres', got: {content}"
+        );
+        assert!(
+            content.contains("created by package: postgresql-server"),
+            "comment must name the providing package, got: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_ownership_mapped_account_named() {
+        // named account is created by bind
+        let content = tmpfiles_for_owner_and_packages("named", "named", 25, 25, &["bind"])
+            .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("named named"),
+            "must use symbolic name 'named', got: {content}"
+        );
+        assert!(
+            content.contains("created by package: bind"),
+            "comment must name the providing package, got: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_ownership_mapped_account_mysql_via_mariadb() {
+        // mysql account can come from mariadb-server
+        let content =
+            tmpfiles_for_owner_and_packages("mysql", "mysql", 27, 27, &["mariadb-server"])
+                .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("mysql mysql"),
+            "must use symbolic name 'mysql', got: {content}"
+        );
+        assert!(
+            content.contains("created by package: mariadb-server"),
+            "comment must name mariadb-server, got: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_ownership_direct_match_still_works() {
+        // nginx package creates nginx account — direct name==package match
+        let content = tmpfiles_for_owner_and_packages("nginx", "nginx", 997, 995, &["nginx"])
+            .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("nginx nginx"),
+            "direct match must use symbolic name, got: {content}"
+        );
+        assert!(
+            content.contains("created by package: nginx"),
+            "comment must name the package, got: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_ownership_unknown_account_falls_through() {
+        // myapp is not in any mapping and not a package name — must use numeric UID:GID
+        let content = tmpfiles_for_owner_and_packages("myapp", "myapp", 5000, 5000, &["httpd"])
+            .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("5000 5000"),
+            "unknown account must fall through to numeric UID:GID, got: {content}"
+        );
+        assert!(
+            content.contains("not guaranteed"),
+            "must include warning comment, got: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_ownership_package_present_account_not_mapped() {
+        // Package "custom-daemon" is replicated but not in the mapping, and the
+        // owner "customd" doesn't match the package name — safe fallthrough
+        let content =
+            tmpfiles_for_owner_and_packages("customd", "customd", 4999, 4999, &["custom-daemon"])
+                .expect("should produce tmpfiles content");
+        assert!(
+            content.contains("4999 4999"),
+            "unmapped account must fall through to numeric, got: {content}"
+        );
+        assert!(
+            content.contains("not guaranteed"),
+            "must include warning comment, got: {content}"
+        );
     }
 }
