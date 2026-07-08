@@ -41,8 +41,8 @@ for the full command reference.
 | `-o, --output <PATH>` | Output file path (tarball) or directory (with `--inspect-only`). |
 | `--base-image <IMAGE>` | Target base image for baseline comparison (e.g., `quay.io/centos-bootc/centos-bootc:stream9`). |
 | `--preserve <ITEM>` | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable. |
-| `--no-redaction` | Skip redaction pipeline, retaining raw secrets (requires --ack-sensitive). |
-| `--ack-sensitive` | Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction). Alias: `--acknowledge-sensitive`. |
+| `--no-redaction` | Skip redaction pipeline, retaining raw secrets (requires `--ack-sensitive`). |
+| `--ack-sensitive` | Acknowledge sensitive data in the snapshot (required with `--preserve` or `--no-redaction`). Alias: `--acknowledge-sensitive`. |
 | `--progress <MODE>` | Override progress display: `pretty` or `flat`. |
 | `-v, --verbose` | Show sub-step detail for all inspectors. Conflicts with `--quiet`. |
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
