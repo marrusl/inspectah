@@ -116,6 +116,14 @@ From the 2026-07-07 refine/UX convergence final branch review. Small fixes, not 
 - [ ] **Dead retired section branches in MainContent.tsx:** `if (activeSection === "system_tuning")` and `if (activeSection === "version_changes")` branches are unreachable from the new group-driven sidebar but would render broken headings (`undefined`) if reached via URL manipulation. Remove both branches. ~10 lines.
 - [ ] **Reference badges show count text:** Spec says reference sections get `<Badge isRead>` with no count. Implementation shows counts. Remove count text from reference badges in `Sidebar.tsx`. ~2 lines.
 
+## Language Package Detection v2 Follow-ups
+
+From the 2026-07-08 language package detection v2 final branch review. Small fixes, not worth individual specs.
+
+- [ ] **Keyboard Enter on pin checkbox listitem:** ArrowUp/Down moves focus between `role="listitem"` divs in the package sublist, but Enter/Space on the focused listitem doesn't toggle the pin checkbox — users must Tab to reach the checkbox within the item. Add an Enter handler on the listitem that delegates to the checkbox. ~5 lines in `LanguagePackageList.tsx`.
+- [ ] **`strip_prefix` vs `trim_start_matches` inconsistency:** npm global path stored with `strip_prefix('/')` in the collector but rendered with `trim_start_matches('/')` in the renderer. Both produce the same result for single-`/` paths but differ on malformed input like `//opt`. Use `strip_prefix` consistently in both locations. ~2 lines.
+- [ ] **`process::exit(1)` in `build_scan_roots`:** Empty `--scan-home` value calls `std::process::exit(1)` in library code (scan.rs). Non-testable. Replace with `anyhow::bail!` or return a `Result`. ~3 lines.
+
 ## TUI: Quality Items (from Thorn CP1/CP2)
 
 - [ ] **Unicode width handling:** `truncate()` in triage_list.rs uses byte length as proxy for display width. CJK/emoji characters may under-truncate. Consider `unicode-width` crate for accurate column measurement.
