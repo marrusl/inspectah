@@ -12,6 +12,7 @@ use inspectah_core::types::storage::{
     CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, UnbackedVarAdvisory,
     VarDirBacking,
 };
+use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -116,7 +117,7 @@ impl Inspector for StorageInspector {
         let lvm_info = collect_lvs(exec).unwrap_or_default();
 
         // 4. Discover and classify var directories.
-        let mut var_directories = discover_var_directories(exec);
+        let (mut var_directories, var_warnings) = discover_var_directories(exec);
         let rpm_owned = build_rpm_owned_set(exec);
         for dir in &mut var_directories {
             dir.backing = Some(detect_var_dir_backing(exec, &dir.path, &rpm_owned));
@@ -152,7 +153,7 @@ impl Inspector for StorageInspector {
                 credential_refs,
                 unbacked_var_advisory,
             }),
-            warnings: Vec::new(),
+            warnings: var_warnings,
             redaction_hints,
         })
     }
@@ -165,7 +166,10 @@ impl Inspector for StorageInspector {
 /// (removing any path that is a prefix of a deeper discovered path).
 fn discover_var_directories(
     exec: &dyn Executor,
-) -> Vec<inspectah_core::types::storage::VarDirectory> {
+) -> (
+    Vec<inspectah_core::types::storage::VarDirectory>,
+    Vec<Warning>,
+) {
     use inspectah_core::types::storage::VarDirectory;
 
     let mut paths = Vec::new();
@@ -207,7 +211,8 @@ fn discover_var_directories(
         !all_paths.iter().any(|other| other.starts_with(&prefix))
     });
 
-    paths
+    let mut warnings = Vec::new();
+    let dirs = paths
         .into_iter()
         .map(|path| {
             let mut var_dir = VarDirectory {
@@ -226,14 +231,23 @@ fn discover_var_directories(
                     var_dir.owner_name = Some(parts[3].to_string());
                     var_dir.group_name = Some(parts[4].to_string());
                 }
+            } else {
+                warnings.push(Warning {
+                    inspector: "storage".to_string(),
+                    message: format!(
+                        "Could not read ownership/mode for {}: \
+                         tmpfiles.d provisioning unavailable, falling back to mkdir",
+                        path
+                    ),
+                    severity: Some(WarningSeverity::Warning),
+                    extra: std::collections::HashMap::new(),
+                });
             }
-            // If stat fails, fields remain None — renderer falls back to RUN mkdir.
-            // Stat can fail for directories that existed during find but were deleted
-            // before stat ran, or due to permission issues.
 
             var_dir
         })
-        .collect()
+        .collect();
+    (dirs, warnings)
 }
 
 /// Parse /etc/fstab content into FstabEntry list, credential refs, and redaction hints.
@@ -591,7 +605,7 @@ mod tests {
                 },
             );
 
-        let dirs = discover_var_directories(&exec);
+        let (dirs, _warnings) = discover_var_directories(&exec);
         let paths: Vec<&str> = dirs.iter().map(|d| d.path.as_str()).collect();
 
         assert!(
@@ -678,7 +692,8 @@ mod tests {
                 },
             );
 
-        let dirs = discover_var_directories(&exec);
+        let (dirs, warnings) = discover_var_directories(&exec);
+        assert!(warnings.is_empty());
         assert_eq!(dirs.len(), 1);
         let dir = &dirs[0];
         assert_eq!(dir.path, "/var/lib/rpm");
@@ -725,7 +740,8 @@ mod tests {
                 },
             );
 
-        let dirs = discover_var_directories(&exec);
+        let (dirs, warnings) = discover_var_directories(&exec);
+        assert!(warnings.is_empty());
         assert_eq!(dirs.len(), 1);
         let dir = &dirs[0];
         assert_eq!(dir.path, "/var/lib/pgsql/data");
@@ -772,7 +788,8 @@ mod tests {
                 },
             );
 
-        let dirs = discover_var_directories(&exec);
+        let (dirs, warnings) = discover_var_directories(&exec);
+        assert!(warnings.is_empty());
         assert_eq!(dirs.len(), 1);
         let dir = &dirs[0];
         assert_eq!(dir.path, "/var/lib/shared");
@@ -820,7 +837,14 @@ mod tests {
                 },
             );
 
-        let dirs = discover_var_directories(&exec);
+        let (dirs, warnings) = discover_var_directories(&exec);
+        assert_eq!(warnings.len(), 1, "stat failure should emit a warning");
+        assert!(warnings[0].message.contains("/var/lib/missing"));
+        assert!(
+            warnings[0]
+                .message
+                .contains("tmpfiles.d provisioning unavailable")
+        );
         assert_eq!(dirs.len(), 1);
         let dir = &dirs[0];
         assert_eq!(dir.path, "/var/lib/missing");
