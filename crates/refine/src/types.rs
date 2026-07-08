@@ -149,6 +149,11 @@ pub enum ItemId {
         ecosystem: String,
         path: String,
     },
+    LanguagePackage {
+        ecosystem: String,
+        env_path: String,
+        package: String,
+    },
 
     // Unmanaged files section
     UnmanagedFile {
@@ -187,6 +192,15 @@ pub enum RefinementOp {
     DiscardVariant {
         item_id: ItemId,
         variant: ContentHash,
+    },
+    SetPackagePin {
+        item_id: ItemId,
+        pinned: bool,
+    },
+    SetBulkPackagePin {
+        ecosystem: String,
+        env_path: String,
+        pinned: bool,
     },
 }
 
@@ -791,6 +805,46 @@ mod item_id_tests {
         assert!(json.contains("Group"));
         let back: ItemId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, back);
+    }
+
+    #[test]
+    fn item_id_language_package_round_trip() {
+        let id = ItemId::LanguagePackage {
+            ecosystem: "npm".into(),
+            env_path: "/usr/lib/node_modules".into(),
+            package: "pm2".into(),
+        };
+        let json = serde_json::to_string(&id).unwrap();
+        assert!(json.contains("LanguagePackage"));
+        let back: ItemId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn set_package_pin_serde_roundtrip() {
+        let op = RefinementOp::SetPackagePin {
+            item_id: ItemId::LanguagePackage {
+                ecosystem: "npm".into(),
+                env_path: "/usr/lib/node_modules".into(),
+                package: "pm2".into(),
+            },
+            pinned: true,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        let back: RefinementOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, back);
+    }
+
+    #[test]
+    fn set_bulk_package_pin_serde_roundtrip() {
+        let op = RefinementOp::SetBulkPackagePin {
+            ecosystem: "pip".into(),
+            env_path: "/opt/venv".into(),
+            pinned: false,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        let back: RefinementOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, back);
     }
 
     #[test]

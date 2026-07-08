@@ -1441,6 +1441,7 @@ impl RefineSession {
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
                     | ItemId::LanguageEnv { .. }
+                    | ItemId::LanguagePackage { .. }
                     | ItemId::UnmanagedFile { .. }
                     | ItemId::ModuleStream { .. }
                     | ItemId::VersionLock { .. }
@@ -1545,6 +1546,57 @@ impl RefineSession {
             RefinementOp::DiscardVariant { item_id, variant } => {
                 let state = self.build_variant_state();
                 variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
+            }
+            RefinementOp::SetPackagePin { item_id, pinned: _ } => {
+                if let ItemId::LanguagePackage {
+                    ecosystem,
+                    env_path,
+                    package,
+                } = item_id
+                {
+                    let found = self
+                        .original
+                        .non_rpm_software
+                        .as_ref()
+                        .and_then(|nrs| {
+                            nrs.items.iter().find(|i| {
+                                i.method.contains(ecosystem.as_str()) && i.path == *env_path
+                            })
+                        })
+                        .and_then(|item| item.packages.iter().find(|p| p.name == *package))
+                        .is_some();
+                    if !found {
+                        return Err(RefineError::UnknownTarget(format!(
+                            "{ecosystem}:{env_path}:{package}"
+                        )));
+                    }
+                } else {
+                    return Err(RefineError::BadRequest(format!(
+                        "SetPackagePin requires LanguagePackage item_id, got {:?}",
+                        item_id
+                    )));
+                }
+            }
+            RefinementOp::SetBulkPackagePin {
+                ecosystem,
+                env_path,
+                pinned: _,
+            } => {
+                let found = self
+                    .original
+                    .non_rpm_software
+                    .as_ref()
+                    .and_then(|nrs| {
+                        nrs.items
+                            .iter()
+                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                    })
+                    .is_some();
+                if !found {
+                    return Err(RefineError::UnknownTarget(format!(
+                        "{ecosystem}:{env_path}"
+                    )));
+                }
             }
         }
         Ok(())
@@ -1700,6 +1752,42 @@ impl RefineSession {
             RefinementOp::SelectVariant { .. }
             | RefinementOp::EditVariant { .. }
             | RefinementOp::DiscardVariant { .. } => false,
+            RefinementOp::SetPackagePin { item_id, pinned } => {
+                if let ItemId::LanguagePackage {
+                    ecosystem,
+                    env_path,
+                    package,
+                } = item_id
+                {
+                    projected
+                        .non_rpm_software
+                        .as_ref()
+                        .and_then(|nrs| {
+                            nrs.items.iter().find(|i| {
+                                i.method.contains(ecosystem.as_str()) && i.path == *env_path
+                            })
+                        })
+                        .and_then(|item| item.packages.iter().find(|p| p.name == *package))
+                        .map(|pkg| pkg.pinned == *pinned)
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            RefinementOp::SetBulkPackagePin {
+                ecosystem,
+                env_path,
+                pinned,
+            } => projected
+                .non_rpm_software
+                .as_ref()
+                .and_then(|nrs| {
+                    nrs.items
+                        .iter()
+                        .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                })
+                .map(|item| item.packages.iter().all(|p| p.pinned == *pinned))
+                .unwrap_or(false),
         }
     }
 
@@ -2046,6 +2134,38 @@ impl RefineSession {
                 }
                 RefinementOp::DiscardVariant { item_id, variant } => {
                     variant_ops::apply_discard(&mut variant_state, item_id, variant);
+                }
+                RefinementOp::SetPackagePin { item_id, pinned } => {
+                    if let ItemId::LanguagePackage {
+                        ecosystem,
+                        env_path,
+                        package,
+                    } = item_id
+                        && let Some(ref mut nrs) = snap.non_rpm_software
+                        && let Some(item) = nrs
+                            .items
+                            .iter_mut()
+                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                        && let Some(pkg) = item.packages.iter_mut().find(|p| p.name == *package)
+                    {
+                        pkg.pinned = *pinned;
+                    }
+                }
+                RefinementOp::SetBulkPackagePin {
+                    ecosystem,
+                    env_path,
+                    pinned,
+                } => {
+                    if let Some(ref mut nrs) = snap.non_rpm_software
+                        && let Some(item) = nrs
+                            .items
+                            .iter_mut()
+                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                    {
+                        for pkg in &mut item.packages {
+                            pkg.pinned = *pinned;
+                        }
+                    }
                 }
             }
         }
@@ -6662,6 +6782,249 @@ mod tests {
         assert!(
             matches!(result, Err(RefineError::InventoryNotToggleable(_))),
             "FirewallZone should be rejected as inventory"
+        );
+    }
+
+    /// Build a snapshot with non-RPM software for language package pin tests.
+    fn test_snapshot_with_lang_packages() -> InspectionSnapshot {
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection::default()),
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    path: "/opt/venv".into(),
+                    name: "venv".into(),
+                    method: "pip".into(),
+                    confidence: "high".into(),
+                    disposition: FindingKind::included(),
+                    packages: vec![
+                        LanguagePackage {
+                            name: "requests".into(),
+                            version: "2.31.0".into(),
+                            pinned: false,
+                        },
+                        LanguagePackage {
+                            name: "flask".into(),
+                            version: "3.0.0".into(),
+                            pinned: false,
+                        },
+                    ],
+                    ..Default::default()
+                }],
+                env_files: vec![],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn set_package_pin_applies_and_projects() {
+        let snap = test_snapshot_with_lang_packages();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetPackagePin {
+                item_id: ItemId::LanguagePackage {
+                    ecosystem: "pip".into(),
+                    env_path: "/opt/venv".into(),
+                    package: "requests".into(),
+                },
+                pinned: true,
+            })
+            .unwrap();
+
+        let projected = session.project_snapshot();
+        let nrs = projected.non_rpm_software.as_ref().unwrap();
+        let item = nrs
+            .items
+            .iter()
+            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .unwrap();
+        let pkg = item.packages.iter().find(|p| p.name == "requests").unwrap();
+        assert!(pkg.pinned, "requests should be pinned after SetPackagePin");
+
+        // Other package should remain unpinned
+        let flask = item.packages.iter().find(|p| p.name == "flask").unwrap();
+        assert!(!flask.pinned, "flask should remain unpinned");
+    }
+
+    #[test]
+    fn set_package_pin_is_idempotent() {
+        let snap = test_snapshot_with_lang_packages();
+        let mut session = RefineSession::new(snap);
+
+        let op = RefinementOp::SetPackagePin {
+            item_id: ItemId::LanguagePackage {
+                ecosystem: "pip".into(),
+                env_path: "/opt/venv".into(),
+                package: "requests".into(),
+            },
+            pinned: true,
+        };
+
+        session.apply(op.clone()).unwrap();
+        let gen_after_first = session.generation;
+
+        // Second apply should be a noop
+        session.apply(op).unwrap();
+        assert_eq!(
+            session.generation, gen_after_first,
+            "duplicate SetPackagePin should be a noop"
+        );
+    }
+
+    #[test]
+    fn set_bulk_package_pin_pins_all() {
+        let snap = test_snapshot_with_lang_packages();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::SetBulkPackagePin {
+                ecosystem: "pip".into(),
+                env_path: "/opt/venv".into(),
+                pinned: true,
+            })
+            .unwrap();
+
+        let projected = session.project_snapshot();
+        let nrs = projected.non_rpm_software.as_ref().unwrap();
+        let item = nrs
+            .items
+            .iter()
+            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .unwrap();
+        assert!(
+            item.packages.iter().all(|p| p.pinned),
+            "all packages should be pinned after SetBulkPackagePin"
+        );
+    }
+
+    #[test]
+    fn set_bulk_package_pin_is_idempotent() {
+        let snap = test_snapshot_with_lang_packages();
+        let mut session = RefineSession::new(snap);
+
+        let op = RefinementOp::SetBulkPackagePin {
+            ecosystem: "pip".into(),
+            env_path: "/opt/venv".into(),
+            pinned: true,
+        };
+
+        session.apply(op.clone()).unwrap();
+        let gen_after_first = session.generation;
+
+        session.apply(op).unwrap();
+        assert_eq!(
+            session.generation, gen_after_first,
+            "duplicate SetBulkPackagePin should be a noop"
+        );
+    }
+
+    #[test]
+    fn set_package_pin_rejects_unknown_package() {
+        let snap = test_snapshot_with_lang_packages();
+        let session = RefineSession::new(snap);
+
+        let result = session.validate_target(&RefinementOp::SetPackagePin {
+            item_id: ItemId::LanguagePackage {
+                ecosystem: "pip".into(),
+                env_path: "/opt/venv".into(),
+                package: "nonexistent".into(),
+            },
+            pinned: true,
+        });
+        assert!(
+            matches!(result, Err(RefineError::UnknownTarget(_))),
+            "unknown package should be rejected"
+        );
+    }
+
+    #[test]
+    fn set_package_pin_rejects_unknown_env() {
+        let snap = test_snapshot_with_lang_packages();
+        let session = RefineSession::new(snap);
+
+        let result = session.validate_target(&RefinementOp::SetBulkPackagePin {
+            ecosystem: "npm".into(),
+            env_path: "/nonexistent".into(),
+            pinned: true,
+        });
+        assert!(
+            matches!(result, Err(RefineError::UnknownTarget(_))),
+            "unknown environment should be rejected"
+        );
+    }
+
+    #[test]
+    fn set_package_pin_rejects_wrong_item_id() {
+        let snap = test_snapshot_with_lang_packages();
+        let session = RefineSession::new(snap);
+
+        let result = session.validate_target(&RefinementOp::SetPackagePin {
+            item_id: ItemId::Package {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+            },
+            pinned: true,
+        });
+        assert!(
+            matches!(result, Err(RefineError::BadRequest(_))),
+            "non-LanguagePackage item_id should be rejected"
+        );
+    }
+
+    #[test]
+    fn set_package_pin_survives_timeline_roundtrip() {
+        let snap = test_snapshot_with_lang_packages();
+        let mut session = RefineSession::new(snap.clone());
+
+        session
+            .apply(RefinementOp::SetPackagePin {
+                item_id: ItemId::LanguagePackage {
+                    ecosystem: "pip".into(),
+                    env_path: "/opt/venv".into(),
+                    package: "requests".into(),
+                },
+                pinned: true,
+            })
+            .unwrap();
+
+        // Serialize the timeline and reconstruct
+        let timeline_json = serde_json::to_string(&session.ops_history()).unwrap();
+        let deserialized: Vec<AnnotatedOp> = serde_json::from_str(&timeline_json).unwrap();
+        assert_eq!(deserialized.len(), 1);
+        assert!(deserialized[0].active);
+
+        // Rebuild session from original snapshot and replay
+        let mut session2 = RefineSession::new(snap);
+        if let RefinementOp::SetPackagePin {
+            ref item_id,
+            pinned,
+        } = deserialized[0].op
+        {
+            session2
+                .apply(RefinementOp::SetPackagePin {
+                    item_id: item_id.clone(),
+                    pinned,
+                })
+                .unwrap();
+        } else {
+            panic!("expected SetPackagePin op");
+        }
+
+        let projected = session2.project_snapshot();
+        let nrs = projected.non_rpm_software.as_ref().unwrap();
+        let item = nrs
+            .items
+            .iter()
+            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .unwrap();
+        let pkg = item.packages.iter().find(|p| p.name == "requests").unwrap();
+        assert!(
+            pkg.pinned,
+            "pin state should survive timeline serialization roundtrip"
         );
     }
 }

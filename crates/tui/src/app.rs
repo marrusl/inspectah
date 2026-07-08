@@ -67,6 +67,11 @@ fn item_id_to_viewed_key(item_id: &ItemId) -> String {
         ItemId::Fstab { mount_point } => mount_point.clone(),
         ItemId::NonRpm { name } => name.clone(),
         ItemId::LanguageEnv { ecosystem, path } => format!("{ecosystem}:{path}"),
+        ItemId::LanguagePackage {
+            ecosystem,
+            env_path,
+            package,
+        } => format!("{ecosystem}:{env_path}:{package}"),
         ItemId::Group { name } => name.clone(),
         ItemId::UnmanagedFile { path } => path.clone(),
     }
