@@ -63,6 +63,12 @@ export function ServiceSection({
 
   const dropinsByUnit = useMemo(() => groupDropinsByUnit(dropins), [dropins]);
 
+  // Count full-shadow services for section header
+  const shadowCount = useMemo(
+    () => services.filter((s) => s.shadow_type === "full_shadow").length,
+    [services],
+  );
+
   const handleToggleService = useCallback(
     (unit: string, currentInclude: boolean) => {
       const id = `service:${unit}`;
@@ -147,11 +153,24 @@ export function ServiceSection({
       {services.map((svc, idx) => {
         const unitDropins = dropinsByUnit.get(svc.unit) ?? [];
         const bucket = extractTriageBucket(svc.triage);
-        const borderLeft = LEVEL_BORDER[bucket] ?? "none";
         const badge = badgeTextForTriage(svc.triage);
         const level = triageBucketToAttention(svc.triage);
         const isPending = pendingIds.has(`service:${svc.unit}`);
         const svcLocked = svc.locked === true;
+        const isShadow = svc.shadow_type === "full_shadow";
+
+        // Border-left priority: triage border wins if present, else shadow warning border
+        let borderLeft = LEVEL_BORDER[bucket] ?? "none";
+        let backgroundColor: string | undefined;
+        if (isShadow) {
+          if (borderLeft !== "none") {
+            // Triage border wins left edge, shadow gets background
+            backgroundColor = "var(--pf-t--global--color--status--warning--default)";
+          } else {
+            // No triage border, shadow gets left border
+            borderLeft = "4px solid var(--pf-t--global--color--status--warning--default)";
+          }
+        }
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -161,13 +180,24 @@ export function ServiceSection({
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
               aria-describedby={
-                svcLocked ? `locked-reason-service-${svc.unit}` : undefined
+                svcLocked && isShadow
+                  ? `locked-reason-service-${svc.unit} shadow-rationale-${svc.unit}`
+                  : svcLocked
+                    ? `locked-reason-service-${svc.unit}`
+                    : isShadow
+                      ? `shadow-rationale-${svc.unit}`
+                      : undefined
               }
               tabIndex={idx === 0 ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
               className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
-              style={{ borderLeft }}
+              style={{
+                borderLeft,
+                backgroundColor: backgroundColor
+                  ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
+                  : undefined,
+              }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (svcLocked) return;
@@ -190,6 +220,11 @@ export function ServiceSection({
                       svcLocked
                         ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
                         : `Toggle ${svc.unit}`
+                    }
+                    aria-describedby={
+                      isShadow && svc.shadow_rationale
+                        ? `shadow-rationale-${svc.unit}`
+                        : undefined
                     }
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
@@ -228,6 +263,17 @@ export function ServiceSection({
                     <Label color={attentionLabelColor(level)}>{badge}</Label>
                   </div>
                 )}
+                {isShadow && (
+                  <div
+                    role="gridcell"
+                    className="inspectah-decision-row__badge"
+                    data-testid={`shadow-badge-service-${svc.unit}`}
+                  >
+                    <Label color="gold" isCompact>
+                      Shadow override
+                    </Label>
+                  </div>
+                )}
                 {svcLocked && (
                   <div
                     role="gridcell"
@@ -242,8 +288,9 @@ export function ServiceSection({
                 )}
               </div>
               {/* Full-shadow rationale below the service toggle row */}
-              {svc.shadow_type === "full_shadow" && svc.shadow_rationale && (
+              {isShadow && svc.shadow_rationale && (
                 <div
+                  id={`shadow-rationale-${svc.unit}`}
                   className="inspectah-decision-row__helper-text"
                   data-testid={`shadow-rationale-${svc.unit}`}
                   style={{

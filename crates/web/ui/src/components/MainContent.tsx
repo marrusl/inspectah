@@ -535,13 +535,22 @@ export function MainContent({
 
   // Services decision section — promoted from context to decision.
   if (activeSection === "services") {
+    const services = viewData?.service_states ?? [];
+    const shadowCount = services.filter(
+      (s) => s.shadow_type === "full_shadow",
+    ).length;
+    const headerText =
+      shadowCount > 0
+        ? `${SECTION_LABELS.services} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
+        : SECTION_LABELS.services;
+
     return (
       <>
         <Content>
-          <h2>{SECTION_LABELS.services}</h2>
+          <h2>{headerText}</h2>
         </Content>
         <ServiceSection
-          services={viewData?.service_states ?? []}
+          services={services}
           dropins={viewData?.service_dropins ?? []}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
