@@ -2,8 +2,6 @@
 
 **Status:** Proposed
 **Date:** 2026-07-08
-**Author:** Kiwi (with input from Collins, Ember, Fern)
-**Research:** `marks-inbox/research/2026-07-07-language-package-replication-analysis.md`
 
 ---
 
