@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 22;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -100,7 +100,7 @@ impl InspectionSnapshot {
     }
 
     /// Minimum accepted schema version.
-    const MIN_SCHEMA: u32 = SCHEMA_VERSION;
+    const MIN_SCHEMA: u32 = 21;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 22, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 23, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

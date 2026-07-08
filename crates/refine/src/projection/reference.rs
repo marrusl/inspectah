@@ -2568,10 +2568,12 @@ mod tests {
                         PipPackage {
                             name: "requests".into(),
                             version: "2.28.0".into(),
+                            pinned: false,
                         },
                         PipPackage {
                             name: "flask".into(),
                             version: "".into(),
+                            pinned: false,
                         },
                     ],
                     ..Default::default()

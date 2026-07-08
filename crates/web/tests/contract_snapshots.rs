@@ -129,6 +129,7 @@ fn contract_snapshot() -> InspectionSnapshot {
             packages: vec![PipPackage {
                 name: "express".into(),
                 version: "4.18.2".into(),
+                pinned: false,
             }],
             ..Default::default()
         }],

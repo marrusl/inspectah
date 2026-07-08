@@ -446,6 +446,7 @@ mod tests {
                 .map(|(n, v)| LanguagePackage {
                     name: n.to_string(),
                     version: v.to_string(),
+                    pinned: false,
                 })
                 .collect(),
             manifest_files,
@@ -740,10 +741,12 @@ mod tests {
                 LanguagePackage {
                     name: "flask".into(),
                     version: "2.3.3".into(),
+                    pinned: false,
                 },
                 LanguagePackage {
                     name: "requests".into(),
                     version: "2.31.0".into(),
+                    pinned: false,
                 },
             ],
             rpm_filtered: true,

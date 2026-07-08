@@ -589,10 +589,12 @@ fn rich_snapshot() -> InspectionSnapshot {
                     PipPackage {
                         name: "requests".into(),
                         version: "2.31.0".into(),
+                        pinned: false,
                     },
                     PipPackage {
                         name: "flask".into(),
                         version: "3.0.0".into(),
+                        pinned: false,
                     },
                 ],
                 ..Default::default()

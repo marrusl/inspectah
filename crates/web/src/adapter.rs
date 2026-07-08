@@ -1728,6 +1728,7 @@ mod tests {
                 packages: vec![LanguagePackage {
                     name: "flask".into(),
                     version: "2.0".into(),
+                    pinned: false,
                 }],
                 manifest_files,
                 ..Default::default()

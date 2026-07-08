@@ -868,6 +868,7 @@ mod tests {
             packages: vec![LanguagePackage {
                 name: "requests".into(),
                 version: "2.28.0".into(),
+                pinned: false,
             }],
             ..Default::default()
         };
@@ -878,6 +879,7 @@ mod tests {
             packages: vec![LanguagePackage {
                 name: "requests".into(),
                 version: "2.31.0".into(),
+                pinned: false,
             }],
             ..Default::default()
         };

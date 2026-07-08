@@ -295,6 +295,7 @@ fn smoke_containerfile_nonrpm() {
                 packages: vec![inspectah_core::types::nonrpm::LanguagePackage {
                     name: "flask".into(),
                     version: "2.3.0".into(),
+                    pinned: false,
                 }],
                 ..Default::default()
             },

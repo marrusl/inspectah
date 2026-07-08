@@ -2703,10 +2703,12 @@ mod tests {
                         LanguagePackage {
                             name: "flask".to_string(),
                             version: "2.3.0".to_string(),
+                            pinned: false,
                         },
                         LanguagePackage {
                             name: "requests".to_string(),
                             version: "2.31.0".to_string(),
+                            pinned: false,
                         },
                     ],
                     manifest_files,
@@ -2951,10 +2953,12 @@ mod tests {
                             LanguagePackage {
                                 name: "flask".to_string(),
                                 version: "2.3.0".to_string(),
+                                pinned: false,
                             },
                             LanguagePackage {
                                 name: "requests".to_string(),
                                 version: "2.31.0".to_string(),
+                                pinned: false,
                             },
                         ],
                         aggregate: Some(AggregatePrevalence {
@@ -2980,10 +2984,12 @@ mod tests {
                             LanguagePackage {
                                 name: "flask".to_string(),
                                 version: "2.2.5".to_string(),
+                                pinned: false,
                             },
                             LanguagePackage {
                                 name: "requests".to_string(),
                                 version: "2.28.0".to_string(),
+                                pinned: false,
                             },
                         ],
                         aggregate: Some(AggregatePrevalence {
@@ -3090,6 +3096,7 @@ mod tests {
                     packages: vec![LanguagePackage {
                         name: "flask".to_string(),
                         version: "2.3.0".to_string(),
+                        pinned: false,
                     }],
                     aggregate: Some(AggregatePrevalence {
                         count: 3,
@@ -3335,6 +3342,7 @@ mod tests {
                     packages: vec![LanguagePackage {
                         name: "setuptools".to_string(),
                         version: "53.0.0".to_string(),
+                        pinned: false,
                     }],
                     manifest_files: std::collections::HashMap::new(),
                     aggregate: Some(AggregatePrevalence {

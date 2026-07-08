@@ -10,6 +10,8 @@ pub struct LanguagePackage {
     pub name: String,
     #[serde(default)]
     pub version: String,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Type alias for backward compatibility.
@@ -233,6 +235,7 @@ mod tests {
                 packages: vec![LanguagePackage {
                     name: "example-pkg".to_string(),
                     version: "1.2.3".to_string(),
+                    pinned: false,
                 }],
                 has_c_extensions: false,
                 git_remote: String::new(),
@@ -394,5 +397,14 @@ mod tests {
             hash1, hash2,
             "different content must produce different hash"
         );
+    }
+
+    #[test]
+    fn language_package_without_pinned_deserializes() {
+        let json = r#"{"name":"pm2","version":"5.3.0"}"#;
+        let pkg: LanguagePackage = serde_json::from_str(json).unwrap();
+        assert_eq!(pkg.name, "pm2");
+        assert_eq!(pkg.version, "5.3.0");
+        assert!(!pkg.pinned, "pinned defaults to false");
     }
 }

@@ -698,6 +698,7 @@ fn parse_pip_json(json_str: &str) -> Vec<PipPackage> {
             .map(|e| PipPackage {
                 name: e.name,
                 version: e.version,
+                pinned: false,
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -726,7 +727,11 @@ fn scan_dist_info_walk(exec: &dyn Executor, dir: &str, packages: &mut Vec<PipPac
                         if sp_entry.ends_with(".dist-info") {
                             let (name, version) =
                                 parse_dist_info_name(sp_entry.trim_end_matches(".dist-info"));
-                            packages.push(PipPackage { name, version });
+                            packages.push(PipPackage {
+                                name,
+                                version,
+                                pinned: false,
+                            });
                         }
                     }
                 }
@@ -820,7 +825,11 @@ fn scan_pip_packages(
                         }
                     }
 
-                    packages.push(PipPackage { name, version });
+                    packages.push(PipPackage {
+                        name,
+                        version,
+                        pinned: false,
+                    });
                 }
             }
 
@@ -886,6 +895,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .map(|p| LanguagePackage {
                         name: p.name,
                         version: p.version,
+                        pinned: false,
                     })
                     .collect();
             }
@@ -1022,6 +1032,7 @@ fn parse_package_json(content: &str) -> Vec<LanguagePackage> {
                 packages.push(LanguagePackage {
                     name: name.clone(),
                     version,
+                    pinned: false,
                 });
             }
         }
@@ -1058,6 +1069,7 @@ fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
                     .map(|g| LanguagePackage {
                         name: g.name,
                         version: g.version,
+                        pinned: false,
                     })
                     .collect();
             }
@@ -1175,6 +1187,7 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
             packages.push(LanguagePackage {
                 name: name.to_string(),
                 version,
+                pinned: false,
             });
         }
     }

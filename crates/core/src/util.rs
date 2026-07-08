@@ -23,6 +23,9 @@ pub const METHOD_GEM_LOCKFILE: &str = "gem lockfile";
 /// Method string for system gems detected via `gem list --local`.
 pub const METHOD_GEM_SYSTEM: &str = "gem system";
 
+/// Method string for npm global packages detected via `npm list -g --json`.
+pub const METHOD_NPM_GLOBAL: &str = "npm global";
+
 /// Compute a short hash (12 hex chars) from a path for use in language environment identifiers.
 ///
 /// This generates a stable, deterministic hash from the path string that can be used to create

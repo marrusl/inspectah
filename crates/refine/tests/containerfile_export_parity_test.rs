@@ -106,6 +106,7 @@ fn containerfile_copy_paths_match_export_layout() {
         packages: vec![LanguagePackage {
             name: "flask".into(),
             version: "2.3.3".into(),
+            pinned: false,
         }],
         ..Default::default()
     };
