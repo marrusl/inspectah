@@ -123,6 +123,31 @@ export function Sidebar({
   >(getInitialExpanded);
   const [clearedState, setClearedState] = useState<Record<string, boolean>>({});
 
+  // Auto-expand the group containing the active section when navigating.
+  // This ensures keyboard (1-8) and search navigation reveal the target
+  // section even if the user previously collapsed its parent group.
+  useEffect(() => {
+    if (!groups) return;
+    const parentGroup = groups.find(
+      (g) =>
+        g.sections.length > 1 &&
+        g.sections.some((s) => s.id === activeSection),
+    );
+    if (!parentGroup) return;
+
+    setExpandedGroups((prev) => {
+      // Default is expanded (true), so only act when explicitly collapsed
+      if (prev[parentGroup.slug] ?? true) return prev;
+      const next = { ...prev, [parentGroup.slug]: true };
+      try {
+        localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, [activeSection, groups]);
+
   // Focus trap and Escape handler for overlay mode
   useEffect(() => {
     if (!overlay) return;
@@ -175,6 +200,8 @@ export function Sidebar({
       toggledItem: { groupId: number | string; isExpanded: boolean },
     ) => {
       const slug = String(toggledItem.groupId);
+      const isCollapsing = !toggledItem.isExpanded;
+
       setExpandedGroups((prev) => {
         const next = { ...prev, [slug]: toggledItem.isExpanded };
         try {
@@ -184,6 +211,66 @@ export function Sidebar({
         }
         return next;
       });
+
+      // Focus restoration: when collapsing a group that contains the
+      // active section, move focus to the group heading button so the
+      // user doesn't lose their place. aria-current stays on the
+      // (now hidden) child NavItem and content keeps showing.
+      if (isCollapsing && groups) {
+        const group = groups.find((g) => g.slug === slug);
+        if (group?.sections.some((s) => s.id === activeSection)) {
+          requestAnimationFrame(() => {
+            const groupEl = document.getElementById(slug);
+            const headingBtn = groupEl?.querySelector("button");
+            (headingBtn as HTMLElement | null)?.focus();
+          });
+        }
+      }
+    },
+    [activeSection, groups],
+  );
+
+  /** ArrowDown on a group heading focuses the first child when expanded.
+   *  This completes the heading row Tab order contract:
+   *  group label -> kebab menu (if present) -> no more stops.
+   *  ArrowDown moves into children; ArrowUp on first child returns to heading. */
+  const handleSidebarKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+
+      if (e.key === "ArrowDown" && target.tagName === "BUTTON") {
+        // Only act on NavExpandable toggle buttons (identified by aria-expanded)
+        if (target.getAttribute("aria-expanded") === "true") {
+          const parentLi = target.closest("li");
+          if (!parentLi) return;
+          const firstChildLink = parentLi.querySelector(
+            "section a, ul a",
+          ) as HTMLElement | null;
+          if (firstChildLink) {
+            e.preventDefault();
+            firstChildLink.focus();
+          }
+        }
+      }
+
+      if (e.key === "ArrowUp") {
+        // From first child back to group heading
+        const link = target.closest("a");
+        if (!link) return;
+        const section = link.closest("section");
+        if (!section) return;
+        const allLinks = section.querySelectorAll("a");
+        if (allLinks.length > 0 && allLinks[0] === link) {
+          const parentLi = section.closest("li");
+          const headingBtn = parentLi?.querySelector(
+            ":scope > button",
+          ) as HTMLElement | null;
+          if (headingBtn) {
+            e.preventDefault();
+            headingBtn.focus();
+          }
+        }
+      }
     },
     [],
   );
@@ -314,6 +401,7 @@ export function Sidebar({
       aria-label="Section navigation"
       id={overlay ? "inspectah-sidebar-overlay" : undefined}
       ref={sidebarRef}
+      onKeyDown={handleSidebarKeyDown}
     >
       <div className="inspectah-sidebar__host">
         {health ? (

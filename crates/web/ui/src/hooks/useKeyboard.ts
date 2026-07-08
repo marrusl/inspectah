@@ -1,9 +1,12 @@
 import { useEffect, useCallback } from "react";
+import type { SectionGroupMeta } from "../api/types";
 
 /** Single-host sidebar section IDs in display order (for 1-9 jump).
  *  Order must match Sidebar visible rendering: review sections first,
  *  then reference sections. system_tuning follows the conditional
- *  language_packages and unmanaged_files sections in the review group. */
+ *  language_packages and unmanaged_files sections in the review group.
+ *  @deprecated Use groups-based navigation instead. Kept for backward
+ *  compatibility with aggregate mode until it adopts groups. */
 const SINGLE_HOST_SECTION_IDS = [
   "packages", // 1
   "configs", // 2
@@ -36,6 +39,12 @@ export interface UseKeyboardOptions {
    *  defaults to single-host section IDs. Aggregate mode passes its
    *  own section list since the IDs differ. */
   sectionIds?: string[];
+  /** Section groups from /api/groups. When provided, number keys 1-8
+   *  jump to groups in display order instead of flat sections.
+   *  - Singleton: navigates to the only section.
+   *  - Multi-section: navigates to the first triage section (or first
+   *    section if none are triage). The Sidebar auto-expands the group. */
+  groups?: SectionGroupMeta[];
 }
 
 /** Returns true if the event target is a text input where single-key shortcuts should be suppressed. */
@@ -53,6 +62,19 @@ function isDialogOpen(): boolean {
 }
 
 /**
+ * Resolve the target section ID for a group-based keyboard jump.
+ * - Singleton: the only section.
+ * - Multi-section: first triage section, or first section if none are triage.
+ */
+function resolveGroupTarget(group: SectionGroupMeta): string {
+  if (group.sections.length === 1) {
+    return group.sections[0].id;
+  }
+  const triageSection = group.sections.find((s) => s.is_triage);
+  return (triageSection ?? group.sections[0]).id;
+}
+
+/**
  * Global keyboard handler for the inspectah refine UI.
  *
  * Attaches a document-level keydown listener that handles:
@@ -62,10 +84,11 @@ function isDialogOpen(): boolean {
  * - Ctrl+K: open global search
  * - /: open section search
  * - ?: open shortcut overlay
- * - 1-9: jump to section by index
+ * - 1-8: jump to group by index (when groups provided)
+ * - 1-9: jump to section by index (legacy flat mode)
  *
  * ALL shortcuts are suppressed when a modal dialog is open.
- * Single-key shortcuts (/, ?, 1-9) are also suppressed when focus is in a text input.
+ * Single-key shortcuts (/, ?, 1-8/9) are also suppressed when focus is in a text input.
  * Ctrl-chord shortcuts fire in text inputs but not in dialogs.
  */
 export function useKeyboard(options: UseKeyboardOptions): void {
@@ -79,6 +102,7 @@ export function useKeyboard(options: UseKeyboardOptions): void {
     onOpenGlobalSearch,
     onOpenShortcuts,
     sectionIds = SINGLE_HOST_SECTION_IDS,
+    groups,
   } = options;
 
   const handleKeyDown = useCallback(
@@ -143,12 +167,24 @@ export function useKeyboard(options: UseKeyboardOptions): void {
         return;
       }
 
-      // 1-9 jump to section by index
+      // Number key navigation: group-aware (1-8) or flat section (1-9)
       const num = parseInt(e.key, 10);
-      if (num >= 1 && num <= 9 && num <= sectionIds.length) {
-        e.preventDefault();
-        onSectionChange(sectionIds[num - 1]);
-        return;
+      if (num >= 1) {
+        if (groups && groups.length > 0) {
+          // Group-aware: 1-8 jump to groups in display order
+          if (num <= 8 && num <= groups.length) {
+            e.preventDefault();
+            onSectionChange(resolveGroupTarget(groups[num - 1]));
+            return;
+          }
+        } else {
+          // Legacy flat section: 1-9 jump to section by index
+          if (num <= 9 && num <= sectionIds.length) {
+            e.preventDefault();
+            onSectionChange(sectionIds[num - 1]);
+            return;
+          }
+        }
       }
     },
     [
@@ -161,6 +197,7 @@ export function useKeyboard(options: UseKeyboardOptions): void {
       onOpenGlobalSearch,
       onOpenShortcuts,
       sectionIds,
+      groups,
     ],
   );
 

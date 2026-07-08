@@ -12,6 +12,7 @@ import type {
   ReferenceSection,
   LanguagePackageEnv,
   UnmanagedFileGroup,
+  SectionGroupMeta,
 } from "../api/types";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
@@ -96,6 +97,8 @@ export interface AppShellProps {
   isAggregateMode?: boolean;
   /** Override section IDs for 1-9 keyboard navigation (aggregate mode). */
   sectionIds?: string[];
+  /** Section groups from /api/groups for group-aware 1-8 keyboard navigation. */
+  groups?: SectionGroupMeta[];
   /** Number of uploaded RPMs that did not match any package (gates export). */
   unmatchedUploadCount?: number;
 }
@@ -139,6 +142,7 @@ export function AppShell({
   aggregateSummary,
   isAggregateMode = false,
   sectionIds,
+  groups,
   unmatchedUploadCount = 0,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(() =>
@@ -205,6 +209,7 @@ export function AppShell({
     onOpenGlobalSearch: handleOpenGlobalSearch,
     onOpenShortcuts: handleToggleShortcuts,
     sectionIds,
+    groups,
   });
 
   const searchSlot = (

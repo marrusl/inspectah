@@ -575,6 +575,164 @@ describe("Sidebar", () => {
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
+  describe("keyboard navigation", () => {
+    it("auto-expands collapsed group when activeSection changes to its child", () => {
+      // Start with system-config collapsed
+      localStorage.setItem(
+        "inspectah-sidebar-expanded",
+        JSON.stringify({ "system-config": false }),
+      );
+
+      const { rerender } = render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Verify collapsed
+      const button = screen
+        .getByText("System Configuration")
+        .closest("button");
+      expect(button?.getAttribute("aria-expanded")).toBe("false");
+
+      // Simulate keyboard navigation to a section in the collapsed group
+      rerender(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Group should auto-expand
+      expect(button?.getAttribute("aria-expanded")).toBe("true");
+
+      // localStorage should be updated
+      const stored = JSON.parse(
+        localStorage.getItem("inspectah-sidebar-expanded") ?? "{}",
+      );
+      expect(stored["system-config"]).toBe(true);
+    });
+
+    it("does not auto-expand already-expanded groups", () => {
+      const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // system-config is expanded by default; no localStorage write needed
+      const writes = setItemSpy.mock.calls.filter(
+        ([key]) => key === "inspectah-sidebar-expanded",
+      );
+      expect(writes.length).toBe(0);
+    });
+
+    it("does not auto-expand for singleton group sections", () => {
+      localStorage.setItem(
+        "inspectah-sidebar-expanded",
+        JSON.stringify({}),
+      );
+
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Singleton groups have no expandable parent — nothing to auto-expand
+      // Just verify the item renders correctly
+      expect(screen.getByText("Packages")).toBeInTheDocument();
+    });
+
+    it("preserves aria-current on active child when parent is collapsed", async () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // config NavItem should have aria-current="page"
+      const configLink = screen.getByText("Configuration Files").closest("a");
+      expect(configLink?.getAttribute("aria-current")).toBe("page");
+
+      // Collapse the group
+      const toggleBtn = screen
+        .getByText("System Configuration")
+        .closest("button");
+      await userEvent.click(toggleBtn!);
+
+      // Note: auto-expand will re-expand because activeSection="config".
+      // The key invariant is that aria-current is driven by activeSection
+      // prop, not by expanded state. Verify the attribute is still set.
+      expect(configLink?.getAttribute("aria-current")).toBe("page");
+    });
+
+    it("sets aria-current only on active NavItem, never on group heading", () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Active section has aria-current
+      const configLink = screen.getByText("Configuration Files").closest("a");
+      expect(configLink?.getAttribute("aria-current")).toBe("page");
+
+      // Group heading button should NOT have aria-current
+      const groupBtn = screen
+        .getByText("System Configuration")
+        .closest("button");
+      expect(groupBtn?.getAttribute("aria-current")).toBeNull();
+    });
+
+    it("renders singleton NavItem with aria-current when active", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      const packagesLink = screen.getByText("Packages").closest("a");
+      expect(packagesLink?.getAttribute("aria-current")).toBe("page");
+    });
+  });
+
   describe("badge differentiation", () => {
     it("renders blue badges (default) for triage sections", () => {
       render(

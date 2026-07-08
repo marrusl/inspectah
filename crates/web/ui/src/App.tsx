@@ -578,6 +578,7 @@ function SingleHostApp({
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}
+        groups={groups.data ?? undefined}
         unmatchedUploadCount={rpmUpload.unmatchedUploads.length}
         toolbarExtra={
           rpmUpload.needsUploadCount > 0 ? (
