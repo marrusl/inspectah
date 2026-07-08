@@ -121,6 +121,7 @@ export function Sidebar({
   const [expandedGroups, setExpandedGroups] = useState<
     Record<string, boolean>
   >(getInitialExpanded);
+  const [clearedState, setClearedState] = useState<Record<string, boolean>>({});
 
   // Focus trap and Escape handler for overlay mode
   useEffect(() => {
@@ -198,6 +199,22 @@ export function Sidebar({
     [stats, sections, userDecisionCount, viewData],
   );
 
+  /** Track cleared state (count === "0") for triage sections with aria-live announcements. */
+  useEffect(() => {
+    if (!groups) return;
+    const newClearedState: Record<string, boolean> = {};
+    groups.forEach((group) => {
+      group.sections.forEach((sec) => {
+        if (sec.is_triage) {
+          const count = decisionCount(stats, sec.id, userDecisionCount, viewData);
+          const isCleared = count === "0";
+          newClearedState[sec.id] = isCleared;
+        }
+      });
+    });
+    setClearedState(newClearedState);
+  }, [groups, stats, userDecisionCount, viewData]);
+
   const renderNavContent = () => {
     if (!groups) {
       return (
@@ -213,6 +230,8 @@ export function Sidebar({
       if (group.sections.length === 1) {
         // Singleton group — render as a plain NavItem (no chevron)
         const sec = group.sections[0];
+        const badgeText = badge(sec.id, sec.is_triage);
+        const isCleared = sec.is_triage && clearedState[sec.id];
         return (
           <NavItem
             key={sec.id}
@@ -222,7 +241,16 @@ export function Sidebar({
             onClick={() => onSelect(sec.id)}
           >
             {sec.label}{" "}
-            <Badge isRead>{badge(sec.id, sec.is_triage)}</Badge>
+            {sec.is_triage ? (
+              <Badge aria-label={`${badgeText} decisions`}>{badgeText}</Badge>
+            ) : (
+              <Badge isRead aria-label={`${badgeText} items`}>{badgeText}</Badge>
+            )}
+            {isCleared && (
+              <span className="pf-v6-screen-reader" aria-live="polite">
+                {sec.label}: 0 decisions remaining
+              </span>
+            )}
           </NavItem>
         );
       }
@@ -240,18 +268,31 @@ export function Sidebar({
           isActive={groupIsActive}
           id={group.slug}
         >
-          {group.sections.map((sec) => (
-            <NavItem
-              key={sec.id}
-              itemId={sec.id}
-              isActive={activeSection === sec.id}
-              aria-current={activeSection === sec.id ? "page" : undefined}
-              onClick={() => onSelect(sec.id)}
-            >
-              {sec.label}{" "}
-              <Badge isRead>{badge(sec.id, sec.is_triage)}</Badge>
-            </NavItem>
-          ))}
+          {group.sections.map((sec) => {
+            const badgeText = badge(sec.id, sec.is_triage);
+            const isCleared = sec.is_triage && clearedState[sec.id];
+            return (
+              <NavItem
+                key={sec.id}
+                itemId={sec.id}
+                isActive={activeSection === sec.id}
+                aria-current={activeSection === sec.id ? "page" : undefined}
+                onClick={() => onSelect(sec.id)}
+              >
+                {sec.label}{" "}
+                {sec.is_triage ? (
+                  <Badge aria-label={`${badgeText} decisions`}>{badgeText}</Badge>
+                ) : (
+                  <Badge isRead aria-label={`${badgeText} items`}>{badgeText}</Badge>
+                )}
+                {isCleared && (
+                  <span className="pf-v6-screen-reader" aria-live="polite">
+                    {sec.label}: 0 decisions remaining
+                  </span>
+                )}
+              </NavItem>
+            );
+          })}
           {group.slug === "software" && !hasUnmanagedScan && (
             <Content
               component="small"

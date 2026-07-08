@@ -574,4 +574,218 @@ describe("Sidebar", () => {
     // Network section should show "3" (2 + 1 subsection items)
     expect(screen.getByText("3")).toBeInTheDocument();
   });
+
+  describe("badge differentiation", () => {
+    it("renders blue badges (default) for triage sections", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Triage section badges should NOT have pf-m-read class (blue/unread state)
+      const packageBadge = screen.getByLabelText("42 decisions");
+      expect(packageBadge).toBeInTheDocument();
+      expect(packageBadge).not.toHaveClass("pf-m-read");
+
+      const configBadge = screen.getByLabelText("15 decisions");
+      expect(configBadge).toBeInTheDocument();
+      expect(configBadge).not.toHaveClass("pf-m-read");
+    });
+
+    it("renders grey badges (isRead) for reference sections", () => {
+      render(
+        <Sidebar
+          activeSection="network"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Reference section badges should have pf-m-read class (grey/read state)
+      const referenceBadges = screen.getAllByLabelText("0 items");
+      expect(referenceBadges.length).toBeGreaterThan(0);
+      referenceBadges.forEach((badge) => {
+        expect(badge).toHaveClass("pf-m-read");
+      });
+    });
+
+    it("uses correct aria-labels for triage sections", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Triage badges: "{count} decisions"
+      expect(screen.getByLabelText("42 decisions")).toHaveTextContent("42");
+      expect(screen.getByLabelText("15 decisions")).toHaveTextContent("15");
+    });
+
+    it("uses correct aria-labels for reference sections", () => {
+      render(
+        <Sidebar
+          activeSection="network"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Reference badges: "{count} items"
+      const itemBadges = screen.getAllByLabelText("0 items");
+      expect(itemBadges.length).toBeGreaterThan(0);
+    });
+
+    it("shows cleared-state '0' badge with aria-live for triage sections", () => {
+      const emptyStats = mockStats({
+        sections: [
+          { kind: "package", total: 0, included: 0, excluded: 0 },
+          { kind: "config", total: 0, included: 0, excluded: 0 },
+        ],
+        needs_review_count: 0,
+        ops_applied: 0,
+        can_undo: false,
+        can_redo: false,
+        baseline_available: false,
+      });
+
+      const emptyViewData: ViewResponse = {
+        ...MOCK_VIEW_DATA,
+        service_states: [],
+        quadlets: [],
+        flatpaks: [],
+      };
+
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={emptyStats}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={emptyViewData}
+          userDecisionCount={0}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Should show "0" badges for triage sections
+      const decisionBadges = screen.getAllByLabelText("0 decisions");
+      expect(decisionBadges.length).toBeGreaterThan(0);
+      decisionBadges.forEach((badge) => {
+        expect(badge).toHaveTextContent("0");
+      });
+
+      // Should have aria-live announcement for cleared triage section
+      expect(
+        screen.getByText("Packages: 0 decisions remaining"),
+      ).toBeInTheDocument();
+
+      // Should also show for config section
+      expect(
+        screen.getByText("Configuration Files: 0 decisions remaining"),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show aria-live for reference sections with 0 count", () => {
+      render(
+        <Sidebar
+          activeSection="network"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Reference sections with 0 items should exist
+      const zeroBadges = screen.getAllByLabelText("0 items");
+      expect(zeroBadges.length).toBeGreaterThan(0);
+
+      // Should NOT have aria-live announcement for reference sections
+      // (Network, Storage, Kernel & Boot, etc. are all reference sections)
+      expect(
+        screen.queryByText("Network: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Storage: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Kernel & Boot: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show aria-live for triage sections with non-zero count", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      // Triage section with items
+      expect(screen.getByLabelText("42 decisions")).toBeInTheDocument();
+
+      // Should NOT have aria-live announcement (only when count is 0)
+      expect(
+        screen.queryByText("Packages: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("aria-live announcement has correct screen reader class", () => {
+      const emptyStats = mockStats({
+        sections: [{ kind: "package", total: 0, included: 0, excluded: 0 }],
+        needs_review_count: 0,
+        ops_applied: 0,
+        can_undo: false,
+        can_redo: false,
+        baseline_available: false,
+      });
+
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={emptyStats}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      const announcement = screen.getByText("Packages: 0 decisions remaining");
+      expect(announcement).toHaveClass("pf-v6-screen-reader");
+      expect(announcement.closest("span")?.getAttribute("aria-live")).toBe(
+        "polite",
+      );
+    });
+  });
 });
