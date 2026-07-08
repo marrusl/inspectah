@@ -481,7 +481,16 @@ fn scan_dirs(
         if exec.read_dir(Path::new(root)).is_err() {
             continue; // silent skip if dir doesn't exist
         }
-        walk_for_elf_binaries(exec, root, section, has_readelf, has_file);
+        let mut visited = HashSet::new();
+        walk_for_elf_binaries(
+            exec,
+            root,
+            section,
+            has_readelf,
+            has_file,
+            root,
+            &mut visited,
+        );
     }
 }
 
@@ -492,6 +501,8 @@ fn walk_for_elf_binaries(
     section: &mut NonRpmSoftwareSection,
     has_readelf: bool,
     has_file: bool,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
 ) {
     let entries = match exec.read_dir(Path::new(dir)) {
         Ok(e) => e,
@@ -506,7 +517,18 @@ fn walk_for_elf_binaries(
             if PRUNE_DIRS.contains(&entry.as_str()) {
                 continue;
             }
-            walk_for_elf_binaries(exec, &child, section, has_readelf, has_file);
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
+            walk_for_elf_binaries(
+                exec,
+                &child,
+                section,
+                has_readelf,
+                has_file,
+                scan_root,
+                visited,
+            );
             continue;
         }
 
@@ -657,11 +679,18 @@ struct VenvInfo {
 /// Find pyvenv.cfg files under a root directory.
 fn find_venvs(exec: &dyn Executor, root: &str) -> Vec<VenvInfo> {
     let mut results = Vec::new();
-    find_venvs_walk(exec, root, &mut results);
+    let mut visited = HashSet::new();
+    find_venvs_walk(exec, root, &mut results, root, &mut visited);
     results
 }
 
-fn find_venvs_walk(exec: &dyn Executor, dir: &str, results: &mut Vec<VenvInfo>) {
+fn find_venvs_walk(
+    exec: &dyn Executor,
+    dir: &str,
+    results: &mut Vec<VenvInfo>,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
+) {
     let entries = match exec.read_dir(Path::new(dir)) {
         Ok(e) => e,
         Err(_) => return,
@@ -670,7 +699,7 @@ fn find_venvs_walk(exec: &dyn Executor, dir: &str, results: &mut Vec<VenvInfo>) 
     for entry in &entries {
         let child = format!("{}/{}", dir, entry);
         if entry == "pyvenv.cfg" {
-            // Found a venv — parse its config.
+            // Found a venv -- parse its config.
             let system_sp = match exec.read_file(Path::new(&child)) {
                 Ok(content) => content.lines().any(|l| {
                     l.trim()
@@ -687,7 +716,10 @@ fn find_venvs_walk(exec: &dyn Executor, dir: &str, results: &mut Vec<VenvInfo>) 
 
         // Recurse into subdirs, but prune build artifacts.
         if exec.read_dir(Path::new(&child)).is_ok() && !PRUNE_DIRS.contains(&entry.as_str()) {
-            find_venvs_walk(exec, &child, results);
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
+            find_venvs_walk(exec, &child, results, scan_root, visited);
         }
     }
 }
@@ -948,97 +980,113 @@ fn scan_npm_packages(
     let mut lockfile_paths: HashSet<String> = HashSet::new();
 
     for root in roots {
-        find_files_matching(exec, root, "package-lock.json", &mut |lockfile_path| {
-            let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
-            let rel_path = project_dir
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .to_string();
-            if is_ostree && rel_path.starts_with("var/") {
-                return;
-            }
-
-            lockfile_paths.insert(rel_path.clone());
-
-            let mut manifest_files = HashMap::new();
-            let mut packages = Vec::new();
-
-            // Collect lockfile content and parse packages.
-            if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
-                manifest_files.insert("package-lock.json".to_string(), content.clone());
-                packages = parse_package_lock(&content)
-                    .into_iter()
-                    .map(|p| LanguagePackage {
-                        name: p.name,
-                        version: p.version,
-                        pinned: false,
-                    })
-                    .collect();
-            }
-
-            // Collect package.json if present.
-            let pkg_json_path = project_dir.join("package.json");
-            if let Ok(content) = exec.read_file(&pkg_json_path) {
-                manifest_files.insert("package.json".to_string(), content);
-            }
-
-            section.items.push(NonRpmItem {
-                path: rel_path,
-                name: project_dir
-                    .file_name()
-                    .unwrap_or_default()
+        let mut visited = HashSet::new();
+        find_files_matching(
+            exec,
+            root,
+            "package-lock.json",
+            root,
+            &mut visited,
+            &mut |lockfile_path| {
+                let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
+                let rel_path = project_dir
                     .to_string_lossy()
-                    .to_string(),
-                method: METHOD_NPM_LOCKFILE.to_string(),
-                confidence: "high".to_string(),
-                disposition: FindingKind::included(),
-                packages,
-                manifest_files,
-                ..Default::default()
-            });
-        });
+                    .trim_start_matches('/')
+                    .to_string();
+                if is_ostree && rel_path.starts_with("var/") {
+                    return;
+                }
+
+                lockfile_paths.insert(rel_path.clone());
+
+                let mut manifest_files = HashMap::new();
+                let mut packages = Vec::new();
+
+                // Collect lockfile content and parse packages.
+                if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
+                    manifest_files.insert("package-lock.json".to_string(), content.clone());
+                    packages = parse_package_lock(&content)
+                        .into_iter()
+                        .map(|p| LanguagePackage {
+                            name: p.name,
+                            version: p.version,
+                            pinned: false,
+                        })
+                        .collect();
+                }
+
+                // Collect package.json if present.
+                let pkg_json_path = project_dir.join("package.json");
+                if let Ok(content) = exec.read_file(&pkg_json_path) {
+                    manifest_files.insert("package.json".to_string(), content);
+                }
+
+                section.items.push(NonRpmItem {
+                    path: rel_path,
+                    name: project_dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    method: METHOD_NPM_LOCKFILE.to_string(),
+                    confidence: "high".to_string(),
+                    disposition: FindingKind::included(),
+                    packages,
+                    manifest_files,
+                    ..Default::default()
+                });
+            },
+        );
     }
 
     // Fallback: scan for package.json without a lockfile.
     for root in roots {
-        find_files_matching(exec, root, "package.json", &mut |manifest_path| {
-            let project_dir = Path::new(manifest_path).parent().unwrap_or(Path::new("/"));
-            let rel_path = project_dir
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .to_string();
-            if is_ostree && rel_path.starts_with("var/") {
-                return;
-            }
-
-            // Skip if a lockfile-based item already exists for this path.
-            if lockfile_paths.contains(&rel_path) {
-                return;
-            }
-
-            let mut manifest_files = HashMap::new();
-            let mut packages = Vec::new();
-
-            if let Ok(content) = exec.read_file(Path::new(manifest_path)) {
-                manifest_files.insert("package.json".to_string(), content.clone());
-                packages = parse_package_json(&content);
-            }
-
-            section.items.push(NonRpmItem {
-                path: rel_path,
-                name: project_dir
-                    .file_name()
-                    .unwrap_or_default()
+        let mut visited = HashSet::new();
+        find_files_matching(
+            exec,
+            root,
+            "package.json",
+            root,
+            &mut visited,
+            &mut |manifest_path| {
+                let project_dir = Path::new(manifest_path).parent().unwrap_or(Path::new("/"));
+                let rel_path = project_dir
                     .to_string_lossy()
-                    .to_string(),
-                method: METHOD_NPM_MANIFEST.to_string(),
-                confidence: "low".to_string(),
-                disposition: FindingKind::included(),
-                packages,
-                manifest_files,
-                ..Default::default()
-            });
-        });
+                    .trim_start_matches('/')
+                    .to_string();
+                if is_ostree && rel_path.starts_with("var/") {
+                    return;
+                }
+
+                // Skip if a lockfile-based item already exists for this path.
+                if lockfile_paths.contains(&rel_path) {
+                    return;
+                }
+
+                let mut manifest_files = HashMap::new();
+                let mut packages = Vec::new();
+
+                if let Ok(content) = exec.read_file(Path::new(manifest_path)) {
+                    manifest_files.insert("package.json".to_string(), content.clone());
+                    packages = parse_package_json(&content);
+                }
+
+                section.items.push(NonRpmItem {
+                    path: rel_path,
+                    name: project_dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    method: METHOD_NPM_MANIFEST.to_string(),
+                    confidence: "low".to_string(),
+                    disposition: FindingKind::included(),
+                    packages,
+                    manifest_files,
+                    ..Default::default()
+                });
+            },
+        );
     }
 }
 
@@ -1350,53 +1398,61 @@ fn scan_gem_packages(
     roots: &[String],
 ) {
     for root in roots {
-        find_files_matching(exec, root, "Gemfile.lock", &mut |lockfile_path| {
-            let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
-            let rel_path = project_dir
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .to_string();
-            if is_ostree && rel_path.starts_with("var/") {
-                return;
-            }
-
-            let mut manifest_files = HashMap::new();
-            let mut packages = Vec::new();
-
-            // Collect lockfile content and parse packages.
-            if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
-                manifest_files.insert("Gemfile.lock".to_string(), content.clone());
-                packages = parse_gemfile_lock(&content)
-                    .into_iter()
-                    .map(|g| LanguagePackage {
-                        name: g.name,
-                        version: g.version,
-                        pinned: false,
-                    })
-                    .collect();
-            }
-
-            // Collect Gemfile if present.
-            let gemfile_path = project_dir.join("Gemfile");
-            if let Ok(content) = exec.read_file(&gemfile_path) {
-                manifest_files.insert("Gemfile".to_string(), content);
-            }
-
-            section.items.push(NonRpmItem {
-                path: rel_path,
-                name: project_dir
-                    .file_name()
-                    .unwrap_or_default()
+        let mut visited = HashSet::new();
+        find_files_matching(
+            exec,
+            root,
+            "Gemfile.lock",
+            root,
+            &mut visited,
+            &mut |lockfile_path| {
+                let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
+                let rel_path = project_dir
                     .to_string_lossy()
-                    .to_string(),
-                method: METHOD_GEM_LOCKFILE.to_string(),
-                confidence: "high".to_string(),
-                disposition: FindingKind::included(),
-                packages,
-                manifest_files,
-                ..Default::default()
-            });
-        });
+                    .trim_start_matches('/')
+                    .to_string();
+                if is_ostree && rel_path.starts_with("var/") {
+                    return;
+                }
+
+                let mut manifest_files = HashMap::new();
+                let mut packages = Vec::new();
+
+                // Collect lockfile content and parse packages.
+                if let Ok(content) = exec.read_file(Path::new(lockfile_path)) {
+                    manifest_files.insert("Gemfile.lock".to_string(), content.clone());
+                    packages = parse_gemfile_lock(&content)
+                        .into_iter()
+                        .map(|g| LanguagePackage {
+                            name: g.name,
+                            version: g.version,
+                            pinned: false,
+                        })
+                        .collect();
+                }
+
+                // Collect Gemfile if present.
+                let gemfile_path = project_dir.join("Gemfile");
+                if let Ok(content) = exec.read_file(&gemfile_path) {
+                    manifest_files.insert("Gemfile".to_string(), content);
+                }
+
+                section.items.push(NonRpmItem {
+                    path: rel_path,
+                    name: project_dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    method: METHOD_GEM_LOCKFILE.to_string(),
+                    confidence: "high".to_string(),
+                    disposition: FindingKind::included(),
+                    packages,
+                    manifest_files,
+                    ..Default::default()
+                });
+            },
+        );
     }
 }
 
@@ -1558,7 +1614,8 @@ fn collect_env_files(
 ) {
     for root in roots {
         for env_name in ENV_FILE_NAMES {
-            find_files_matching(exec, root, env_name, &mut |path| {
+            let mut visited = HashSet::new();
+            find_files_matching(exec, root, env_name, root, &mut visited, &mut |path| {
                 let content = exec.read_file(Path::new(path)).unwrap_or_default();
                 let rel_path = path.trim_start_matches('/').to_string();
 
@@ -1607,7 +1664,8 @@ fn collect_git_repos(
     roots: &[String],
 ) {
     for root in roots {
-        find_git_configs(exec, root, section, redaction_hints);
+        let mut visited = HashSet::new();
+        find_git_configs(exec, root, section, redaction_hints, root, &mut visited);
     }
 }
 
@@ -1616,6 +1674,8 @@ fn find_git_configs(
     dir: &str,
     section: &mut NonRpmSoftwareSection,
     redaction_hints: &mut Vec<RedactionHint>,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
 ) {
     let entries = match exec.read_dir(Path::new(dir)) {
         Ok(e) => e,
@@ -1625,7 +1685,7 @@ fn find_git_configs(
     for entry in &entries {
         let child = format!("{}/{}", dir, entry);
         if entry == ".git" {
-            // Found a git repo — extract remote URL from config.
+            // Found a git repo -- extract remote URL from config.
             let config_path = format!("{}/.git/config", dir);
             let remote_url = match exec.read_file(Path::new(&config_path)) {
                 Ok(content) => extract_git_remote_url(&content),
@@ -1666,7 +1726,10 @@ fn find_git_configs(
 
         // Recurse into subdirs.
         if exec.read_dir(Path::new(&child)).is_ok() && !PRUNE_DIRS.contains(&entry.as_str()) {
-            find_git_configs(exec, &child, section, redaction_hints);
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
+            find_git_configs(exec, &child, section, redaction_hints, scan_root, visited);
         }
     }
 }
@@ -1774,11 +1837,53 @@ fn deduplicate_items(section: &mut NonRpmSoftwareSection) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// Check if a directory symlink should be skipped during recursive walking.
+///
+/// Returns `true` (skip) when:
+/// - The path is a symlink resolving outside `scan_root` (escape)
+/// - The resolved target was already visited (cycle)
+/// - Symlink resolution fails (fail closed -- dangling or broken chain)
+///
+/// Regular (non-symlink) directories always return `false`.
+fn should_skip_directory(
+    exec: &dyn Executor,
+    path: &str,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
+) -> bool {
+    // Not a symlink -- regular directory, safe to recurse.
+    if exec.read_link(Path::new(path)).is_err() {
+        return false;
+    }
+
+    // It IS a symlink. Resolve the final target.
+    let resolved = match exec.resolve_final_target(Path::new(path)) {
+        Ok(p) => p,
+        Err(_) => return true, // Fail closed: dangling or broken chain.
+    };
+
+    let resolved_str = resolved.to_string_lossy().to_string();
+
+    // Reject targets outside the scan root.
+    if !resolved_str.starts_with(scan_root) {
+        return true;
+    }
+
+    // Cycle detection: skip if this resolved path was already visited.
+    if !visited.insert(resolved_str) {
+        return true;
+    }
+
+    false
+}
+
 /// Recursively find files matching a specific filename under a root.
 fn find_files_matching(
     exec: &dyn Executor,
     root: &str,
     filename: &str,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
     handler: &mut impl FnMut(&str),
 ) {
     let entries = match exec.read_dir(Path::new(root)) {
@@ -1796,7 +1901,10 @@ fn find_files_matching(
             if PRUNE_DIRS.contains(&entry.as_str()) {
                 continue;
             }
-            find_files_matching(exec, &child, filename, handler);
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
+            find_files_matching(exec, &child, filename, scan_root, visited, handler);
         }
     }
 }
@@ -4739,6 +4847,279 @@ mod tests {
         assert!(
             !item.has_c_extensions,
             "should not detect C extensions when none present"
+        );
+    }
+
+    // ---- Symlink containment tests ----
+
+    #[test]
+    fn test_should_skip_directory_regular_dir() {
+        // Regular directory (not a symlink) should NOT be skipped.
+        let exec = MockExecutor::new().with_dir("/opt/app/subdir", vec!["file.txt"]);
+        let mut visited = HashSet::new();
+        assert!(
+            !should_skip_directory(&exec, "/opt/app/subdir", "/opt", &mut visited),
+            "regular directory should not be skipped"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_directory_symlink_outside_root() {
+        // Symlink pointing outside the scan root should be skipped.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/app/escape", vec!["shadow"])
+            .with_link("/opt/app/escape", "/etc/sensitive");
+        let mut visited = HashSet::new();
+        assert!(
+            should_skip_directory(&exec, "/opt/app/escape", "/opt", &mut visited),
+            "symlink outside scan root should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_directory_symlink_within_root() {
+        // Symlink staying within the scan root should NOT be skipped.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/app/link", vec!["config.yml"])
+            .with_link("/opt/app/link", "/opt/app/real");
+        let mut visited = HashSet::new();
+        assert!(
+            !should_skip_directory(&exec, "/opt/app/link", "/opt", &mut visited),
+            "symlink within scan root should not be skipped"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_directory_dangling_symlink() {
+        // Dangling symlink (resolve fails) should be skipped (fail closed).
+        let exec = MockExecutor::new().with_link("/opt/app/broken", "/nonexistent/target");
+        let mut visited = HashSet::new();
+        assert!(
+            should_skip_directory(&exec, "/opt/app/broken", "/opt", &mut visited),
+            "dangling symlink should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_directory_cycle_detection() {
+        // Two symlinks resolving to the same target: second visit should be skipped.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/app/link1", vec!["data"])
+            .with_link("/opt/app/link1", "/opt/app/real")
+            .with_dir("/opt/app/link2", vec!["data"])
+            .with_link("/opt/app/link2", "/opt/app/real");
+        let mut visited = HashSet::new();
+        // First visit succeeds.
+        assert!(
+            !should_skip_directory(&exec, "/opt/app/link1", "/opt", &mut visited),
+            "first visit to resolved target should not be skipped"
+        );
+        // Second visit to same resolved target should be skipped.
+        assert!(
+            should_skip_directory(&exec, "/opt/app/link2", "/opt", &mut visited),
+            "second visit to same resolved target should be skipped (cycle)"
+        );
+    }
+
+    #[test]
+    fn test_self_referencing_symlink_loop_completes() {
+        // A symlink loop: /opt/app/loop -> /opt/app/loop.
+        // resolve_final_target detects the loop and returns Err,
+        // so should_skip_directory returns true (fail closed).
+        let exec = MockExecutor::new()
+            .with_dir("/opt/app/loop", vec!["secret.txt"])
+            .with_link("/opt/app/loop", "/opt/app/loop");
+        let mut visited = HashSet::new();
+        assert!(
+            should_skip_directory(&exec, "/opt/app/loop", "/opt", &mut visited),
+            "self-referencing symlink loop should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_walk_for_elf_binaries_skips_symlink_outside_root() {
+        // /opt/app/escape -> /usr/bin (outside /opt scan root).
+        // Files under /usr/bin should NOT be found.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["app"])
+            .with_dir("/opt/app", vec!["real", "escape"])
+            .with_dir("/opt/app/real", vec!["mybin"])
+            .with_dir("/opt/app/escape", vec!["leaked_bin"])
+            .with_link("/opt/app/escape", "/usr/bin")
+            // mybin is a regular file (read_dir fails), detected via `file -b`
+            .with_command(
+                "file -b /opt/app/real/mybin",
+                ExecResult {
+                    stdout: "ELF 64-bit LSB executable".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection {
+            items: Vec::new(),
+            env_files: Vec::new(),
+        };
+        let mut visited = HashSet::new();
+        walk_for_elf_binaries(
+            &exec,
+            "/opt",
+            &mut section,
+            false,
+            true,
+            "/opt",
+            &mut visited,
+        );
+
+        // mybin should be found (regular file under real dir).
+        assert!(
+            section.items.iter().any(|i| i.path.contains("mybin")),
+            "should find mybin under real directory"
+        );
+        // leaked_bin should NOT be found (under symlink outside root).
+        assert!(
+            !section.items.iter().any(|i| i.path.contains("leaked_bin")),
+            "should not find leaked_bin under symlinked escape dir"
+        );
+    }
+
+    #[test]
+    fn test_walk_for_elf_binaries_follows_symlink_within_root() {
+        // /opt/app/link -> /opt/app/real (stays within /opt scan root).
+        // Files under the symlink should still be found.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["app"])
+            .with_dir("/opt/app", vec!["link"])
+            .with_dir("/opt/app/link", vec!["goodbin"])
+            .with_link("/opt/app/link", "/opt/app/real")
+            .with_command(
+                "file -b /opt/app/link/goodbin",
+                ExecResult {
+                    stdout: "ELF 64-bit LSB executable".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection {
+            items: Vec::new(),
+            env_files: Vec::new(),
+        };
+        let mut visited = HashSet::new();
+        walk_for_elf_binaries(
+            &exec,
+            "/opt",
+            &mut section,
+            false,
+            true,
+            "/opt",
+            &mut visited,
+        );
+
+        assert!(
+            section.items.iter().any(|i| i.path.contains("goodbin")),
+            "should find goodbin under within-root symlinked dir"
+        );
+    }
+
+    #[test]
+    fn test_find_files_matching_skips_symlink_outside_root() {
+        // /opt/app/escape -> /etc (outside scan root).
+        // A .env file under /etc should NOT be found.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["app"])
+            .with_dir("/opt/app", vec!["real", "escape"])
+            .with_dir("/opt/app/real", vec![".env"])
+            .with_file("/opt/app/real/.env", "KEY=value")
+            .with_dir("/opt/app/escape", vec![".env"])
+            .with_file("/opt/app/escape/.env", "LEAKED=secret")
+            .with_link("/opt/app/escape", "/etc");
+
+        let mut found = Vec::new();
+        let mut visited = HashSet::new();
+        find_files_matching(&exec, "/opt", ".env", "/opt", &mut visited, &mut |path| {
+            found.push(path.to_string());
+        });
+
+        assert!(
+            found.iter().any(|p| p.contains("real/.env")),
+            "should find .env in real directory"
+        );
+        assert!(
+            !found.iter().any(|p| p.contains("escape")),
+            "should not find .env under symlinked escape dir"
+        );
+    }
+
+    #[test]
+    fn test_find_files_matching_normal_subdir_walked() {
+        // Normal subdirectories (no symlinks) should be walked normally.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["app"])
+            .with_dir("/opt/app", vec!["sub1", "sub2"])
+            .with_dir("/opt/app/sub1", vec!["package.json"])
+            .with_file("/opt/app/sub1/package.json", "{}")
+            .with_dir("/opt/app/sub2", vec!["deep"])
+            .with_dir("/opt/app/sub2/deep", vec!["package.json"])
+            .with_file("/opt/app/sub2/deep/package.json", "{}");
+
+        let mut found = Vec::new();
+        let mut visited = HashSet::new();
+        find_files_matching(
+            &exec,
+            "/opt",
+            "package.json",
+            "/opt",
+            &mut visited,
+            &mut |path| {
+                found.push(path.to_string());
+            },
+        );
+
+        assert_eq!(found.len(), 2, "should find both package.json files");
+        assert!(found.iter().any(|p| p.contains("sub1/package.json")));
+        assert!(found.iter().any(|p| p.contains("sub2/deep/package.json")));
+    }
+
+    #[test]
+    fn test_find_git_configs_skips_symlink_outside_root() {
+        // /opt/projects/escape -> /home/user (outside /opt).
+        // Git repos under /home/user should NOT be found.
+        let exec = MockExecutor::new()
+            .with_dir("/opt", vec!["projects"])
+            .with_dir("/opt/projects", vec!["legit", "escape"])
+            .with_dir("/opt/projects/legit", vec![".git"])
+            .with_dir("/opt/projects/legit/.git", vec!["config"])
+            .with_file(
+                "/opt/projects/legit/.git/config",
+                "[remote \"origin\"]\n\turl = https://github.com/legit/repo.git\n",
+            )
+            .with_dir("/opt/projects/escape", vec![".git"])
+            .with_link("/opt/projects/escape", "/home/user/projects");
+
+        let mut section = NonRpmSoftwareSection {
+            items: Vec::new(),
+            env_files: Vec::new(),
+        };
+        let mut redaction_hints = Vec::new();
+        let mut visited = HashSet::new();
+        find_git_configs(
+            &exec,
+            "/opt",
+            &mut section,
+            &mut redaction_hints,
+            "/opt",
+            &mut visited,
+        );
+
+        assert_eq!(
+            section.items.len(),
+            1,
+            "should find only the legit git repo"
+        );
+        assert!(
+            section.items[0].path.contains("legit"),
+            "found repo should be the legit one"
         );
     }
 }
