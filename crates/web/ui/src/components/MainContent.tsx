@@ -86,6 +86,10 @@ export interface MainContentProps {
   onUploadClick?: (packageName: string) => void;
   /** Called when user removes a previously uploaded RPM. */
   onRemoveRpmUpload?: (packageName: string) => void;
+  /** Callback to pin/unpin a single language package. */
+  onSetPackagePin?: (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => void;
+  /** Callback to bulk pin/unpin all packages in a language environment. */
+  onSetBulkPackagePin?: (ecosystem: string, envPath: string, pinned: boolean) => void;
 }
 
 interface ToastEntry {
@@ -133,6 +137,8 @@ export function MainContent({
   onUploadClick,
   onRemoveRpmUpload,
   hasUnmanagedScan = false,
+  onSetPackagePin,
+  onSetBulkPackagePin,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -610,6 +616,9 @@ export function MainContent({
             }}
             isPending={isPending}
             revealItemId={revealItemId}
+            onSetPackagePin={onSetPackagePin}
+            onSetBulkPackagePin={onSetBulkPackagePin}
+            searchQuery={filterText}
           />
         )}
       </div>

@@ -10,7 +10,7 @@ import {
 } from "@patternfly/react-core";
 import { UploadIcon } from "@patternfly/react-icons";
 import type { ViewResponse, RpmUploadRowState } from "./api/types";
-import { fetchOps, batchToggleGroup } from "./api/client";
+import { fetchOps, batchToggleGroup, setPackagePin, setBulkPackagePin } from "./api/client";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -366,6 +366,29 @@ function SingleHostApp({
     }
   }, [view.data?.unmanaged_files, mutation]);
 
+  // --- Language package pin callbacks ---
+  const handleSetPackagePin = useCallback(
+    (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => {
+      setPackagePin(ecosystem, envPath, pkg, pinned)
+        .then(() => view.invalidate())
+        .catch((err: unknown) =>
+          console.error("Failed to set package pin:", err),
+        );
+    },
+    [view.invalidate],
+  );
+
+  const handleSetBulkPackagePin = useCallback(
+    (ecosystem: string, envPath: string, pinned: boolean) => {
+      setBulkPackagePin(ecosystem, envPath, pinned)
+        .then(() => view.invalidate())
+        .catch((err: unknown) =>
+          console.error("Failed to set bulk package pin:", err),
+        );
+    },
+    [view.invalidate],
+  );
+
   const handleRemoveRpmUpload = useCallback(
     (nameArch: string) => {
       rpmUpload.removeUpload(nameArch).catch((err: unknown) => {
@@ -688,6 +711,8 @@ function SingleHostApp({
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}
                 onToggleLangEnv={handleToggleLangEnv}
+                onSetPackagePin={handleSetPackagePin}
+                onSetBulkPackagePin={handleSetBulkPackagePin}
                 onToggleUnmanagedFile={handleToggleUnmanagedFile}
                 onToggleUnmanagedGroup={handleToggleUnmanagedGroup}
                 onUnmanagedIncludeNone={handleUnmanagedIncludeNone}

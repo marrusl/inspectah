@@ -56,6 +56,7 @@ export function LanguagePackageList({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
   const expandBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const envRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const handleToggle = useCallback(
     (ecosystem: string, path: string) => {
@@ -96,6 +97,21 @@ export function LanguagePackageList({
     }
   }, [searchQuery, environments]);
 
+  /** Scroll first matching package into view after search-driven expansion. */
+  useEffect(() => {
+    if (!searchQuery?.trim()) return;
+    // Wait for expansion state change to render the sublist DOM
+    requestAnimationFrame(() => {
+      const match = document.querySelector(
+        '[data-search-match="true"]',
+      ) as HTMLElement | null;
+      if (match) {
+        match.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        match.focus();
+      }
+    });
+  }, [searchQuery, environments]);
+
   /** Keyboard handler for expanded sublist: ArrowUp/Down navigate, Escape collapses. */
   const handleSublistKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>, itemKey: string) => {
@@ -119,7 +135,7 @@ export function LanguagePackageList({
       } else if (e.key === "Escape") {
         e.preventDefault();
         toggleExpand(itemKey);
-        expandBtnRefs.current.get(itemKey)?.focus();
+        envRowRefs.current.get(itemKey)?.focus();
       }
     },
     [toggleExpand],
@@ -169,6 +185,10 @@ export function LanguagePackageList({
             key={itemKey}
             role="listitem"
             tabIndex={isExpandable ? 0 : -1}
+            aria-expanded={isExpandable ? isExpanded : undefined}
+            ref={(el) => {
+              if (el) envRowRefs.current.set(itemKey, el);
+            }}
             data-testid={`lang-env-row-${itemKey}`}
             className="inspectah-lang-pkg-row"
             data-revealed={revealItemId === itemKey ? "true" : undefined}
@@ -215,7 +235,6 @@ export function LanguagePackageList({
                         if (el) expandBtnRefs.current.set(itemKey, el);
                       }}
                       className="inspectah-lang-pkg-row__expand-btn"
-                      aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? "Collapse" : "Expand"} package list for ${env.path}`}
                       onClick={() => toggleExpand(itemKey)}
                       data-testid={`lang-env-expand-${itemKey}`}
@@ -264,12 +283,13 @@ export function LanguagePackageList({
                 data-testid={`lang-env-sublist-${itemKey}`}
                 onKeyDown={(e) => handleSublistKeyDown(e, itemKey)}
               >
-                {onSetBulkPackagePin && env.packages.length > 1 && (
+                {onSetBulkPackagePin && env.packages.length >= 1 && (
                   <div className="inspectah-lang-pkg-sublist__bulk">
                     <button
                       type="button"
                       className="inspectah-lang-pkg-sublist__bulk-btn"
                       disabled={isPending}
+                      aria-label={`${env.packages.every((p) => p.pinned) ? "Unpin" : "Pin"} all packages in ${env.ecosystem} globals ${env.path}`}
                       onClick={() => {
                         const allPinned = env.packages.every(
                           (p) => p.pinned,
@@ -315,7 +335,7 @@ export function LanguagePackageList({
                           type="checkbox"
                           checked={pkg.pinned}
                           disabled={isPending}
-                          aria-label={`Pin ${pkg.name}`}
+                          aria-label={`Pin ${pkg.name} to version ${pkg.detected_version}`}
                           onChange={() =>
                             onSetPackagePin(
                               env.ecosystem,

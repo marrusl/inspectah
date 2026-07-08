@@ -329,7 +329,11 @@ describe("LanguagePackageList expandable sublist", () => {
       "lang-env-expand-npm:/usr/lib/node_modules",
     );
     expect(expandBtn).toBeInTheDocument();
-    expect(expandBtn).toHaveAttribute("aria-expanded", "false");
+    // aria-expanded lives on the focusable env row, not the nested button
+    const envRow = screen.getByTestId(
+      "lang-env-row-npm:/usr/lib/node_modules",
+    );
+    expect(envRow).toHaveAttribute("aria-expanded", "false");
   });
 
   it("does not render expand button for non-npm-global environments", () => {
@@ -373,7 +377,11 @@ describe("LanguagePackageList expandable sublist", () => {
       "lang-env-sublist-npm:/usr/lib/node_modules",
     );
     expect(sublist).toBeInTheDocument();
-    expect(expandBtn).toHaveAttribute("aria-expanded", "true");
+    // aria-expanded lives on the focusable env row, not the nested button
+    const envRow = screen.getByTestId(
+      "lang-env-row-npm:/usr/lib/node_modules",
+    );
+    expect(envRow).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("typescript")).toBeInTheDocument();
     expect(screen.getByText("5.4.0")).toBeInTheDocument();
     expect(screen.getByText("eslint")).toBeInTheDocument();
@@ -384,7 +392,7 @@ describe("LanguagePackageList expandable sublist", () => {
     expect(
       screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
     ).not.toBeInTheDocument();
-    expect(expandBtn).toHaveAttribute("aria-expanded", "false");
+    expect(envRow).toHaveAttribute("aria-expanded", "false");
   });
 
   it("renders pin checkboxes reflecting pinned state", async () => {
@@ -593,7 +601,7 @@ describe("LanguagePackageList keyboard navigation", () => {
     );
   });
 
-  it("Escape collapses sublist and returns focus to expand button", async () => {
+  it("Escape collapses sublist and returns focus to env row", async () => {
     const user = userEvent.setup();
     render(
       <LanguagePackageList
@@ -617,8 +625,9 @@ describe("LanguagePackageList keyboard navigation", () => {
     expect(
       screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
     ).not.toBeInTheDocument();
+    // Focus returns to the env row, not the nested expand button
     expect(document.activeElement).toBe(
-      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+      screen.getByTestId("lang-env-row-npm:/usr/lib/node_modules"),
     );
   });
 });
