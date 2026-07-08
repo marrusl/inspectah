@@ -1276,17 +1276,39 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
 
     // Unbacked /var paths — advisory items for directories with no
     // declarative backing (tmpfiles.d, StateDirectory=, etc.)
+    // Enrich with ownership/mode from var_directories when available.
     for path in &data.unbacked_var_paths {
+        // Find matching var_directory entry to get ownership/mode
+        let var_dir = data.var_directories.iter().find(|vd| vd.path == *path);
+
+        let detail_text = if let Some(vd) = var_dir {
+            if let (Some(mode), Some(owner), Some(group)) =
+                (&vd.mode, &vd.owner_name, &vd.group_name)
+            {
+                format!(
+                    "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
+                     LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
+                     provisioning. Current ownership: {} {}:{}",
+                    mode, owner, group
+                )
+            } else {
+                "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
+                 LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
+                 provisioning."
+                    .to_string()
+            }
+        } else {
+            "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
+             LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
+             provisioning."
+                .to_string()
+        };
+
         items.push(ContextItem {
             id: format!("unbacked:{}", path),
             title: path.clone(),
             subtitle: Some("advisory: unbacked /var directory".to_string()),
-            detail: Some(
-                "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
-                 LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
-                 provisioning."
-                    .to_string(),
-            ),
+            detail: Some(detail_text),
             searchable_text: format!("{} unbacked var advisory", path),
         });
     }

@@ -227,7 +227,9 @@ fn discover_var_directories(
                     var_dir.group_name = Some(parts[4].to_string());
                 }
             }
-            // If stat fails, fields remain None — renderer falls back to RUN mkdir
+            // If stat fails, fields remain None — renderer falls back to RUN mkdir.
+            // Stat can fail for directories that existed during find but were deleted
+            // before stat ran, or due to permission issues.
 
             var_dir
         })

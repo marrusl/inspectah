@@ -658,14 +658,14 @@ pub async fn batch_toggle_group(
         .iter()
         .find(|g| g.slug() == group_slug)
         .ok_or_else(|| {
-            AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            AppError(inspectah_refine::types::RefineError::NotFound(format!(
                 "unknown batch toggle group: {group_slug}"
             )))
         })?;
 
     // Reject reference-only groups
     if !group.has_actionable_sections() {
-        return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+        return Err(AppError(inspectah_refine::types::RefineError::NotFound(
             format!("batch toggle not supported for reference-only group: {group_slug}"),
         )));
     }
