@@ -208,7 +208,7 @@ export function MainContent({
       (env) =>
         env.path.toLowerCase().includes(q) ||
         env.ecosystem.toLowerCase().includes(q) ||
-        env.packages.some((pkg) => pkg.toLowerCase().includes(q)),
+        env.packages.some((pkg) => pkg.name.toLowerCase().includes(q)),
     );
   }, [langPkgs, filterText]);
 

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Badge, Label, Content } from "@patternfly/react-core";
 import type { LanguagePackageEnv } from "../api/types";
 
@@ -17,6 +17,9 @@ const MANIFEST_LABELS: Record<string, string> = {
   "Gemfile.lock": "from Gemfile.lock",
 };
 
+/** Method value that triggers expandable package sublists. */
+const EXPANDABLE_METHOD = "npm global";
+
 export interface LanguagePackageListProps {
   environments: LanguagePackageEnv[];
   /** Toggle callback. Receives { ecosystem, path } matching ItemId::LanguageEnv. */
@@ -24,6 +27,19 @@ export interface LanguagePackageListProps {
   isPending: boolean;
   /** Item to scroll into view (from global search). Format: "ecosystem:path". */
   revealItemId?: string;
+  /** Callback to pin/unpin a single package. */
+  onSetPackagePin?: (
+    ecosystem: string,
+    envPath: string,
+    pkg: string,
+    pinned: boolean,
+  ) => void;
+  /** Callback to bulk pin/unpin all packages in an environment. */
+  onSetBulkPackagePin?: (
+    ecosystem: string,
+    envPath: string,
+    pinned: boolean,
+  ) => void;
 }
 
 export function LanguagePackageList({
@@ -31,13 +47,29 @@ export function LanguagePackageList({
   onToggle,
   isPending,
   revealItemId,
+  onSetPackagePin,
+  onSetBulkPackagePin,
 }: LanguagePackageListProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   const handleToggle = useCallback(
     (ecosystem: string, path: string) => {
       if (!isPending) onToggle(ecosystem, path);
     },
     [onToggle, isPending],
   );
+
+  const toggleExpand = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
 
   if (environments.length === 0) {
     return (
@@ -56,6 +88,9 @@ export function LanguagePackageList({
     >
       {environments.map((env) => {
         const itemKey = `${env.ecosystem}:${env.path}`;
+        const isExpandable = env.method === EXPANDABLE_METHOD;
+        const isExpanded = expanded.has(itemKey);
+
         return (
           <div
             key={itemKey}
@@ -87,6 +122,23 @@ export function LanguagePackageList({
                   <span className="inspectah-lang-pkg-row__path">
                     {env.path}
                   </span>
+                  {isExpandable && (
+                    <button
+                      type="button"
+                      className="inspectah-lang-pkg-row__expand-btn"
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? "Collapse" : "Expand"} package list for ${env.path}`}
+                      onClick={() => toggleExpand(itemKey)}
+                      data-testid={`lang-env-expand-${itemKey}`}
+                    >
+                      <span
+                        className="inspectah-lang-pkg-row__chevron"
+                        data-expanded={isExpanded ? "true" : undefined}
+                      >
+                        &#9654;
+                      </span>
+                    </button>
+                  )}
                 </div>
                 <div className="inspectah-lang-pkg-row__meta">
                   <Badge isRead>
@@ -102,9 +154,81 @@ export function LanguagePackageList({
                   <span className="inspectah-lang-pkg-row__basis">
                     {MANIFEST_LABELS[env.manifest_basis] ?? env.manifest_basis}
                   </span>
+                  {env.has_c_extensions && (
+                    <span role="status" aria-label="This environment contains C extensions">
+                      <Label color="orange" isCompact>C extensions</Label>
+                    </span>
+                  )}
+                  {env.system_site_packages && (
+                    <span role="status" aria-label="This environment uses system site-packages">
+                      <Label color="blue" isCompact>system site-packages</Label>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
+            {isExpandable && isExpanded && (
+              <div
+                className="inspectah-lang-pkg-sublist"
+                role="list"
+                aria-label={`Packages in ${env.path}`}
+                data-testid={`lang-env-sublist-${itemKey}`}
+              >
+                {onSetBulkPackagePin && env.packages.length > 1 && (
+                  <div className="inspectah-lang-pkg-sublist__bulk">
+                    <button
+                      type="button"
+                      className="inspectah-lang-pkg-sublist__bulk-btn"
+                      disabled={isPending}
+                      onClick={() =>
+                        onSetBulkPackagePin(
+                          env.ecosystem,
+                          env.path,
+                          !env.packages.every((p) => p.pinned),
+                        )
+                      }
+                      data-testid={`lang-env-bulk-pin-${itemKey}`}
+                    >
+                      {env.packages.every((p) => p.pinned)
+                        ? "Unpin all"
+                        : "Pin all"}
+                    </button>
+                  </div>
+                )}
+                {env.packages.map((pkg) => (
+                  <div
+                    key={pkg.name}
+                    role="listitem"
+                    className="inspectah-lang-pkg-sublist__item"
+                    data-testid={`lang-pkg-${pkg.name}`}
+                  >
+                    <span className="inspectah-lang-pkg-sublist__name">
+                      {pkg.name}
+                    </span>
+                    <span className="inspectah-lang-pkg-sublist__version">
+                      {pkg.detected_version}
+                    </span>
+                    {onSetPackagePin && (
+                      <input
+                        type="checkbox"
+                        checked={pkg.pinned}
+                        disabled={isPending}
+                        aria-label={`Pin ${pkg.name}`}
+                        onChange={() =>
+                          onSetPackagePin(
+                            env.ecosystem,
+                            env.path,
+                            pkg.name,
+                            !pkg.pinned,
+                          )
+                        }
+                        data-testid={`lang-pkg-pin-${pkg.name}`}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}

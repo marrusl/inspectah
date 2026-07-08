@@ -398,8 +398,8 @@ describe("VariantView", () => {
             host_count: 1,
             selected: true,
             packages: [
-              { name: "flask", version: "2.3.3" },
-              { name: "requests", version: "2.31.0" },
+              { name: "flask", detected_version: "2.3.3", pinned: false },
+              { name: "requests", detected_version: "2.31.0", pinned: false },
             ],
           },
           {
@@ -408,9 +408,9 @@ describe("VariantView", () => {
             host_count: 1,
             selected: false,
             packages: [
-              { name: "flask", version: "2.3.3" },
-              { name: "requests", version: "2.32.0" },
-              { name: "newpkg", version: "1.0.0" },
+              { name: "flask", detected_version: "2.3.3", pinned: false },
+              { name: "requests", detected_version: "2.32.0", pinned: false },
+              { name: "newpkg", detected_version: "1.0.0", pinned: false },
             ],
           },
         ],
@@ -450,7 +450,7 @@ describe("VariantView", () => {
             hosts: ["host-a"],
             host_count: 1,
             selected: true,
-            packages: [{ name: "flask", version: "2.3.3" }],
+            packages: [{ name: "flask", detected_version: "2.3.3", pinned: false }],
           },
         ],
       },

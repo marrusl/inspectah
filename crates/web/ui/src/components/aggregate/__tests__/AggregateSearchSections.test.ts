@@ -43,8 +43,8 @@ describe("buildAggregateSearchSections", () => {
       package_count: 2,
       manifest_basis: "requirements.txt",
       packages: [
-        { name: "flask", version: "2.0.0" },
-        { name: "requests", version: "2.28.0" },
+        { name: "flask", detected_version: "2.0.0", pinned: false },
+        { name: "requests", detected_version: "2.28.0", pinned: false },
       ],
     };
 
@@ -84,9 +84,9 @@ describe("buildAggregateSearchSections", () => {
       package_count: 3,
       manifest_basis: "dist-info",
       packages: [
-        { name: "flask", version: "2.0.0" },
-        { name: "werkzeug", version: "2.0.0" },
-        { name: "jinja2", version: "3.1.0" },
+        { name: "flask", detected_version: "2.0.0", pinned: false },
+        { name: "werkzeug", detected_version: "2.0.0", pinned: false },
+        { name: "jinja2", detected_version: "3.1.0", pinned: false },
       ],
     };
 

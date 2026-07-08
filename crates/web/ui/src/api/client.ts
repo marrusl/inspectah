@@ -180,3 +180,31 @@ export function fetchUserPreview(reveal = false): Promise<UserPreviewResponse> {
   const url = reveal ? "/api/user-preview?reveal=true" : "/api/user-preview";
   return getJson(url);
 }
+
+// --- Language package pin endpoints ---
+
+export function setPackagePin(
+  ecosystem: string,
+  envPath: string,
+  pkg: string,
+  pinned: boolean,
+): Promise<ViewResponse> {
+  return postJson("/api/set-package-pin", {
+    ecosystem,
+    env_path: envPath,
+    package: pkg,
+    pinned,
+  });
+}
+
+export function setBulkPackagePin(
+  ecosystem: string,
+  envPath: string,
+  pinned: boolean,
+): Promise<ViewResponse> {
+  return postJson("/api/set-bulk-package-pin", {
+    ecosystem,
+    env_path: envPath,
+    pinned,
+  });
+}

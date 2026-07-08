@@ -1191,6 +1191,75 @@ body,
   font-style: italic;
 }
 
+.inspectah-lang-pkg-row__expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  color: var(--pf-t--global--text--color--regular);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  line-height: 1;
+}
+
+.inspectah-lang-pkg-row__expand-btn:hover {
+  color: var(--pf-t--global--color--brand--default);
+}
+
+.inspectah-lang-pkg-row__chevron {
+  display: inline-block;
+  transition: transform 150ms ease;
+  font-size: 0.65em;
+}
+
+.inspectah-lang-pkg-row__chevron[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.inspectah-lang-pkg-sublist {
+  padding-left: calc(var(--pf-t--global--spacer--md) + 20px);
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+}
+
+.inspectah-lang-pkg-sublist__bulk {
+  padding: var(--pf-t--global--spacer--xs) 0;
+}
+
+.inspectah-lang-pkg-sublist__bulk-btn {
+  background: none;
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--small);
+  padding: 2px var(--pf-t--global--spacer--sm);
+  cursor: pointer;
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--regular);
+}
+
+.inspectah-lang-pkg-sublist__bulk-btn:hover {
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-lang-pkg-sublist__item {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: 2px 0;
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-lang-pkg-sublist__name {
+  font-family: var(--pf-t--global--font--family--mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspectah-lang-pkg-sublist__version {
+  font-family: var(--pf-t--global--font--family--mono);
+  color: var(--pf-t--global--text--color--subtle);
+  flex-shrink: 0;
+}
+
 /* ─── Unmanaged file list (decision section) ─────────────────────────── */
 
 .inspectah-unmanaged-list__header {

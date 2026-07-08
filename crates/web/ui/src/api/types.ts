@@ -696,14 +696,18 @@ export interface LanguagePackageEnv {
   path: string;
   /** Method string from Plan 1 contract. */
   method: string;
-  /** Package names in this environment. */
-  packages: string[];
+  /** Structured package entries in this environment. */
+  packages: LanguagePackageDto[];
   /** Confidence level from collector. */
   confidence: "high" | "medium" | "low";
   /** How the environment was discovered (e.g., "requirements.txt", "dist-info", "package-lock.json", "Gemfile.lock"). */
   manifest_basis: string;
   /** Whether to include in export. */
   include: boolean;
+  /** Whether any package in the environment has C extensions. */
+  has_c_extensions: boolean;
+  /** Whether the environment inherits system site-packages (pip venvs). */
+  system_site_packages: boolean;
 }
 
 /**
@@ -774,7 +778,8 @@ export interface LanguagePackageMetadata {
 
 export interface LanguagePackageDto {
   name: string;
-  version: string;
+  detected_version: string;
+  pinned: boolean;
 }
 
 /** Section-specific metadata for unmanaged file aggregate items. */

@@ -315,10 +315,15 @@ describe("GlobalSearch language packages and unmanaged files", () => {
       ecosystem: "pip" as const,
       path: "/opt/myapp/venv",
       method: "pip list",
-      packages: ["flask", "requests"],
+      packages: [
+        { name: "flask", detected_version: "2.3.3", pinned: false },
+        { name: "requests", detected_version: "2.31.0", pinned: false },
+      ],
       confidence: "high" as const,
       manifest_basis: "requirements.txt",
       include: true,
+      has_c_extensions: false,
+      system_site_packages: false,
     },
   ];
 

@@ -45,9 +45,9 @@ function LanguagePackageDetail({ item }: { item: AggregateItem }) {
           </thead>
           <tbody>
             {meta.packages.map((pkg) => (
-              <tr key={`${pkg.name}-${pkg.version}`}>
+              <tr key={`${pkg.name}-${pkg.detected_version}`}>
                 <td className="item-detail-pane__mono">{pkg.name}</td>
-                <td className="item-detail-pane__mono">{pkg.version}</td>
+                <td className="item-detail-pane__mono">{pkg.detected_version}</td>
               </tr>
             ))}
           </tbody>

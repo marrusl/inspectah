@@ -45,7 +45,7 @@ function buildPackageDiff(variants: VariantPackageList[]): PackageDiffRow[] {
         hashMap = new Map();
         pkgMap.set(pkg.name, hashMap);
       }
-      hashMap.set(variant.content_hash, pkg.version);
+      hashMap.set(variant.content_hash, pkg.detected_version);
     }
   }
 

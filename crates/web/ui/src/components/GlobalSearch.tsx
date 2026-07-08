@@ -195,7 +195,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
             results.push({
               sectionId: "language_packages",
               sectionLabel: SECTION_LABELS.language_packages,
-              title: `${pkg} (${env.ecosystem} in ${env.path})`,
+              title: `${pkg.name} (${env.ecosystem} in ${env.path})`,
               itemId: envItemId,
             });
           }

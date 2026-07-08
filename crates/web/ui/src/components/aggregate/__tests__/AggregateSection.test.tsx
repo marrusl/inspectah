@@ -240,8 +240,8 @@ describe("AggregateSectionContent", () => {
         package_count: 2,
         manifest_basis: "requirements.txt",
         packages: [
-          { name: "flask", version: "2.3.3" },
-          { name: "requests", version: "2.31.0" },
+          { name: "flask", detected_version: "2.3.3", pinned: false },
+          { name: "requests", detected_version: "2.31.0", pinned: false },
         ],
       },
     });
@@ -252,7 +252,7 @@ describe("AggregateSectionContent", () => {
         confidence: "high",
         package_count: 1,
         manifest_basis: "package-lock.json",
-        packages: [{ name: "express", version: "4.18.0" }],
+        packages: [{ name: "express", detected_version: "4.18.0", pinned: false }],
       },
     });
 

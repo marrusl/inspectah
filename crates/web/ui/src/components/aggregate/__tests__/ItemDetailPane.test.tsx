@@ -59,8 +59,8 @@ describe("ItemDetailPane", () => {
         package_count: 2,
         manifest_basis: "requirements.txt",
         packages: [
-          { name: "flask", version: "2.3.3" },
-          { name: "requests", version: "2.31.0" },
+          { name: "flask", detected_version: "2.3.3", pinned: false },
+          { name: "requests", detected_version: "2.31.0", pinned: false },
         ],
       },
     });

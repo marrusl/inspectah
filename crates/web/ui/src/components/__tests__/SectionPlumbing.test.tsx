@@ -37,19 +37,29 @@ const langPkgFixture: ViewResponse["language_packages"] = [
     ecosystem: "pip",
     path: "/opt/myapp/venv",
     method: "pip list",
-    packages: ["flask", "requests", "gunicorn"],
+    packages: [
+      { name: "flask", detected_version: "2.3.3", pinned: false },
+      { name: "requests", detected_version: "2.31.0", pinned: false },
+      { name: "gunicorn", detected_version: "21.2.0", pinned: false },
+    ],
     confidence: "high",
     manifest_basis: "requirements.txt",
     include: true,
+    has_c_extensions: false,
+    system_site_packages: false,
   },
   {
     ecosystem: "npm",
     path: "/opt/other/app",
     method: "npm lockfile",
-    packages: ["express"],
+    packages: [
+      { name: "express", detected_version: "4.18.0", pinned: false },
+    ],
     confidence: "high",
     manifest_basis: "package-lock.json",
     include: true,
+    has_c_extensions: false,
+    system_site_packages: false,
   },
 ];
 
