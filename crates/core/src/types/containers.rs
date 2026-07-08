@@ -68,7 +68,7 @@ pub struct ComposeFile {
     pub raw_content: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RunningContainer {
     #[serde(default)]
     pub id: String,
@@ -100,28 +100,6 @@ pub struct RunningContainer {
     pub acknowledged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregatePrevalence>,
-}
-
-impl Default for RunningContainer {
-    fn default() -> Self {
-        Self {
-            disposition: FindingKind::included(),
-            id: Default::default(),
-            name: Default::default(),
-            image: Default::default(),
-            image_id: Default::default(),
-            status: Default::default(),
-            restart_policy: Default::default(),
-            mounts: Default::default(),
-            networks: Default::default(),
-            ports: Default::default(),
-            env: Default::default(),
-            inspect_data: Default::default(),
-            locked: Default::default(),
-            acknowledged: Default::default(),
-            aggregate: Default::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

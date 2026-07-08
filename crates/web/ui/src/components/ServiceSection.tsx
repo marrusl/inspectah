@@ -63,12 +63,6 @@ export function ServiceSection({
 
   const dropinsByUnit = useMemo(() => groupDropinsByUnit(dropins), [dropins]);
 
-  // Count full-shadow services for section header
-  const shadowCount = useMemo(
-    () => services.filter((s) => s.shadow_type === "full_shadow").length,
-    [services],
-  );
-
   const handleToggleService = useCallback(
     (unit: string, currentInclude: boolean) => {
       const id = `service:${unit}`;
@@ -269,7 +263,7 @@ export function ServiceSection({
                     className="inspectah-decision-row__badge"
                     data-testid={`shadow-badge-service-${svc.unit}`}
                   >
-                    <Label color="gold" isCompact>
+                    <Label color="orange" isCompact>
                       Shadow override
                     </Label>
                   </div>

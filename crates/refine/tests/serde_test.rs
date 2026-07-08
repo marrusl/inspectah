@@ -1,4 +1,3 @@
-use inspectah_core::types::FindingKind;
 use inspectah_refine::types::{ItemId, RefinementOp, RepoProvenance, TriageReason};
 
 #[test]

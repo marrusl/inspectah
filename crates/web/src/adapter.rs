@@ -92,7 +92,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .entry
                 .shadow_type
                 .as_ref()
-                .map(|st| format!("{:?}", st).to_lowercase()),
+                .and_then(|st| serde_json::to_value(st).ok())
+                .and_then(|v| v.as_str().map(|s| s.to_string())),
             shadow_rationale: s.entry.shadow_rationale.clone(),
         })
         .collect();
@@ -1246,7 +1247,7 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
 
     // VarDirectory
     for vd in &data.var_directories {
-        let detail = if let (Some(ref mode), Some(ref owner), Some(ref group)) =
+        let detail = if let (Some(mode), Some(owner), Some(group)) =
             (&vd.mode, &vd.owner_name, &vd.group_name)
         {
             format!("{} ({} {}:{})", vd.recommendation, mode, owner, group)
@@ -2009,7 +2010,7 @@ mod tests {
         let states = json["service_states"].as_array().unwrap();
         assert_eq!(states.len(), 1);
         assert_eq!(states[0]["unit"], "httpd.service");
-        assert_eq!(states[0]["shadow_type"], "fullshadow");
+        assert_eq!(states[0]["shadow_type"], "full_shadow");
         assert_eq!(
             states[0]["shadow_rationale"],
             "Custom unit file overrides package default"

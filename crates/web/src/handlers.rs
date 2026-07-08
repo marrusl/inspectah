@@ -1555,7 +1555,7 @@ mod tests {
             .expect("sshd.service should be in service_states");
         assert_eq!(
             sshd.shadow_type.as_deref(),
-            Some("fullshadow"),
+            Some("full_shadow"),
             "shadow_type should be populated from service entry"
         );
         assert!(

@@ -17,7 +17,7 @@ pub struct CronJob {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SystemdTimer {
     #[serde(default)]
     pub name: String,
@@ -43,25 +43,7 @@ pub struct SystemdTimer {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
-impl Default for SystemdTimer {
-    fn default() -> Self {
-        Self {
-            disposition: FindingKind::included(),
-            name: Default::default(),
-            on_calendar: Default::default(),
-            exec_start: Default::default(),
-            description: Default::default(),
-            source: Default::default(),
-            path: Default::default(),
-            timer_content: Default::default(),
-            service_content: Default::default(),
-            locked: Default::default(),
-            aggregate: Default::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AtJob {
     #[serde(default)]
     pub file: String,
@@ -77,20 +59,6 @@ pub struct AtJob {
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregatePrevalence>,
-}
-
-impl Default for AtJob {
-    fn default() -> Self {
-        Self {
-            disposition: FindingKind::included(),
-            file: Default::default(),
-            command: Default::default(),
-            user: Default::default(),
-            working_dir: Default::default(),
-            locked: Default::default(),
-            aggregate: Default::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

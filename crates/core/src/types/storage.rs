@@ -2,7 +2,7 @@ use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct FstabEntry {
     #[serde(default)]
     pub device: String,
@@ -22,22 +22,6 @@ pub struct FstabEntry {
     pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
-}
-
-impl Default for FstabEntry {
-    fn default() -> Self {
-        Self {
-            disposition: FindingKind::included(),
-            device: Default::default(),
-            mount_point: Default::default(),
-            fstype: Default::default(),
-            options: Default::default(),
-            locked: Default::default(),
-            acknowledged: Default::default(),
-            aggregate: Default::default(),
-            attention_reason: Default::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
