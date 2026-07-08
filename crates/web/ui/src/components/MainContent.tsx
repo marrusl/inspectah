@@ -8,6 +8,7 @@ import {
   AlertGroup,
   AlertActionCloseButton,
   AlertVariant,
+  ExpandableSection,
 } from "@patternfly/react-core";
 import type {
   ViewResponse,
@@ -40,8 +41,6 @@ const SECTION_LABELS: Record<string, string> = {
   configs: "Config Files",
   services: "Services",
   containers: "Containers",
-  system_tuning: "System Tuning",
-  version_changes: "Version Changes",
   compose: "Compose",
   network: "Network",
   storage: "Storage",
@@ -447,6 +446,18 @@ export function MainContent({
           onUploadClick={onUploadClick}
           onRemoveRpmUpload={onRemoveRpmUpload}
         />
+        <div style={{ marginTop: "var(--pf-t--global--spacer--lg)" }}>
+          <ExpandableSection
+            toggleText="Version Changes"
+            isExpanded={false}
+            data-testid="version-changes-panel"
+          >
+            <VersionChangesTable
+              entries={viewData?.version_changes ?? []}
+              revealItemId={revealItemId}
+            />
+          </ExpandableSection>
+        </div>
         {toasts.length > 0 && (
           <AlertGroup isToast isLiveRegion>
             {toasts.map((toast) => (
