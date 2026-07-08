@@ -253,6 +253,27 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("|---|---|".into());
     lines.push("| `Containerfile` | Image definition |".into());
     lines.push("| `config/` | Files to COPY into the image |".into());
+
+    // Conditional: tmpfiles.d artifact for /var directory ownership provisioning
+    {
+        use inspectah_core::types::storage::VarDirBacking;
+        let has_tmpfiles = snap
+            .storage
+            .as_ref()
+            .map(|s| {
+                s.var_directories
+                    .iter()
+                    .any(|d| d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_some())
+            })
+            .unwrap_or(false);
+        if has_tmpfiles {
+            lines.push(
+                "| `config/usr/lib/tmpfiles.d/inspectah-var.conf` | /var directory ownership provisioning |"
+                    .into(),
+            );
+        }
+    }
+
     lines.push("| `audit-report.md` | Full findings (markdown) |".into());
     lines.push("| `audit-report.html` | Interactive report (open in browser) |".into());
     lines.push("| `secrets-review.md` | Redacted items requiring manual handling |".into());

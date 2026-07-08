@@ -54,6 +54,14 @@ pub fn render_all(
     // 8b. env-files/ — .env files go to a separate directory (not config/)
     configtree::write_env_files(snap, output_dir)?;
 
+    // 8c. tmpfiles.d — /var directory provisioning (staged before Containerfile
+    //     rendering so the COPY line references an actual file)
+    if let Some(tmpfiles_content) = containerfile::render_tmpfiles_conf(snap) {
+        let tmpfiles_dir = output_dir.join("config/usr/lib/tmpfiles.d");
+        std::fs::create_dir_all(&tmpfiles_dir)?;
+        std::fs::write(tmpfiles_dir.join("inspectah-var.conf"), &tmpfiles_content)?;
+    }
+
     // 1. Containerfile — COPY lines derived from materialized config tree roots
     let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots), None);
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;

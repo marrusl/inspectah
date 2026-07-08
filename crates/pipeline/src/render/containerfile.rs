@@ -13,7 +13,7 @@
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
-//!     12b. /var directory provisioning (unbacked dirs)
+//!     12b. /var directory provisioning (tmpfiles.d + mkdir fallback)
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -235,8 +235,9 @@ fn render_containerfile_inner(
     // 12. Secrets comments
     lines.extend(secrets_comment_lines(snap));
 
-    // 12b. /var directory provisioning (unbacked dirs need mkdir -p)
-    lines.extend(var_dir_section_lines(snap));
+    // 12b. /var directory provisioning (tmpfiles.d + mkdir fallback)
+    let tmpfiles_staged = render_tmpfiles_conf(snap).is_some();
+    lines.extend(var_dir_section_lines(snap, tmpfiles_staged));
 
     // 13. Epilogue
     lines.extend(tmpfiles_lines());
@@ -1556,7 +1557,154 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- /var directory provisioning ---
 
-fn var_dir_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+/// Collect usernames being materialized via useradd in this Containerfile.
+///
+/// These are users with `containerfile_strategy == "useradd"` and `include == true`.
+/// Their accounts are guaranteed to exist at image build time, so tmpfiles.d entries
+/// can safely reference them by name.
+fn collect_materialized_usernames(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
+    let ug = match &snap.users_groups {
+        Some(u) => u,
+        None => return std::collections::HashSet::new(),
+    };
+    ug.users
+        .iter()
+        .filter(|u| {
+            let strategy = u
+                .get("containerfile_strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let include = u.get("include").and_then(|v| v.as_bool()).unwrap_or(true);
+            strategy == "useradd" && include
+        })
+        .filter_map(|u| u.get("name").and_then(|v| v.as_str()).map(String::from))
+        .collect()
+}
+
+/// Collect names of RPM packages being replicated (included in the Containerfile).
+///
+/// Package scriptlets create system accounts, so if an owner name matches a
+/// replicated package, the account is likely to exist at build time.
+fn collect_replicated_rpm_names(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
+    snap.rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.packages_added
+                .iter()
+                .filter(|p| p.disposition.is_included())
+                .map(|p| p.name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve ownership fields for a tmpfiles.d entry.
+///
+/// Returns `(owner, group, comment)`. Comments go on a separate line above the
+/// entry; never inline per tmpfiles.d best practice.
+///
+/// Resolution order (first match wins):
+/// 1. Root (UID 0) -> `root root`
+/// 2. Account materialized via useradd -> name
+/// 3. Account created by a replicated RPM -> name + package comment
+/// 4. Name available but not guaranteed -> numeric UID:GID + warning comment
+/// 5. Name unavailable -> numeric UID:GID
+fn resolve_tmpfiles_ownership(
+    d: &inspectah_core::types::storage::VarDirectory,
+    materialized_users: &std::collections::HashSet<String>,
+    replicated_rpms: &std::collections::HashSet<String>,
+) -> (String, String, String) {
+    let uid = d.owner_uid.unwrap_or(0);
+    let gid = d.owner_gid.unwrap_or(0);
+
+    // Case 1: root
+    if uid == 0 {
+        return ("root".into(), "root".into(), String::new());
+    }
+
+    let owner_name = d.owner_name.as_deref().unwrap_or("");
+    let group_name = d.group_name.as_deref().unwrap_or("");
+
+    // Case 2: materialized user (being created by useradd in this Containerfile)
+    if !owner_name.is_empty() && materialized_users.contains(owner_name) {
+        let group = if !group_name.is_empty() {
+            group_name.to_string()
+        } else {
+            gid.to_string()
+        };
+        return (owner_name.into(), group, String::new());
+    }
+
+    // Case 3: RPM-provided user (package scriptlets create the account)
+    if !owner_name.is_empty() && replicated_rpms.contains(owner_name) {
+        let group = if !group_name.is_empty() {
+            group_name.to_string()
+        } else {
+            owner_name.to_string()
+        };
+        return (
+            owner_name.into(),
+            group,
+            format!("created by package: {owner_name}"),
+        );
+    }
+
+    // Case 4: name known but not guaranteed in the image
+    if !owner_name.is_empty() {
+        return (
+            uid.to_string(),
+            gid.to_string(),
+            format!("account '{owner_name}' not guaranteed in image"),
+        );
+    }
+
+    // Case 5: no name available
+    (uid.to_string(), gid.to_string(), String::new())
+}
+
+/// Generate tmpfiles.d conf content for unbacked /var directories with
+/// ownership and mode data.
+///
+/// Returns `None` when no directories qualify (no mode data), in which case
+/// all unbacked dirs fall back to `RUN mkdir -p` in the Containerfile.
+///
+/// Directories without mode data are skipped here and handled by
+/// `var_dir_section_lines()` as `RUN mkdir -p` fallback. A single snapshot
+/// can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
+pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
+    use inspectah_core::types::storage::VarDirBacking;
+
+    let storage = snap.storage.as_ref()?;
+    let materialized_users = collect_materialized_usernames(snap);
+    let replicated_rpms = collect_replicated_rpm_names(snap);
+    let mut lines = Vec::new();
+
+    for d in &storage.var_directories {
+        if d.backing != Some(VarDirBacking::Unbacked) {
+            continue;
+        }
+        // Per-directory: skip directories missing mode data.
+        // These get RUN mkdir fallback in var_dir_section_lines().
+        let mode = match &d.mode {
+            Some(m) => m.as_str(),
+            None => continue,
+        };
+        let (owner, group, comment) =
+            resolve_tmpfiles_ownership(d, &materialized_users, &replicated_rpms);
+        if !comment.is_empty() {
+            lines.push(format!("# {comment}"));
+        }
+        lines.push(format!("d {} {} {} {} -", d.path, mode, owner, group));
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n") + "\n")
+}
+
+fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Vec<String> {
     use inspectah_core::types::storage::VarDirBacking;
 
     let storage = match &snap.storage {
@@ -1565,8 +1713,18 @@ fn var_dir_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     };
 
     let mut body = Vec::new();
+
+    if tmpfiles_staged {
+        body.push("# /var directories with known ownership/mode provisioned via tmpfiles.d".into());
+        body.push(
+            "COPY config/usr/lib/tmpfiles.d/inspectah-var.conf /usr/lib/tmpfiles.d/inspectah-var.conf"
+                .into(),
+        );
+    }
+
+    // Fallback: RUN mkdir for unbacked dirs WITHOUT ownership/mode data
     for d in &storage.var_directories {
-        if d.backing == Some(VarDirBacking::Unbacked) {
+        if d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_none() {
             body.push(format!("RUN mkdir -p {}", d.path));
         }
     }
@@ -4066,5 +4224,379 @@ mod tests {
 
         let output = render_containerfile(&snap, None, None);
         assert!(!output.contains("Compose stacks detected"));
+    }
+
+    // --- tmpfiles.d /var directory provisioning tests ---
+
+    use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
+
+    fn var_dir(path: &str, backing: VarDirBacking) -> VarDirectory {
+        VarDirectory {
+            path: path.into(),
+            backing: Some(backing),
+            ..Default::default()
+        }
+    }
+
+    fn var_dir_with_mode(
+        path: &str,
+        mode: &str,
+        uid: u32,
+        gid: u32,
+        owner: Option<&str>,
+        group: Option<&str>,
+    ) -> VarDirectory {
+        VarDirectory {
+            path: path.into(),
+            backing: Some(VarDirBacking::Unbacked),
+            mode: Some(mode.into()),
+            owner_uid: Some(uid),
+            owner_gid: Some(gid),
+            owner_name: owner.map(String::from),
+            group_name: group.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tmpfiles_conf_none_when_no_storage() {
+        let snap = InspectionSnapshot::new();
+        assert!(render_tmpfiles_conf(&snap).is_none());
+    }
+
+    #[test]
+    fn tmpfiles_conf_none_when_no_unbacked_dirs() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir("/var/log", VarDirBacking::RpmOwned)],
+            ..Default::default()
+        });
+        assert!(render_tmpfiles_conf(&snap).is_none());
+    }
+
+    #[test]
+    fn tmpfiles_conf_none_when_no_mode_data() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir("/var/lib/myapp", VarDirBacking::Unbacked)],
+            ..Default::default()
+        });
+        assert!(render_tmpfiles_conf(&snap).is_none());
+    }
+
+    #[test]
+    fn tmpfiles_conf_root_ownership() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/myapp",
+                "0755",
+                0,
+                0,
+                Some("root"),
+                Some("root"),
+            )],
+            ..Default::default()
+        });
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert_eq!(content, "d /var/lib/myapp 0755 root root -\n");
+    }
+
+    #[test]
+    fn tmpfiles_conf_materialized_user() {
+        use inspectah_core::types::users::UserGroupSection;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/myapp",
+                "0750",
+                1001,
+                1001,
+                Some("myapp"),
+                Some("myapp"),
+            )],
+            ..Default::default()
+        });
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "myapp",
+                "uid": 1001,
+                "gid": 1001,
+                "include": true,
+                "containerfile_strategy": "useradd"
+            })],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert_eq!(content, "d /var/lib/myapp 0750 myapp myapp -\n");
+        // No comment for materialized users — the name is guaranteed
+        assert!(!content.contains('#'));
+    }
+
+    #[test]
+    fn tmpfiles_conf_rpm_provided_user() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/nginx",
+                "0700",
+                996,
+                996,
+                Some("nginx"),
+                Some("nginx"),
+            )],
+            ..Default::default()
+        });
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "nginx".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                source_repo: "appstream".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(content.contains("# created by package: nginx"));
+        assert!(content.contains("d /var/lib/nginx 0700 nginx nginx -"));
+    }
+
+    #[test]
+    fn tmpfiles_conf_unguaranteed_name_uses_numeric() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/someapp",
+                "0750",
+                500,
+                500,
+                Some("someapp"),
+                Some("someapp"),
+            )],
+            ..Default::default()
+        });
+        // No RPMs replicated, no user materialization
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(
+            content.contains("# account 'someapp' not guaranteed in image"),
+            "must have warning comment: {content}"
+        );
+        assert!(
+            content.contains("d /var/lib/someapp 0750 500 500 -"),
+            "must use numeric UID:GID: {content}"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_conf_no_name_uses_numeric_no_comment() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![VarDirectory {
+                path: "/var/lib/thing".into(),
+                backing: Some(VarDirBacking::Unbacked),
+                mode: Some("0755".into()),
+                owner_uid: Some(999),
+                owner_gid: Some(999),
+                owner_name: None,
+                group_name: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert_eq!(content, "d /var/lib/thing 0755 999 999 -\n");
+        assert!(!content.contains('#'), "no comment when no name available");
+    }
+
+    #[test]
+    fn tmpfiles_conf_non_default_modes() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                var_dir_with_mode("/var/lib/sticky", "1777", 0, 0, Some("root"), Some("root")),
+                var_dir_with_mode("/var/lib/sgid", "2770", 0, 0, Some("root"), Some("root")),
+                var_dir_with_mode("/var/lib/tight", "0700", 0, 0, Some("root"), Some("root")),
+            ],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(content.contains("d /var/lib/sticky 1777 root root -"));
+        assert!(content.contains("d /var/lib/sgid 2770 root root -"));
+        assert!(content.contains("d /var/lib/tight 0700 root root -"));
+    }
+
+    #[test]
+    fn tmpfiles_conf_comments_on_separate_lines() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/orphan",
+                "0750",
+                1234,
+                1234,
+                Some("orphan"),
+                Some("orphan"),
+            )],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "comment + entry = 2 lines");
+        assert!(
+            lines[0].starts_with('#'),
+            "first line must be a comment: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("d "),
+            "second line must be the entry: {}",
+            lines[1]
+        );
+        // No inline comments
+        let entry_line = lines[1];
+        assert!(
+            !entry_line.contains('#'),
+            "no inline comments in tmpfiles.d entries"
+        );
+    }
+
+    #[test]
+    fn tmpfiles_mixed_output_three_dirs() {
+        // Critical mixed-data test from the brief:
+        // 3 unbacked dirs:
+        //   1. full metadata (mode + owner) -> tmpfiles entry
+        //   2. mode but no owner name -> tmpfiles with numeric fallback
+        //   3. no mode at all -> RUN mkdir fallback
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                // Dir 1: full metadata, root-owned
+                var_dir_with_mode("/var/lib/full", "0755", 0, 0, Some("root"), Some("root")),
+                // Dir 2: mode present, no owner name -> numeric
+                VarDirectory {
+                    path: "/var/lib/numeric".into(),
+                    backing: Some(VarDirBacking::Unbacked),
+                    mode: Some("0700".into()),
+                    owner_uid: Some(500),
+                    owner_gid: Some(500),
+                    owner_name: None,
+                    group_name: None,
+                    ..Default::default()
+                },
+                // Dir 3: no mode -> mkdir fallback
+                var_dir("/var/lib/nomode", VarDirBacking::Unbacked),
+            ],
+            ..Default::default()
+        });
+
+        // Verify tmpfiles conf has entries for dir 1 and dir 2
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(
+            content.contains("d /var/lib/full 0755 root root -"),
+            "dir 1 must be in tmpfiles"
+        );
+        assert!(
+            content.contains("d /var/lib/numeric 0700 500 500 -"),
+            "dir 2 must be in tmpfiles with numeric"
+        );
+        assert!(
+            !content.contains("/var/lib/nomode"),
+            "dir 3 must NOT be in tmpfiles"
+        );
+
+        // Verify the Containerfile renders 1 RUN mkdir for dir 3 and a COPY for tmpfiles
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains(
+                "COPY config/usr/lib/tmpfiles.d/inspectah-var.conf /usr/lib/tmpfiles.d/inspectah-var.conf"
+            ),
+            "must have COPY for tmpfiles.d: {output}"
+        );
+        assert!(
+            output.contains("RUN mkdir -p /var/lib/nomode"),
+            "dir 3 must get RUN mkdir fallback"
+        );
+        assert!(
+            !output.contains("RUN mkdir -p /var/lib/full"),
+            "dir 1 must NOT get RUN mkdir (handled by tmpfiles)"
+        );
+        assert!(
+            !output.contains("RUN mkdir -p /var/lib/numeric"),
+            "dir 2 must NOT get RUN mkdir (handled by tmpfiles)"
+        );
+    }
+
+    #[test]
+    fn var_dir_all_have_mode_no_mkdir() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![var_dir_with_mode(
+                "/var/lib/app",
+                "0755",
+                0,
+                0,
+                Some("root"),
+                Some("root"),
+            )],
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains("COPY config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+            "must emit COPY"
+        );
+        assert!(
+            !output.contains("RUN mkdir"),
+            "no mkdir when all dirs have mode"
+        );
+    }
+
+    #[test]
+    fn var_dir_none_have_mode_no_tmpfiles() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                var_dir("/var/lib/a", VarDirBacking::Unbacked),
+                var_dir("/var/lib/b", VarDirBacking::Unbacked),
+            ],
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            !output.contains("tmpfiles"),
+            "no tmpfiles references when no mode data"
+        );
+        assert!(output.contains("RUN mkdir -p /var/lib/a"));
+        assert!(output.contains("RUN mkdir -p /var/lib/b"));
+    }
+
+    #[test]
+    fn var_dir_backed_dirs_excluded_from_both() {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                var_dir("/var/log", VarDirBacking::LogsDirectory),
+                var_dir("/var/cache", VarDirBacking::CacheDirectory),
+                var_dir_with_mode("/var/lib/app", "0755", 0, 0, Some("root"), Some("root")),
+            ],
+            ..Default::default()
+        });
+
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(!content.contains("/var/log"), "backed dir excluded");
+        assert!(!content.contains("/var/cache"), "backed dir excluded");
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(!output.contains("RUN mkdir -p /var/log"));
+        assert!(!output.contains("RUN mkdir -p /var/cache"));
     }
 }
