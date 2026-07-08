@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Label, Content } from "@patternfly/react-core";
 import type { LanguagePackageEnv } from "../api/types";
 
@@ -40,6 +40,8 @@ export interface LanguagePackageListProps {
     envPath: string,
     pinned: boolean,
   ) => void;
+  /** When non-empty, auto-expands environments with matching packages and highlights matches. */
+  searchQuery?: string;
 }
 
 export function LanguagePackageList({
@@ -49,8 +51,11 @@ export function LanguagePackageList({
   revealItemId,
   onSetPackagePin,
   onSetBulkPackagePin,
+  searchQuery,
 }: LanguagePackageListProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [announcement, setAnnouncement] = useState("");
+  const expandBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const handleToggle = useCallback(
     (ecosystem: string, path: string) => {
@@ -71,6 +76,72 @@ export function LanguagePackageList({
     });
   }, []);
 
+  /** Auto-expand environments whose packages match searchQuery. */
+  useEffect(() => {
+    if (!searchQuery?.trim()) return;
+    const q = searchQuery.toLowerCase();
+    const keysToExpand: string[] = [];
+    for (const env of environments) {
+      if (env.method !== EXPANDABLE_METHOD) continue;
+      if (env.packages.some((p) => p.name.toLowerCase().includes(q))) {
+        keysToExpand.push(`${env.ecosystem}:${env.path}`);
+      }
+    }
+    if (keysToExpand.length > 0) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        for (const k of keysToExpand) next.add(k);
+        return next;
+      });
+    }
+  }, [searchQuery, environments]);
+
+  /** Keyboard handler for expanded sublist: ArrowUp/Down navigate, Escape collapses. */
+  const handleSublistKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, itemKey: string) => {
+      const sublist = e.currentTarget;
+      const items = Array.from(
+        sublist.querySelectorAll<HTMLElement>('[role="listitem"]'),
+      );
+      const active = document.activeElement?.closest(
+        '[role="listitem"]',
+      ) as HTMLElement | null;
+      const currentIndex = active ? items.indexOf(active) : -1;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = Math.min(currentIndex + 1, items.length - 1);
+        items[next]?.focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = Math.max(currentIndex - 1, 0);
+        items[prev]?.focus();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        toggleExpand(itemKey);
+        expandBtnRefs.current.get(itemKey)?.focus();
+      }
+    },
+    [toggleExpand],
+  );
+
+  /** Wrap bulk pin to fire aria-live announcement. */
+  const handleBulkPin = useCallback(
+    (
+      ecosystem: string,
+      envPath: string,
+      pinned: boolean,
+      pkgCount: number,
+    ) => {
+      onSetBulkPackagePin?.(ecosystem, envPath, pinned);
+      const action = pinned ? "Pinned" : "Unpinned";
+      setAnnouncement(
+        `${action} ${pkgCount} packages in ${ecosystem} globals`,
+      );
+    },
+    [onSetBulkPackagePin],
+  );
+
   if (environments.length === 0) {
     return (
       <Content component="p" style={{ color: "var(--pf-t--global--text--color--subtle)" }}>
@@ -78,6 +149,8 @@ export function LanguagePackageList({
       </Content>
     );
   }
+
+  const queryLower = searchQuery?.toLowerCase() ?? "";
 
   return (
     <div
@@ -95,10 +168,23 @@ export function LanguagePackageList({
           <div
             key={itemKey}
             role="listitem"
-            tabIndex={-1}
+            tabIndex={isExpandable ? 0 : -1}
             data-testid={`lang-env-row-${itemKey}`}
             className="inspectah-lang-pkg-row"
             data-revealed={revealItemId === itemKey ? "true" : undefined}
+            onKeyDown={
+              isExpandable
+                ? (e: React.KeyboardEvent) => {
+                    if (
+                      e.key === "Enter" &&
+                      e.target === e.currentTarget
+                    ) {
+                      e.preventDefault();
+                      toggleExpand(itemKey);
+                    }
+                  }
+                : undefined
+            }
           >
             <div className="inspectah-lang-pkg-row__main">
               <div className="inspectah-lang-pkg-row__toggle">
@@ -125,6 +211,9 @@ export function LanguagePackageList({
                   {isExpandable && (
                     <button
                       type="button"
+                      ref={(el) => {
+                        if (el) expandBtnRefs.current.set(itemKey, el);
+                      }}
                       className="inspectah-lang-pkg-row__expand-btn"
                       aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? "Collapse" : "Expand"} package list for ${env.path}`}
@@ -173,6 +262,7 @@ export function LanguagePackageList({
                 role="list"
                 aria-label={`Packages in ${env.path}`}
                 data-testid={`lang-env-sublist-${itemKey}`}
+                onKeyDown={(e) => handleSublistKeyDown(e, itemKey)}
               >
                 {onSetBulkPackagePin && env.packages.length > 1 && (
                   <div className="inspectah-lang-pkg-sublist__bulk">
@@ -180,13 +270,17 @@ export function LanguagePackageList({
                       type="button"
                       className="inspectah-lang-pkg-sublist__bulk-btn"
                       disabled={isPending}
-                      onClick={() =>
-                        onSetBulkPackagePin(
+                      onClick={() => {
+                        const allPinned = env.packages.every(
+                          (p) => p.pinned,
+                        );
+                        handleBulkPin(
                           env.ecosystem,
                           env.path,
-                          !env.packages.every((p) => p.pinned),
-                        )
-                      }
+                          !allPinned,
+                          env.packages.length,
+                        );
+                      }}
                       data-testid={`lang-env-bulk-pin-${itemKey}`}
                     >
                       {env.packages.every((p) => p.pinned)
@@ -195,43 +289,70 @@ export function LanguagePackageList({
                     </button>
                   </div>
                 )}
-                {env.packages.map((pkg) => (
-                  <div
-                    key={pkg.name}
-                    role="listitem"
-                    className="inspectah-lang-pkg-sublist__item"
-                    data-testid={`lang-pkg-${pkg.name}`}
-                  >
-                    <span className="inspectah-lang-pkg-sublist__name">
-                      {pkg.name}
-                    </span>
-                    <span className="inspectah-lang-pkg-sublist__version">
-                      {pkg.detected_version}
-                    </span>
-                    {onSetPackagePin && (
-                      <input
-                        type="checkbox"
-                        checked={pkg.pinned}
-                        disabled={isPending}
-                        aria-label={`Pin ${pkg.name}`}
-                        onChange={() =>
-                          onSetPackagePin(
-                            env.ecosystem,
-                            env.path,
-                            pkg.name,
-                            !pkg.pinned,
-                          )
-                        }
-                        data-testid={`lang-pkg-pin-${pkg.name}`}
-                      />
-                    )}
-                  </div>
-                ))}
+                {env.packages.map((pkg) => {
+                  const isSearchMatch =
+                    queryLower !== "" &&
+                    pkg.name.toLowerCase().includes(queryLower);
+                  return (
+                    <div
+                      key={pkg.name}
+                      role="listitem"
+                      tabIndex={0}
+                      className={`inspectah-lang-pkg-sublist__item${isSearchMatch ? " inspectah-lang-pkg-sublist__item--search-match" : ""}`}
+                      data-testid={`lang-pkg-${pkg.name}`}
+                      data-search-match={
+                        isSearchMatch ? "true" : undefined
+                      }
+                    >
+                      <span className="inspectah-lang-pkg-sublist__name">
+                        {pkg.name}
+                      </span>
+                      <span className="inspectah-lang-pkg-sublist__version">
+                        {pkg.detected_version}
+                      </span>
+                      {onSetPackagePin && (
+                        <input
+                          type="checkbox"
+                          checked={pkg.pinned}
+                          disabled={isPending}
+                          aria-label={`Pin ${pkg.name}`}
+                          onChange={() =>
+                            onSetPackagePin(
+                              env.ecosystem,
+                              env.path,
+                              pkg.name,
+                              !pkg.pinned,
+                            )
+                          }
+                          data-testid={`lang-pkg-pin-${pkg.name}`}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         );
       })}
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          width: "1px",
+          height: "1px",
+          padding: 0,
+          margin: "-1px",
+          overflow: "hidden",
+          clip: "rect(0, 0, 0, 0)",
+          whiteSpace: "nowrap",
+          border: 0,
+        }}
+        data-testid="lang-pkg-announcement"
+      >
+        {announcement}
+      </div>
     </div>
   );
 }

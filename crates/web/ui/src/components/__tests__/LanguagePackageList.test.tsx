@@ -116,7 +116,7 @@ describe("Type contracts", () => {
   });
 });
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { LanguagePackageList } from "../LanguagePackageList";
@@ -494,5 +494,277 @@ describe("LanguagePackageList expandable sublist", () => {
     expect(
       screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules"),
     ).toHaveTextContent("Unpin all");
+  });
+});
+
+// --- Keyboard navigation tests ---
+
+describe("LanguagePackageList keyboard navigation", () => {
+  const npmGlobalEnv = makeLangEnv(
+    "npm",
+    "/usr/lib/node_modules",
+    [
+      { name: "typescript", detected_version: "5.4.0", pinned: false },
+      { name: "eslint", detected_version: "8.57.0", pinned: true },
+      { name: "prettier", detected_version: "3.2.0", pinned: false },
+    ],
+    { method: "npm global" },
+  );
+
+  it("Enter on expandable env row toggles expand/collapse", () => {
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+      />,
+    );
+    const envRow = screen.getByTestId(
+      "lang-env-row-npm:/usr/lib/node_modules",
+    );
+
+    envRow.focus();
+    fireEvent.keyDown(envRow, { key: "Enter" });
+    expect(
+      screen.getByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(envRow, { key: "Enter" });
+    expect(
+      screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ArrowDown moves focus to next package row in sublist", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+
+    const sublist = screen.getByTestId(
+      "lang-env-sublist-npm:/usr/lib/node_modules",
+    );
+    screen.getByTestId("lang-pkg-typescript").focus();
+
+    fireEvent.keyDown(sublist, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(
+      screen.getByTestId("lang-pkg-eslint"),
+    );
+
+    fireEvent.keyDown(sublist, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(
+      screen.getByTestId("lang-pkg-prettier"),
+    );
+  });
+
+  it("ArrowUp moves focus to previous package row in sublist", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+
+    const sublist = screen.getByTestId(
+      "lang-env-sublist-npm:/usr/lib/node_modules",
+    );
+    screen.getByTestId("lang-pkg-prettier").focus();
+
+    fireEvent.keyDown(sublist, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(
+      screen.getByTestId("lang-pkg-eslint"),
+    );
+  });
+
+  it("Escape collapses sublist and returns focus to expand button", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+
+    const sublist = screen.getByTestId(
+      "lang-env-sublist-npm:/usr/lib/node_modules",
+    );
+    screen.getByTestId("lang-pkg-typescript").focus();
+
+    fireEvent.keyDown(sublist, { key: "Escape" });
+    expect(
+      screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+  });
+});
+
+// --- Search integration tests ---
+
+describe("LanguagePackageList search integration", () => {
+  const npmGlobalEnv = makeLangEnv(
+    "npm",
+    "/usr/lib/node_modules",
+    [
+      { name: "typescript", detected_version: "5.4.0", pinned: false },
+      { name: "eslint", detected_version: "8.57.0", pinned: true },
+    ],
+    { method: "npm global" },
+  );
+
+  it("auto-expands environments when searchQuery matches a package name", () => {
+    const { rerender } = render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+        searchQuery="type"
+      />,
+    );
+
+    expect(
+      screen.getByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).toBeInTheDocument();
+  });
+
+  it("highlights matching packages with data-search-match attribute", () => {
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+        searchQuery="type"
+      />,
+    );
+
+    const tsRow = screen.getByTestId("lang-pkg-typescript");
+    expect(tsRow).toHaveAttribute("data-search-match", "true");
+
+    const eslintRow = screen.getByTestId("lang-pkg-eslint");
+    expect(eslintRow).not.toHaveAttribute("data-search-match");
+  });
+
+  it("does not auto-expand when searchQuery has no package matches", () => {
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={vi.fn()}
+        searchQuery="nonexistent"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// --- aria-live announcement tests ---
+
+describe("LanguagePackageList aria-live announcements", () => {
+  const npmGlobalEnv = makeLangEnv(
+    "npm",
+    "/usr/lib/node_modules",
+    [
+      { name: "typescript", detected_version: "5.4.0", pinned: false },
+      { name: "eslint", detected_version: "8.57.0", pinned: false },
+    ],
+    { method: "npm global" },
+  );
+
+  it("announces pin count after bulk pin all", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetBulkPackagePin={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+    await user.click(
+      screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules"),
+    );
+
+    expect(screen.getByTestId("lang-pkg-announcement")).toHaveTextContent(
+      "Pinned 2 packages in npm globals",
+    );
+  });
+
+  it("announces unpin count after bulk unpin all", async () => {
+    const user = userEvent.setup();
+    const allPinnedEnv = makeLangEnv(
+      "npm",
+      "/usr/lib/node_modules",
+      [
+        { name: "typescript", detected_version: "5.4.0", pinned: true },
+        { name: "eslint", detected_version: "8.57.0", pinned: true },
+      ],
+      { method: "npm global" },
+    );
+    render(
+      <LanguagePackageList
+        environments={[allPinnedEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetBulkPackagePin={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+    await user.click(
+      screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules"),
+    );
+
+    expect(screen.getByTestId("lang-pkg-announcement")).toHaveTextContent(
+      "Unpinned 2 packages in npm globals",
+    );
   });
 });
