@@ -188,7 +188,12 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         lines.push(format!(
             "COPY language-packages/pip/{hash}/requirements.txt /tmp/{venv_name}-requirements.txt"
         ));
-        lines.push(format!("RUN python3 -m venv {abs_path} \\"));
+        let venv_flags = if item.system_site_packages {
+            "--system-site-packages "
+        } else {
+            ""
+        };
+        lines.push(format!("RUN python3 -m venv {venv_flags}{abs_path} \\"));
         lines.push(format!(
             "    && {abs_path}/bin/pip install -r /tmp/{venv_name}-requirements.txt \\"
         ));
@@ -201,7 +206,12 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
              — transitive deps may differ)"
         ));
         lines.push("# Uncomment after verifying package list is complete:".into());
-        lines.push(format!("# RUN python3 -m venv {abs_path} \\"));
+        let venv_flags = if item.system_site_packages {
+            "--system-site-packages "
+        } else {
+            ""
+        };
+        lines.push(format!("# RUN python3 -m venv {venv_flags}{abs_path} \\"));
         if pkgs.is_empty() {
             lines.push(format!("#     && {abs_path}/bin/pip install <packages>"));
         } else {
@@ -357,7 +367,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
             "COPY language-packages/gem/{hash}/Gemfile.lock {project_path}/Gemfile.lock"
         ));
         lines.push(format!(
-            "RUN cd {project_path} && bundle install --deployment"
+            "RUN cd {project_path} && bundle config set --local deployment 'true' && bundle install"
         ));
     } else {
         // Medium confidence: commented out.
@@ -372,7 +382,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
             "# COPY language-packages/gem/{hash}/Gemfile.lock {project_path}/Gemfile.lock"
         ));
         lines.push(format!(
-            "# RUN cd {project_path} && bundle install --deployment"
+            "# RUN cd {project_path} && bundle config set --local deployment 'true' && bundle install"
         ));
     }
 
@@ -623,8 +633,8 @@ mod tests {
             "must copy Gemfile.lock: {output}"
         );
         assert!(
-            output.contains("bundle install --deployment"),
-            "must run bundle install: {output}"
+            output.contains("bundle config set --local deployment 'true' && bundle install"),
+            "must run bundle install with new syntax: {output}"
         );
     }
 
@@ -889,6 +899,95 @@ mod tests {
         assert!(
             output.contains(&expected_hash),
             "must use env_hash for paths: expected {expected_hash} in output: {output}"
+        );
+    }
+
+    #[test]
+    fn system_site_packages_true_includes_flag() {
+        let mut item = pip_venv_item(
+            "/opt/myapp/venv",
+            HIGH_CONFIDENCE,
+            true,
+            vec![("flask", "2.3.3")],
+        );
+        item.system_site_packages = true;
+        let snap = test_snap(vec![item], &["python3"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("--system-site-packages"),
+            "system_site_packages: true must include --system-site-packages flag: {output}"
+        );
+        assert!(
+            output.contains("RUN python3 -m venv --system-site-packages /opt/myapp/venv"),
+            "flag must appear in venv creation command: {output}"
+        );
+    }
+
+    #[test]
+    fn system_site_packages_false_excludes_flag() {
+        let mut item = pip_venv_item(
+            "/opt/myapp/venv",
+            HIGH_CONFIDENCE,
+            true,
+            vec![("flask", "2.3.3")],
+        );
+        item.system_site_packages = false;
+        let snap = test_snap(vec![item], &["python3"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            !output.contains("--system-site-packages"),
+            "system_site_packages: false must NOT include --system-site-packages flag: {output}"
+        );
+    }
+
+    #[test]
+    fn gem_high_confidence_uses_new_bundler_syntax() {
+        let snap = test_snap(vec![gem_item("/opt/myapp", HIGH_CONFIDENCE)], &["rubygems"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("bundle config set --local deployment 'true'"),
+            "must use new bundle config syntax: {output}"
+        );
+        assert!(
+            output.contains("&& bundle install"),
+            "must follow with bundle install: {output}"
+        );
+    }
+
+    #[test]
+    fn gem_high_confidence_does_not_use_deprecated_flag() {
+        let snap = test_snap(vec![gem_item("/opt/myapp", HIGH_CONFIDENCE)], &["rubygems"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            !output.contains("bundle install --deployment"),
+            "must NOT use deprecated --deployment flag: {output}"
+        );
+    }
+
+    #[test]
+    fn gem_medium_confidence_uses_new_bundler_syntax() {
+        let snap = test_snap(
+            vec![gem_item("/opt/myapp", MEDIUM_CONFIDENCE)],
+            &["rubygems"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("# RUN cd /opt/myapp && bundle config set --local deployment 'true' && bundle install"),
+            "medium confidence commented version must use new syntax: {output}"
+        );
+        assert!(
+            !output.contains("bundle install --deployment"),
+            "must NOT use deprecated --deployment flag: {output}"
         );
     }
 }
