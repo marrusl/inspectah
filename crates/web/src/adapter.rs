@@ -1246,11 +1246,18 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
 
     // VarDirectory
     for vd in &data.var_directories {
+        let detail = if let (Some(ref mode), Some(ref owner), Some(ref group)) =
+            (&vd.mode, &vd.owner_name, &vd.group_name)
+        {
+            format!("{} ({} {}:{})", vd.recommendation, mode, owner, group)
+        } else {
+            vd.recommendation.clone()
+        };
         items.push(ContextItem {
             id: vd.path.clone(),
             title: vd.path.clone(),
             subtitle: Some(format!("~{}", vd.size_estimate)),
-            detail: Some(vd.recommendation.clone()),
+            detail: Some(detail),
             searchable_text: format!("{} {} {}", vd.path, vd.size_estimate, vd.recommendation),
         });
     }

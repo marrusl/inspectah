@@ -548,6 +548,9 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
             path: d.path.clone(),
             size_estimate: d.size_estimate.clone(),
             recommendation: d.recommendation.clone(),
+            mode: d.mode.clone(),
+            owner_name: d.owner_name.clone(),
+            group_name: d.group_name.clone(),
         })
         .collect();
 

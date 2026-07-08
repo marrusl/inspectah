@@ -998,9 +998,19 @@ pub fn build_list_items(
                 ));
             }
             for d in &st.var_directories {
+                let detail = if let (Some(mode), Some(owner), Some(group)) =
+                    (&d.mode, &d.owner_name, &d.group_name)
+                {
+                    format!(
+                        "{} \u{2014} {} ({} {}:{})",
+                        d.size_estimate, d.recommendation, mode, owner, group
+                    )
+                } else {
+                    format!("{} \u{2014} {}", d.size_estimate, d.recommendation)
+                };
                 items.push(RawItem::new(
                     d.path.clone(),
-                    format!("{} \u{2014} {}", d.size_estimate, d.recommendation),
+                    detail,
                     TriageGroup::Site,
                     None,
                     None,

@@ -43,8 +43,13 @@
       Consider adding tmpfiles.d entries for reproducible provisioning.
     </div>
     <ul>
-      {% for path in unbacked_var_paths %}
-      <li><code>{{ path }}</code></li>
+      {% for dir in unbacked_var_dirs %}
+      <li>
+        <code>{{ dir.path }}</code>
+        {% if dir.mode and dir.owner_name and dir.group_name %}
+        <span class="ownership-info">({{ dir.mode }} {{ dir.owner_name }}:{{ dir.group_name }})</span>
+        {% endif %}
+      </li>
       {% endfor %}
     </ul>
   </div>

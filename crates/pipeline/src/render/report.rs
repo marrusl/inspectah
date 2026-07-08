@@ -625,11 +625,25 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .as_ref()
         .and_then(|s| s.unbacked_var_advisory.as_ref())
         .is_some();
-    let unbacked_var_paths: Vec<Value> = snap
+    let unbacked_var_dirs: Vec<Value> = snap
         .storage
         .as_ref()
-        .and_then(|s| s.unbacked_var_advisory.as_ref())
-        .map(|adv| adv.paths.iter().map(|p| Value::from(p.clone())).collect())
+        .map(|s| {
+            s.var_directories
+                .iter()
+                .filter(|d| {
+                    d.backing == Some(inspectah_core::types::storage::VarDirBacking::Unbacked)
+                })
+                .map(|d| {
+                    Value::from_serialize(serde_json::json!({
+                        "path": d.path,
+                        "mode": d.mode,
+                        "owner_name": d.owner_name,
+                        "group_name": d.group_name,
+                    }))
+                })
+                .collect()
+        })
         .unwrap_or_default();
 
     // ── Network section data (conditional) ────────────────────
@@ -1171,7 +1185,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let config_files_val = Value::from(config_files);
     let services_val = Value::from(services);
     let storage_items_val = Value::from(storage_items);
-    let unbacked_var_paths_val = Value::from(unbacked_var_paths);
+    let unbacked_var_dirs_val = Value::from(unbacked_var_dirs);
     let sysctl_overrides_val = Value::from(sysctl_overrides);
     let modules_load_d_val = Value::from(modules_load_d);
     let modprobe_d_val = Value::from(modprobe_d);
@@ -1239,7 +1253,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         storage_count,
         storage_state => storage_state_str,
         has_unbacked_var_advisory,
-        unbacked_var_paths => unbacked_var_paths_val,
+        unbacked_var_dirs => unbacked_var_dirs_val,
         // Network (conditional)
         has_network,
         network_connections => network_connections_val,

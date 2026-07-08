@@ -333,6 +333,9 @@ pub struct RefVarDirectory {
     pub path: String,
     pub size_estimate: String,
     pub recommendation: String,
+    pub mode: Option<String>,
+    pub owner_name: Option<String>,
+    pub group_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
