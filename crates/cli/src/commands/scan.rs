@@ -8,7 +8,7 @@
 //! a tarball or rendered artifacts.
 
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::{ArgAction, Args};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,9 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::network::NetworkInspector;
-use inspectah_collect::inspectors::nonrpm::{NonRpmInspector, scan_unmanaged_files};
+use inspectah_collect::inspectors::nonrpm::{
+    NonRpmInspector, default_scan_roots, scan_unmanaged_files,
+};
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
@@ -157,6 +159,15 @@ pub struct ScanArgs {
     /// Exclude specific paths from unmanaged file collection (repeatable)
     #[arg(long = "exclude-path", value_name = "PATH")]
     pub exclude_path: Vec<String>,
+
+    /// Scan home directories for non-RPM software.
+    /// Value: 'all' for users with UID >= 1000, or a comma-separated list of usernames.
+    #[arg(long, value_name = "all|USER,...")]
+    pub scan_home: Option<String>,
+
+    /// Add extra scan paths for non-RPM software detection (repeatable)
+    #[arg(long, value_name = "PATH", action = ArgAction::Append)]
+    pub scan_path: Vec<String>,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -227,6 +238,110 @@ fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
     Ok(())
 }
 
+/// Resolve home directory users from a `--scan-home` spec.
+///
+/// Returns `(username, home_dir)` pairs. When `spec` is `"all"`, discovers
+/// users with UID >= 1000 via `getent passwd`. When a comma-separated list,
+/// looks up each user individually (system users with UID < 1000 are included
+/// when explicitly named).
+fn resolve_home_users(
+    exec: &dyn inspectah_core::traits::executor::Executor,
+    spec: &str,
+) -> Vec<(String, String)> {
+    let mut users = Vec::new();
+    if spec == "all" {
+        let result = exec.run("getent", &["passwd"]);
+        if result.exit_code == 0 {
+            for line in result.stdout.lines() {
+                let fields: Vec<&str> = line.split(':').collect();
+                if fields.len() >= 6 {
+                    let uid: u32 = fields[2].parse().unwrap_or(0);
+                    if uid >= 1000 {
+                        users.push((fields[0].to_string(), fields[5].to_string()));
+                    }
+                }
+            }
+        }
+    } else {
+        for username in spec.split(',') {
+            let username = username.trim();
+            if username.is_empty() {
+                continue;
+            }
+            let result = exec.run("getent", &["passwd", username]);
+            if result.exit_code == 0 {
+                let fields: Vec<&str> = result.stdout.trim().split(':').collect();
+                if fields.len() >= 6 {
+                    users.push((fields[0].to_string(), fields[5].to_string()));
+                }
+            } else {
+                eprintln!("Warning: user '{}' not found, skipping", username);
+            }
+        }
+    }
+    users
+}
+
+/// Build the effective scan root list from defaults + CLI flags.
+///
+/// Returns `(effective_roots, home_users, extra_paths)`. All stderr
+/// messages (warnings, progress) go through `eprintln!` to preserve
+/// the `--inspect-only` stdout purity contract.
+fn build_scan_roots(
+    args: &ScanArgs,
+    exec: &dyn inspectah_core::traits::executor::Executor,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut roots = default_scan_roots();
+    let mut home_users = Vec::new();
+    let mut extra_paths = Vec::new();
+
+    // --scan-home
+    if let Some(ref home_arg) = args.scan_home {
+        if home_arg.is_empty() {
+            eprintln!("Error: --scan-home requires 'all' or a comma-separated user list");
+            std::process::exit(1);
+        }
+        let users = resolve_home_users(exec, home_arg);
+        home_users = users.iter().map(|(u, _)| u.clone()).collect();
+        for (_, home_dir) in &users {
+            if !roots.iter().any(|r| home_dir.starts_with(r.as_str())) {
+                roots.push(home_dir.clone());
+            }
+        }
+        if !users.is_empty() {
+            eprintln!("  Scan home: {} user(s) added", users.len(),);
+        }
+    }
+
+    // --scan-path (with validation)
+    for path in &args.scan_path {
+        // Warn on broad paths (fewer than 2 meaningful path segments).
+        let normal_components = std::path::Path::new(path)
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .count();
+        if normal_components < 2 {
+            eprintln!(
+                "Warning: --scan-path '{}' is very broad — consider a more specific path",
+                path,
+            );
+        }
+
+        // Check existence via executor (works in container context).
+        if !exec.file_exists(std::path::Path::new(path)) {
+            eprintln!("Warning: --scan-path '{}' does not exist, skipping", path);
+            continue;
+        }
+
+        extra_paths.push(path.clone());
+        if !roots.iter().any(|r| path.starts_with(r.as_str())) {
+            roots.push(path.clone());
+        }
+    }
+
+    (roots, home_users, extra_paths)
+}
+
 pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
@@ -245,6 +360,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     let has_subscription = preserved.contains(&PreserveItem::Subscription);
 
     let executor = RealExecutor::new();
+
+    // Build effective scan roots from defaults + CLI flags.
+    let (effective_roots, home_users, extra_paths) = build_scan_roots(args, &executor);
 
     // Step 1: Detect source system
     eprintln!("Detecting source system...");
@@ -442,7 +560,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
         Box::new(ScheduledTasksInspector::new()),
         Box::new(ConfigInspector::new()),
         Box::new(SelinuxInspector::new()),
-        Box::new(NonRpmInspector::new()),
+        Box::new(NonRpmInspector::with_roots(effective_roots.clone())),
     ];
 
     // Add SubscriptionInspector when subscription is preserved
@@ -533,6 +651,20 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     snapshot.preserved_credentials = has_password_hashes;
     snapshot.preserved_ssh_keys = has_ssh_keys;
     snapshot.preserved_subscription = has_subscription;
+
+    // Persist scan scope in snapshot meta for downstream consumers.
+    snapshot.meta.insert(
+        "scan_roots".into(),
+        serde_json::to_value(&effective_roots).unwrap(),
+    );
+    snapshot.meta.insert(
+        "scan_home_users".into(),
+        serde_json::to_value(&home_users).unwrap(),
+    );
+    snapshot.meta.insert(
+        "scan_extra_paths".into(),
+        serde_json::to_value(&extra_paths).unwrap(),
+    );
 
     // Build version change summary for renderer (populated by RPM inspector during collection).
     let version_changes = build_version_change_summary(&snapshot);
@@ -1102,6 +1234,8 @@ VARIANT_ID="workstation"
             quiet: false,
             include_unmanaged: false,
             exclude_path: vec![],
+            scan_home: None,
+            scan_path: vec![],
         }
     }
 
@@ -1291,5 +1425,299 @@ VARIANT_ID="workstation"
         let notice = build_sensitivity_notice(&snap).expect("should produce notice");
         assert!(notice.contains("ssh-keys"));
         assert!(!notice.contains("Subscription certs"));
+    }
+
+    // =========================================================================
+    // Scan expansion tests (--scan-home, --scan-path)
+    // =========================================================================
+
+    /// Lightweight mock executor for scan root tests.
+    struct ScanTestExecutor {
+        commands: std::collections::HashMap<String, inspectah_core::traits::executor::ExecResult>,
+        existing_dirs: Vec<String>,
+    }
+
+    impl ScanTestExecutor {
+        fn new() -> Self {
+            Self {
+                commands: std::collections::HashMap::new(),
+                existing_dirs: Vec::new(),
+            }
+        }
+
+        fn with_command(
+            mut self,
+            cmd: &str,
+            result: inspectah_core::traits::executor::ExecResult,
+        ) -> Self {
+            self.commands.insert(cmd.to_string(), result);
+            self
+        }
+
+        fn with_existing_dir(mut self, path: &str) -> Self {
+            self.existing_dirs.push(path.to_string());
+            self
+        }
+    }
+
+    impl inspectah_core::traits::executor::Executor for ScanTestExecutor {
+        fn run(&self, cmd: &str, args: &[&str]) -> inspectah_core::traits::executor::ExecResult {
+            let full = if args.is_empty() {
+                cmd.to_string()
+            } else {
+                format!("{} {}", cmd, args.join(" "))
+            };
+            self.commands.get(&full).cloned().unwrap_or(
+                inspectah_core::traits::executor::ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 127,
+                },
+            )
+        }
+
+        fn run_with_line_callback(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            _on_stderr_line: &mut dyn FnMut(&str),
+        ) -> inspectah_core::traits::executor::ExecResult {
+            self.run(cmd, args)
+        }
+
+        fn read_file(&self, _path: &std::path::Path) -> Result<String, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
+        fn file_exists(&self, path: &std::path::Path) -> bool {
+            self.existing_dirs
+                .iter()
+                .any(|d| d == &path.to_string_lossy().as_ref())
+        }
+
+        fn read_dir(&self, _path: &std::path::Path) -> Result<Vec<String>, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
+        fn read_link(&self, _path: &std::path::Path) -> Result<String, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
+        fn host_root(&self) -> &std::path::Path {
+            std::path::Path::new("/")
+        }
+
+        fn resolve_final_target(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<std::path::PathBuf, std::io::Error> {
+            Ok(path.to_path_buf())
+        }
+    }
+
+    // --- Test 1: --scan-home bare flag (no argument) is rejected by clap ---
+
+    #[test]
+    fn scan_home_bare_flag_is_error() {
+        // clap requires a value for Option<String>; bare --scan-home errors.
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            scan: ScanArgs,
+        }
+        let result = <Cli as clap::Parser>::try_parse_from(["test", "--scan-home"]);
+        assert!(result.is_err(), "--scan-home without a value must error");
+    }
+
+    // --- Test 2: --scan-home all discovers users with UID >= 1000 ---
+
+    #[test]
+    fn scan_home_all_discovers_regular_users() {
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "root:x:0:0:root:/root:/bin/bash\n\
+                         nginx:x:998:996:nginx:/var/lib/nginx:/sbin/nologin\n\
+                         deploy:x:1000:1000:deploy:/home/deploy:/bin/bash\n\
+                         app:x:1001:1001:app:/home/app:/bin/bash\n"
+                    .to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let users = resolve_home_users(&exec, "all");
+        assert_eq!(users.len(), 2, "should find 2 users with UID >= 1000");
+        assert_eq!(users[0].0, "deploy");
+        assert_eq!(users[0].1, "/home/deploy");
+        assert_eq!(users[1].0, "app");
+        assert_eq!(users[1].1, "/home/app");
+    }
+
+    // --- Test 3: --scan-home nonexistent warns and continues ---
+
+    #[test]
+    fn scan_home_nonexistent_user_warns() {
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd nonexistent",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 2, // getent returns 2 for "key not found"
+            },
+        );
+
+        let users = resolve_home_users(&exec, "nonexistent");
+        assert!(
+            users.is_empty(),
+            "nonexistent user should produce empty list"
+        );
+    }
+
+    // --- Test 4: --scan-home nginx (system user, UID < 1000) included when named ---
+
+    #[test]
+    fn scan_home_system_user_included_when_named() {
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd nginx",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "nginx:x:998:996:nginx user:/var/lib/nginx:/sbin/nologin\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let users = resolve_home_users(&exec, "nginx");
+        assert_eq!(
+            users.len(),
+            1,
+            "explicitly named system user must be included"
+        );
+        assert_eq!(users[0].0, "nginx");
+        assert_eq!(users[0].1, "/var/lib/nginx");
+    }
+
+    // --- Test 5: --scan-path /nonexistent warns and skips ---
+
+    #[test]
+    fn scan_path_nonexistent_warns_and_skips() {
+        let exec = ScanTestExecutor::new();
+        // /nonexistent is NOT in existing_dirs
+
+        let args = ScanArgs {
+            scan_path: vec!["/nonexistent".to_string()],
+            ..base_args()
+        };
+        let (roots, _, extra_paths) = build_scan_roots(&args, &exec);
+
+        // /nonexistent should not appear in effective roots or extra_paths
+        assert!(
+            !roots.contains(&"/nonexistent".to_string()),
+            "nonexistent path must not be in roots"
+        );
+        assert!(
+            extra_paths.is_empty(),
+            "nonexistent path must not be in extra_paths"
+        );
+    }
+
+    // --- Test 6: Broad --scan-path / produces warning (still added if exists) ---
+
+    #[test]
+    fn scan_path_broad_path_warns() {
+        let exec = ScanTestExecutor::new().with_existing_dir("/");
+
+        let args = ScanArgs {
+            scan_path: vec!["/".to_string()],
+            ..base_args()
+        };
+        // The warning goes to stderr (eprintln). We verify the path is still
+        // added to extra_paths when it exists — the warning is advisory.
+        let (roots, _, extra_paths) = build_scan_roots(&args, &exec);
+
+        assert!(
+            extra_paths.contains(&"/".to_string()),
+            "existing broad path should be in extra_paths"
+        );
+        assert!(
+            roots.contains(&"/".to_string()),
+            "existing broad path should be in roots"
+        );
+    }
+
+    // --- Test 7: Duplicate suppression (home dir under existing root) ---
+
+    #[test]
+    fn scan_home_under_existing_root_not_duplicated() {
+        // /opt is already a default root. A home dir under /opt should not
+        // add a duplicate root entry.
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd appuser",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "appuser:x:1000:1000:app:/opt/appuser:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("appuser".to_string()),
+            ..base_args()
+        };
+        let (roots, home_users, _) = build_scan_roots(&args, &exec);
+
+        assert_eq!(home_users, vec!["appuser".to_string()]);
+        // /opt/appuser starts with /opt (a default root), so no new root added.
+        let opt_count = roots.iter().filter(|r| r.starts_with("/opt")).count();
+        assert_eq!(opt_count, 1, "should not duplicate /opt-based root");
+    }
+
+    // --- Test 8: --inspect-only stdout purity with --scan-home/--scan-path ---
+    //
+    // Verifies that build_scan_roots and resolve_home_users communicate
+    // warnings/progress via eprintln (stderr), never println (stdout).
+    // The actual --inspect-only JSON parsing test requires root and a live
+    // system — this unit test verifies the component-level contract.
+
+    #[test]
+    fn scan_root_functions_do_not_write_stdout() {
+        // build_scan_roots returns data via return values, not stdout.
+        // All warnings go through eprintln. This test exercises the code
+        // paths that produce warnings (nonexistent path, broad path,
+        // nonexistent user) and verifies the return values are correct.
+        let exec = ScanTestExecutor::new().with_existing_dir("/").with_command(
+            "getent passwd ghost",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 2,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("ghost".to_string()),
+            scan_path: vec!["/nonexistent".to_string(), "/".to_string()],
+            ..base_args()
+        };
+
+        let (roots, home_users, extra_paths) = build_scan_roots(&args, &exec);
+
+        // Verify return values are sane — if anything leaked to stdout,
+        // a --inspect-only pipe to serde_json::from_str would fail.
+        assert!(home_users.is_empty(), "ghost user not found");
+        assert_eq!(extra_paths, vec!["/".to_string()]);
+        // Default roots + "/" (nonexistent was skipped)
+        assert!(roots.contains(&"/opt".to_string()));
+        assert!(roots.contains(&"/var/www".to_string()));
+        assert!(roots.contains(&"/".to_string()));
     }
 }

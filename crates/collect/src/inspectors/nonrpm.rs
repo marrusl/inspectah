@@ -65,18 +65,34 @@ const SECRET_PATTERNS: &[&str] = &[
 ];
 
 /// Scan roots for non-RPM software.
-const SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local"];
+const SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local", "/var/www"];
+
+/// Get the default scan roots as owned strings.
+pub fn default_scan_roots() -> Vec<String> {
+    SCAN_ROOTS.iter().map(|s| s.to_string()).collect()
+}
 
 /// Ostree-internal /var paths to filter out.
 const OSTREE_VAR_INTERNALS: &[&str] = &["var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"];
 
-/// Inspects non-RPM software: ELF binaries in /opt, /srv, /usr/local,
+/// Inspects non-RPM software: ELF binaries in /opt, /srv, /usr/local, /var/www,
 /// Python venvs, pip/npm/gem packages, .env files, and git repos.
-pub struct NonRpmInspector;
+pub struct NonRpmInspector {
+    effective_roots: Vec<String>,
+}
 
 impl NonRpmInspector {
     pub fn new() -> Self {
-        Self
+        Self {
+            effective_roots: default_scan_roots(),
+        }
+    }
+
+    /// Create an inspector with custom scan roots (default roots + CLI overrides).
+    pub fn with_roots(roots: Vec<String>) -> Self {
+        Self {
+            effective_roots: roots,
+        }
     }
 }
 
@@ -147,7 +163,13 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::ElfBinaries,
         });
         let pre = section.items.len();
-        scan_dirs(exec, &mut section, has_readelf, has_file);
+        scan_dirs(
+            exec,
+            &mut section,
+            has_readelf,
+            has_file,
+            &self.effective_roots,
+        );
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -165,7 +187,13 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::PythonVenvs,
         });
         let pre = section.items.len();
-        scan_python_venvs(exec, &mut section, &mut warnings, ctx.rpm_state);
+        scan_python_venvs(
+            exec,
+            &mut section,
+            &mut warnings,
+            ctx.rpm_state,
+            &self.effective_roots,
+        );
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -201,7 +229,7 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::NpmPackages,
         });
         let pre = section.items.len();
-        scan_npm_packages(exec, &mut section, is_ostree);
+        scan_npm_packages(exec, &mut section, is_ostree, &self.effective_roots);
         scan_npm_global_packages(exec, &mut section);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
@@ -220,7 +248,7 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::GemPackages,
         });
         let pre = section.items.len();
-        scan_gem_packages(exec, &mut section, is_ostree);
+        scan_gem_packages(exec, &mut section, is_ostree, &self.effective_roots);
         scan_system_gems(exec, &mut section);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
@@ -239,7 +267,12 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::EnvFiles,
         });
         let pre = section.env_files.len();
-        collect_env_files(exec, &mut section, &mut redaction_hints);
+        collect_env_files(
+            exec,
+            &mut section,
+            &mut redaction_hints,
+            &self.effective_roots,
+        );
         let found = section.env_files.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -257,7 +290,12 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::GitRepos,
         });
         let pre = section.items.len();
-        collect_git_repos(exec, &mut section, &mut redaction_hints);
+        collect_git_repos(
+            exec,
+            &mut section,
+            &mut redaction_hints,
+            &self.effective_roots,
+        );
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -431,14 +469,15 @@ fn is_elf_binary(exec: &dyn Executor, path: &str) -> bool {
     result.exit_code == 0 && result.stdout.contains("ELF")
 }
 
-/// Scan /opt, /srv, /usr/local for ELF binaries and classify them.
+/// Scan configured roots for ELF binaries and classify them.
 fn scan_dirs(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
     has_readelf: bool,
     has_file: bool,
+    roots: &[String],
 ) {
-    for root in SCAN_ROOTS {
+    for root in roots {
         if exec.read_dir(Path::new(root)).is_err() {
             continue; // silent skip if dir doesn't exist
         }
@@ -520,11 +559,12 @@ fn scan_python_venvs(
     section: &mut NonRpmSoftwareSection,
     warnings: &mut Vec<Warning>,
     rpm_state: Option<&RpmState>,
+    roots: &[String],
 ) {
     let mut pip_fail_count = 0;
     let has_rpm_state = rpm_state.is_some();
 
-    for root in SCAN_ROOTS {
+    for root in roots {
         let venvs = find_venvs(exec, root);
         for venv in &venvs {
             let packages = scan_venv_packages(exec, &venv.path);
@@ -898,11 +938,16 @@ fn scan_pip_packages(
 /// Individual packages are stored in the `packages` vec as
 /// `LanguagePackage` entries; raw lockfile and package.json content
 /// is captured in `manifest_files` for downstream rendering.
-fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
+fn scan_npm_packages(
+    exec: &dyn Executor,
+    section: &mut NonRpmSoftwareSection,
+    is_ostree: bool,
+    roots: &[String],
+) {
     // Collect paths that have a lockfile so the manifest-only pass can skip them.
     let mut lockfile_paths: HashSet<String> = HashSet::new();
 
-    for root in SCAN_ROOTS {
+    for root in roots {
         find_files_matching(exec, root, "package-lock.json", &mut |lockfile_path| {
             let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
             let rel_path = project_dir
@@ -955,7 +1000,7 @@ fn scan_npm_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, i
     }
 
     // Fallback: scan for package.json without a lockfile.
-    for root in SCAN_ROOTS {
+    for root in roots {
         find_files_matching(exec, root, "package.json", &mut |manifest_path| {
             let project_dir = Path::new(manifest_path).parent().unwrap_or(Path::new("/"));
             let rel_path = project_dir
@@ -1284,8 +1329,13 @@ fn rpm_filter_npm_globals(
 // ---------------------------------------------------------------------------
 
 /// Scan for gem packages via Gemfile.lock files.
-fn scan_gem_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection, is_ostree: bool) {
-    for root in SCAN_ROOTS {
+fn scan_gem_packages(
+    exec: &dyn Executor,
+    section: &mut NonRpmSoftwareSection,
+    is_ostree: bool,
+    roots: &[String],
+) {
+    for root in roots {
         find_files_matching(exec, root, "Gemfile.lock", &mut |lockfile_path| {
             let project_dir = Path::new(lockfile_path).parent().unwrap_or(Path::new("/"));
             let rel_path = project_dir
@@ -1490,8 +1540,9 @@ fn collect_env_files(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
     redaction_hints: &mut Vec<RedactionHint>,
+    roots: &[String],
 ) {
-    for root in SCAN_ROOTS {
+    for root in roots {
         for env_name in ENV_FILE_NAMES {
             find_files_matching(exec, root, env_name, &mut |path| {
                 let content = exec.read_file(Path::new(path)).unwrap_or_default();
@@ -1539,8 +1590,9 @@ fn collect_git_repos(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
     redaction_hints: &mut Vec<RedactionHint>,
+    roots: &[String],
 ) {
-    for root in SCAN_ROOTS {
+    for root in roots {
         find_git_configs(exec, root, section, redaction_hints);
     }
 }
@@ -2563,7 +2615,13 @@ mod tests {
             "should find flask package"
         );
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, None);
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            None,
+            &default_scan_roots(),
+        );
         assert_eq!(section.items.len(), 1);
         assert_eq!(section.items[0].method, "python venv");
     }
@@ -2681,7 +2739,7 @@ mod tests {
             .with_dir("/usr/local", vec![]);
 
         let mut section = NonRpmSoftwareSection::default();
-        scan_npm_packages(&exec, &mut section, false);
+        scan_npm_packages(&exec, &mut section, false, &default_scan_roots());
 
         assert_eq!(
             section.items.len(),
@@ -2738,7 +2796,7 @@ mod tests {
             .with_dir("/usr/local", vec![]);
 
         let mut section = NonRpmSoftwareSection::default();
-        scan_gem_packages(&exec, &mut section, false);
+        scan_gem_packages(&exec, &mut section, false, &default_scan_roots());
 
         assert_eq!(
             section.items.len(),
@@ -2796,7 +2854,7 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_env_files(&exec, &mut section, &mut hints);
+        collect_env_files(&exec, &mut section, &mut hints, &default_scan_roots());
 
         assert_eq!(section.env_files.len(), 1, "should collect one .env file");
         assert_eq!(section.env_files[0].path, "opt/myapp/.env");
@@ -2820,7 +2878,7 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_git_repos(&exec, &mut section, &mut hints);
+        collect_git_repos(&exec, &mut section, &mut hints, &default_scan_roots());
 
         assert_eq!(section.items.len(), 1, "should find one git repo");
         assert_eq!(section.items[0].method, "git repo");
@@ -2843,7 +2901,7 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_env_files(&exec, &mut section, &mut hints);
+        collect_env_files(&exec, &mut section, &mut hints, &default_scan_roots());
 
         assert!(!hints.is_empty(), "should flag .env content for redaction");
         assert!(
@@ -2878,7 +2936,7 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_git_repos(&exec, &mut section, &mut hints);
+        collect_git_repos(&exec, &mut section, &mut hints, &default_scan_roots());
 
         assert!(
             !hints.is_empty(),
@@ -3363,7 +3421,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(section.items.len(), 1, "should find one venv");
         let item = &section.items[0];
@@ -3410,7 +3474,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(section.items.len(), 1, "should find one venv");
         let item = &section.items[0];
@@ -3454,7 +3524,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(
             section.items.len(),
@@ -3476,7 +3552,7 @@ mod tests {
             .with_file("/opt/myapp/package.json", pkg_json);
 
         let mut section = NonRpmSoftwareSection::default();
-        scan_npm_packages(&exec, &mut section, false);
+        scan_npm_packages(&exec, &mut section, false, &default_scan_roots());
 
         assert_eq!(section.items.len(), 1, "should detect manifest-only npm");
         let item = &section.items[0];
@@ -3506,7 +3582,7 @@ mod tests {
             );
 
         let mut section = NonRpmSoftwareSection::default();
-        scan_npm_packages(&exec, &mut section, false);
+        scan_npm_packages(&exec, &mut section, false, &default_scan_roots());
 
         assert_eq!(
             section.items.len(),
@@ -4379,7 +4455,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(section.items.len(), 1);
         let item = &section.items[0];
@@ -4428,7 +4510,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(section.items.len(), 1);
         let item = &section.items[0];
@@ -4474,7 +4562,13 @@ mod tests {
         let mut warnings = Vec::new();
         let rpm_state = empty_rpm_state();
 
-        scan_python_venvs(&exec, &mut section, &mut warnings, Some(&rpm_state));
+        scan_python_venvs(
+            &exec,
+            &mut section,
+            &mut warnings,
+            Some(&rpm_state),
+            &default_scan_roots(),
+        );
 
         assert_eq!(section.items.len(), 1);
         let item = &section.items[0];
