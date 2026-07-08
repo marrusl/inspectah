@@ -25,7 +25,6 @@ import { VersionChangesTable } from "./VersionChangesTable";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
-import { SystemTuningSection } from "./SystemTuningSection";
 import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
 import { PackageList } from "./PackageList";
@@ -576,22 +575,6 @@ export function MainContent({
     );
   }
 
-  // System Tuning decision section — sysctls and tuned profiles combined.
-  if (activeSection === "system_tuning") {
-    return (
-      <>
-        <Content>
-          <h2>{SECTION_LABELS.system_tuning}</h2>
-        </Content>
-        <SystemTuningSection
-          sysctls={viewData?.sysctls ?? []}
-          tuned={viewData?.tuned ?? []}
-          onViewUpdate={onViewUpdate}
-          onMutationError={onMutationError}
-        />
-      </>
-    );
-  }
 
   // Language Packages decision section
   if (activeSection === "language_packages") {
@@ -686,7 +669,6 @@ export function MainContent({
   // Context sections: compose, network, storage,
   // scheduled_tasks, non_rpm_software, kernel_boot, selinux
   const contextSectionIds = [
-    "version_changes",
     "compose",
     "network",
     "storage",
@@ -695,27 +677,6 @@ export function MainContent({
     "kernel_boot",
     "selinux",
   ];
-
-  if (activeSection === "version_changes") {
-    const section = sections?.find((s) => s.id === "version_changes");
-    if (!section) {
-      return <p>Section data not available.</p>;
-    }
-    const emptyReason = section.empty_reason ?? undefined;
-
-    return (
-      <>
-        <Content>
-          <h2>{SECTION_LABELS.version_changes}</h2>
-        </Content>
-        <VersionChangesTable
-          entries={viewData?.version_changes ?? []}
-          emptyReason={emptyReason}
-          revealItemId={revealItemId}
-        />
-      </>
-    );
-  }
 
   if (contextSectionIds.includes(activeSection)) {
     // "compose" sidebar entry maps to the "containers" backend context section

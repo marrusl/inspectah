@@ -129,12 +129,12 @@ impl SectionGroup {
                 SectionMeta {
                     id: "kernel_boot",
                     label: "Kernel & Boot",
-                    is_triage: false,
+                    is_triage: true,
                 },
                 SectionMeta {
                     id: "selinux",
                     label: "Security & Access Control",
-                    is_triage: false,
+                    is_triage: true,
                 },
             ],
             Self::Services => &[
@@ -146,7 +146,7 @@ impl SectionGroup {
                 SectionMeta {
                     id: "scheduled_tasks",
                     label: "Scheduled Tasks",
-                    is_triage: false,
+                    is_triage: true,
                 },
                 SectionMeta {
                     id: "containers",
@@ -173,6 +173,11 @@ impl SectionGroup {
                 SectionMeta {
                     id: "non_rpm_software",
                     label: "Non-RPM Software",
+                    is_triage: true,
+                },
+                SectionMeta {
+                    id: "language_packages",
+                    label: "Language Packages",
                     is_triage: true,
                 },
                 SectionMeta {

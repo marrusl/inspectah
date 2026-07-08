@@ -628,18 +628,17 @@ fn rich_state() -> Arc<AppState> {
 }
 
 #[tokio::test]
-async fn sections_returns_nine_sections() {
+async fn sections_returns_eight_sections() {
     let app = app(rich_state());
     let (status, json) = get_json(&app, "/api/snapshot/sections").await;
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().expect("sections is an array");
-    // Users & groups moved to ViewResponse — 9 sections remain.
-    assert_eq!(sections.len(), 9, "exactly 9 context sections");
+    // Users & groups moved to ViewResponse, version_changes retired — 8 sections remain.
+    assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(ids.contains(&"services"));
-    assert!(ids.contains(&"version_changes"));
     assert!(ids.contains(&"containers"));
     assert!(ids.contains(&"network"));
     assert!(ids.contains(&"storage"));
@@ -702,8 +701,8 @@ async fn sections_empty_snapshot_returns_empty_items() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().unwrap();
-    // Users & groups moved to ViewResponse — 9 sections remain.
-    assert_eq!(sections.len(), 9);
+    // Users & groups moved to ViewResponse, version_changes retired — 8 sections remain.
+    assert_eq!(sections.len(), 8);
     for section in sections {
         let items = section["items"].as_array().unwrap();
         assert!(
@@ -1204,12 +1203,11 @@ fn build_web_sections_section_count_and_ids() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
     let sections = build_web_sections(session.reference());
-    // Users & groups moved to ViewResponse — 9 sections remain.
-    assert_eq!(sections.len(), 9, "exactly 9 context sections");
+    // Users & groups moved to ViewResponse, version_changes retired — 8 sections remain.
+    assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let expected_ids = [
         "services",
-        "version_changes",
         "containers",
         "network",
         "storage",

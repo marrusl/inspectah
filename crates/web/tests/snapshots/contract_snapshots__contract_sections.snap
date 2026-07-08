@@ -17,19 +17,6 @@ expression: json
     ]
   },
   {
-    "display_name": "Version Changes",
-    "id": "version_changes",
-    "items": [
-      {
-        "detail": null,
-        "id": "openssl.x86_64",
-        "searchable_text": "openssl x86_64 upgrade",
-        "subtitle": "3.0.7-28.el9 → 3.0.7-27.el9 (upgrade)",
-        "title": "openssl.x86_64"
-      }
-    ]
-  },
-  {
     "display_name": "Containers",
     "id": "containers",
     "items": [

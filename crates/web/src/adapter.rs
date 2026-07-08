@@ -1331,15 +1331,14 @@ pub fn web_generic_section(
 
 // -- Orchestrator ----------------------------------------------------------
 
-/// Build all 9 reference sections in canonical order.
+/// Build all 8 reference sections in canonical order.
 ///
 /// Order MUST match `normalize_for_reference` in handlers.rs:
-/// services, version_changes, containers, network, storage,
+/// services, containers, network, storage,
 /// scheduled_tasks, non_rpm_software, kernel_boot, selinux.
 pub fn build_web_sections(ref_proj: &ReferenceProjection) -> Vec<ReferenceSection> {
     vec![
         web_services_section(&ref_proj.services),
-        web_version_changes_section(&ref_proj.version_changes),
         web_containers_section(&ref_proj.containers),
         web_network_section(&ref_proj.network),
         web_storage_section(&ref_proj.storage),
@@ -1413,21 +1412,20 @@ mod tests {
         assert_eq!(vc[0]["direction"], "upgrade");
     }
 
-    /// Verify `build_web_sections` returns 9 sections with correct ids in
+    /// Verify `build_web_sections` returns 8 sections with correct ids in
     /// canonical order (matching `normalize_for_reference`).
     #[test]
-    fn build_web_sections_returns_9_sections_in_order() {
+    fn build_web_sections_returns_8_sections_in_order() {
         use inspectah_refine::projection::project_reference;
 
         let snap = InspectionSnapshot::new();
         let ref_proj = project_reference(&snap);
         let sections = build_web_sections(&ref_proj);
 
-        assert_eq!(sections.len(), 9, "must return exactly 9 sections");
+        assert_eq!(sections.len(), 8, "must return exactly 8 sections");
 
         let expected_ids = [
             "services",
-            "version_changes",
             "containers",
             "network",
             "storage",
@@ -1454,7 +1452,6 @@ mod tests {
 
         let expected_names = [
             "Services",
-            "Version Changes",
             "Containers",
             "Network",
             "Storage",
