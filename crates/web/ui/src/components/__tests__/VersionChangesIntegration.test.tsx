@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MainContent } from "../MainContent";
+import { VersionChangesTable } from "../VersionChangesTable";
 import type {
   ViewResponse,
   ReferenceSection,
@@ -80,13 +81,13 @@ describe("VersionChanges integration in MainContent", () => {
     vi.clearAllMocks();
   });
 
-  it("renders VersionChangesTable instead of ContextList for version_changes", () => {
+  it("renders VersionChangesTable inside packages section expandable panel", () => {
     const viewData = makeViewData([downgrade, upgrade]);
     const sections = makeSections(2);
 
     render(
       <MainContent
-        activeSection="version_changes"
+        activeSection="packages"
         loading={false}
         viewData={viewData as ViewResponse}
         sections={sections}
@@ -97,33 +98,16 @@ describe("VersionChanges integration in MainContent", () => {
       />,
     );
 
-    // VersionChangesTable renders group headers and data rows
-    expect(screen.getByText(/Downgrades \(1\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Upgrades \(1\)/)).toBeInTheDocument();
-
-    // Data rows have context-item testids
-    expect(screen.getByTestId("context-item-httpd.x86_64")).toBeInTheDocument();
-    expect(
-      screen.getByTestId("context-item-podman.x86_64"),
-    ).toBeInTheDocument();
+    // Version changes is now in an ExpandableSection panel within packages view
+    expect(screen.getByTestId("version-changes-panel")).toBeInTheDocument();
+    expect(screen.getByText("Version Changes")).toBeInTheDocument();
   });
 
   it("plain section entry focuses first data row, not group header", () => {
     const viewData = makeViewData([downgrade, upgrade]);
     const sections = makeSections(2);
 
-    render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={viewData as ViewResponse}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
-      />,
-    );
+    render(<VersionChangesTable entries={[downgrade, upgrade]} />);
 
     // The data rows (context-item-*) should be focusable (tabIndex=-1),
     // and group header rows should NOT have context-item testids.
@@ -145,15 +129,8 @@ describe("VersionChanges integration in MainContent", () => {
     const sections = makeSections(2);
 
     render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={viewData as ViewResponse}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
+      <VersionChangesTable
+        entries={[downgrade, upgrade]}
         revealItemId="podman.x86_64"
       />,
     );
@@ -171,15 +148,9 @@ describe("VersionChanges integration in MainContent", () => {
     const sections = makeSections(0, "zero_drift");
 
     render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={viewData as ViewResponse}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
+      <VersionChangesTable
+        entries={[]}
+        emptyReason="zero_drift"
       />,
     );
 

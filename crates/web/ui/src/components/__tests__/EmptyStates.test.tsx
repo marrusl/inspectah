@@ -355,49 +355,25 @@ describe("Packages section renders unified components", () => {
 describe("Version Changes empty states", () => {
   it("renders zero_drift empty state", async () => {
     const { MainContent } = await import("../MainContent");
-    const sections = [
-      {
-        id: "version_changes",
-        display_name: "Version Changes",
-        items: [],
-        empty_reason: "zero_drift",
-      },
-    ];
+    const { VersionChangesTable } = await import("../VersionChangesTable");
+
+    // Version changes is now embedded in packages view
     render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={{ ...MOCK_VIEW }}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
+      <VersionChangesTable
+        entries={[]}
+        emptyReason="zero_drift"
       />,
     );
     expect(screen.getByText(/All packages match/)).toBeInTheDocument();
   });
 
   it("renders data_unavailable empty state", async () => {
-    const { MainContent } = await import("../MainContent");
-    const sections = [
-      {
-        id: "version_changes",
-        display_name: "Version Changes",
-        items: [],
-        empty_reason: "data_unavailable",
-      },
-    ];
+    const { VersionChangesTable } = await import("../VersionChangesTable");
+
     render(
-      <MainContent
-        activeSection="version_changes"
-        loading={false}
-        viewData={{ ...MOCK_VIEW }}
-        sections={sections}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-        sectionSearchOpen={false}
-        onSectionSearchClose={vi.fn()}
+      <VersionChangesTable
+        entries={[]}
+        emptyReason="data_unavailable"
       />,
     );
     expect(screen.getByText(/not available/)).toBeInTheDocument();
