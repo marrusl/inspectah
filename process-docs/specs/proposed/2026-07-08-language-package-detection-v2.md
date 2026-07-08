@@ -145,8 +145,12 @@ pub struct LanguagePackage {
 ```
 
 Default is `false` (unpinned). The `version` field always carries the detected
-version regardless of pin state — `pinned` controls whether the renderer uses
-the version in the Containerfile output.
+version regardless of pin state. **`pinned` is consulted only for
+`METHOD_NPM_GLOBAL` environments** — the renderer checks `pinned` when
+emitting `npm install` lines and renders `@version` when true, bare package
+name when false. Existing pip and gem render paths are unaffected: pip
+continues to use `version` unconditionally via `pinned_package_list()`, and
+gem rendering is unchanged.
 
 ### Refine Contract Changes
 
@@ -212,9 +216,11 @@ Pin state is persisted in the refine session timeline via `SetPackagePin` and
 `SetBulkPackagePin` ops. These are autosaved and replayed on session reload,
 same as existing `SetInclude` ops.
 
-**Export parity:** The renderer reads the projected `LanguagePackage.pinned`
-field after session ops are applied. If `pinned` is `true`, the package is
-rendered with `@version`; if `false`, without.
+**Export parity:** For npm global environments, the renderer reads the
+projected `LanguagePackage.pinned` field after session ops are applied. If
+`pinned` is `true`, the package is rendered with `@version`; if `false`,
+without. Other ecosystems (pip, gem) ignore `pinned` and continue using
+their existing version-rendering logic.
 
 ### Interaction Model
 
