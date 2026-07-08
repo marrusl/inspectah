@@ -155,7 +155,7 @@ fn scan_npm_global_packages(
             name: format!("npm-globals-{}", env_hash(prefix)),
             method: METHOD_NPM_GLOBAL.into(),
             confidence: confidence.into(),
-            ecosystem: "npm".into(),
+            lang: "npm".into(),
             packages: filtered,
             disposition: FindingKind::included(),
             ..Default::default()
@@ -537,6 +537,7 @@ Test cases per spec:
 5. `--scan-path /nonexistent` warns and continues
 6. Broad `--scan-path /` produces warning
 7. Duplicate suppression (home dir under existing root)
+8. `--inspect-only` stdout remains parseable JSON with `--scan-home`/`--scan-path` active (spec §6 CLI test + §3 Output Channel Contract): scan-root headers and warnings go to stderr only, so `serde_json::from_str::<Value>(stdout)` succeeds — verifies the new stderr writes never leak to stdout
 
 - [ ] **Step 9: Run tests, commit**
 
@@ -692,9 +693,34 @@ fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 3: Wire into language_package_lines()**
+- [ ] **Step 3: Wire into language_package_lines() with runtime check**
 
-Add npm global items to the filter and rendering:
+Add a `render_npm_global_section()` wrapper that emits the `nodejs` runtime
+warning (spec §1 Runtime Check — same behavior as `render_npm_section`, which
+the new npm-global render path does NOT inherit automatically) before
+rendering each item:
+
+```rust
+fn render_npm_global_section(items: &[&NonRpmItem], rpm_names: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if !has_runtime(rpm_names, RUNTIME_NODEJS) && !rpm_names.is_empty() {
+        lines.push(format!(
+            "# WARNING: {RUNTIME_NODEJS} not found in RPM package list \
+             — add it before this section"
+        ));
+    }
+
+    for item in items {
+        lines.push(String::new());
+        lines.extend(render_npm_global_item(item));
+    }
+
+    lines
+}
+```
+
+Then add npm global items to the filter and rendering in `language_package_lines()`:
 
 ```rust
 let npm_global_items: Vec<&NonRpmItem> = nrs.items.iter()
@@ -717,6 +743,7 @@ Test cases:
 5. Excluded npm globals → commented out
 6. C-extension warning rendered when `has_c_extensions: true`
 7. Existing pip/gem rendering unchanged by `pinned` field
+8. Runtime check (spec §1): `nodejs` absent from RPM list → `nodejs not found in RPM package list` warning emitted for the npm-global section; warning absent when `nodejs` is present or when there is no RPM data
 
 - [ ] **Step 5: Run tests, commit**
 
