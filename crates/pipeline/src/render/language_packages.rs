@@ -128,6 +128,16 @@ fn pinned_package_list(item: &NonRpmItem) -> String {
         .join(" ")
 }
 
+/// Returns true if a string contains shell-unsafe characters (single quote or newline).
+fn contains_unsafe_chars(s: &str) -> bool {
+    s.contains('\'') || s.contains('\n')
+}
+
+/// Sanitize a path for display in warning comments by replacing unsafe chars.
+fn sanitize_for_comment(s: &str) -> String {
+    s.replace('\'', "''").replace('\n', "\\n")
+}
+
 // ---------------------------------------------------------------------------
 // pip rendering
 // ---------------------------------------------------------------------------
@@ -185,6 +195,15 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
     // before storing. npm/gem renderers already do this; pip must too.
     let abs_path = format!("/{}", item.path.trim_start_matches('/'));
 
+    // Shell injection safety: reject paths with unsafe characters.
+    if contains_unsafe_chars(&abs_path) {
+        lines.push(format!(
+            "# WARNING: path contains unsafe characters, skipping: {}",
+            sanitize_for_comment(&abs_path)
+        ));
+        return lines;
+    }
+
     if is_venv && has_requirements && effective_confidence == HIGH_CONFIDENCE {
         // High confidence venv with requirements.txt: executable COPY/RUN.
         let hash = env_hash(&item.path);
@@ -207,9 +226,9 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         } else {
             ""
         };
-        lines.push(format!("RUN python3 -m venv {venv_flags}{abs_path} \\"));
+        lines.push(format!("RUN python3 -m venv {venv_flags}'{abs_path}' \\"));
         lines.push(format!(
-            "    && {abs_path}/bin/pip install -r /tmp/{venv_name}-requirements.txt \\"
+            "    && '{abs_path}'/bin/pip install -r /tmp/{venv_name}-requirements.txt \\"
         ));
         lines.push(format!("    && rm /tmp/{venv_name}-requirements.txt"));
     } else if is_venv {
@@ -225,11 +244,11 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         } else {
             ""
         };
-        lines.push(format!("# RUN python3 -m venv {venv_flags}{abs_path} \\"));
+        lines.push(format!("# RUN python3 -m venv {venv_flags}'{abs_path}' \\"));
         if pkgs.is_empty() {
-            lines.push(format!("#     && {abs_path}/bin/pip install <packages>"));
+            lines.push(format!("#     && '{abs_path}'/bin/pip install <packages>"));
         } else {
-            lines.push(format!("#     && {abs_path}/bin/pip install {pkgs}"));
+            lines.push(format!("#     && '{abs_path}'/bin/pip install {pkgs}"));
         }
     } else {
         // System-level pip (always medium confidence): commented out.
@@ -295,18 +314,27 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
     let hash = env_hash(&item.path);
     let project_path = format!("/{}", item.path.trim_start_matches('/'));
 
+    // Shell injection safety: reject paths with unsafe characters.
+    if contains_unsafe_chars(&project_path) {
+        lines.push(format!(
+            "# WARNING: path contains unsafe characters, skipping: {}",
+            sanitize_for_comment(&project_path)
+        ));
+        return lines;
+    }
+
     if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!(
             "# npm packages: {project_path} (from package-lock.json)"
         ));
         lines.push(format!(
-            "COPY language-packages/npm/{hash}/package.json {project_path}/package.json"
+            "COPY language-packages/npm/{hash}/package.json '{project_path}'/package.json"
         ));
         lines.push(format!(
             "COPY language-packages/npm/{hash}/package-lock.json \
-             {project_path}/package-lock.json"
+             '{project_path}'/package-lock.json"
         ));
-        lines.push(format!("RUN cd {project_path} && npm ci --production"));
+        lines.push(format!("RUN cd '{project_path}' && npm ci --production"));
     } else {
         // Medium confidence: commented out.
         lines.push(format!(
@@ -314,13 +342,13 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         ));
         lines.push("# Uncomment after verifying package list is complete:".into());
         lines.push(format!(
-            "# COPY language-packages/npm/{hash}/package.json {project_path}/package.json"
+            "# COPY language-packages/npm/{hash}/package.json '{project_path}'/package.json"
         ));
         lines.push(format!(
             "# COPY language-packages/npm/{hash}/package-lock.json \
-             {project_path}/package-lock.json"
+             '{project_path}'/package-lock.json"
         ));
-        lines.push(format!("# RUN cd {project_path} && npm ci --production"));
+        lines.push(format!("# RUN cd '{project_path}' && npm ci --production"));
     }
 
     lines
@@ -365,18 +393,30 @@ fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
     };
 
     // Build package list respecting pin state
-    let pkg_list: String = item
+    let pkg_list: Vec<String> = item
         .packages
         .iter()
-        .map(|p| {
-            if p.pinned && !p.version.is_empty() {
-                format!("{}@{}", p.name, p.version)
+        .filter_map(|p| {
+            // Shell injection safety: reject packages with unsafe characters.
+            if contains_unsafe_chars(&p.name) || contains_unsafe_chars(&p.version) {
+                None
+            } else if p.pinned && !p.version.is_empty() {
+                Some(format!("{}@{}", p.name, p.version))
             } else {
-                p.name.clone()
+                Some(p.name.clone())
             }
         })
-        .collect::<Vec<_>>()
-        .join(" ");
+        .collect();
+
+    // Count rejected packages.
+    let rejected_count = item.packages.len() - pkg_list.len();
+    if rejected_count > 0 {
+        lines.push(format!(
+            "# WARNING: {rejected_count} package(s) skipped due to unsafe characters in name/version"
+        ));
+    }
+
+    let pkg_list = pkg_list.join(" ");
 
     if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!("# npm global packages: {prefix} ({method_label})"));
@@ -440,18 +480,27 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
     let hash = env_hash(&item.path);
     let project_path = format!("/{}", item.path.trim_start_matches('/'));
 
+    // Shell injection safety: reject paths with unsafe characters.
+    if contains_unsafe_chars(&project_path) {
+        lines.push(format!(
+            "# WARNING: path contains unsafe characters, skipping: {}",
+            sanitize_for_comment(&project_path)
+        ));
+        return lines;
+    }
+
     if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!(
             "# gem packages: {project_path} (from Gemfile.lock)"
         ));
         lines.push(format!(
-            "COPY language-packages/gem/{hash}/Gemfile {project_path}/Gemfile"
+            "COPY language-packages/gem/{hash}/Gemfile '{project_path}'/Gemfile"
         ));
         lines.push(format!(
-            "COPY language-packages/gem/{hash}/Gemfile.lock {project_path}/Gemfile.lock"
+            "COPY language-packages/gem/{hash}/Gemfile.lock '{project_path}'/Gemfile.lock"
         ));
         lines.push(format!(
-            "RUN cd {project_path} && bundle config set --local deployment 'true' && bundle install"
+            "RUN cd '{project_path}' && bundle config set --local deployment 'true' && bundle install"
         ));
     } else {
         // Medium confidence: commented out.
@@ -460,13 +509,13 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
         ));
         lines.push("# Uncomment after verifying package list is complete:".into());
         lines.push(format!(
-            "# COPY language-packages/gem/{hash}/Gemfile {project_path}/Gemfile"
+            "# COPY language-packages/gem/{hash}/Gemfile '{project_path}'/Gemfile"
         ));
         lines.push(format!(
-            "# COPY language-packages/gem/{hash}/Gemfile.lock {project_path}/Gemfile.lock"
+            "# COPY language-packages/gem/{hash}/Gemfile.lock '{project_path}'/Gemfile.lock"
         ));
         lines.push(format!(
-            "# RUN cd {project_path} && bundle config set --local deployment 'true' && bundle install"
+            "# RUN cd '{project_path}' && bundle config set --local deployment 'true' && bundle install"
         ));
     }
 
@@ -612,8 +661,8 @@ mod tests {
             "must COPY requirements.txt: {output}"
         );
         assert!(
-            output.contains("RUN python3 -m venv /opt/myapp/venv"),
-            "must create venv: {output}"
+            output.contains("RUN python3 -m venv '/opt/myapp/venv'"),
+            "must create venv with quoted path: {output}"
         );
         assert!(
             output.contains("pip install -r"),
@@ -932,11 +981,11 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN python3 -m venv /opt/myapp/venv"),
-            "must normalize path to absolute: {output}"
+            output.contains("RUN python3 -m venv '/opt/myapp/venv'"),
+            "must normalize path to absolute with quotes: {output}"
         );
         assert!(
-            !output.contains("RUN python3 -m venv opt/"),
+            !output.contains("RUN python3 -m venv 'opt/"),
             "must not use relative path: {output}"
         );
     }
@@ -1004,8 +1053,8 @@ mod tests {
             "system_site_packages: true must include --system-site-packages flag: {output}"
         );
         assert!(
-            output.contains("RUN python3 -m venv --system-site-packages /opt/myapp/venv"),
-            "flag must appear in venv creation command: {output}"
+            output.contains("RUN python3 -m venv --system-site-packages '/opt/myapp/venv'"),
+            "flag must appear in venv creation command with quoted path: {output}"
         );
     }
 
@@ -1066,8 +1115,8 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("# RUN cd /opt/myapp && bundle config set --local deployment 'true' && bundle install"),
-            "medium confidence commented version must use new syntax: {output}"
+            output.contains("# RUN cd '/opt/myapp' && bundle config set --local deployment 'true' && bundle install"),
+            "medium confidence commented version must use new syntax with quoted path: {output}"
         );
         assert!(
             !output.contains("bundle install --deployment"),
@@ -1284,6 +1333,173 @@ mod tests {
         assert!(
             output.contains("bundle install"),
             "gem must use bundle install: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Shell injection safety tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn pip_path_with_spaces_renders_with_quotes() {
+        let snap = test_snap(
+            vec![pip_venv_item(
+                "/opt/my app/venv",
+                HIGH_CONFIDENCE,
+                true,
+                vec![("flask", "2.3.3")],
+            )],
+            &["python3"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("RUN python3 -m venv '/opt/my app/venv'"),
+            "path with spaces must be single-quoted: {output}"
+        );
+        assert!(
+            output.contains("'/opt/my app/venv'/bin/pip install"),
+            "path in pip install must be quoted: {output}"
+        );
+    }
+
+    #[test]
+    fn pip_path_with_single_quote_is_rejected() {
+        let snap = test_snap(
+            vec![pip_venv_item(
+                "/opt/user's/venv",
+                HIGH_CONFIDENCE,
+                true,
+                vec![("flask", "2.3.3")],
+            )],
+            &["python3"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("WARNING: path contains unsafe characters, skipping"),
+            "path with single quote must be rejected: {output}"
+        );
+        assert!(
+            !output.contains("RUN python3 -m venv"),
+            "rejected path must not render RUN: {output}"
+        );
+        assert!(
+            output.contains("/opt/user''s/venv"),
+            "sanitized path must escape single quotes: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_path_with_newline_is_rejected() {
+        let snap = test_snap(
+            vec![npm_item("/opt/app\ndir", HIGH_CONFIDENCE)],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("WARNING: path contains unsafe characters, skipping"),
+            "path with newline must be rejected: {output}"
+        );
+        assert!(
+            !output.contains("RUN cd"),
+            "rejected path must not render RUN: {output}"
+        );
+        assert!(
+            output.contains(r"\n"),
+            "sanitized path must escape newlines: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_package_with_shell_metachar_is_rejected() {
+        let snap = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", false), ("evil';rm -rf /", "1.0.0", false)],
+            )],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("WARNING: 1 package(s) skipped due to unsafe characters"),
+            "must warn about rejected packages: {output}"
+        );
+        assert!(
+            output.contains("RUN npm install -g pm2"),
+            "safe package must still render: {output}"
+        );
+        assert!(
+            !output.contains("evil"),
+            "unsafe package must not appear in command: {output}"
+        );
+    }
+
+    #[test]
+    fn gem_path_with_spaces_renders_with_quotes() {
+        let snap = test_snap(
+            vec![gem_item("/opt/my project", HIGH_CONFIDENCE)],
+            &["rubygems"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("COPY language-packages/gem/"),
+            "must COPY gem files: {output}"
+        );
+        assert!(
+            output.contains("'/opt/my project'/Gemfile"),
+            "path with spaces must be quoted in COPY: {output}"
+        );
+        assert!(
+            output.contains("RUN cd '/opt/my project'"),
+            "path with spaces must be quoted in RUN: {output}"
+        );
+    }
+
+    #[test]
+    fn normal_paths_still_render_correctly() {
+        let snap = test_snap(
+            vec![
+                pip_venv_item(
+                    "/opt/app/venv",
+                    HIGH_CONFIDENCE,
+                    true,
+                    vec![("flask", "2.3.3")],
+                ),
+                npm_item("/opt/webapp", HIGH_CONFIDENCE),
+                gem_item("/opt/gemapp", HIGH_CONFIDENCE),
+            ],
+            &["python3", "nodejs", "rubygems"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        // All should render without warnings.
+        assert!(
+            !output.contains("WARNING: path contains unsafe"),
+            "normal paths must not trigger warnings: {output}"
+        );
+        // All should render with quotes (defensive).
+        assert!(
+            output.contains("RUN python3 -m venv '/opt/app/venv'"),
+            "pip path must be quoted: {output}"
+        );
+        assert!(
+            output.contains("RUN cd '/opt/webapp'"),
+            "npm path must be quoted: {output}"
+        );
+        assert!(
+            output.contains("RUN cd '/opt/gemapp'"),
+            "gem path must be quoted: {output}"
         );
     }
 
