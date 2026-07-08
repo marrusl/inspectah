@@ -108,6 +108,14 @@ Items flagged during code review. Reviewers approved at POC bar — these raise 
 
 - [ ] **Evaluate `tui-input` vs custom input:** TUI currently uses custom input handling via crossterm. The `tui-input` crate was a dependency but unused (removed in dead code scan). Evaluate whether adopting `tui-input` would simplify the input layer vs. maintaining the custom approach.
 
+## UX Convergence Post-SDD Cleanup
+
+From the 2026-07-07 refine/UX convergence final branch review. Small fixes, not worth individual specs.
+
+- [ ] **Double `render_tmpfiles_conf()` computation:** `render_containerfile_inner()` calls `render_tmpfiles_conf(snap).is_some()` to compute the `tmpfiles_staged` bool, then `render_all()` calls it again to write the file. Pass `tmpfiles_staged: bool` from `render_all()` into `render_containerfile()` instead. ~5 lines.
+- [ ] **Dead retired section branches in MainContent.tsx:** `if (activeSection === "system_tuning")` and `if (activeSection === "version_changes")` branches are unreachable from the new group-driven sidebar but would render broken headings (`undefined`) if reached via URL manipulation. Remove both branches. ~10 lines.
+- [ ] **Reference badges show count text:** Spec says reference sections get `<Badge isRead>` with no count. Implementation shows counts. Remove count text from reference badges in `Sidebar.tsx`. ~2 lines.
+
 ## TUI: Quality Items (from Thorn CP1/CP2)
 
 - [ ] **Unicode width handling:** `truncate()` in triage_list.rs uses byte length as proxy for display width. CJK/emoji characters may under-truncate. Consider `unicode-width` crate for accurate column measurement.
