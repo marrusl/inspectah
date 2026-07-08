@@ -15,8 +15,8 @@ use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use inspectah_core::util::{
-    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_LOCKFILE, METHOD_NPM_MANIFEST,
-    METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV,
+    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_GLOBAL, METHOD_NPM_LOCKFILE,
+    METHOD_NPM_MANIFEST, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -202,6 +202,7 @@ impl Inspector for NonRpmInspector {
         });
         let pre = section.items.len();
         scan_npm_packages(exec, &mut section, is_ostree);
+        scan_npm_global_packages(exec, &mut section);
         let found = section.items.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
             inspector: InspectorId::NonRpmSoftware,
@@ -1042,6 +1043,213 @@ fn parse_package_json(content: &str) -> Vec<LanguagePackage> {
 }
 
 // ---------------------------------------------------------------------------
+// npm global package scanning
+// ---------------------------------------------------------------------------
+
+/// Scan for globally-installed npm packages via `npm list -g` and directory walk.
+///
+/// Discovers npm global prefixes, merges results from `npm list -g --json`
+/// (high confidence) and directory walk of `<prefix>/<pkg>/package.json`
+/// (medium confidence), filters out RPM-owned packages, and produces one
+/// `NonRpmItem` per prefix that has packages.
+fn scan_npm_global_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
+    let prefixes = discover_npm_global_prefixes(exec);
+    if prefixes.is_empty() {
+        return;
+    }
+
+    let npm_list_packages = parse_npm_list_global(exec);
+
+    for prefix in &prefixes {
+        let dir_walk_packages = walk_npm_global_prefix(exec, prefix);
+        let merged = merge_npm_global_packages(&npm_list_packages, &dir_walk_packages);
+        let filtered = rpm_filter_npm_globals(exec, &merged, prefix);
+
+        if filtered.is_empty() {
+            continue;
+        }
+
+        let confidence = if npm_list_packages.is_some() {
+            "high"
+        } else {
+            "medium"
+        };
+
+        let path = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
+
+        section.items.push(NonRpmItem {
+            path,
+            name: format!("npm-globals-{}", env_hash(prefix)),
+            method: METHOD_NPM_GLOBAL.to_string(),
+            confidence: confidence.to_string(),
+            lang: "npm".to_string(),
+            packages: filtered,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Discover npm global prefix directories.
+///
+/// Runs `npm root -g` for the actual prefix, then checks well-known
+/// fallback paths. Returns a deduplicated list of existing directories.
+fn discover_npm_global_prefixes(exec: &dyn Executor) -> Vec<String> {
+    let mut prefixes = Vec::new();
+
+    let result = exec.run("npm", &["root", "-g"]);
+    if result.exit_code == 0 {
+        let path = result.stdout.trim().to_string();
+        if !path.is_empty() {
+            prefixes.push(path);
+        }
+    }
+
+    for fallback in &["/usr/lib/node_modules", "/usr/local/lib/node_modules"] {
+        if !prefixes.contains(&fallback.to_string()) {
+            let check = exec.run("test", &["-d", fallback]);
+            if check.exit_code == 0 {
+                prefixes.push(fallback.to_string());
+            }
+        }
+    }
+
+    prefixes
+}
+
+/// Parse `npm list -g --json` output for package names and versions.
+///
+/// Returns `None` if npm is unavailable or the command fails.
+fn parse_npm_list_global(exec: &dyn Executor) -> Option<HashMap<String, String>> {
+    let result = exec.run("npm", &["list", "-g", "--json"]);
+    if result.exit_code != 0 {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&result.stdout).ok()?;
+    let deps = parsed.get("dependencies")?.as_object()?;
+    let mut packages = HashMap::new();
+    for (name, info) in deps {
+        if let Some(version) = info.get("version").and_then(|v| v.as_str()) {
+            packages.insert(name.clone(), version.to_string());
+        }
+    }
+    Some(packages)
+}
+
+/// Walk an npm global prefix directory for installed packages.
+///
+/// Discovers unscoped packages (`<prefix>/<pkg>/package.json`) and
+/// scoped packages (`<prefix>/@scope/<pkg>/package.json`).
+fn walk_npm_global_prefix(exec: &dyn Executor, prefix: &str) -> Vec<LanguagePackage> {
+    let mut packages = Vec::new();
+    let result = exec.run("ls", &["-1", prefix]);
+    if result.exit_code != 0 {
+        return packages;
+    }
+
+    for entry in result.stdout.lines() {
+        let entry = entry.trim();
+        if entry.is_empty() || entry.starts_with('.') {
+            continue;
+        }
+        if entry.starts_with('@') {
+            // Scoped package: walk @scope/ for sub-packages.
+            let scope_path = format!("{}/{}", prefix, entry);
+            let scope_result = exec.run("ls", &["-1", &scope_path]);
+            if scope_result.exit_code == 0 {
+                for sub in scope_result.stdout.lines() {
+                    let sub = sub.trim();
+                    if sub.is_empty() || sub.starts_with('.') {
+                        continue;
+                    }
+                    let pkg_name = format!("{}/{}", entry, sub);
+                    if let Some(pkg) = read_npm_package_json(exec, prefix, &pkg_name) {
+                        packages.push(pkg);
+                    }
+                }
+            }
+        } else if let Some(pkg) = read_npm_package_json(exec, prefix, entry) {
+            packages.push(pkg);
+        }
+    }
+
+    packages
+}
+
+/// Read a package.json from an npm global prefix to extract name and version.
+fn read_npm_package_json(
+    exec: &dyn Executor,
+    prefix: &str,
+    pkg_name: &str,
+) -> Option<LanguagePackage> {
+    let pkg_json_path = format!("{}/{}/package.json", prefix, pkg_name);
+    let content = exec.read_file(Path::new(&pkg_json_path)).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let name = parsed.get("name")?.as_str()?.to_string();
+    let version = parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(LanguagePackage {
+        name,
+        version,
+        pinned: false,
+    })
+}
+
+/// Merge npm list results with directory walk results.
+///
+/// npm list entries take priority per package name (higher confidence).
+fn merge_npm_global_packages(
+    npm_list: &Option<HashMap<String, String>>,
+    dir_walk: &[LanguagePackage],
+) -> Vec<LanguagePackage> {
+    let mut merged: HashMap<String, LanguagePackage> = HashMap::new();
+
+    // Directory walk entries first (lower priority).
+    for pkg in dir_walk {
+        merged.insert(pkg.name.clone(), pkg.clone());
+    }
+
+    // npm list entries override (higher priority).
+    if let Some(npm_list) = npm_list {
+        for (name, version) in npm_list {
+            merged.insert(
+                name.clone(),
+                LanguagePackage {
+                    name: name.clone(),
+                    version: version.clone(),
+                    pinned: false,
+                },
+            );
+        }
+    }
+
+    let mut result: Vec<LanguagePackage> = merged.into_values().collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
+/// Filter out npm global packages whose install path is owned by an RPM.
+fn rpm_filter_npm_globals(
+    exec: &dyn Executor,
+    packages: &[LanguagePackage],
+    prefix: &str,
+) -> Vec<LanguagePackage> {
+    packages
+        .iter()
+        .filter(|pkg| {
+            let pkg_path = format!("{}/{}", prefix, pkg.name);
+            let result = exec.run("rpm", &["-qf", &pkg_path]);
+            // Keep if NOT owned by an RPM.
+            result.exit_code != 0
+        })
+        .cloned()
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // gem scanning
 // ---------------------------------------------------------------------------
 
@@ -1411,7 +1619,10 @@ fn filter_ostree_var_paths(section: &mut NonRpmSoftwareSection) {
 fn dedup_ecosystem(method: &str) -> &str {
     if method == METHOD_PIP_DIST_INFO || method == METHOD_PYTHON_VENV {
         "pip"
-    } else if method == METHOD_NPM_LOCKFILE || method == METHOD_NPM_MANIFEST {
+    } else if method == METHOD_NPM_LOCKFILE
+        || method == METHOD_NPM_MANIFEST
+        || method == METHOD_NPM_GLOBAL
+    {
         "npm"
     } else if method == METHOD_GEM_LOCKFILE || method == METHOD_GEM_SYSTEM {
         "gem"
@@ -3617,5 +3828,481 @@ mod tests {
         let json = r#"{"items":[],"total_size":0,"total_count":0}"#;
         let deser: UnmanagedFileSection = serde_json::from_str(json).unwrap();
         assert!(deser.usr_entries.is_empty());
+    }
+
+    // ---- npm global package detection tests ----
+
+    #[test]
+    fn test_npm_global_merge_npm_list_and_dir_walk() {
+        // npm list -g + directory walk both available: merge, prefer npm list versions.
+        let exec = MockExecutor::new()
+            // discover_npm_global_prefixes: npm root -g succeeds
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // parse_npm_list_global: npm list -g --json succeeds
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    stdout: r#"{
+                        "dependencies": {
+                            "express": {"version": "4.19.0"},
+                            "typescript": {"version": "5.4.0"}
+                        }
+                    }"#
+                    .to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // walk_npm_global_prefix: ls prefix
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "express\ntypescript\nlodash\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // read_npm_package_json for each dir entry
+            .with_file(
+                "/usr/lib/node_modules/express/package.json",
+                r#"{"name": "express", "version": "4.18.0"}"#,
+            )
+            .with_file(
+                "/usr/lib/node_modules/typescript/package.json",
+                r#"{"name": "typescript", "version": "5.3.0"}"#,
+            )
+            .with_file(
+                "/usr/lib/node_modules/lodash/package.json",
+                r#"{"name": "lodash", "version": "4.17.21"}"#,
+            )
+            // rpm filter: none owned by RPM
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/express",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/typescript",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/lodash",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 1, "one item per prefix");
+        let item = &section.items[0];
+        assert_eq!(item.method, "npm global");
+        assert_eq!(item.confidence, "high");
+        assert_eq!(item.path, "usr/lib/node_modules");
+        assert!(item.disposition.is_included());
+
+        // npm list versions should win over dir walk versions.
+        let express = item.packages.iter().find(|p| p.name == "express").unwrap();
+        assert_eq!(express.version, "4.19.0", "npm list version should win");
+
+        let ts = item
+            .packages
+            .iter()
+            .find(|p| p.name == "typescript")
+            .unwrap();
+        assert_eq!(ts.version, "5.4.0", "npm list version should win");
+
+        // lodash only in dir walk — should still appear.
+        let lodash = item.packages.iter().find(|p| p.name == "lodash").unwrap();
+        assert_eq!(lodash.version, "4.17.21");
+
+        assert_eq!(item.packages.len(), 3);
+    }
+
+    #[test]
+    fn test_npm_global_fallback_dir_walk_only() {
+        // npm not on PATH: directory walk fallback only (medium confidence).
+        let exec = MockExecutor::new()
+            // npm root -g fails (npm not on PATH)
+            // MockExecutor returns exit_code 127 for unknown commands,
+            // which is what happens when npm is not installed.
+            // fallback: test -d /usr/lib/node_modules succeeds
+            .with_command(
+                "test -d /usr/lib/node_modules",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // npm list -g --json also fails (no npm)
+            // ls prefix
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "express\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/lib/node_modules/express/package.json",
+                r#"{"name": "express", "version": "4.18.2"}"#,
+            )
+            // rpm filter: not owned
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/express",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+        assert_eq!(item.method, "npm global");
+        assert_eq!(
+            item.confidence, "medium",
+            "should be medium without npm list"
+        );
+        assert_eq!(item.packages.len(), 1);
+        assert_eq!(item.packages[0].name, "express");
+        assert_eq!(item.packages[0].version, "4.18.2");
+    }
+
+    #[test]
+    fn test_npm_global_scoped_packages() {
+        // Scoped packages (@angular/cli, @types/node) discovered.
+        let exec = MockExecutor::new()
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // npm list -g returns scoped packages too
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    stdout: r#"{
+                        "dependencies": {
+                            "@angular/cli": {"version": "17.0.0"}
+                        }
+                    }"#
+                    .to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // ls prefix: shows @angular scope dir
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "@angular\n@types\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // ls scoped dirs
+            .with_command(
+                "ls -1 /usr/lib/node_modules/@angular",
+                ExecResult {
+                    stdout: "cli\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "ls -1 /usr/lib/node_modules/@types",
+                ExecResult {
+                    stdout: "node\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // package.json files
+            .with_file(
+                "/usr/lib/node_modules/@angular/cli/package.json",
+                r#"{"name": "@angular/cli", "version": "16.0.0"}"#,
+            )
+            .with_file(
+                "/usr/lib/node_modules/@types/node/package.json",
+                r#"{"name": "@types/node", "version": "20.0.0"}"#,
+            )
+            // rpm filter: not owned
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/@angular/cli",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/@types/node",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+
+        // @angular/cli: npm list version (17.0.0) should win over dir walk (16.0.0).
+        let angular = item
+            .packages
+            .iter()
+            .find(|p| p.name == "@angular/cli")
+            .unwrap();
+        assert_eq!(angular.version, "17.0.0");
+
+        // @types/node: only in dir walk.
+        let types_node = item
+            .packages
+            .iter()
+            .find(|p| p.name == "@types/node")
+            .unwrap();
+        assert_eq!(types_node.version, "20.0.0");
+
+        assert_eq!(item.packages.len(), 2);
+    }
+
+    #[test]
+    fn test_npm_global_rpm_owned_filtered() {
+        // RPM-owned packages are filtered out.
+        let exec = MockExecutor::new()
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    stdout: r#"{
+                        "dependencies": {
+                            "npm": {"version": "10.0.0"},
+                            "express": {"version": "4.18.2"}
+                        }
+                    }"#
+                    .to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "npm\nexpress\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/lib/node_modules/npm/package.json",
+                r#"{"name": "npm", "version": "10.0.0"}"#,
+            )
+            .with_file(
+                "/usr/lib/node_modules/express/package.json",
+                r#"{"name": "express", "version": "4.18.2"}"#,
+            )
+            // npm is RPM-owned, express is not.
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/npm",
+                ExecResult {
+                    stdout: "npm-10.0.0-1.el9.x86_64\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/express",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 1);
+        let item = &section.items[0];
+        assert_eq!(item.packages.len(), 1, "RPM-owned npm should be filtered");
+        assert_eq!(item.packages[0].name, "express");
+    }
+
+    #[test]
+    fn test_npm_global_multiple_prefixes() {
+        // Multiple prefixes produce separate NonRpmItem entries.
+        // npm list fails — each prefix relies on dir walk only,
+        // isolating the "separate item per prefix" concern.
+        let exec = MockExecutor::new()
+            // npm root -g returns one prefix
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/local/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // fallback: /usr/lib/node_modules also exists
+            .with_command(
+                "test -d /usr/lib/node_modules",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // npm list fails (isolate dir walk per prefix)
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            // ls first prefix
+            .with_command(
+                "ls -1 /usr/local/lib/node_modules",
+                ExecResult {
+                    stdout: "yarn\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/local/lib/node_modules/yarn/package.json",
+                r#"{"name": "yarn", "version": "1.22.0"}"#,
+            )
+            .with_command(
+                "rpm -qf /usr/local/lib/node_modules/yarn",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            // ls second prefix
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "eslint\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/lib/node_modules/eslint/package.json",
+                r#"{"name": "eslint", "version": "8.50.0"}"#,
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/eslint",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 2, "separate item per prefix");
+
+        let local_item = section
+            .items
+            .iter()
+            .find(|i| i.path == "usr/local/lib/node_modules")
+            .expect("should have usr/local prefix item");
+        assert_eq!(local_item.packages.len(), 1);
+        assert_eq!(local_item.packages[0].name, "yarn");
+        assert_eq!(
+            local_item.confidence, "medium",
+            "no npm list -> medium confidence"
+        );
+
+        let lib_item = section
+            .items
+            .iter()
+            .find(|i| i.path == "usr/lib/node_modules")
+            .expect("should have usr/lib prefix item");
+        assert_eq!(lib_item.packages.len(), 1);
+        assert_eq!(lib_item.packages[0].name, "eslint");
+    }
+
+    #[test]
+    fn test_npm_global_empty_prefix_no_item() {
+        // Empty prefix (no packages after filtering) produces no item.
+        let exec = MockExecutor::new()
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    stdout: r#"{"dependencies": {"npm": {"version": "10.0.0"}}}"#.to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "npm\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/lib/node_modules/npm/package.json",
+                r#"{"name": "npm", "version": "10.0.0"}"#,
+            )
+            // npm is RPM-owned — will be filtered, leaving empty list.
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/npm",
+                ExecResult {
+                    stdout: "npm-10.0.0-1.el9.x86_64\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(
+            section.items.len(),
+            0,
+            "empty prefix should not produce an item"
+        );
     }
 }
