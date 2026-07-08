@@ -316,6 +316,15 @@ export function Sidebar({
             "[data-group-slug][data-group-actionable]",
           );
           if (wrapper) {
+            // Only fire from group heading buttons (multi-section groups)
+            // or from within singleton group wrappers. Child NavItem links
+            // inside a multi-section group must not trigger batch actions.
+            const isMultiSection = !wrapper.classList.contains(
+              "inspectah-sidebar__group-wrapper--singleton",
+            );
+            if (isMultiSection && !target.matches("button[aria-expanded]")) {
+              return;
+            }
             e.preventDefault();
             const slug = wrapper.getAttribute("data-group-slug")!;
             const label = wrapper.getAttribute("data-group-label")!;

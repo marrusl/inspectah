@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import type {
@@ -1234,6 +1234,114 @@ describe("Sidebar", () => {
       expect(
         screen.getByLabelText("Actions for Users & Identity"),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe("Ctrl+Shift+A/X target filtering", () => {
+    const onBatchToggle = vi.fn(() => Promise.resolve());
+
+    beforeEach(() => {
+      onBatchToggle.mockClear();
+    });
+
+    it("does NOT fire Ctrl+Shift+A from child NavItem within a multi-section group", () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Focus a child NavItem link inside the system-config group
+      const configLink = screen.getByText("Configuration Files").closest("a");
+      expect(configLink).toBeTruthy();
+      configLink!.focus();
+
+      // Fire Ctrl+Shift+A from the child NavItem
+      fireEvent.keyDown(configLink!, { key: "a", ctrlKey: true, shiftKey: true });
+
+      // Should NOT trigger batch toggle — focus was on a child, not the heading
+      expect(onBatchToggle).not.toHaveBeenCalled();
+    });
+
+    it("does NOT fire Ctrl+Shift+X from child NavItem within a multi-section group", () => {
+      render(
+        <Sidebar
+          activeSection="services"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Focus a child NavItem link inside the services-scheduling group
+      const servicesLink = screen.getByText("Services").closest("a");
+      expect(servicesLink).toBeTruthy();
+      servicesLink!.focus();
+
+      fireEvent.keyDown(servicesLink!, { key: "x", ctrlKey: true, shiftKey: true });
+
+      expect(onBatchToggle).not.toHaveBeenCalled();
+    });
+
+    it("fires Ctrl+Shift+A from group heading button of multi-section group", () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Focus the group heading button (has aria-expanded)
+      const headingBtn = screen
+        .getByText("System Configuration")
+        .closest("button");
+      expect(headingBtn).toBeTruthy();
+      headingBtn!.focus();
+
+      fireEvent.keyDown(headingBtn!, { key: "a", ctrlKey: true, shiftKey: true });
+
+      expect(onBatchToggle).toHaveBeenCalledWith("system-config", true);
+    });
+
+    it("fires Ctrl+Shift+A from singleton triage NavItem", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Focus the singleton Packages NavItem link
+      const packagesLink = screen.getByText("Packages").closest("a");
+      expect(packagesLink).toBeTruthy();
+      packagesLink!.focus();
+
+      fireEvent.keyDown(packagesLink!, { key: "a", ctrlKey: true, shiftKey: true });
+
+      expect(onBatchToggle).toHaveBeenCalledWith("packages-group", true);
     });
   });
 });

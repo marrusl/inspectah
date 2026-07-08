@@ -72,10 +72,27 @@ function SingleHostApp({
   const mainContentRef = useRef<HTMLDivElement>(null);
   const hamburgerRef = useRef<HTMLButtonElement>(null);
   const pendingFocusItemRef = useRef<string | null>(null);
+  /** Tracks whether the current section change came from a keyboard number
+   *  key press. When true, the focus effect targets the sidebar nav control
+   *  instead of main content, so the user's keyboard position stays in the
+   *  sidebar after pressing 1-8. */
+  const keyboardNavRef = useRef<boolean>(false);
 
   useEffect(() => {
     requestAnimationFrame(() => {
       if (pendingFocusItemRef.current) return;
+
+      // When navigation came from a keyboard number key press,
+      // focus the sidebar nav control instead of main content.
+      if (keyboardNavRef.current) {
+        keyboardNavRef.current = false;
+        const activeNavItem = document.querySelector(
+          'nav[aria-label="Section navigation"] [aria-current="page"]',
+        ) as HTMLElement | null;
+        activeNavItem?.focus();
+        return;
+      }
+
       const container = mainContentRef.current;
       if (!container) return;
 
@@ -498,6 +515,13 @@ function SingleHostApp({
     });
   }, [activeSection, view.data, searchNavCounter]);
 
+  /** Section change from keyboard number key (1-8). Sets the ref so the
+   *  focus effect targets the sidebar nav control instead of main content. */
+  const handleKeyboardNav = useCallback((sectionId: string) => {
+    keyboardNavRef.current = true;
+    setActiveSection(sectionId);
+  }, []);
+
   const handleSidebarSelect = useCallback(
     (sectionId: string) => {
       setActiveSection(sectionId);
@@ -579,7 +603,7 @@ function SingleHostApp({
         onExportComplete={handleExportViewUpdate}
         isPending={mutation.isPending}
         activeSection={activeSection}
-        onNavigateSection={setActiveSection}
+        onNavigateSection={handleKeyboardNav}
         searchPackageItems={packageItems}
         searchConfigItems={configItems}
         searchUserDecisions={view.data?.users_groups_decisions}
