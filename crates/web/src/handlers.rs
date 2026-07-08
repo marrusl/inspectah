@@ -99,6 +99,23 @@ pub struct UserPasswordRequest {
     pub hash: Option<String>,
 }
 
+// -- Language package pin endpoint request bodies -------------------------
+
+#[derive(Deserialize)]
+pub struct SetPackagePinRequest {
+    pub ecosystem: String,
+    pub env_path: String,
+    pub package: String,
+    pub pinned: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SetBulkPackagePinRequest {
+    pub ecosystem: String,
+    pub env_path: String,
+    pub pinned: bool,
+}
+
 // -- Handlers -------------------------------------------------------------
 
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -535,6 +552,53 @@ pub async fn user_password(
         }
     };
     let op = RefinementOp::UserPassword(pw_op);
+    let mut session = state.session.lock().unwrap();
+    session.apply(op).map_err(AppError)?;
+    Ok(Json(
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
+    ))
+}
+
+// -- Language package pin handlers -----------------------------------------
+
+pub async fn set_package_pin(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let req: SetPackagePinRequest = serde_json::from_slice(&body).map_err(|e| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid set package pin request: {e}"
+        )))
+    })?;
+    let op = RefinementOp::SetPackagePin {
+        item_id: inspectah_refine::types::ItemId::LanguagePackage {
+            ecosystem: req.ecosystem,
+            env_path: req.env_path,
+            package: req.package,
+        },
+        pinned: req.pinned,
+    };
+    let mut session = state.session.lock().unwrap();
+    session.apply(op).map_err(AppError)?;
+    Ok(Json(
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
+    ))
+}
+
+pub async fn set_bulk_package_pin(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let req: SetBulkPackagePinRequest = serde_json::from_slice(&body).map_err(|e| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid set bulk package pin request: {e}"
+        )))
+    })?;
+    let op = RefinementOp::SetBulkPackagePin {
+        ecosystem: req.ecosystem,
+        env_path: req.env_path,
+        pinned: req.pinned,
+    };
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
@@ -1760,5 +1824,222 @@ mod tests {
             .find(|g| g["slug"] == "network-group")
             .unwrap();
         assert_eq!(network["has_actionable_sections"], false);
+    }
+
+    // -- Language package pin endpoint tests ----------------------------------
+
+    #[tokio::test]
+    async fn set_package_pin_toggles_single_package() {
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        let mut snap = empty_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/venv".into(),
+                name: "app-venv".into(),
+                method: "pip_freeze".into(),
+                confidence: "high".into(),
+                disposition: FindingKind::included(),
+                lang: "pip".into(),
+                packages: vec![
+                    LanguagePackage {
+                        name: "flask".into(),
+                        version: "2.0".into(),
+                        pinned: false,
+                    },
+                    LanguagePackage {
+                        name: "requests".into(),
+                        version: "2.28".into(),
+                        pinned: false,
+                    },
+                ],
+                manifest_files: std::collections::HashMap::new(),
+                has_c_extensions: false,
+                system_site_packages: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let payload = serde_json::json!({
+            "ecosystem": "pip",
+            "env_path": "/opt/venv",
+            "package": "flask",
+            "pinned": true,
+        });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        let result = set_package_pin(State(state.clone()), body).await;
+        assert!(result.is_ok(), "set_package_pin should succeed");
+
+        // Verify flask is pinned, requests is not
+        let session = state.session.lock().unwrap();
+        let snap = session.snapshot_projected();
+        let item = snap
+            .non_rpm_software
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find(|i| i.path == "/opt/venv")
+            .unwrap();
+        let flask = item.packages.iter().find(|p| p.name == "flask").unwrap();
+        let requests = item.packages.iter().find(|p| p.name == "requests").unwrap();
+        assert!(flask.pinned, "flask should be pinned");
+        assert!(!requests.pinned, "requests should not be pinned");
+    }
+
+    #[tokio::test]
+    async fn set_bulk_package_pin_toggles_all_packages_in_env() {
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        let mut snap = empty_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/usr/lib/node_modules".into(),
+                name: "global-npm".into(),
+                method: "npm_list".into(),
+                confidence: "high".into(),
+                disposition: FindingKind::included(),
+                lang: "npm".into(),
+                packages: vec![
+                    LanguagePackage {
+                        name: "pm2".into(),
+                        version: "5.3.0".into(),
+                        pinned: false,
+                    },
+                    LanguagePackage {
+                        name: "yarn".into(),
+                        version: "1.22.19".into(),
+                        pinned: false,
+                    },
+                ],
+                manifest_files: std::collections::HashMap::new(),
+                has_c_extensions: false,
+                system_site_packages: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let payload = serde_json::json!({
+            "ecosystem": "npm",
+            "env_path": "/usr/lib/node_modules",
+            "pinned": true,
+        });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        let result = set_bulk_package_pin(State(state.clone()), body).await;
+        assert!(result.is_ok(), "set_bulk_package_pin should succeed");
+
+        // Verify all packages are pinned
+        let session = state.session.lock().unwrap();
+        let snap = session.snapshot_projected();
+        let item = snap
+            .non_rpm_software
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find(|i| i.path == "/usr/lib/node_modules")
+            .unwrap();
+        for pkg in &item.packages {
+            assert!(pkg.pinned, "{} should be pinned", pkg.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn set_package_pin_returns_updated_view() {
+        use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmItem, NonRpmSoftwareSection};
+
+        let mut snap = empty_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/opt/venv".into(),
+                name: "app-venv".into(),
+                method: "pip_freeze".into(),
+                confidence: "high".into(),
+                disposition: FindingKind::included(),
+                lang: "pip".into(),
+                packages: vec![LanguagePackage {
+                    name: "django".into(),
+                    version: "4.2".into(),
+                    pinned: false,
+                }],
+                manifest_files: std::collections::HashMap::new(),
+                has_c_extensions: false,
+                system_site_packages: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        let payload = serde_json::json!({
+            "ecosystem": "pip",
+            "env_path": "/opt/venv",
+            "package": "django",
+            "pinned": true,
+        });
+        let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        let result = set_package_pin(State(state.clone()), body).await;
+        let response = match result {
+            Ok(r) => r.into_response(),
+            Err(e) => panic!("set_package_pin failed: {}", e.0),
+        };
+        let resp_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+
+        // Verify the view response includes language_packages with pinned state
+        let lang = json["language_packages"].as_array().unwrap();
+        assert_eq!(lang.len(), 1);
+        assert_eq!(lang[0]["packages"][0]["name"], "django");
+
+        // Also verify directly in the session
+        let session = state.session.lock().unwrap();
+        let snap = session.snapshot_projected();
+        let item = snap
+            .non_rpm_software
+            .as_ref()
+            .unwrap()
+            .items
+            .first()
+            .unwrap();
+        let pkg = &item.packages[0];
+        eprintln!(
+            "Direct check: pkg.name={}, pkg.pinned={}",
+            pkg.name, pkg.pinned
+        );
+        assert_eq!(pkg.name, "django");
+        assert_eq!(
+            pkg.pinned, true,
+            "django should be pinned in projected snapshot"
+        );
+
+        eprintln!("JSON check: {:?}", lang[0]["packages"][0]);
+        assert_eq!(
+            lang[0]["packages"][0]["pinned"], true,
+            "django should be pinned in JSON response"
+        );
     }
 }

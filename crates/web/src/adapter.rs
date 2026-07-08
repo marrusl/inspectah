@@ -24,10 +24,10 @@ use inspectah_refine::session::RefineSession;
 
 use crate::web_types::{
     ContextItem, ContextSubsection, DropInDecisionDto, FlatpakDecisionDto, GroupInfo,
-    GroupMemberInfo, LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto,
-    QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto, SysctlDecisionDto,
-    TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto, VersionChangeEntry,
-    ViewResponse,
+    GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto, PackageProvenance,
+    ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto,
+    SysctlDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
+    VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -325,8 +325,9 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
     // -- Language packages (from non_rpm_software items with lang field) ------
 
     let snap = session.snapshot();
+    let projected = session.snapshot_projected();
 
-    let language_packages: Vec<LanguagePackageEnvDto> = snap
+    let language_packages: Vec<LanguagePackageEnvDto> = projected
         .non_rpm_software
         .as_ref()
         .map(|nrs| {
@@ -344,10 +345,20 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                         ecosystem: item.lang.clone(),
                         path: item.path.clone(),
                         method: item.method.clone(),
-                        packages: item.packages.iter().map(|p| p.name.clone()).collect(),
+                        packages: item
+                            .packages
+                            .iter()
+                            .map(|p| LanguagePackageDto {
+                                name: p.name.clone(),
+                                detected_version: p.version.clone(),
+                                pinned: p.pinned,
+                            })
+                            .collect(),
                         confidence: item.confidence.clone(),
                         manifest_basis,
                         include: item.disposition.is_included(),
+                        has_c_extensions: item.has_c_extensions,
+                        system_site_packages: item.system_site_packages,
                     }
                 })
                 .collect()
@@ -1742,9 +1753,13 @@ mod tests {
         assert_eq!(lang.len(), 1);
         assert_eq!(lang[0]["ecosystem"], "pip");
         assert_eq!(lang[0]["path"], "/opt/app/venv");
-        assert_eq!(lang[0]["packages"][0], "flask");
+        assert_eq!(lang[0]["packages"][0]["name"], "flask");
+        assert_eq!(lang[0]["packages"][0]["detected_version"], "2.0");
+        assert_eq!(lang[0]["packages"][0]["pinned"], false);
         assert_eq!(lang[0]["manifest_basis"], "requirements.txt");
         assert_eq!(lang[0]["include"], true);
+        assert_eq!(lang[0]["has_c_extensions"], false);
+        assert_eq!(lang[0]["system_site_packages"], false);
         assert_eq!(json["has_unmanaged_scan"], false);
     }
 

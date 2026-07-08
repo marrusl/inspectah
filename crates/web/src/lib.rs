@@ -81,6 +81,11 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/user-strategy", post(handlers::user_strategy))
         .route("/api/user-password", post(handlers::user_password))
         .route("/api/user-preview", get(handlers::user_preview))
+        .route("/api/set-package-pin", post(handlers::set_package_pin))
+        .route(
+            "/api/set-bulk-package-pin",
+            post(handlers::set_bulk_package_pin),
+        )
         .route(
             "/api/aggregate/view",
             get(aggregate_handlers::aggregate_view),

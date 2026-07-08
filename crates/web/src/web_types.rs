@@ -13,6 +13,14 @@ use serde::Serialize;
 
 // -- Non-RPM DTOs (language packages + unmanaged files for the frontend) ----
 
+/// A single language package within an environment.
+#[derive(Serialize, Clone, Debug)]
+pub struct LanguagePackageDto {
+    pub name: String,
+    pub detected_version: String,
+    pub pinned: bool,
+}
+
 /// A language package environment (pip venv, npm project, gem project)
 /// projected for the view response.
 #[derive(Serialize, Clone, Debug)]
@@ -20,10 +28,12 @@ pub struct LanguagePackageEnvDto {
     pub ecosystem: String,
     pub path: String,
     pub method: String,
-    pub packages: Vec<String>,
+    pub packages: Vec<LanguagePackageDto>,
     pub confidence: String,
     pub manifest_basis: String,
     pub include: bool,
+    pub has_c_extensions: bool,
+    pub system_site_packages: bool,
 }
 
 /// Provenance signals for an unmanaged file.

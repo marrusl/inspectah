@@ -13,13 +13,19 @@ expression: json
     {
       "confidence": "high",
       "ecosystem": "javascript",
+      "has_c_extensions": false,
       "include": true,
       "manifest_basis": "",
       "method": "binary",
       "packages": [
-        "express"
+        {
+          "detected_version": "4.18.2",
+          "name": "express",
+          "pinned": false
+        }
       ],
-      "path": "/usr/local/bin/node"
+      "path": "/usr/local/bin/node",
+      "system_site_packages": false
     }
   ],
   "package_groups": [],
