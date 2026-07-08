@@ -315,6 +315,15 @@ fn build_scan_roots(
 
     // --scan-path (with validation)
     for path in &args.scan_path {
+        // Reject relative paths
+        if !path.starts_with('/') {
+            eprintln!(
+                "Warning: --scan-path requires absolute paths, skipping '{}'",
+                path
+            );
+            continue;
+        }
+
         // Warn on broad paths (fewer than 2 meaningful path segments).
         let normal_components = std::path::Path::new(path)
             .components()

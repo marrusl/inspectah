@@ -1559,9 +1559,9 @@ impl RefineSession {
                         .non_rpm_software
                         .as_ref()
                         .and_then(|nrs| {
-                            nrs.items.iter().find(|i| {
-                                i.method.contains(ecosystem.as_str()) && i.path == *env_path
-                            })
+                            nrs.items
+                                .iter()
+                                .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                         })
                         .and_then(|item| item.packages.iter().find(|p| p.name == *package))
                         .is_some();
@@ -1589,7 +1589,7 @@ impl RefineSession {
                     .and_then(|nrs| {
                         nrs.items
                             .iter()
-                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                            .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                     })
                     .is_some();
                 if !found {
@@ -1763,9 +1763,9 @@ impl RefineSession {
                         .non_rpm_software
                         .as_ref()
                         .and_then(|nrs| {
-                            nrs.items.iter().find(|i| {
-                                i.method.contains(ecosystem.as_str()) && i.path == *env_path
-                            })
+                            nrs.items
+                                .iter()
+                                .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                         })
                         .and_then(|item| item.packages.iter().find(|p| p.name == *package))
                         .map(|pkg| pkg.pinned == *pinned)
@@ -1784,7 +1784,7 @@ impl RefineSession {
                 .and_then(|nrs| {
                     nrs.items
                         .iter()
-                        .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                        .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                 })
                 .map(|item| item.packages.iter().all(|p| p.pinned == *pinned))
                 .unwrap_or(false),
@@ -2145,7 +2145,7 @@ impl RefineSession {
                         && let Some(item) = nrs
                             .items
                             .iter_mut()
-                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                            .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                         && let Some(pkg) = item.packages.iter_mut().find(|p| p.name == *package)
                     {
                         pkg.pinned = *pinned;
@@ -2160,7 +2160,7 @@ impl RefineSession {
                         && let Some(item) = nrs
                             .items
                             .iter_mut()
-                            .find(|i| i.method.contains(ecosystem.as_str()) && i.path == *env_path)
+                            .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
                     {
                         for pkg in &mut item.packages {
                             pkg.pinned = *pinned;
@@ -6797,6 +6797,7 @@ mod tests {
                     path: "/opt/venv".into(),
                     name: "venv".into(),
                     method: "pip".into(),
+                    lang: "pip".into(),
                     confidence: "high".into(),
                     disposition: FindingKind::included(),
                     packages: vec![
@@ -6840,7 +6841,7 @@ mod tests {
         let item = nrs
             .items
             .iter()
-            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .find(|i| i.lang == "pip" && i.path == "/opt/venv")
             .unwrap();
         let pkg = item.packages.iter().find(|p| p.name == "requests").unwrap();
         assert!(pkg.pinned, "requests should be pinned after SetPackagePin");
@@ -6893,7 +6894,7 @@ mod tests {
         let item = nrs
             .items
             .iter()
-            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .find(|i| i.lang == "pip" && i.path == "/opt/venv")
             .unwrap();
         assert!(
             item.packages.iter().all(|p| p.pinned),
@@ -7019,7 +7020,7 @@ mod tests {
         let item = nrs
             .items
             .iter()
-            .find(|i| i.method.contains("pip") && i.path == "/opt/venv")
+            .find(|i| i.lang == "pip" && i.path == "/opt/venv")
             .unwrap();
         let pkg = item.packages.iter().find(|p| p.name == "requests").unwrap();
         assert!(
