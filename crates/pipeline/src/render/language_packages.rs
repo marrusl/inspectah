@@ -7,8 +7,8 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::NonRpmItem;
 use inspectah_core::util::{
-    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_LOCKFILE, METHOD_NPM_MANIFEST,
-    METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
+    METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_GLOBAL, METHOD_NPM_LOCKFILE,
+    METHOD_NPM_MANIFEST, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
 
 const HIGH_CONFIDENCE: &str = "high";
@@ -29,6 +29,11 @@ fn is_npm_env(item: &NonRpmItem) -> bool {
     item.method == METHOD_NPM_LOCKFILE || item.method == METHOD_NPM_MANIFEST
 }
 
+/// Returns true if the item is an npm global environment.
+fn is_npm_global_env(item: &NonRpmItem) -> bool {
+    item.method == METHOD_NPM_GLOBAL
+}
+
 /// Returns true if the item is a gem environment (lockfile or system).
 fn is_gem_env(item: &NonRpmItem) -> bool {
     item.method == METHOD_GEM_LOCKFILE || item.method == METHOD_GEM_SYSTEM
@@ -36,7 +41,7 @@ fn is_gem_env(item: &NonRpmItem) -> bool {
 
 /// Returns true if the item is a language environment handled by this module.
 pub fn is_language_env(item: &NonRpmItem) -> bool {
-    is_pip_env(item) || is_npm_env(item) || is_gem_env(item)
+    is_pip_env(item) || is_npm_env(item) || is_npm_global_env(item) || is_gem_env(item)
 }
 
 /// Render Containerfile lines for all language package environments.
@@ -55,9 +60,15 @@ pub fn language_package_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let pip_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_pip_env(i)).collect();
     let npm_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_npm_env(i)).collect();
+    let npm_global_items: Vec<&NonRpmItem> =
+        nrs.items.iter().filter(|i| is_npm_global_env(i)).collect();
     let gem_items: Vec<&NonRpmItem> = nrs.items.iter().filter(|i| is_gem_env(i)).collect();
 
-    if pip_items.is_empty() && npm_items.is_empty() && gem_items.is_empty() {
+    if pip_items.is_empty()
+        && npm_items.is_empty()
+        && npm_global_items.is_empty()
+        && gem_items.is_empty()
+    {
         return Vec::new();
     }
 
@@ -68,6 +79,9 @@ pub fn language_package_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     if !npm_items.is_empty() {
         lines.extend(render_npm_section(&npm_items, &rpm_names));
+    }
+    if !npm_global_items.is_empty() {
+        lines.extend(render_npm_global_section(&npm_global_items, &rpm_names));
     }
     if !gem_items.is_empty() {
         lines.extend(render_gem_section(&gem_items, &rpm_names));
@@ -307,6 +321,76 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
              {project_path}/package-lock.json"
         ));
         lines.push(format!("# RUN cd {project_path} && npm ci --production"));
+    }
+
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// npm global rendering
+// ---------------------------------------------------------------------------
+
+fn render_npm_global_section(items: &[&NonRpmItem], rpm_names: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if !has_runtime(rpm_names, RUNTIME_NODEJS) && !rpm_names.is_empty() {
+        lines.push(format!(
+            "# WARNING: {RUNTIME_NODEJS} not found in RPM package list \
+             — add it before this section"
+        ));
+    }
+
+    for item in items {
+        lines.push(String::new());
+        lines.extend(render_npm_global_item(item));
+    }
+
+    lines
+}
+
+fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
+    let mut lines = Vec::new();
+    let prefix = format!("/{}", item.path.trim_start_matches('/'));
+
+    let effective_confidence = if !item.disposition.is_included() {
+        MEDIUM_CONFIDENCE
+    } else {
+        item.confidence.as_str()
+    };
+
+    let method_label = if item.confidence == HIGH_CONFIDENCE {
+        "detected via npm list -g"
+    } else {
+        "detected via directory walk"
+    };
+
+    // Build package list respecting pin state
+    let pkg_list: String = item
+        .packages
+        .iter()
+        .map(|p| {
+            if p.pinned && !p.version.is_empty() {
+                format!("{}@{}", p.name, p.version)
+            } else {
+                p.name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if effective_confidence == HIGH_CONFIDENCE {
+        lines.push(format!("# npm global packages: {prefix} ({method_label})"));
+        if item.has_c_extensions {
+            lines.push(
+                "# WARNING: environment contains native addons — \
+                 build tools (gcc, node-gyp) may be needed"
+                    .into(),
+            );
+        }
+        lines.push(format!("RUN npm install -g {pkg_list}"));
+    } else {
+        lines.push(format!("# npm global packages: {prefix} ({method_label})"));
+        lines.push(format!("# RUN npm install -g {pkg_list}"));
     }
 
     lines
@@ -988,6 +1072,272 @@ mod tests {
         assert!(
             !output.contains("bundle install --deployment"),
             "must NOT use deprecated --deployment flag: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // npm global tests
+    // ---------------------------------------------------------------------------
+
+    fn npm_global_item(
+        path: &str,
+        confidence: &str,
+        packages: Vec<(&str, &str, bool)>,
+    ) -> NonRpmItem {
+        use inspectah_core::util::METHOD_NPM_GLOBAL;
+        NonRpmItem {
+            path: path.into(),
+            name: "npm-global".into(),
+            method: METHOD_NPM_GLOBAL.into(),
+            confidence: confidence.into(),
+            disposition: FindingKind::from_bool(confidence == HIGH_CONFIDENCE),
+            packages: packages
+                .iter()
+                .map(|(n, v, pinned)| LanguagePackage {
+                    name: n.to_string(),
+                    version: v.to_string(),
+                    pinned: *pinned,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn npm_global_rendered_unpinned_by_default() {
+        let snap = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", false), ("typescript", "5.4.2", false)],
+            )],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("RUN npm install -g pm2 typescript"),
+            "unpinned packages must not include version: {output}"
+        );
+        assert!(
+            !output.contains("@5.3.0") && !output.contains("@5.4.2"),
+            "unpinned packages must not have versions: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_rendered_pinned() {
+        let snap = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", true), ("typescript", "5.4.2", true)],
+            )],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("RUN npm install -g pm2@5.3.0 typescript@5.4.2"),
+            "pinned packages must include version: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_mixed_pin_state() {
+        let snap = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", true), ("typescript", "5.4.2", false)],
+            )],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("pm2@5.3.0"),
+            "pinned package must include version: {output}"
+        );
+        assert!(
+            !output.contains("typescript@"),
+            "unpinned package must not include version: {output}"
+        );
+        assert!(
+            output.contains("RUN npm install -g pm2@5.3.0 typescript"),
+            "mixed pin state must be respected: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_scoped_package_rendering() {
+        let snap = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("@angular/cli", "17.0.0", false)],
+            )],
+            &["nodejs"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("RUN npm install -g @angular/cli"),
+            "scoped packages must be rendered correctly: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_excluded_renders_commented_out() {
+        let mut item = npm_global_item(
+            "/usr/local/lib/node_modules",
+            HIGH_CONFIDENCE,
+            vec![("pm2", "5.3.0", false)],
+        );
+        item.disposition = FindingKind::excluded();
+
+        let snap = test_snap(vec![item], &["nodejs"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("# RUN npm install -g"),
+            "excluded npm globals must be commented out: {output}"
+        );
+        assert!(
+            !output.contains("\nRUN npm install -g"),
+            "excluded npm globals must not produce active RUN: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_c_extension_warning() {
+        let mut item = npm_global_item(
+            "/usr/local/lib/node_modules",
+            HIGH_CONFIDENCE,
+            vec![("node-sass", "8.0.0", false)],
+        );
+        item.has_c_extensions = true;
+
+        let snap = test_snap(vec![item], &["nodejs"]);
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("WARNING: environment contains native addons"),
+            "must warn about native addons: {output}"
+        );
+        assert!(
+            output.contains("build tools (gcc, node-gyp) may be needed"),
+            "must mention build tools: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_pinned_field_does_not_affect_pip_gem() {
+        // Verify that existing pip/gem rendering is unchanged by the pinned field.
+        // Use medium-confidence pip (dist-info) which renders package list inline.
+        let pip_item = NonRpmItem {
+            path: "/usr/lib/python3.9/site-packages".into(),
+            name: "system-pip".into(),
+            method: METHOD_PIP_DIST_INFO.into(),
+            confidence: MEDIUM_CONFIDENCE.into(),
+            disposition: FindingKind::excluded(),
+            packages: vec![
+                LanguagePackage {
+                    name: "flask".into(),
+                    version: "2.3.3".into(),
+                    pinned: false,
+                },
+                LanguagePackage {
+                    name: "requests".into(),
+                    version: "2.31.0".into(),
+                    pinned: false,
+                },
+            ],
+            rpm_filtered: true,
+            ..Default::default()
+        };
+
+        let snap = test_snap(
+            vec![pip_item, gem_item("/opt/gemapp", HIGH_CONFIDENCE)],
+            &["python3", "rubygems"],
+        );
+        let lines = language_package_lines(&snap);
+        let output = lines.join("\n");
+
+        // pip should still use == syntax, not @
+        assert!(
+            output.contains("flask==2.3.3"),
+            "pip must use == syntax: {output}"
+        );
+        assert!(
+            !output.contains("flask@2.3.3"),
+            "pip must not use @ syntax: {output}"
+        );
+
+        // gem should still use bundle install, not version pins
+        assert!(
+            output.contains("bundle install"),
+            "gem must use bundle install: {output}"
+        );
+    }
+
+    #[test]
+    fn npm_global_runtime_check() {
+        // Test 1: nodejs absent from RPM list → warning emitted
+        let snap_no_nodejs = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", false)],
+            )],
+            &["httpd"], // some RPM but not nodejs
+        );
+        let lines = language_package_lines(&snap_no_nodejs);
+        let output = lines.join("\n");
+
+        assert!(
+            output.contains("WARNING: nodejs not found in RPM package list"),
+            "must warn when nodejs absent: {output}"
+        );
+
+        // Test 2: nodejs present → no warning
+        let snap_with_nodejs = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", false)],
+            )],
+            &["nodejs"],
+        );
+        let lines_with_nodejs = language_package_lines(&snap_with_nodejs);
+        let output_with_nodejs = lines_with_nodejs.join("\n");
+
+        assert!(
+            !output_with_nodejs.contains("WARNING: nodejs not found"),
+            "must NOT warn when nodejs present: {output_with_nodejs}"
+        );
+
+        // Test 3: no RPM data at all → no warning
+        let snap_no_rpm = test_snap(
+            vec![npm_global_item(
+                "/usr/local/lib/node_modules",
+                HIGH_CONFIDENCE,
+                vec![("pm2", "5.3.0", false)],
+            )],
+            &[], // no RPM data
+        );
+        let lines_no_rpm = language_package_lines(&snap_no_rpm);
+        let output_no_rpm = lines_no_rpm.join("\n");
+
+        assert!(
+            !output_no_rpm.contains("WARNING: nodejs not found"),
+            "must NOT warn when no RPM data: {output_no_rpm}"
         );
     }
 }
