@@ -290,7 +290,7 @@ fn resolve_home_users(
 fn build_scan_roots(
     args: &ScanArgs,
     exec: &dyn inspectah_core::traits::executor::Executor,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let mut roots = default_scan_roots();
     let mut home_users = Vec::new();
     let mut extra_paths = Vec::new();
@@ -298,13 +298,19 @@ fn build_scan_roots(
     // --scan-home
     if let Some(ref home_arg) = args.scan_home {
         if home_arg.is_empty() {
-            eprintln!("Error: --scan-home requires 'all' or a comma-separated user list");
-            std::process::exit(1);
+            anyhow::bail!("--scan-home requires 'all' or a comma-separated user list");
         }
         let users = resolve_home_users(exec, home_arg);
-        home_users = users.iter().map(|(u, _)| u.clone()).collect();
+        // Preserve the "all" sentinel so downstream consumers know the full
+        // scan was requested, not a specific user list.
+        if home_arg == "all" {
+            home_users = vec!["all".to_string()];
+        } else {
+            home_users = users.iter().map(|(u, _)| u.clone()).collect();
+        }
         for (_, home_dir) in &users {
-            if !roots.iter().any(|r| home_dir.starts_with(r.as_str())) {
+            let home_path = Path::new(home_dir);
+            if !roots.iter().any(|r| home_path.starts_with(r.as_str())) {
                 roots.push(home_dir.clone());
             }
         }
@@ -343,12 +349,13 @@ fn build_scan_roots(
         }
 
         extra_paths.push(path.clone());
-        if !roots.iter().any(|r| path.starts_with(r.as_str())) {
+        let scan_path = Path::new(path);
+        if !roots.iter().any(|r| scan_path.starts_with(r.as_str())) {
             roots.push(path.clone());
         }
     }
 
-    (roots, home_users, extra_paths)
+    Ok((roots, home_users, extra_paths))
 }
 
 pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
@@ -371,7 +378,8 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     let executor = RealExecutor::new();
 
     // Build effective scan roots from defaults + CLI flags.
-    let (effective_roots, home_users, extra_paths) = build_scan_roots(args, &executor);
+    let (effective_roots, home_users, extra_paths) =
+        build_scan_roots(args, &executor).context("scan root construction failed")?;
 
     // Step 1: Detect source system
     eprintln!("Detecting source system...");
@@ -703,6 +711,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                             || item.method == METHOD_PIP_DIST_INFO
                             || item.method == METHOD_NPM_LOCKFILE
                             || item.method == METHOD_NPM_MANIFEST
+                            || item.method == METHOD_NPM_GLOBAL
                             || item.method == METHOD_GEM_LOCKFILE
                             || item.method == METHOD_GEM_SYSTEM
                     })
@@ -1626,7 +1635,7 @@ VARIANT_ID="workstation"
             scan_path: vec!["/nonexistent".to_string()],
             ..base_args()
         };
-        let (roots, _, extra_paths) = build_scan_roots(&args, &exec);
+        let (roots, _, extra_paths) = build_scan_roots(&args, &exec).unwrap();
 
         // /nonexistent should not appear in effective roots or extra_paths
         assert!(
@@ -1651,7 +1660,7 @@ VARIANT_ID="workstation"
         };
         // The warning goes to stderr (eprintln). We verify the path is still
         // added to extra_paths when it exists — the warning is advisory.
-        let (roots, _, extra_paths) = build_scan_roots(&args, &exec);
+        let (roots, _, extra_paths) = build_scan_roots(&args, &exec).unwrap();
 
         assert!(
             extra_paths.contains(&"/".to_string()),
@@ -1682,7 +1691,7 @@ VARIANT_ID="workstation"
             scan_home: Some("appuser".to_string()),
             ..base_args()
         };
-        let (roots, home_users, _) = build_scan_roots(&args, &exec);
+        let (roots, home_users, _) = build_scan_roots(&args, &exec).unwrap();
 
         assert_eq!(home_users, vec!["appuser".to_string()]);
         // /opt/appuser starts with /opt (a default root), so no new root added.
@@ -1718,7 +1727,7 @@ VARIANT_ID="workstation"
             ..base_args()
         };
 
-        let (roots, home_users, extra_paths) = build_scan_roots(&args, &exec);
+        let (roots, home_users, extra_paths) = build_scan_roots(&args, &exec).unwrap();
 
         // Verify return values are sane — if anything leaked to stdout,
         // a --inspect-only pipe to serde_json::from_str would fail.
@@ -1728,5 +1737,159 @@ VARIANT_ID="workstation"
         assert!(roots.contains(&"/opt".to_string()));
         assert!(roots.contains(&"/var/www".to_string()));
         assert!(roots.contains(&"/".to_string()));
+    }
+
+    // --- Test 9: empty --scan-home returns error (not process::exit) ---
+
+    #[test]
+    fn scan_home_empty_string_returns_error() {
+        let exec = ScanTestExecutor::new();
+        let args = ScanArgs {
+            scan_home: Some(String::new()),
+            ..base_args()
+        };
+        let result = build_scan_roots(&args, &exec);
+        assert!(result.is_err(), "empty --scan-home must return Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("--scan-home requires"));
+    }
+
+    // --- Test 10: scan_home_users preserves "all" sentinel ---
+
+    #[test]
+    fn scan_home_all_preserves_sentinel() {
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "deploy:x:1000:1000:deploy:/home/deploy:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("all".to_string()),
+            ..base_args()
+        };
+        let (_, home_users, _) = build_scan_roots(&args, &exec).unwrap();
+        assert_eq!(
+            home_users,
+            vec!["all".to_string()],
+            "scan_home_users must preserve the 'all' sentinel"
+        );
+    }
+
+    // =========================================================================
+    // Sibling-prefix regression tests (component-aware path matching)
+    // =========================================================================
+
+    #[test]
+    fn sibling_prefix_not_suppressed_var_www2() {
+        // /var/www is a default root. /var/www2 is a sibling, NOT a child.
+        // It must NOT be suppressed by /var/www.
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd webuser",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "webuser:x:1000:1000:web:/var/www2:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("webuser".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            roots.contains(&"/var/www2".to_string()),
+            "/var/www must NOT suppress sibling /var/www2"
+        );
+    }
+
+    #[test]
+    fn sibling_prefix_not_suppressed_opt_app() {
+        // /opt is a default root. /opt-app is a sibling, NOT a child.
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd appuser",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "appuser:x:1000:1000:app:/opt-app/appuser:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("appuser".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            roots.contains(&"/opt-app/appuser".to_string()),
+            "/opt must NOT suppress sibling /opt-app/appuser"
+        );
+    }
+
+    #[test]
+    fn child_path_suppressed_opt_subdir() {
+        // /opt is a default root. /opt/subdir IS a child and should be suppressed.
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd appuser",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "appuser:x:1000:1000:app:/opt/subdir:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("appuser".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            !roots.contains(&"/opt/subdir".to_string()),
+            "/opt SHOULD suppress child /opt/subdir"
+        );
+    }
+
+    #[test]
+    fn child_path_suppressed_var_www_html() {
+        // /var/www is a default root. /var/www/html IS a child.
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd webuser",
+            inspectah_core::traits::executor::ExecResult {
+                stdout: "webuser:x:1000:1000:web:/var/www/html:/bin/bash\n".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+        );
+
+        let args = ScanArgs {
+            scan_home: Some("webuser".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            !roots.contains(&"/var/www/html".to_string()),
+            "/var/www SHOULD suppress child /var/www/html"
+        );
+    }
+
+    #[test]
+    fn sibling_prefix_scan_path_not_suppressed() {
+        // Verify --scan-path also uses component-aware matching.
+        // /var/www is a default root. /var/www2/data is a sibling path.
+        let exec = ScanTestExecutor::new().with_existing_dir("/var/www2/data");
+
+        let args = ScanArgs {
+            scan_path: vec!["/var/www2/data".to_string()],
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            roots.contains(&"/var/www2/data".to_string()),
+            "/var/www must NOT suppress sibling /var/www2/data via --scan-path"
+        );
     }
 }
