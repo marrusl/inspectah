@@ -36,6 +36,7 @@ import { Content } from "@patternfly/react-core";
 /** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */
 const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
+  config: "Configuration Files",
   configs: "Config Files",
   services: "Services",
   containers: "Containers",
@@ -466,7 +467,7 @@ export function MainContent({
     );
   }
 
-  if (activeSection === "configs") {
+  if (activeSection === "configs" || activeSection === "config") {
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredConfigItems.length === 0;
     return (

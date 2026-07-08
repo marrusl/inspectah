@@ -8,6 +8,7 @@ import type {
   TimelineEntry,
   ViewDirective,
   UserPreviewResponse,
+  SectionGroupMeta,
 } from "./types";
 import { ApiError } from "./types";
 
@@ -60,6 +61,10 @@ export function fetchChanges(): Promise<ChangesSummary> {
 
 export function fetchViewed(): Promise<{ ids: string[] }> {
   return getJson("/api/viewed");
+}
+
+export function fetchGroups(): Promise<SectionGroupMeta[]> {
+  return getJson("/api/groups");
 }
 
 // --- Mutation endpoints ---

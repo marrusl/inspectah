@@ -1,7 +1,7 @@
-import { useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import {
   Nav,
-  NavGroup,
+  NavExpandable,
   NavItem,
   Badge,
   Content,
@@ -11,30 +11,10 @@ import type { RefineStats } from "../api/types";
 import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
+import type { SectionGroupMeta } from "../api/types";
 
-/** Review section IDs (always present). */
-const BASE_REVIEW_SECTIONS = [
-  { id: "packages", label: "Packages" },
-  { id: "configs", label: "Config Files" },
-  { id: "users_groups", label: "Users & Groups" },
-  { id: "services", label: "Services" },
-  { id: "containers", label: "Containers" },
-  { id: "language_packages", label: "Language Packages" },
-  { id: "unmanaged_files", label: "Unmanaged Files" },
-  { id: "system_tuning", label: "System Tuning" },
-];
-
-/** Section IDs from the snapshot context endpoint (read-only reference). */
-const REFERENCE_SECTIONS = [
-  { id: "version_changes", label: "Version Changes" },
-  { id: "compose", label: "Compose" },
-  { id: "network", label: "Network" },
-  { id: "storage", label: "Storage" },
-  { id: "scheduled_tasks", label: "Scheduled Tasks" },
-  { id: "non_rpm_software", label: "Non-RPM Software" },
-  { id: "kernel_boot", label: "Kernel & Boot" },
-  { id: "selinux", label: "Security & Access Control" },
-];
+/** localStorage key for persisting group expand/collapse state. */
+const EXPANDED_STORAGE_KEY = "inspectah-sidebar-expanded";
 
 export interface SidebarProps {
   activeSection: string;
@@ -48,6 +28,8 @@ export interface SidebarProps {
   userDecisionCount?: number;
   /** Whether the snapshot was collected with --include-unmanaged. */
   hasUnmanagedScan?: boolean;
+  /** Section groups from /api/groups. */
+  groups?: SectionGroupMeta[] | null;
   /** When true, renders as a fixed overlay with backdrop. */
   overlay?: boolean;
   /** Called to close the overlay (Escape, backdrop click). */
@@ -93,12 +75,6 @@ function decisionCount(
       (viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0),
     );
   }
-  if (id === "system_tuning") {
-    if (!viewData) return "...";
-    return String(
-      (viewData.sysctls?.length ?? 0) + (viewData.tuned?.length ?? 0),
-    );
-  }
   if (id === "language_packages") {
     if (!viewData) return "...";
     return String(viewData.language_packages?.length ?? 0);
@@ -110,11 +86,21 @@ function decisionCount(
   if (!stats) return "...";
   const section = stats.sections?.find((s: { kind: string }) => {
     if (id === "packages") return s.kind === "package";
-    if (id === "configs") return s.kind === "config";
+    if (id === "config" || id === "configs") return s.kind === "config";
     return false;
   });
   if (section) return String(section.total);
   return "0";
+}
+
+function getInitialExpanded(): Record<string, boolean> {
+  try {
+    const stored = localStorage.getItem(EXPANDED_STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    /* ignore malformed localStorage */
+  }
+  return {};
 }
 
 export function Sidebar({
@@ -125,12 +111,16 @@ export function Sidebar({
   health,
   viewData,
   userDecisionCount,
+  groups,
   hasUnmanagedScan = false,
   overlay = false,
   onClose,
   searchSlot,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
+  const [expandedGroups, setExpandedGroups] = useState<
+    Record<string, boolean>
+  >(getInitialExpanded);
 
   // Focus trap and Escape handler for overlay mode
   useEffect(() => {
@@ -178,6 +168,105 @@ export function Sidebar({
     onClose?.();
   }, [onClose]);
 
+  const handleNavToggle = useCallback(
+    (
+      _event: React.MouseEvent<HTMLButtonElement>,
+      toggledItem: { groupId: number | string; isExpanded: boolean },
+    ) => {
+      const slug = String(toggledItem.groupId);
+      setExpandedGroups((prev) => {
+        const next = { ...prev, [slug]: toggledItem.isExpanded };
+        try {
+          localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Badge text for a given section. */
+  const badge = useCallback(
+    (sectionId: string, isTriage: boolean): string | undefined => {
+      if (isTriage) {
+        return decisionCount(stats, sectionId, userDecisionCount, viewData);
+      }
+      return sectionCount(sections, sectionId);
+    },
+    [stats, sections, userDecisionCount, viewData],
+  );
+
+  const renderNavContent = () => {
+    if (!groups) {
+      return (
+        <>
+          <Skeleton width="80%" />
+          <Skeleton width="60%" />
+          <Skeleton width="70%" />
+        </>
+      );
+    }
+
+    return groups.map((group) => {
+      if (group.sections.length === 1) {
+        // Singleton group — render as a plain NavItem (no chevron)
+        const sec = group.sections[0];
+        return (
+          <NavItem
+            key={sec.id}
+            itemId={sec.id}
+            isActive={activeSection === sec.id}
+            aria-current={activeSection === sec.id ? "page" : undefined}
+            onClick={() => onSelect(sec.id)}
+          >
+            {sec.label}{" "}
+            <Badge isRead>{badge(sec.id, sec.is_triage)}</Badge>
+          </NavItem>
+        );
+      }
+
+      // Multi-section group — NavExpandable with child NavItems
+      const groupIsActive = group.sections.some(
+        (s) => activeSection === s.id,
+      );
+      return (
+        <NavExpandable
+          key={group.slug}
+          title={group.label}
+          groupId={group.slug}
+          isExpanded={expandedGroups[group.slug] ?? true}
+          isActive={groupIsActive}
+          id={group.slug}
+        >
+          {group.sections.map((sec) => (
+            <NavItem
+              key={sec.id}
+              itemId={sec.id}
+              isActive={activeSection === sec.id}
+              aria-current={activeSection === sec.id ? "page" : undefined}
+              onClick={() => onSelect(sec.id)}
+            >
+              {sec.label}{" "}
+              <Badge isRead>{badge(sec.id, sec.is_triage)}</Badge>
+            </NavItem>
+          ))}
+          {group.slug === "software" && !hasUnmanagedScan && (
+            <Content
+              component="small"
+              className="inspectah-sidebar__hint"
+              data-testid="unmanaged-hint"
+            >
+              Unmanaged files not scanned. Re-run with{" "}
+              <code>--include-unmanaged</code> to review.
+            </Content>
+          )}
+        </NavExpandable>
+      );
+    });
+  };
+
   const sidebarContent = (
     <nav
       className={`inspectah-sidebar${overlay ? " inspectah-sidebar--overlay" : ""}`}
@@ -202,46 +291,8 @@ export function Sidebar({
         )}
       </div>
       {searchSlot}
-      <Nav aria-label="Sections">
-        <NavGroup title="Review">
-          {BASE_REVIEW_SECTIONS.map((sec) => (
-            <NavItem
-              key={sec.id}
-              itemId={sec.id}
-              isActive={activeSection === sec.id}
-              aria-current={activeSection === sec.id ? "page" : undefined}
-              onClick={() => onSelect(sec.id)}
-            >
-              {sec.label}{" "}
-              <Badge isRead>
-                {decisionCount(stats, sec.id, userDecisionCount, viewData)}
-              </Badge>
-            </NavItem>
-          ))}
-          {!hasUnmanagedScan && (
-            <Content
-              component="small"
-              className="inspectah-sidebar__hint"
-              data-testid="unmanaged-hint"
-            >
-              Unmanaged files not scanned. Re-run with{" "}
-              <code>--include-unmanaged</code> to review.
-            </Content>
-          )}
-        </NavGroup>
-        <NavGroup title="Reference">
-          {REFERENCE_SECTIONS.map((sec) => (
-            <NavItem
-              key={sec.id}
-              itemId={sec.id}
-              isActive={activeSection === sec.id}
-              aria-current={activeSection === sec.id ? "page" : undefined}
-              onClick={() => onSelect(sec.id)}
-            >
-              {sec.label} <Badge isRead>{sectionCount(sections, sec.id)}</Badge>
-            </NavItem>
-          ))}
-        </NavGroup>
+      <Nav aria-label="Sections" onToggle={handleNavToggle}>
+        {renderNavContent()}
       </Nav>
     </nav>
   );

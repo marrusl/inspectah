@@ -110,6 +110,31 @@ const MOCK_HEALTH = {
   policy: { distro_repos: ["baseos", "appstream"] },
 };
 
+/** Minimal groups needed for the sidebar to render nav items. */
+const MOCK_GROUPS = [
+  {
+    slug: "packages-group",
+    label: "Packages",
+    sections: [{ id: "packages", label: "Packages", is_triage: true }],
+    has_actionable_sections: true,
+  },
+  {
+    slug: "services-scheduling",
+    label: "Services & Scheduling",
+    sections: [
+      { id: "services", label: "Services", is_triage: true },
+      { id: "containers", label: "Containers", is_triage: true },
+    ],
+    has_actionable_sections: true,
+  },
+  {
+    slug: "network-group",
+    label: "Network",
+    sections: [{ id: "network", label: "Network", is_triage: false }],
+    has_actionable_sections: false,
+  },
+];
+
 beforeEach(() => {
   // jsdom does not implement scrollIntoView — stub it globally
   Element.prototype.scrollIntoView = vi.fn();
@@ -143,6 +168,12 @@ beforeEach(() => {
     }
     if (url === "/api/viewed" && opts?.method === "POST") {
       return Promise.resolve({ ok: true, status: 204 });
+    }
+    if (url === "/api/groups") {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(MOCK_GROUPS),
+      });
     }
     return Promise.resolve({
       ok: false,
@@ -282,9 +313,9 @@ describe("Focus fallback for context/empty sections", () => {
       expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
-    // Switch to compose (a context/reference section — maps to backend "containers" section)
-    const composeNav = screen.getByText("Compose");
-    await userEvent.click(composeNav);
+    // Switch to network (a context/reference section)
+    const networkNav = screen.getByText("Network");
+    await userEvent.click(networkNav);
 
     // Wait for requestAnimationFrame focus
     await act(async () => {
@@ -356,6 +387,12 @@ describe("Retry button refetches all endpoints", () => {
           json: () => Promise.resolve({ ids: [] }),
         });
       }
+      if (url === "/api/groups") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_GROUPS),
+        });
+      }
       return Promise.resolve({
         ok: false,
         status: 404,
@@ -418,6 +455,12 @@ describe("Undo/redo focus restore", () => {
       }
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/groups") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_GROUPS),
+        });
       }
       return Promise.resolve({
         ok: false,
@@ -521,6 +564,12 @@ describe("RepoBar renders in packages section", () => {
       }
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/groups") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_GROUPS),
+        });
       }
       return Promise.resolve({
         ok: false,
@@ -631,6 +680,12 @@ describe("App-level packages rendering with unified components", () => {
       }
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/groups") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_GROUPS),
+        });
       }
       return Promise.resolve({
         ok: false,

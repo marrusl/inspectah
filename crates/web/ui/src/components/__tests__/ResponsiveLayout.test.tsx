@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
-import type { HealthResponse, ReferenceSection } from "../../api/types";
+import type {
+  HealthResponse,
+  ReferenceSection,
+  SectionGroupMeta,
+} from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
 
 const MOCK_STATS = mockStats({
@@ -35,6 +39,30 @@ const MOCK_HEALTH: HealthResponse = {
 
 const MOCK_SECTIONS: ReferenceSection[] = [
   { id: "services", display_name: "Services", items: [] },
+];
+
+/** Minimal groups for sidebar rendering in overlay mode. */
+const MOCK_GROUPS: SectionGroupMeta[] = [
+  {
+    slug: "packages-group",
+    label: "Packages",
+    sections: [{ id: "packages", label: "Packages", is_triage: true }],
+    has_actionable_sections: true,
+  },
+  {
+    slug: "system-config",
+    label: "System Configuration",
+    sections: [
+      { id: "config", label: "Configuration Files", is_triage: true },
+    ],
+    has_actionable_sections: true,
+  },
+  {
+    slug: "services-scheduling",
+    label: "Services & Scheduling",
+    sections: [{ id: "services", label: "Services", is_triage: true }],
+    has_actionable_sections: true,
+  },
 ];
 
 describe("Sidebar overlay mode", () => {
@@ -144,13 +172,14 @@ describe("Sidebar overlay mode", () => {
         stats={MOCK_STATS}
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
+        groups={MOCK_GROUPS}
         overlay
         onClose={vi.fn()}
       />,
     );
 
-    await user.click(screen.getByText("Config Files"));
-    expect(onSelect).toHaveBeenCalledWith("configs");
+    await user.click(screen.getByText("Configuration Files"));
+    expect(onSelect).toHaveBeenCalledWith("config");
   });
 });
 

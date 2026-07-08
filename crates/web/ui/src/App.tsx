@@ -17,6 +17,7 @@ import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
 import { useRpmUpload } from "./hooks/useRpmUpload";
+import { useGroups } from "./hooks/useGroups";
 import { Sidebar } from "./components/Sidebar";
 import { MainContent } from "./components/MainContent";
 import { AppShell } from "./components/AppShell";
@@ -156,7 +157,16 @@ function SingleHostApp({
 
   const view = useView();
   const sections = useSections();
+  const groups = useGroups();
   const health = healthFromRouter;
+
+  // Redirect retired section IDs to first section (handles stale session state).
+  useEffect(() => {
+    const RETIRED = ["system_tuning", "version_changes"];
+    if (RETIRED.includes(activeSection)) {
+      setActiveSection("packages");
+    }
+  }, [activeSection]);
 
   const undoFocusRef = useRef<string | null>(null);
 
@@ -503,7 +513,9 @@ function SingleHostApp({
         ? health.error
         : !sections.loading && sections.error && sections.data === null
           ? sections.error
-          : null;
+          : !groups.loading && groups.error && groups.data === null
+            ? groups.error
+            : null;
 
   if (initialLoadError) {
     return (
@@ -525,6 +537,7 @@ function SingleHostApp({
                   view.refetch();
                   health.refetch();
                   sections.refetch();
+                  groups.refetch();
                 }}
               >
                 Retry
@@ -615,6 +628,7 @@ function SingleHostApp({
                   viewData={view.data}
                   userDecisionCount={view.data?.users_groups_decisions?.length}
                   hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
+                  groups={groups.data}
                   searchSlot={searchSlot}
                 />
               </div>
@@ -660,6 +674,7 @@ function SingleHostApp({
                 viewData={view.data}
                 userDecisionCount={view.data?.users_groups_decisions?.length}
                 hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
+                groups={groups.data}
                 overlay
                 onClose={closeSidebarOverlay}
                 searchSlot={searchSlot}

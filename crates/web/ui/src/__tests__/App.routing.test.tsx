@@ -17,6 +17,7 @@ vi.mock("../api/client", () => ({
   fetchHealth: (...args: unknown[]) => mockFetchHealth(...(args as [])),
   fetchView: (...args: unknown[]) => mockFetchView(...(args as [])),
   fetchSections: (...args: unknown[]) => mockFetchSections(...(args as [])),
+  fetchGroups: vi.fn().mockResolvedValue([]),
   fetchViewed: vi.fn().mockResolvedValue({ ids: [] }),
   fetchOps: vi.fn().mockResolvedValue([]),
   applyOp: vi.fn().mockResolvedValue({}),

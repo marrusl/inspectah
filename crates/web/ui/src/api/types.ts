@@ -1001,6 +1001,23 @@ export interface AggregateDiffResponse {
   stats: DiffStats;
 }
 
+// --- Group metadata types (from GET /api/groups) ---
+
+/** Metadata for a single section within a group. */
+export interface SectionMetaDto {
+  id: string;
+  label: string;
+  is_triage: boolean;
+}
+
+/** Metadata for a section group, consumed by the sidebar. */
+export interface SectionGroupMeta {
+  slug: string;
+  label: string;
+  sections: SectionMetaDto[];
+  has_actionable_sections: boolean;
+}
+
 // --- Error type ---
 
 export class ApiError extends Error {
