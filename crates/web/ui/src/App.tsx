@@ -10,7 +10,7 @@ import {
 } from "@patternfly/react-core";
 import { UploadIcon } from "@patternfly/react-icons";
 import type { ViewResponse, RpmUploadRowState } from "./api/types";
-import { fetchOps } from "./api/client";
+import { fetchOps, batchToggleGroup } from "./api/client";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -205,6 +205,15 @@ function SingleHostApp({
   );
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
+
+  /** Batch-toggle all actionable items in a section group. */
+  const handleBatchToggle = useCallback(
+    async (groupSlug: string, include: boolean) => {
+      await batchToggleGroup(groupSlug, include);
+      view.invalidate();
+    },
+    [view.invalidate],
+  );
 
   // --- RPM upload ---
   const rpmUpload = useRpmUpload();
@@ -631,6 +640,7 @@ function SingleHostApp({
                   hasUnmanagedScan={view.data?.has_unmanaged_scan ?? false}
                   groups={groups.data}
                   searchSlot={searchSlot}
+                  onBatchToggle={handleBatchToggle}
                 />
               </div>
             )}
@@ -679,6 +689,7 @@ function SingleHostApp({
                 overlay
                 onClose={closeSidebarOverlay}
                 searchSlot={searchSlot}
+                onBatchToggle={handleBatchToggle}
               />
             )}
           </>

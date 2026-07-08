@@ -1324,6 +1324,32 @@ body,
   flex-shrink: 0;
 }
 
+/* ─── Sidebar group batch-toggle kebab menu ──────────────────────────── */
+
+.inspectah-sidebar__group-wrapper {
+  position: relative;
+}
+
+.inspectah-sidebar__kebab {
+  position: absolute;
+  top: 2px;
+  right: 24px; /* Clear NavExpandable chevron */
+  z-index: 1;
+}
+
+.inspectah-sidebar__group-wrapper--singleton .inspectah-sidebar__kebab {
+  right: 4px;
+}
+
+.inspectah-sidebar__kebab-toggle {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 /* ─── Sidebar hint ───────────────────────────────────────────────────── */
 
 .inspectah-sidebar__hint {

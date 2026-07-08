@@ -67,6 +67,14 @@ export function fetchGroups(): Promise<SectionGroupMeta[]> {
   return getJson("/api/groups");
 }
 
+/** Batch-toggle all actionable items in a section group. */
+export function batchToggleGroup(
+  groupSlug: string,
+  include: boolean,
+): Promise<ViewResponse> {
+  return postJson(`/api/batch-toggle/${groupSlug}`, { include });
+}
+
 // --- Mutation endpoints ---
 
 export function applyTimelineEntry(

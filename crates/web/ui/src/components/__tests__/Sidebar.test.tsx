@@ -946,4 +946,294 @@ describe("Sidebar", () => {
       );
     });
   });
+
+  describe("batch-toggle kebab menu", () => {
+    const onBatchToggle = vi.fn(() => Promise.resolve());
+
+    beforeEach(() => {
+      onBatchToggle.mockClear();
+    });
+
+    it("shows kebab menu on triage groups when onBatchToggle is provided", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Triage singleton groups should have kebab
+      expect(screen.getByTestId("kebab-packages-group")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-identity")).toBeInTheDocument();
+
+      // Triage multi-section groups should have kebab
+      expect(screen.getByTestId("kebab-system-config")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-services-scheduling")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-software")).toBeInTheDocument();
+    });
+
+    it("does not show kebab menu on reference-only groups", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Reference-only groups should NOT have kebab
+      expect(
+        screen.queryByTestId("kebab-network-group"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("kebab-storage-group"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId("kebab-secrets")).not.toBeInTheDocument();
+    });
+
+    it("does not show kebab menu when onBatchToggle is not provided", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("kebab-packages-group"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("kebab-system-config"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("opens dropdown with Include all and Exclude all items", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Click the system-config kebab
+      await userEvent.click(screen.getByTestId("kebab-system-config"));
+
+      // Menu items should appear
+      expect(screen.getByText("Include all")).toBeInTheDocument();
+      expect(screen.getByText("Exclude all")).toBeInTheDocument();
+    });
+
+    it("calls onBatchToggle with include=true on Include all click", async () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      // DropdownItem renders a button inside a li; click the button text
+      await userEvent.click(screen.getByRole("menuitem", { name: "Include all" }));
+
+      expect(onBatchToggle).toHaveBeenCalledWith("system-config", true);
+    });
+
+    it("calls onBatchToggle with include=false on Exclude all click (non-packages)", async () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+
+      expect(onBatchToggle).toHaveBeenCalledWith("system-config", false);
+    });
+
+    it("shows confirmation dialog when excluding packages", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-packages-group"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+
+      // Should NOT call onBatchToggle yet
+      expect(onBatchToggle).not.toHaveBeenCalled();
+
+      // Confirmation dialog should appear
+      expect(screen.getByTestId("packages-confirm-modal")).toBeInTheDocument();
+      expect(
+        screen.getByText(/critical runtime dependencies/),
+      ).toBeInTheDocument();
+    });
+
+    it("calls onBatchToggle after confirming packages exclusion", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-packages-group"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+
+      // Confirm
+      await userEvent.click(screen.getByTestId("packages-confirm-yes"));
+
+      expect(onBatchToggle).toHaveBeenCalledWith("packages-group", false);
+    });
+
+    it("does not call onBatchToggle when canceling packages exclusion", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-packages-group"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+
+      // Cancel
+      await userEvent.click(screen.getByText("Cancel"));
+
+      expect(onBatchToggle).not.toHaveBeenCalled();
+      expect(
+        screen.queryByTestId("packages-confirm-modal"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("announces toggle completion via aria-live", async () => {
+      render(
+        <Sidebar
+          activeSection="config"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Include all" }));
+
+      // Wait for the async handler to complete
+      const announceEl = await screen.findByTestId("batch-toggle-announce");
+      expect(announceEl).toHaveTextContent(
+        "All items included in System Configuration",
+      );
+      expect(announceEl.getAttribute("aria-live")).toBe("assertive");
+    });
+
+    it("does not include packages in safety gate for Include all", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-packages-group"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Include all" }));
+
+      // Include all on Packages should NOT trigger confirmation
+      expect(
+        screen.queryByTestId("packages-confirm-modal"),
+      ).not.toBeInTheDocument();
+      expect(onBatchToggle).toHaveBeenCalledWith("packages-group", true);
+    });
+
+    it("has accessible kebab toggle labels", () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      expect(
+        screen.getByLabelText("Actions for Packages"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByLabelText("Actions for System Configuration"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByLabelText("Actions for Users & Identity"),
+      ).toBeInTheDocument();
+    });
+  });
 });

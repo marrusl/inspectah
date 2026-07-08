@@ -6,7 +6,17 @@ import {
   Badge,
   Content,
   Skeleton,
+  Dropdown,
+  DropdownItem,
+  DropdownList,
+  MenuToggle,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  Button,
 } from "@patternfly/react-core";
+import { EllipsisVIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
 import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
@@ -36,6 +46,8 @@ export interface SidebarProps {
   onClose?: () => void;
   /** Optional search component rendered at the top of the sidebar. */
   searchSlot?: ReactNode;
+  /** Callback for batch-toggling all actionable items in a group. */
+  onBatchToggle?: (groupSlug: string, include: boolean) => Promise<void>;
 }
 
 function sectionCount(
@@ -116,12 +128,19 @@ export function Sidebar({
   overlay = false,
   onClose,
   searchSlot,
+  onBatchToggle,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   const [expandedGroups, setExpandedGroups] = useState<
     Record<string, boolean>
   >(getInitialExpanded);
   const [clearedState, setClearedState] = useState<Record<string, boolean>>({});
+
+  // --- Batch-toggle state ---
+  const [openMenuSlug, setOpenMenuSlug] = useState<string | null>(null);
+  const [batchPending, setBatchPending] = useState<Record<string, boolean>>({});
+  const [pkgConfirmSlug, setPkgConfirmSlug] = useState<string | null>(null);
+  const [batchAnnouncement, setBatchAnnouncement] = useState("");
 
   // Auto-expand the group containing the active section when navigating.
   // This ensures keyboard (1-8) and search navigation reveal the target
@@ -230,13 +249,80 @@ export function Sidebar({
     [activeSection, groups],
   );
 
+  // Clear batch-toggle announcement after screen readers have time to read it
+  useEffect(() => {
+    if (!batchAnnouncement) return;
+    const timer = setTimeout(() => setBatchAnnouncement(""), 5000);
+    return () => clearTimeout(timer);
+  }, [batchAnnouncement]);
+
+  /** Execute a batch toggle and announce the result. */
+  const executeBatchToggle = useCallback(
+    async (groupSlug: string, include: boolean, groupLabel: string) => {
+      if (!onBatchToggle) return;
+      setBatchPending((prev) => ({ ...prev, [groupSlug]: true }));
+      try {
+        await onBatchToggle(groupSlug, include);
+        const verb = include ? "included in" : "excluded from";
+        setBatchAnnouncement(`All items ${verb} ${groupLabel}`);
+      } catch {
+        setBatchAnnouncement(`Failed to update ${groupLabel}`);
+      } finally {
+        setBatchPending((prev) => ({ ...prev, [groupSlug]: false }));
+      }
+    },
+    [onBatchToggle],
+  );
+
+  /** Handle a batch-toggle menu action, gating Packages exclude behind confirmation. */
+  const handleBatchAction = useCallback(
+    (groupSlug: string, include: boolean, groupLabel: string) => {
+      setOpenMenuSlug(null);
+      if (groupSlug === "packages-group" && !include) {
+        setPkgConfirmSlug(groupSlug);
+        return;
+      }
+      executeBatchToggle(groupSlug, include, groupLabel);
+    },
+    [executeBatchToggle],
+  );
+
+  /** Confirm Packages exclude from the safety dialog. */
+  const handlePkgConfirm = useCallback(() => {
+    const slug = pkgConfirmSlug;
+    if (!slug) return;
+    const group = groups?.find((g) => g.slug === slug);
+    setPkgConfirmSlug(null);
+    executeBatchToggle(slug, false, group?.label ?? slug);
+  }, [pkgConfirmSlug, groups, executeBatchToggle]);
+
   /** ArrowDown on a group heading focuses the first child when expanded.
    *  This completes the heading row Tab order contract:
    *  group label -> kebab menu (if present) -> no more stops.
-   *  ArrowDown moves into children; ArrowUp on first child returns to heading. */
+   *  ArrowDown moves into children; ArrowUp on first child returns to heading.
+   *
+   *  Ctrl+Shift+A / Ctrl+Shift+X: batch include/exclude when a triage group
+   *  heading or singleton triage NavItem has focus. No-op on reference-only
+   *  groups. */
   const handleSidebarKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const target = e.target as HTMLElement;
+
+      // --- Ctrl+Shift+A/X: batch toggle focused group ---
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === "a" || key === "x") {
+          const wrapper = target.closest<HTMLElement>(
+            "[data-group-slug][data-group-actionable]",
+          );
+          if (wrapper) {
+            e.preventDefault();
+            const slug = wrapper.getAttribute("data-group-slug")!;
+            const label = wrapper.getAttribute("data-group-label")!;
+            handleBatchAction(slug, key === "a", label);
+          }
+        }
+      }
 
       if (e.key === "ArrowDown" && target.tagName === "BUTTON") {
         // Only act on NavExpandable toggle buttons (identified by aria-expanded)
@@ -272,7 +358,7 @@ export function Sidebar({
         }
       }
     },
-    [],
+    [handleBatchAction],
   );
 
   /** Badge text for a given section. */
@@ -314,14 +400,81 @@ export function Sidebar({
     }
 
     return groups.map((group) => {
+      const hasKebab = group.has_actionable_sections && !!onBatchToggle;
+      const isPending = batchPending[group.slug] ?? false;
+      const isMenuOpen = openMenuSlug === group.slug;
+
+      /** Render the kebab action menu for a triage group. */
+      const kebabMenu = hasKebab ? (
+        <span
+          className="inspectah-sidebar__kebab"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <Dropdown
+            isOpen={isMenuOpen}
+            onSelect={(_event, value) => {
+              setOpenMenuSlug(null);
+              if (value === "include") {
+                handleBatchAction(group.slug, true, group.label);
+              } else if (value === "exclude") {
+                handleBatchAction(group.slug, false, group.label);
+              }
+            }}
+            onOpenChange={(open) =>
+              setOpenMenuSlug(open ? group.slug : null)
+            }
+            popperProps={{ position: "right" }}
+            toggle={(toggleRef) => (
+              <MenuToggle
+                ref={toggleRef}
+                variant="plain"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setOpenMenuSlug(isMenuOpen ? null : group.slug);
+                }}
+                isExpanded={isMenuOpen}
+                isDisabled={isPending}
+                aria-label={`Actions for ${group.label}`}
+                data-testid={`kebab-${group.slug}`}
+                className="inspectah-sidebar__kebab-toggle"
+              >
+                <EllipsisVIcon />
+              </MenuToggle>
+            )}
+          >
+            <DropdownList>
+              <DropdownItem
+                key="include"
+                value="include"
+                isDisabled={isPending}
+                data-testid={`include-all-${group.slug}`}
+              >
+                Include all
+              </DropdownItem>
+              <DropdownItem
+                key="exclude"
+                value="exclude"
+                isDisabled={isPending}
+                data-testid={`exclude-all-${group.slug}`}
+              >
+                Exclude all
+              </DropdownItem>
+            </DropdownList>
+          </Dropdown>
+        </span>
+      ) : null;
+
       if (group.sections.length === 1) {
         // Singleton group — render as a plain NavItem (no chevron)
         const sec = group.sections[0];
         const badgeText = badge(sec.id, sec.is_triage);
         const isCleared = sec.is_triage && clearedState[sec.id];
-        return (
+
+        const navItem = (
           <NavItem
-            key={sec.id}
+            key={hasKebab ? undefined : sec.id}
             itemId={sec.id}
             isActive={activeSection === sec.id}
             aria-current={activeSection === sec.id ? "page" : undefined}
@@ -340,15 +493,33 @@ export function Sidebar({
             )}
           </NavItem>
         );
+
+        if (hasKebab) {
+          return (
+            <div
+              key={sec.id}
+              className="inspectah-sidebar__group-wrapper inspectah-sidebar__group-wrapper--singleton"
+              data-group-slug={group.slug}
+              data-group-actionable="true"
+              data-group-label={group.label}
+            >
+              {navItem}
+              {kebabMenu}
+            </div>
+          );
+        }
+
+        return navItem;
       }
 
       // Multi-section group — NavExpandable with child NavItems
       const groupIsActive = group.sections.some(
         (s) => activeSection === s.id,
       );
-      return (
+
+      const expandable = (
         <NavExpandable
-          key={group.slug}
+          key={hasKebab ? undefined : group.slug}
           title={group.label}
           groupId={group.slug}
           isExpanded={expandedGroups[group.slug] ?? true}
@@ -392,6 +563,23 @@ export function Sidebar({
           )}
         </NavExpandable>
       );
+
+      if (hasKebab) {
+        return (
+          <div
+            key={group.slug}
+            className="inspectah-sidebar__group-wrapper"
+            data-group-slug={group.slug}
+            data-group-actionable="true"
+            data-group-label={group.label}
+          >
+            {expandable}
+            {kebabMenu}
+          </div>
+        );
+      }
+
+      return expandable;
     });
   };
 
@@ -423,20 +611,63 @@ export function Sidebar({
       <Nav aria-label="Sections" onToggle={handleNavToggle}>
         {renderNavContent()}
       </Nav>
+      <div
+        aria-live="assertive"
+        className="pf-v6-screen-reader"
+        data-testid="batch-toggle-announce"
+      >
+        {batchAnnouncement}
+      </div>
     </nav>
   );
 
+  const pkgConfirmModal = pkgConfirmSlug ? (
+    <Modal
+      isOpen
+      onClose={() => setPkgConfirmSlug(null)}
+      aria-label="Confirm package exclusion"
+      variant="small"
+      data-testid="packages-confirm-modal"
+    >
+      <ModalHeader title="Exclude all packages?" />
+      <ModalBody>
+        This will exclude all packages, producing an image missing critical
+        runtime dependencies. Continue?
+      </ModalBody>
+      <ModalFooter>
+        <Button
+          variant="danger"
+          onClick={handlePkgConfirm}
+          data-testid="packages-confirm-yes"
+        >
+          Exclude all
+        </Button>
+        <Button variant="link" onClick={() => setPkgConfirmSlug(null)}>
+          Cancel
+        </Button>
+      </ModalFooter>
+    </Modal>
+  ) : null;
+
   if (overlay) {
     return (
-      <div
-        className="inspectah-sidebar-backdrop"
-        onClick={handleBackdropClick}
-        data-testid="sidebar-backdrop"
-      >
-        <div onClick={(e) => e.stopPropagation()}>{sidebarContent}</div>
-      </div>
+      <>
+        <div
+          className="inspectah-sidebar-backdrop"
+          onClick={handleBackdropClick}
+          data-testid="sidebar-backdrop"
+        >
+          <div onClick={(e) => e.stopPropagation()}>{sidebarContent}</div>
+        </div>
+        {pkgConfirmModal}
+      </>
     );
   }
 
-  return sidebarContent;
+  return (
+    <>
+      {sidebarContent}
+      {pkgConfirmModal}
+    </>
+  );
 }
