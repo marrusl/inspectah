@@ -1128,7 +1128,7 @@ fn parse_package_json(content: &str) -> Vec<LanguagePackage> {
 /// (medium confidence), filters out RPM-owned packages, and produces one
 /// `NonRpmItem` per prefix that has packages.
 fn scan_npm_global_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
-    let prefixes = discover_npm_global_prefixes(exec);
+    let (prefixes, npm_root) = discover_npm_global_prefixes(exec);
     if prefixes.is_empty() {
         return;
     }
@@ -1137,14 +1137,25 @@ fn scan_npm_global_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSec
 
     for prefix in &prefixes {
         let dir_walk_packages = walk_npm_global_prefix(exec, prefix);
-        let merged = merge_npm_global_packages(&npm_list_packages, &dir_walk_packages);
+
+        // Only merge npm list results into the prefix that `npm root -g`
+        // reported. Other prefixes use directory walk only — npm list
+        // reflects the root prefix's package tree, not theirs.
+        let is_npm_root = npm_root.as_deref() == Some(prefix.as_str());
+        let npm_list_for_prefix = if is_npm_root {
+            &npm_list_packages
+        } else {
+            &None
+        };
+
+        let merged = merge_npm_global_packages(npm_list_for_prefix, &dir_walk_packages);
         let filtered = rpm_filter_npm_globals(exec, &merged, prefix);
 
         if filtered.is_empty() {
             continue;
         }
 
-        let confidence = if npm_list_packages.is_some() {
+        let confidence = if is_npm_root && npm_list_packages.is_some() {
             "high"
         } else {
             "medium"
@@ -1168,14 +1179,17 @@ fn scan_npm_global_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSec
 /// Discover npm global prefix directories.
 ///
 /// Runs `npm root -g` for the actual prefix, then checks well-known
-/// fallback paths. Returns a deduplicated list of existing directories.
-fn discover_npm_global_prefixes(exec: &dyn Executor) -> Vec<String> {
+/// fallback paths. Returns a deduplicated list of existing directories
+/// and the npm root prefix (the one returned by `npm root -g`), if any.
+fn discover_npm_global_prefixes(exec: &dyn Executor) -> (Vec<String>, Option<String>) {
     let mut prefixes = Vec::new();
+    let mut npm_root = None;
 
     let result = exec.run("npm", &["root", "-g"]);
     if result.exit_code == 0 {
         let path = result.stdout.trim().to_string();
         if !path.is_empty() {
+            npm_root = Some(path.clone());
             prefixes.push(path);
         }
     }
@@ -1189,7 +1203,7 @@ fn discover_npm_global_prefixes(exec: &dyn Executor) -> Vec<String> {
         }
     }
 
-    prefixes
+    (prefixes, npm_root)
 }
 
 /// Parse `npm list -g --json` output for package names and versions.
@@ -4358,6 +4372,156 @@ mod tests {
             .expect("should have usr/lib prefix item");
         assert_eq!(lib_item.packages.len(), 1);
         assert_eq!(lib_item.packages[0].name, "eslint");
+    }
+
+    #[test]
+    fn test_npm_global_npm_list_bound_to_root_prefix_only() {
+        // Regression: npm list -g results must only be merged into the
+        // prefix that `npm root -g` reported. Other prefixes should
+        // contain only their own directory-walk packages.
+        let exec = MockExecutor::new()
+            // npm root -g returns /usr/lib/node_modules
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "/usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // /usr/local/lib/node_modules also exists as a fallback
+            .with_command(
+                "test -d /usr/local/lib/node_modules",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // npm list -g succeeds with pm2 and typescript
+            .with_command(
+                "npm list -g --json",
+                ExecResult {
+                    stdout: r#"{
+                        "dependencies": {
+                            "pm2": {"version": "5.3.0"},
+                            "typescript": {"version": "5.4.0"}
+                        }
+                    }"#
+                    .to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            // dir walk for /usr/lib/node_modules: pm2 and typescript
+            .with_command(
+                "ls -1 /usr/lib/node_modules",
+                ExecResult {
+                    stdout: "pm2\ntypescript\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/lib/node_modules/pm2/package.json",
+                r#"{"name": "pm2", "version": "5.2.0"}"#,
+            )
+            .with_file(
+                "/usr/lib/node_modules/typescript/package.json",
+                r#"{"name": "typescript", "version": "5.3.0"}"#,
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/pm2",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qf /usr/lib/node_modules/typescript",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            )
+            // dir walk for /usr/local/lib/node_modules: nodemon only
+            .with_command(
+                "ls -1 /usr/local/lib/node_modules",
+                ExecResult {
+                    stdout: "nodemon\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "/usr/local/lib/node_modules/nodemon/package.json",
+                r#"{"name": "nodemon", "version": "3.1.0"}"#,
+            )
+            .with_command(
+                "rpm -qf /usr/local/lib/node_modules/nodemon",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 2, "one item per prefix");
+
+        // npm root prefix: gets npm list data merged, high confidence.
+        let root_item = section
+            .items
+            .iter()
+            .find(|i| i.path == "usr/lib/node_modules")
+            .expect("should have npm root prefix item");
+        assert_eq!(
+            root_item.confidence, "high",
+            "npm root prefix with npm list data should be high confidence"
+        );
+        assert_eq!(root_item.packages.len(), 2);
+        assert!(
+            root_item.packages.iter().any(|p| p.name == "pm2"),
+            "pm2 should appear in npm root prefix"
+        );
+        assert!(
+            root_item.packages.iter().any(|p| p.name == "typescript"),
+            "typescript should appear in npm root prefix"
+        );
+        // npm list versions should win over dir walk versions.
+        let pm2 = root_item.packages.iter().find(|p| p.name == "pm2").unwrap();
+        assert_eq!(pm2.version, "5.3.0", "npm list version should win");
+
+        // Fallback prefix: dir walk only, medium confidence.
+        let fallback_item = section
+            .items
+            .iter()
+            .find(|i| i.path == "usr/local/lib/node_modules")
+            .expect("should have fallback prefix item");
+        assert_eq!(
+            fallback_item.confidence, "medium",
+            "non-root prefix should be medium confidence"
+        );
+        assert_eq!(
+            fallback_item.packages.len(),
+            1,
+            "fallback prefix should only have its own dir-walk packages"
+        );
+        assert_eq!(fallback_item.packages[0].name, "nodemon");
+        assert_eq!(fallback_item.packages[0].version, "3.1.0");
+
+        // No cross-contamination: pm2/typescript must NOT appear in fallback.
+        assert!(
+            !fallback_item.packages.iter().any(|p| p.name == "pm2"),
+            "pm2 must not leak into fallback prefix"
+        );
+        assert!(
+            !fallback_item
+                .packages
+                .iter()
+                .any(|p| p.name == "typescript"),
+            "typescript must not leak into fallback prefix"
+        );
     }
 
     #[test]
