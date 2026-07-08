@@ -498,7 +498,7 @@ describe("ServiceSection shadow override rendering", () => {
     );
   });
 
-  it("combines shadow and locked aria-describedby when both apply", () => {
+  it("combines shadow and locked aria-describedby on checkbox when both apply (shadow-first ordering)", () => {
     const services = [
       makeService({
         unit: "shadow.service",
@@ -511,10 +511,14 @@ describe("ServiceSection shadow override rendering", () => {
     render(<ServiceSection {...defaultProps} services={services} />);
 
     const row = screen.getByTestId("service-item-shadow.service");
-    expect(row).toHaveAttribute(
+    const checkbox = within(row).getByRole("checkbox");
+    // Checkbox should have aria-describedby with shadow-first ordering
+    expect(checkbox).toHaveAttribute(
       "aria-describedby",
-      "locked-reason-service-shadow.service shadow-rationale-shadow.service",
+      "shadow-rationale-shadow.service locked-reason-service-shadow.service",
     );
+    // Row should NOT have aria-describedby (moved to checkbox)
+    expect(row).not.toHaveAttribute("aria-describedby");
   });
 
   it("uses background color when triage border conflicts with shadow border", () => {

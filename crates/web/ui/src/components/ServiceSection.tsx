@@ -173,15 +173,6 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
-              aria-describedby={
-                svcLocked && isShadow
-                  ? `locked-reason-service-${svc.unit} shadow-rationale-${svc.unit}`
-                  : svcLocked
-                    ? `locked-reason-service-${svc.unit}`
-                    : isShadow
-                      ? `shadow-rationale-${svc.unit}`
-                      : undefined
-              }
               tabIndex={idx === 0 ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
@@ -216,9 +207,13 @@ export function ServiceSection({
                         : `Toggle ${svc.unit}`
                     }
                     aria-describedby={
-                      isShadow && svc.shadow_rationale
-                        ? `shadow-rationale-${svc.unit}`
-                        : undefined
+                      svcLocked && isShadow
+                        ? `shadow-rationale-${svc.unit} locked-reason-service-${svc.unit}`
+                        : svcLocked
+                          ? `locked-reason-service-${svc.unit}`
+                          : isShadow
+                            ? `shadow-rationale-${svc.unit}`
+                            : undefined
                     }
                     style={{ minWidth: 20, minHeight: 20 }}
                   />

@@ -409,7 +409,8 @@ export function Sidebar({
     }
 
     return groups.map((group) => {
-      const hasKebab = group.has_actionable_sections && !!onBatchToggle;
+      // Identity batch-toggle deferred — handler only covers groups, not individual users
+      const hasKebab = group.has_actionable_sections && !!onBatchToggle && group.slug !== "identity";
       const isPending = batchPending[group.slug] ?? false;
       const isMenuOpen = openMenuSlug === group.slug;
 

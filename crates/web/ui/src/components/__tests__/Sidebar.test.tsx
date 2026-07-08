@@ -968,14 +968,31 @@ describe("Sidebar", () => {
         />,
       );
 
-      // Triage singleton groups should have kebab
+      // Triage singleton groups should have kebab (except Identity)
       expect(screen.getByTestId("kebab-packages-group")).toBeInTheDocument();
-      expect(screen.getByTestId("kebab-identity")).toBeInTheDocument();
 
       // Triage multi-section groups should have kebab
       expect(screen.getByTestId("kebab-system-config")).toBeInTheDocument();
       expect(screen.getByTestId("kebab-services-scheduling")).toBeInTheDocument();
       expect(screen.getByTestId("kebab-software")).toBeInTheDocument();
+    });
+
+    it("suppresses kebab menu on Identity group (deferred #8)", () => {
+      render(
+        <Sidebar
+          activeSection="users_groups"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      // Identity group should NOT have kebab (batch-toggle handler only covers groups, not individual users)
+      expect(screen.queryByTestId("kebab-identity")).not.toBeInTheDocument();
     });
 
     it("does not show kebab menu on reference-only groups", () => {
@@ -1231,9 +1248,10 @@ describe("Sidebar", () => {
       expect(
         screen.getByLabelText("Actions for System Configuration"),
       ).toBeInTheDocument();
+      // Identity has no kebab menu (deferred #8)
       expect(
-        screen.getByLabelText("Actions for Users & Identity"),
-      ).toBeInTheDocument();
+        screen.queryByLabelText("Actions for Users & Identity"),
+      ).not.toBeInTheDocument();
     });
   });
 
