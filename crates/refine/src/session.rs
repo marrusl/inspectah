@@ -838,6 +838,42 @@ impl RefineSession {
         Ok(())
     }
 
+    /// Apply multiple refinement ops as a single undo/redo step.
+    /// Used by batch-toggle so "Include all" / "Exclude all" undoes atomically.
+    /// Locked and noop ops are silently filtered out.
+    pub fn apply_batch(&mut self, ops: Vec<RefinementOp>) -> Result<(), RefineError> {
+        let valid_ops: Vec<RefinementOp> = ops
+            .into_iter()
+            .filter(|op| {
+                // Skip locked items (same guard as apply())
+                if let RefinementOp::SetInclude {
+                    item_id,
+                    include: true,
+                } = op
+                    && is_item_locked(&self.original, item_id)
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        if valid_ops.is_empty() {
+            return Ok(());
+        }
+
+        self.timeline.truncate(self.cursor);
+        self.timeline.push(TimelineEntry::Batch { ops: valid_ops });
+        self.cursor += 1;
+        self.generation += 1;
+        self.cached_view = None;
+        self.cached_render_context = None;
+        self.cached_decisions = None;
+        self.recompute_view();
+        self.try_autosave();
+        Ok(())
+    }
+
     pub fn undo(&mut self) -> Result<(), RefineError> {
         if self.cursor == 0 {
             return Err(RefineError::NothingToUndo);
@@ -867,29 +903,55 @@ impl RefineSession {
     }
 
     pub fn ops_history(&self) -> Vec<AnnotatedOp> {
-        self.timeline
-            .iter()
-            .enumerate()
-            .filter_map(|(i, entry)| match entry {
-                TimelineEntry::Op(op) => Some(AnnotatedOp {
-                    op: op.clone(),
-                    active: i < self.cursor,
-                }),
-                TimelineEntry::View(_) => None,
-            })
-            .collect()
+        let mut result = Vec::new();
+        for (i, entry) in self.timeline.iter().enumerate() {
+            let active = i < self.cursor;
+            match entry {
+                TimelineEntry::Op(op) => {
+                    result.push(AnnotatedOp {
+                        op: op.clone(),
+                        active,
+                    });
+                }
+                TimelineEntry::Batch { ops } => {
+                    for op in ops {
+                        result.push(AnnotatedOp {
+                            op: op.clone(),
+                            active,
+                        });
+                    }
+                }
+                TimelineEntry::View(_) => {}
+            }
+        }
+        result
     }
 
     /// Returns all timeline entries (both Op and View) with active flags.
+    /// Batch entries are flattened into individual Op entries so the frontend
+    /// does not need to understand the Batch variant.
     pub fn timeline_history(&self) -> Vec<AnnotatedTimelineEntry> {
-        self.timeline
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| AnnotatedTimelineEntry {
-                entry: entry.clone(),
-                active: i < self.cursor,
-            })
-            .collect()
+        let mut result = Vec::new();
+        for (i, entry) in self.timeline.iter().enumerate() {
+            let active = i < self.cursor;
+            match entry {
+                TimelineEntry::Batch { ops } => {
+                    for op in ops {
+                        result.push(AnnotatedTimelineEntry {
+                            entry: TimelineEntry::Op(op.clone()),
+                            active,
+                        });
+                    }
+                }
+                other => {
+                    result.push(AnnotatedTimelineEntry {
+                        entry: other.clone(),
+                        active,
+                    });
+                }
+            }
+        }
+        result
     }
 
     pub fn cursor(&self) -> usize {
@@ -1672,7 +1734,12 @@ impl RefineSession {
     fn build_variant_state(&self) -> VariantProjectionState {
         let mut state = VariantProjectionState::default();
         for entry in &self.timeline[..self.cursor] {
-            if let TimelineEntry::Op(op) = entry {
+            let ops: &[RefinementOp] = match entry {
+                TimelineEntry::Op(op) => std::slice::from_ref(op),
+                TimelineEntry::Batch { ops } => ops.as_slice(),
+                _ => continue,
+            };
+            for op in ops {
                 match op {
                     RefinementOp::SelectVariant { item_id, target } => {
                         variant_ops::apply_select(&mut state, item_id, target);
@@ -1822,352 +1889,373 @@ impl RefineSession {
         let mut variant_state = VariantProjectionState::default();
 
         for entry in &self.timeline[..self.cursor] {
-            let op = match entry {
-                TimelineEntry::Op(op) => op,
+            let ops: &[RefinementOp] = match entry {
+                TimelineEntry::Op(op) => std::slice::from_ref(op),
+                TimelineEntry::Batch { ops } => ops.as_slice(),
                 TimelineEntry::View(_) => continue,
             };
-            match op {
-                RefinementOp::SetInclude { item_id, include } => {
-                    // Defense-in-depth: skip stale SetInclude(true) ops
-                    // from pre-locked autosaved sessions.
-                    if *include && is_item_locked(&self.original, item_id) {
-                        continue;
-                    }
-                    match item_id {
-                        ItemId::Package { name, arch } => {
-                            if let Some(ref mut rpm) = snap.rpm
-                                && let Some(pkg) = rpm
-                                    .packages_added
-                                    .iter_mut()
-                                    .find(|e| e.name == *name && e.arch == *arch)
-                            {
-                                pkg.disposition = FindingKind::from_bool(*include);
-                            }
+            for op in ops {
+                match op {
+                    RefinementOp::SetInclude { item_id, include } => {
+                        // Defense-in-depth: skip stale SetInclude(true) ops
+                        // from pre-locked autosaved sessions.
+                        if *include && is_item_locked(&self.original, item_id) {
+                            continue;
                         }
-                        ItemId::Config { path } => {
-                            if let Some(ref mut config) = snap.config
-                                && let Some(entry) =
-                                    config.files.iter_mut().find(|e| e.path == *path)
-                            {
-                                entry.disposition = FindingKind::from_bool(*include);
+                        match item_id {
+                            ItemId::Package { name, arch } => {
+                                if let Some(ref mut rpm) = snap.rpm
+                                    && let Some(pkg) = rpm
+                                        .packages_added
+                                        .iter_mut()
+                                        .find(|e| e.name == *name && e.arch == *arch)
+                                {
+                                    pkg.disposition = FindingKind::from_bool(*include);
+                                }
                             }
-                        }
-                        ItemId::Repo { path: section_id } => {
-                            if !*include {
-                                // Exclude repo: cascade to packages, repo files, GPG keys
-                                let excluded_sections = self.excluded_sections_at(&snap);
+                            ItemId::Config { path } => {
+                                if let Some(ref mut config) = snap.config
+                                    && let Some(entry) =
+                                        config.files.iter_mut().find(|e| e.path == *path)
+                                {
+                                    entry.disposition = FindingKind::from_bool(*include);
+                                }
+                            }
+                            ItemId::Repo { path: section_id } => {
+                                if !*include {
+                                    // Exclude repo: cascade to packages, repo files, GPG keys
+                                    let excluded_sections = self.excluded_sections_at(&snap);
 
-                                if let Some(ref mut rpm) = snap.rpm {
-                                    // 1. Exclude all packages from this repo (case-insensitive)
-                                    for pkg in &mut rpm.packages_added {
-                                        if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                            pkg.disposition = FindingKind::excluded();
+                                    if let Some(ref mut rpm) = snap.rpm {
+                                        // 1. Exclude all packages from this repo (case-insensitive)
+                                        for pkg in &mut rpm.packages_added {
+                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
+                                                pkg.disposition = FindingKind::excluded();
+                                            }
                                         }
-                                    }
 
-                                    // 2. For repo files: exclude only if ALL sections
-                                    // defined in that file are now excluded
-                                    if let Some(file_paths) =
-                                        self.repo_index.repo_file_by_section.get(section_id)
-                                    {
-                                        for file_path in file_paths {
-                                            let all_sections_excluded = self
-                                                .repo_index
-                                                .repo_file_by_section
-                                                .iter()
-                                                .filter(|(_, paths)| paths.contains(file_path))
-                                                .all(|(sid, _)| excluded_sections.contains(sid));
-                                            if all_sections_excluded
-                                                && let Some(rf) = rpm
-                                                    .repo_files
-                                                    .iter_mut()
-                                                    .find(|r| r.path == *file_path)
-                                            {
-                                                rf.disposition = FindingKind::excluded();
+                                        // 2. For repo files: exclude only if ALL sections
+                                        // defined in that file are now excluded
+                                        if let Some(file_paths) =
+                                            self.repo_index.repo_file_by_section.get(section_id)
+                                        {
+                                            for file_path in file_paths {
+                                                let all_sections_excluded = self
+                                                    .repo_index
+                                                    .repo_file_by_section
+                                                    .iter()
+                                                    .filter(|(_, paths)| paths.contains(file_path))
+                                                    .all(|(sid, _)| {
+                                                        excluded_sections.contains(sid)
+                                                    });
+                                                if all_sections_excluded
+                                                    && let Some(rf) = rpm
+                                                        .repo_files
+                                                        .iter_mut()
+                                                        .find(|r| r.path == *file_path)
+                                                {
+                                                    rf.disposition = FindingKind::excluded();
+                                                }
+                                            }
+                                        }
+
+                                        // 3. For GPG keys: exclude only if ALL sections
+                                        // that reference this key are excluded
+                                        if let Some(key_paths) =
+                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                        {
+                                            for key_path in key_paths {
+                                                if let Some(referencing_sections) = self
+                                                    .repo_index
+                                                    .sections_by_gpg_key
+                                                    .get(key_path)
+                                                {
+                                                    let all_excluded = referencing_sections
+                                                        .iter()
+                                                        .all(|sid| excluded_sections.contains(sid));
+                                                    if all_excluded
+                                                        && let Some(k) = rpm
+                                                            .gpg_keys
+                                                            .iter_mut()
+                                                            .find(|g| g.path == *key_path)
+                                                    {
+                                                        k.disposition = FindingKind::excluded();
+                                                    }
+                                                }
                                             }
                                         }
                                     }
+                                } else {
+                                    // Include repo: re-enable packages, repo files, GPG keys
+                                    if let Some(ref mut rpm) = snap.rpm {
+                                        // 1. Include all packages from this repo (case-insensitive)
+                                        for pkg in &mut rpm.packages_added {
+                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
+                                                pkg.disposition = FindingKind::included();
+                                            }
+                                        }
 
-                                    // 3. For GPG keys: exclude only if ALL sections
-                                    // that reference this key are excluded
-                                    if let Some(key_paths) =
-                                        self.repo_index.gpg_keys_by_section.get(section_id)
-                                    {
-                                        for key_path in key_paths {
-                                            if let Some(referencing_sections) =
-                                                self.repo_index.sections_by_gpg_key.get(key_path)
-                                            {
-                                                let all_excluded = referencing_sections
-                                                    .iter()
-                                                    .all(|sid| excluded_sections.contains(sid));
-                                                if all_excluded
-                                                    && let Some(k) = rpm
-                                                        .gpg_keys
-                                                        .iter_mut()
-                                                        .find(|g| g.path == *key_path)
+                                        // 2. Re-enable repo files for this section
+                                        if let Some(file_paths) =
+                                            self.repo_index.repo_file_by_section.get(section_id)
+                                        {
+                                            for file_path in file_paths {
+                                                if let Some(rf) = rpm
+                                                    .repo_files
+                                                    .iter_mut()
+                                                    .find(|r| r.path == *file_path)
                                                 {
-                                                    k.disposition = FindingKind::excluded();
+                                                    rf.disposition = FindingKind::included();
+                                                }
+                                            }
+                                        }
+
+                                        // 3. Re-enable GPG keys for this section
+                                        if let Some(key_paths) =
+                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                        {
+                                            for key_path in key_paths {
+                                                if let Some(k) = rpm
+                                                    .gpg_keys
+                                                    .iter_mut()
+                                                    .find(|g| g.path == *key_path)
+                                                {
+                                                    k.disposition = FindingKind::included();
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            } else {
-                                // Include repo: re-enable packages, repo files, GPG keys
-                                if let Some(ref mut rpm) = snap.rpm {
-                                    // 1. Include all packages from this repo (case-insensitive)
-                                    for pkg in &mut rpm.packages_added {
-                                        if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                            pkg.disposition = FindingKind::included();
-                                        }
-                                    }
-
-                                    // 2. Re-enable repo files for this section
-                                    if let Some(file_paths) =
-                                        self.repo_index.repo_file_by_section.get(section_id)
+                            }
+                            ItemId::Service { unit } => {
+                                if let Some(ref mut services) = snap.services {
+                                    if let Some(svc) =
+                                        services.state_changes.iter_mut().find(|s| s.unit == *unit)
                                     {
-                                        for file_path in file_paths {
-                                            if let Some(rf) = rpm
-                                                .repo_files
-                                                .iter_mut()
-                                                .find(|r| r.path == *file_path)
-                                            {
-                                                rf.disposition = FindingKind::included();
-                                            }
-                                        }
+                                        svc.disposition = FindingKind::from_bool(*include);
                                     }
-
-                                    // 3. Re-enable GPG keys for this section
-                                    if let Some(key_paths) =
-                                        self.repo_index.gpg_keys_by_section.get(section_id)
+                                    // Symmetric cascade: toggling a service cascades
+                                    // to all drop-ins for that unit.
+                                    for dropin in
+                                        services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
                                     {
-                                        for key_path in key_paths {
-                                            if let Some(k) = rpm
-                                                .gpg_keys
-                                                .iter_mut()
-                                                .find(|g| g.path == *key_path)
-                                            {
-                                                k.disposition = FindingKind::included();
-                                            }
-                                        }
+                                        dropin.disposition = FindingKind::from_bool(*include);
                                     }
                                 }
                             }
-                        }
-                        ItemId::Service { unit } => {
-                            if let Some(ref mut services) = snap.services {
-                                if let Some(svc) =
-                                    services.state_changes.iter_mut().find(|s| s.unit == *unit)
-                                {
-                                    svc.disposition = FindingKind::from_bool(*include);
-                                }
-                                // Symmetric cascade: toggling a service cascades
-                                // to all drop-ins for that unit.
-                                for dropin in
-                                    services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
+                            ItemId::DropIn { path } => {
+                                if let Some(ref mut services) = snap.services
+                                    && let Some(dropin) =
+                                        services.drop_ins.iter_mut().find(|d| d.path == *path)
                                 {
                                     dropin.disposition = FindingKind::from_bool(*include);
                                 }
                             }
-                        }
-                        ItemId::DropIn { path } => {
-                            if let Some(ref mut services) = snap.services
-                                && let Some(dropin) =
-                                    services.drop_ins.iter_mut().find(|d| d.path == *path)
-                            {
-                                dropin.disposition = FindingKind::from_bool(*include);
+                            ItemId::Quadlet { path } => {
+                                if let Some(ref mut containers) = snap.containers
+                                    && let Some(quadlet) = containers
+                                        .quadlet_units
+                                        .iter_mut()
+                                        .find(|q| q.path == *path)
+                                {
+                                    quadlet.disposition = FindingKind::from_bool(*include);
+                                }
                             }
-                        }
-                        ItemId::Quadlet { path } => {
-                            if let Some(ref mut containers) = snap.containers
-                                && let Some(quadlet) = containers
-                                    .quadlet_units
-                                    .iter_mut()
-                                    .find(|q| q.path == *path)
-                            {
-                                quadlet.disposition = FindingKind::from_bool(*include);
+                            ItemId::Flatpak {
+                                app_id,
+                                remote,
+                                branch,
+                            } => {
+                                if let Some(ref mut containers) = snap.containers
+                                    && let Some(flatpak) =
+                                        containers.flatpak_apps.iter_mut().find(|f| {
+                                            f.app_id == *app_id
+                                                && f.remote == *remote
+                                                && f.branch == *branch
+                                        })
+                                {
+                                    flatpak.disposition = FindingKind::from_bool(*include);
+                                }
                             }
-                        }
-                        ItemId::Flatpak {
-                            app_id,
-                            remote,
-                            branch,
-                        } => {
-                            if let Some(ref mut containers) = snap.containers
-                                && let Some(flatpak) =
-                                    containers.flatpak_apps.iter_mut().find(|f| {
-                                        f.app_id == *app_id
-                                            && f.remote == *remote
-                                            && f.branch == *branch
-                                    })
-                            {
-                                flatpak.disposition = FindingKind::from_bool(*include);
+                            ItemId::Sysctl { key } => {
+                                if let Some(ref mut kb) = snap.kernel_boot
+                                    && let Some(sysctl) =
+                                        kb.sysctl_overrides.iter_mut().find(|s| s.key == *key)
+                                {
+                                    sysctl.disposition = FindingKind::from_bool(*include);
+                                }
                             }
-                        }
-                        ItemId::Sysctl { key } => {
-                            if let Some(ref mut kb) = snap.kernel_boot
-                                && let Some(sysctl) =
-                                    kb.sysctl_overrides.iter_mut().find(|s| s.key == *key)
-                            {
-                                sysctl.disposition = FindingKind::from_bool(*include);
+                            ItemId::TunedSelection { profile } => {
+                                if let Some(ref mut kb) = snap.kernel_boot
+                                    && kb.tuned_active == *profile
+                                {
+                                    kb.tuned_disposition = FindingKind::from_bool(*include);
+                                }
                             }
-                        }
-                        ItemId::TunedSelection { profile } => {
-                            if let Some(ref mut kb) = snap.kernel_boot
-                                && kb.tuned_active == *profile
-                            {
-                                kb.tuned_disposition = FindingKind::from_bool(*include);
-                            }
-                        }
-                        ItemId::Group { name } => {
-                            // Fan out: apply include/exclude to ALL package
-                            // members of the named group (all arches).
-                            let member_names: Vec<String> = self
-                                .installed_groups()
-                                .iter()
-                                .find(|g| g.name == *name)
-                                .map(|g| g.members.clone())
-                                .unwrap_or_default();
-                            if let Some(ref mut rpm) = snap.rpm {
-                                for pkg in &mut rpm.packages_added {
-                                    if member_names.contains(&pkg.name) {
-                                        if *include && pkg.locked {
-                                            // Locked members stay excluded
-                                            continue;
+                            ItemId::Group { name } => {
+                                // Fan out: apply include/exclude to ALL package
+                                // members of the named group (all arches).
+                                let member_names: Vec<String> = self
+                                    .installed_groups()
+                                    .iter()
+                                    .find(|g| g.name == *name)
+                                    .map(|g| g.members.clone())
+                                    .unwrap_or_default();
+                                if let Some(ref mut rpm) = snap.rpm {
+                                    for pkg in &mut rpm.packages_added {
+                                        if member_names.contains(&pkg.name) {
+                                            if *include && pkg.locked {
+                                                // Locked members stay excluded
+                                                continue;
+                                            }
+                                            pkg.disposition = FindingKind::from_bool(*include);
                                         }
-                                        pkg.disposition = FindingKind::from_bool(*include);
                                     }
                                 }
                             }
+                            // Phase 2-3 item kinds: not yet handled
+                            _ => {}
                         }
-                        // Phase 2-3 item kinds: not yet handled
-                        _ => {}
                     }
-                }
-                RefinementOp::UserStrategy { username, strategy } => {
-                    if let Some(ref mut ug) = snap.users_groups
-                        && let Some(user) = ug
-                            .users
-                            .iter_mut()
-                            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some(username))
-                        && let Some(m) = user.as_object_mut()
-                    {
-                        m.insert(
-                            "containerfile_strategy".to_string(),
-                            serde_json::to_value(strategy).unwrap(),
-                        );
+                    RefinementOp::UserStrategy { username, strategy } => {
+                        if let Some(ref mut ug) = snap.users_groups
+                            && let Some(user) = ug
+                                .users
+                                .iter_mut()
+                                .find(|u| u.get("name").and_then(|v| v.as_str()) == Some(username))
+                            && let Some(m) = user.as_object_mut()
+                        {
+                            m.insert(
+                                "containerfile_strategy".to_string(),
+                                serde_json::to_value(strategy).unwrap(),
+                            );
+                        }
                     }
-                }
-                RefinementOp::UserPassword(pw_op) => {
-                    match pw_op {
-                        UserPasswordOp::New { username, hash } => {
-                            if let Some(ref mut ug) = snap.users_groups
-                                && let Some(user) = ug.users.iter_mut().find(|u| {
-                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                })
-                                && let Some(m) = user.as_object_mut()
-                            {
-                                m.insert("password_choice".to_string(), serde_json::json!("new"));
-                                if let Some(h) = hash {
-                                    m.insert("password_hash".to_string(), serde_json::json!(h));
-                                }
-                            }
-                        }
-                        UserPasswordOp::None { username } => {
-                            if let Some(ref mut ug) = snap.users_groups
-                                && let Some(user) = ug.users.iter_mut().find(|u| {
-                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                })
-                                && let Some(m) = user.as_object_mut()
-                            {
-                                m.insert("password_choice".to_string(), serde_json::json!("none"));
-                                // CLEAR password_hash
-                                m.remove("password_hash");
-                            }
-                        }
-                        UserPasswordOp::Preserve { username } => {
-                            // CRITICAL: Restore the ORIGINAL hash from self.original,
-                            // not the projected state. This handles New -> Preserve correctly.
-                            let original_hash = self
-                                .original
-                                .users_groups
-                                .as_ref()
-                                .and_then(|ug| {
-                                    ug.users.iter().find(|u| {
+                    RefinementOp::UserPassword(pw_op) => {
+                        match pw_op {
+                            UserPasswordOp::New { username, hash } => {
+                                if let Some(ref mut ug) = snap.users_groups
+                                    && let Some(user) = ug.users.iter_mut().find(|u| {
                                         u.get("name").and_then(|v| v.as_str()) == Some(username)
                                     })
-                                })
-                                .and_then(|u| u.get("password_hash"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-
-                            if let Some(ref mut ug) = snap.users_groups
-                                && let Some(user) = ug.users.iter_mut().find(|u| {
-                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                })
-                                && let Some(m) = user.as_object_mut()
-                            {
-                                m.insert(
-                                    "password_choice".to_string(),
-                                    serde_json::json!("preserve"),
-                                );
-                                match original_hash {
-                                    Some(h) => {
+                                    && let Some(m) = user.as_object_mut()
+                                {
+                                    m.insert(
+                                        "password_choice".to_string(),
+                                        serde_json::json!("new"),
+                                    );
+                                    if let Some(h) = hash {
                                         m.insert("password_hash".to_string(), serde_json::json!(h));
                                     }
-                                    None => {
-                                        m.remove("password_hash");
+                                }
+                            }
+                            UserPasswordOp::None { username } => {
+                                if let Some(ref mut ug) = snap.users_groups
+                                    && let Some(user) = ug.users.iter_mut().find(|u| {
+                                        u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                    })
+                                    && let Some(m) = user.as_object_mut()
+                                {
+                                    m.insert(
+                                        "password_choice".to_string(),
+                                        serde_json::json!("none"),
+                                    );
+                                    // CLEAR password_hash
+                                    m.remove("password_hash");
+                                }
+                            }
+                            UserPasswordOp::Preserve { username } => {
+                                // CRITICAL: Restore the ORIGINAL hash from self.original,
+                                // not the projected state. This handles New -> Preserve correctly.
+                                let original_hash = self
+                                    .original
+                                    .users_groups
+                                    .as_ref()
+                                    .and_then(|ug| {
+                                        ug.users.iter().find(|u| {
+                                            u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                        })
+                                    })
+                                    .and_then(|u| u.get("password_hash"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+
+                                if let Some(ref mut ug) = snap.users_groups
+                                    && let Some(user) = ug.users.iter_mut().find(|u| {
+                                        u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                    })
+                                    && let Some(m) = user.as_object_mut()
+                                {
+                                    m.insert(
+                                        "password_choice".to_string(),
+                                        serde_json::json!("preserve"),
+                                    );
+                                    match original_hash {
+                                        Some(h) => {
+                                            m.insert(
+                                                "password_hash".to_string(),
+                                                serde_json::json!(h),
+                                            );
+                                        }
+                                        None => {
+                                            m.remove("password_hash");
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                // Aggregate variant ops: accumulate into projection state
-                RefinementOp::SelectVariant { item_id, target } => {
-                    variant_ops::apply_select(&mut variant_state, item_id, target);
-                }
-                RefinementOp::EditVariant {
-                    item_id, content, ..
-                } => {
-                    variant_ops::apply_edit(&mut variant_state, item_id, content, &self.original);
-                }
-                RefinementOp::DiscardVariant { item_id, variant } => {
-                    variant_ops::apply_discard(&mut variant_state, item_id, variant);
-                }
-                RefinementOp::SetPackagePin { item_id, pinned } => {
-                    if let ItemId::LanguagePackage {
-                        ecosystem,
-                        env_path,
-                        package,
-                    } = item_id
-                        && let Some(ref mut nrs) = snap.non_rpm_software
-                        && let Some(item) = nrs
-                            .items
-                            .iter_mut()
-                            .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
-                        && let Some(pkg) = item.packages.iter_mut().find(|p| p.name == *package)
-                    {
-                        pkg.pinned = *pinned;
+                    // Aggregate variant ops: accumulate into projection state
+                    RefinementOp::SelectVariant { item_id, target } => {
+                        variant_ops::apply_select(&mut variant_state, item_id, target);
                     }
-                }
-                RefinementOp::SetBulkPackagePin {
-                    ecosystem,
-                    env_path,
-                    pinned,
-                } => {
-                    if let Some(ref mut nrs) = snap.non_rpm_software
-                        && let Some(item) = nrs
-                            .items
-                            .iter_mut()
-                            .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
-                    {
-                        for pkg in &mut item.packages {
+                    RefinementOp::EditVariant {
+                        item_id, content, ..
+                    } => {
+                        variant_ops::apply_edit(
+                            &mut variant_state,
+                            item_id,
+                            content,
+                            &self.original,
+                        );
+                    }
+                    RefinementOp::DiscardVariant { item_id, variant } => {
+                        variant_ops::apply_discard(&mut variant_state, item_id, variant);
+                    }
+                    RefinementOp::SetPackagePin { item_id, pinned } => {
+                        if let ItemId::LanguagePackage {
+                            ecosystem,
+                            env_path,
+                            package,
+                        } = item_id
+                            && let Some(ref mut nrs) = snap.non_rpm_software
+                            && let Some(item) = nrs
+                                .items
+                                .iter_mut()
+                                .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
+                            && let Some(pkg) = item.packages.iter_mut().find(|p| p.name == *package)
+                        {
                             pkg.pinned = *pinned;
                         }
                     }
+                    RefinementOp::SetBulkPackagePin {
+                        ecosystem,
+                        env_path,
+                        pinned,
+                    } => {
+                        if let Some(ref mut nrs) = snap.non_rpm_software
+                            && let Some(item) = nrs
+                                .items
+                                .iter_mut()
+                                .find(|i| i.lang == ecosystem.as_str() && i.path == *env_path)
+                        {
+                            for pkg in &mut item.packages {
+                                pkg.pinned = *pinned;
+                            }
+                        }
+                    }
                 }
-            }
+            } // for op in ops
         }
 
         // Materialize variant projection state into the snapshot
@@ -2241,15 +2329,22 @@ impl RefineSession {
     fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
         let mut excluded = HashSet::new();
         for entry in &self.timeline[..self.cursor] {
-            if let TimelineEntry::Op(RefinementOp::SetInclude {
-                item_id: ItemId::Repo { path: section_id },
-                include,
-            }) = entry
-            {
-                if *include {
-                    excluded.remove(section_id);
-                } else {
-                    excluded.insert(section_id.clone());
+            let ops: &[RefinementOp] = match entry {
+                TimelineEntry::Op(op) => std::slice::from_ref(op),
+                TimelineEntry::Batch { ops } => ops.as_slice(),
+                _ => continue,
+            };
+            for op in ops {
+                if let RefinementOp::SetInclude {
+                    item_id: ItemId::Repo { path: section_id },
+                    include,
+                } = op
+                {
+                    if *include {
+                        excluded.remove(section_id);
+                    } else {
+                        excluded.insert(section_id.clone());
+                    }
                 }
             }
         }
@@ -2543,17 +2638,24 @@ impl RefineSession {
             let mut last_group_op_index: Option<usize> = None;
             let mut last_group_op_include = true;
 
-            for (i, entry) in self.timeline[..self.cursor].iter().enumerate().rev() {
-                if let TimelineEntry::Op(RefinementOp::SetInclude {
-                    item_id: ItemId::Group { name },
-                    include,
-                }) = entry
-                    && *name == group.name
-                {
-                    last_group_op_index = Some(i);
-                    last_group_op_include = *include;
-                    group_excluded = !*include;
-                    break;
+            'group_scan: for (i, entry) in self.timeline[..self.cursor].iter().enumerate().rev() {
+                let ops: &[RefinementOp] = match entry {
+                    TimelineEntry::Op(op) => std::slice::from_ref(op),
+                    TimelineEntry::Batch { ops } => ops.as_slice(),
+                    _ => continue,
+                };
+                for op in ops {
+                    if let RefinementOp::SetInclude {
+                        item_id: ItemId::Group { name },
+                        include,
+                    } = op
+                        && *name == group.name
+                    {
+                        last_group_op_index = Some(i);
+                        last_group_op_include = *include;
+                        group_excluded = !*include;
+                        break 'group_scan;
+                    }
                 }
             }
 
@@ -2564,14 +2666,21 @@ impl RefineSession {
 
             if let Some(group_op_idx) = last_group_op_index {
                 for entry in &self.timeline[group_op_idx + 1..self.cursor] {
-                    if let TimelineEntry::Op(RefinementOp::SetInclude {
-                        item_id: ItemId::Package { name, .. },
-                        include,
-                    }) = entry
-                        && group.members.contains(name)
-                        && *include != last_group_op_include
-                    {
-                        divergent_overrides.insert(name.clone());
+                    let ops: &[RefinementOp] = match entry {
+                        TimelineEntry::Op(op) => std::slice::from_ref(op),
+                        TimelineEntry::Batch { ops } => ops.as_slice(),
+                        _ => continue,
+                    };
+                    for op in ops {
+                        if let RefinementOp::SetInclude {
+                            item_id: ItemId::Package { name, .. },
+                            include,
+                        } = op
+                            && group.members.contains(name)
+                            && *include != last_group_op_include
+                        {
+                            divergent_overrides.insert(name.clone());
+                        }
                     }
                 }
             }

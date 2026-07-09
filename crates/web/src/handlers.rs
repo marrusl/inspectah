@@ -264,6 +264,7 @@ pub async fn apply_op(
     match entry {
         TimelineEntry::Op(op) => session.apply(op).map_err(AppError)?,
         TimelineEntry::View(dir) => session.apply_directive(dir).map_err(AppError)?,
+        TimelineEntry::Batch { ops } => session.apply_batch(ops).map_err(AppError)?,
     }
     Ok(Json(
         serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
@@ -1029,10 +1030,8 @@ pub async fn batch_toggle_group(
         }
     }
 
-    for op in ops {
-        // Errors on individual items are silently skipped (locked, noop).
-        let _ = session.apply(op);
-    }
+    // Apply all ops as a single batch so undo reverses the entire operation.
+    let _ = session.apply_batch(ops);
 
     Ok(Json(
         serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),

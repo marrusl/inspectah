@@ -220,13 +220,19 @@ pub enum UserPasswordOp {
 }
 
 /// A single entry in the session timeline — either a refinement operation
-/// (mutates the projected snapshot) or a view directive (controls display
-/// without changing the data plane).
+/// (mutates the projected snapshot), a view directive (controls display
+/// without changing the data plane), or a batch of operations that undo/redo
+/// as a single atomic step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum TimelineEntry {
     Op(RefinementOp),
     View(ViewDirective),
+    /// Multiple ops applied atomically — one cursor step for undo/redo.
+    /// Used by batch-toggle (Include all / Exclude all).
+    Batch {
+        ops: Vec<RefinementOp>,
+    },
 }
 
 /// View-plane directives that control how data is displayed without
