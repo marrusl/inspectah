@@ -122,7 +122,10 @@ From the 2026-07-08 language package detection v2 final branch review. Small fix
 
 - [ ] **Keyboard Enter on pin checkbox listitem:** ArrowUp/Down moves focus between `role="listitem"` divs in the package sublist, but Enter/Space on the focused listitem doesn't toggle the pin checkbox — users must Tab to reach the checkbox within the item. Add an Enter handler on the listitem that delegates to the checkbox. ~5 lines in `LanguagePackageList.tsx`.
 - [ ] **`strip_prefix` vs `trim_start_matches` inconsistency:** npm global path stored with `strip_prefix('/')` in the collector but rendered with `trim_start_matches('/')` in the renderer. Both produce the same result for single-`/` paths but differ on malformed input like `//opt`. Use `strip_prefix` consistently in both locations. ~2 lines.
-- [ ] **`process::exit(1)` in `build_scan_roots`:** Empty `--scan-home` value calls `std::process::exit(1)` in library code (scan.rs). Non-testable. Replace with `anyhow::bail!` or return a `Result`. ~3 lines.
+- [x] **`process::exit(1)` in `build_scan_roots`:** Replaced with `anyhow::bail!` and `Result` return in fix round commit `59f31957`. *(DONE — 2026-07-08)*
+- [ ] **Ctrl+K package-level navigation:** GlobalSearch package hits navigate to the parent environment row instead of the matched package row. Wire package-level scroll target through `GlobalSearch.tsx` and `App.tsx`. ~15 lines.
+- [ ] **Broader shell metachar rejection in renderer:** `language_packages.rs` now rejects `'` and `\n` in paths/packages but does not reject other shell metacharacters (`;`, `$`, backticks) in npm package names/versions. Low risk at POC bar (snapshot data, not user input), but worth hardening before GA.
+- [ ] **Search expand-state restoration:** Clearing search text in `LanguagePackageList.tsx` does not restore the pre-search expand state — all search-expanded rows stay expanded. Also has extra focus stops beyond the approved keyboard contract.
 
 ## TUI: Quality Items (from Thorn CP1/CP2)
 
