@@ -2476,7 +2476,7 @@ describe("RepoGroupHeader updated labels", () => {
     expect(screen.getByText("mystery")).toBeInTheDocument();
   });
 
-  it("only shows toggle switch for verified non-distro repos", () => {
+  it("shows toggle switch for non-distro repos with known provenance", () => {
     const { rerender } = render(
       <RepoGroupHeader
         sectionId="epel"
@@ -2491,12 +2491,28 @@ describe("RepoGroupHeader updated labels", () => {
       screen.getByRole("switch", { name: /toggle epel repo/i }),
     ).toBeInTheDocument();
 
+    // "incomplete" provenance repos are also toggleable
     rerender(
       <RepoGroupHeader
         sectionId="custom"
         provenance="incomplete"
         isDistro={false}
         packageCount={3}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("switch", { name: /toggle custom repo/i }),
+    ).toBeInTheDocument();
+
+    // "unknown" provenance repos (e.g. @commandline) are NOT toggleable
+    rerender(
+      <RepoGroupHeader
+        sectionId="local"
+        provenance="unknown"
+        isDistro={false}
+        packageCount={2}
         enabled={true}
         onToggle={vi.fn()}
       />,

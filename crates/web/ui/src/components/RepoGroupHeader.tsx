@@ -21,9 +21,10 @@ export interface RepoGroupHeaderProps {
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 }
 
-/** Only verified non-distro repos are toggleable. */
+/** Non-distro repos with known provenance are toggleable.
+ *  Only "unknown" provenance (e.g. @commandline / locally installed) is excluded. */
 const showToggle = (isDistro: boolean, provenance: RepoProvenance): boolean =>
-  !isDistro && provenance === "verified";
+  !isDistro && provenance !== "unknown";
 
 /**
  * Source classification label:
