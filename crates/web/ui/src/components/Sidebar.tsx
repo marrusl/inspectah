@@ -522,14 +522,84 @@ export function Sidebar({
         return navItem;
       }
 
-      // Multi-section group — NavExpandable with child NavItems
+      // Multi-section group — NavExpandable with child NavItems.
+      // Batch-toggle menus are anchored per-section (not at the group
+      // heading) so that "Include all / Exclude all" for config files
+      // appears next to "Configuration Files", not "System Configuration".
       const groupIsActive = group.sections.some(
         (s) => activeSection === s.id,
       );
 
-      const expandable = (
+      /** Build a per-section kebab for a triage section inside a multi-section group. */
+      const sectionKebab = (sec: { id: string; label: string; is_triage: boolean }) => {
+        if (!sec.is_triage || !onBatchToggle) return null;
+        const secMenuOpen = openMenuSlug === sec.id;
+        const secPending = batchPending[sec.id] ?? false;
+        return (
+          <span
+            className="inspectah-sidebar__kebab"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <Dropdown
+              isOpen={secMenuOpen}
+              onSelect={(_event, value) => {
+                setOpenMenuSlug(null);
+                if (value === "include") {
+                  handleBatchAction(sec.id, true, sec.label);
+                } else if (value === "exclude") {
+                  handleBatchAction(sec.id, false, sec.label);
+                }
+              }}
+              onOpenChange={(open) =>
+                setOpenMenuSlug(open ? sec.id : null)
+              }
+              popperProps={{ position: "right" }}
+              toggle={(toggleRef) => (
+                <MenuToggle
+                  ref={toggleRef}
+                  variant="plain"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    setOpenMenuSlug(secMenuOpen ? null : sec.id);
+                  }}
+                  isExpanded={secMenuOpen}
+                  isDisabled={secPending}
+                  aria-label={`Actions for ${sec.label}`}
+                  data-testid={`kebab-${sec.id}`}
+                  className="inspectah-sidebar__kebab-toggle"
+                >
+                  <EllipsisVIcon />
+                </MenuToggle>
+              )}
+            >
+              <DropdownList>
+                <DropdownItem
+                  key="include"
+                  value="include"
+                  isDisabled={secPending}
+                  data-testid={`include-all-${sec.id}`}
+                >
+                  Include all
+                </DropdownItem>
+                <DropdownItem
+                  key="exclude"
+                  value="exclude"
+                  isDisabled={secPending}
+                  data-testid={`exclude-all-${sec.id}`}
+                >
+                  Exclude all
+                </DropdownItem>
+              </DropdownList>
+            </Dropdown>
+          </span>
+        );
+      };
+
+      return (
         <NavExpandable
-          key={hasKebab ? undefined : group.slug}
+          key={group.slug}
           title={group.label}
           groupId={group.slug}
           isExpanded={expandedGroups[group.slug] ?? true}
@@ -539,9 +609,11 @@ export function Sidebar({
           {group.sections.map((sec) => {
             const badgeText = badge(sec.id, sec.is_triage);
             const isCleared = sec.is_triage && clearedState[sec.id];
-            return (
+            const secKebab = hasKebab ? sectionKebab(sec) : null;
+
+            const navItem = (
               <NavItem
-                key={sec.id}
+                key={secKebab ? undefined : sec.id}
                 itemId={sec.id}
                 isActive={activeSection === sec.id}
                 aria-current={activeSection === sec.id ? "page" : undefined}
@@ -560,6 +632,23 @@ export function Sidebar({
                 )}
               </NavItem>
             );
+
+            if (secKebab) {
+              return (
+                <div
+                  key={sec.id}
+                  className="inspectah-sidebar__group-wrapper inspectah-sidebar__group-wrapper--singleton"
+                  data-group-slug={sec.id}
+                  data-group-actionable="true"
+                  data-group-label={sec.label}
+                >
+                  {navItem}
+                  {secKebab}
+                </div>
+              );
+            }
+
+            return navItem;
           })}
           {group.slug === "software" && !hasUnmanagedScan && (
             <Content
@@ -573,23 +662,6 @@ export function Sidebar({
           )}
         </NavExpandable>
       );
-
-      if (hasKebab) {
-        return (
-          <div
-            key={group.slug}
-            className="inspectah-sidebar__group-wrapper"
-            data-group-slug={group.slug}
-            data-group-actionable="true"
-            data-group-label={group.label}
-          >
-            {expandable}
-            {kebabMenu}
-          </div>
-        );
-      }
-
-      return expandable;
     });
   };
 

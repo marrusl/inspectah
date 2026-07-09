@@ -954,7 +954,7 @@ describe("Sidebar", () => {
       onBatchToggle.mockClear();
     });
 
-    it("shows kebab menu on triage groups when onBatchToggle is provided", () => {
+    it("shows kebab menu on triage sections when onBatchToggle is provided", () => {
       render(
         <Sidebar
           activeSection="packages"
@@ -971,10 +971,12 @@ describe("Sidebar", () => {
       // Triage singleton groups should have kebab (except Identity)
       expect(screen.getByTestId("kebab-packages-group")).toBeInTheDocument();
 
-      // Triage multi-section groups should have kebab
-      expect(screen.getByTestId("kebab-system-config")).toBeInTheDocument();
-      expect(screen.getByTestId("kebab-services-scheduling")).toBeInTheDocument();
-      expect(screen.getByTestId("kebab-software")).toBeInTheDocument();
+      // Per-section kebabs on triage sections within multi-section groups
+      expect(screen.getByTestId("kebab-config")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-services")).toBeInTheDocument();
+
+      // Non-triage sections should NOT have kebab
+      expect(screen.queryByTestId("kebab-kernel_boot")).not.toBeInTheDocument();
     });
 
     it("suppresses kebab menu on Identity group (deferred #8)", () => {
@@ -1043,7 +1045,7 @@ describe("Sidebar", () => {
     it("opens dropdown with Include all and Exclude all items", async () => {
       render(
         <Sidebar
-          activeSection="packages"
+          activeSection="config"
           onSelect={vi.fn()}
           stats={MOCK_STATS}
           sections={MOCK_SECTIONS}
@@ -1054,15 +1056,15 @@ describe("Sidebar", () => {
         />,
       );
 
-      // Click the system-config kebab
-      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      // Click the per-section config kebab
+      await userEvent.click(screen.getByTestId("kebab-config"));
 
       // Menu items should appear
       expect(screen.getByText("Include all")).toBeInTheDocument();
       expect(screen.getByText("Exclude all")).toBeInTheDocument();
     });
 
-    it("calls onBatchToggle with include=true on Include all click", async () => {
+    it("calls onBatchToggle with section id on Include all click", async () => {
       render(
         <Sidebar
           activeSection="config"
@@ -1076,14 +1078,13 @@ describe("Sidebar", () => {
         />,
       );
 
-      await userEvent.click(screen.getByTestId("kebab-system-config"));
-      // DropdownItem renders a button inside a li; click the button text
+      await userEvent.click(screen.getByTestId("kebab-config"));
       await userEvent.click(screen.getByRole("menuitem", { name: "Include all" }));
 
-      expect(onBatchToggle).toHaveBeenCalledWith("system-config", true);
+      expect(onBatchToggle).toHaveBeenCalledWith("config", true);
     });
 
-    it("calls onBatchToggle with include=false on Exclude all click (non-packages)", async () => {
+    it("calls onBatchToggle with section id on Exclude all click", async () => {
       render(
         <Sidebar
           activeSection="config"
@@ -1097,10 +1098,10 @@ describe("Sidebar", () => {
         />,
       );
 
-      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      await userEvent.click(screen.getByTestId("kebab-config"));
       await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
 
-      expect(onBatchToggle).toHaveBeenCalledWith("system-config", false);
+      expect(onBatchToggle).toHaveBeenCalledWith("config", false);
     });
 
     it("shows confirmation dialog when excluding packages", async () => {
@@ -1193,13 +1194,13 @@ describe("Sidebar", () => {
         />,
       );
 
-      await userEvent.click(screen.getByTestId("kebab-system-config"));
+      await userEvent.click(screen.getByTestId("kebab-config"));
       await userEvent.click(screen.getByRole("menuitem", { name: "Include all" }));
 
       // Wait for the async handler to complete
       const announceEl = await screen.findByTestId("batch-toggle-announce");
       expect(announceEl).toHaveTextContent(
-        "All items included in System Configuration",
+        "All items included in Configuration Files",
       );
       expect(announceEl.getAttribute("aria-live")).toBe("assertive");
     });
@@ -1245,8 +1246,9 @@ describe("Sidebar", () => {
       expect(
         screen.getByLabelText("Actions for Packages"),
       ).toBeInTheDocument();
+      // Per-section labels on multi-section groups
       expect(
-        screen.getByLabelText("Actions for System Configuration"),
+        screen.getByLabelText("Actions for Configuration Files"),
       ).toBeInTheDocument();
       // Identity has no kebab menu (deferred #8)
       expect(
@@ -1262,7 +1264,7 @@ describe("Sidebar", () => {
       onBatchToggle.mockClear();
     });
 
-    it("does NOT fire Ctrl+Shift+A from child NavItem within a multi-section group", () => {
+    it("fires Ctrl+Shift+A from per-section NavItem within a multi-section group", () => {
       render(
         <Sidebar
           activeSection="config"
@@ -1281,14 +1283,13 @@ describe("Sidebar", () => {
       expect(configLink).toBeTruthy();
       configLink!.focus();
 
-      // Fire Ctrl+Shift+A from the child NavItem
+      // Fire Ctrl+Shift+A — should trigger the per-section batch toggle
       fireEvent.keyDown(configLink!, { key: "a", ctrlKey: true, shiftKey: true });
 
-      // Should NOT trigger batch toggle — focus was on a child, not the heading
-      expect(onBatchToggle).not.toHaveBeenCalled();
+      expect(onBatchToggle).toHaveBeenCalledWith("config", true);
     });
 
-    it("does NOT fire Ctrl+Shift+X from child NavItem within a multi-section group", () => {
+    it("fires Ctrl+Shift+X from per-section NavItem within a multi-section group", () => {
       render(
         <Sidebar
           activeSection="services"
@@ -1309,10 +1310,10 @@ describe("Sidebar", () => {
 
       fireEvent.keyDown(servicesLink!, { key: "x", ctrlKey: true, shiftKey: true });
 
-      expect(onBatchToggle).not.toHaveBeenCalled();
+      expect(onBatchToggle).toHaveBeenCalledWith("services", false);
     });
 
-    it("fires Ctrl+Shift+A from group heading button of multi-section group", () => {
+    it("does NOT fire Ctrl+Shift+A from group heading button (no actionable wrapper)", () => {
       render(
         <Sidebar
           activeSection="config"
@@ -1335,7 +1336,8 @@ describe("Sidebar", () => {
 
       fireEvent.keyDown(headingBtn!, { key: "a", ctrlKey: true, shiftKey: true });
 
-      expect(onBatchToggle).toHaveBeenCalledWith("system-config", true);
+      // Group heading no longer has an actionable wrapper — per-section only
+      expect(onBatchToggle).not.toHaveBeenCalled();
     });
 
     it("fires Ctrl+Shift+A from singleton triage NavItem", () => {

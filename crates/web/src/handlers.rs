@@ -305,6 +305,22 @@ pub async fn redo(
     ))
 }
 
+pub async fn reset(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let _: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(
+            "request body must be JSON (use {})".into(),
+        ))
+    })?;
+    let mut session = state.session.lock().unwrap();
+    session.reset().map_err(AppError)?;
+    Ok(Json(
+        serde_json::to_value(crate::adapter::build_web_view(&session)).unwrap(),
+    ))
+}
+
 pub async fn get_ops(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
     Json(serde_json::to_value(session.timeline_history()).unwrap())
@@ -718,18 +734,41 @@ pub async fn batch_toggle_group(
         )))
     })?;
 
-    // Lookup group by slug
+    // Lookup by group slug first, then fall back to per-section ID.
+    // Per-section slugs (e.g. "config") let the sidebar anchor the batch
+    // menu on individual triage sections within a multi-section group.
     let group = SectionGroup::all_in_order()
         .iter()
         .find(|g| g.slug() == group_slug)
-        .ok_or_else(|| {
-            AppError(inspectah_refine::types::RefineError::NotFound(format!(
-                "unknown batch toggle group: {group_slug}"
-            )))
-        })?;
+        .copied();
+
+    // If no group matched, check if this is a per-section slug
+    let section_only: Option<&str> = if group.is_none() {
+        let is_known_section = SectionGroup::all_in_order().iter().any(|g| {
+            g.has_actionable_sections()
+                && g.member_sections()
+                    .iter()
+                    .any(|s| s.id == group_slug && s.is_triage)
+        });
+        if is_known_section {
+            Some(group_slug.as_str())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if group.is_none() && section_only.is_none() {
+        return Err(AppError(inspectah_refine::types::RefineError::NotFound(
+            format!("unknown batch toggle group: {group_slug}"),
+        )));
+    }
 
     // Reject reference-only groups
-    if !group.has_actionable_sections() {
+    if let Some(g) = group
+        && !g.has_actionable_sections()
+    {
         return Err(AppError(inspectah_refine::types::RefineError::NotFound(
             format!("batch toggle not supported for reference-only group: {group_slug}"),
         )));
@@ -741,7 +780,10 @@ pub async fn batch_toggle_group(
     // Collect item IDs for actionable (non-advisory) items in the group.
     let mut ops: Vec<inspectah_refine::types::RefinementOp> = Vec::new();
 
-    match group {
+    // Determine which group to use — per-section maps to its parent group
+    let effective_group = group.unwrap_or_else(|| SectionGroup::for_section(section_only.unwrap()));
+
+    match effective_group {
         SectionGroup::Packages => {
             if let Some(ref rpm) = snap.rpm {
                 for pkg in &rpm.packages_added {
@@ -759,8 +801,16 @@ pub async fn batch_toggle_group(
             }
         }
         SectionGroup::SystemConfig => {
+            // Per-section filtering: when a section slug is provided,
+            // only toggle items belonging to that section.
+            let include_config = section_only.is_none()
+                || section_only == Some("config")
+                || section_only == Some("configs");
+            let include_kernel = section_only.is_none() || section_only == Some("kernel_boot");
+            let include_selinux = section_only.is_none() || section_only == Some("selinux");
+
             // Config files
-            if let Some(ref config) = snap.config {
+            if include_config && let Some(ref config) = snap.config {
                 for file in &config.files {
                     if file.disposition.is_advisory() || file.locked {
                         continue;
@@ -774,7 +824,7 @@ pub async fn batch_toggle_group(
                 }
             }
             // Kernel boot items
-            if let Some(ref kernel) = snap.kernel_boot {
+            if include_kernel && let Some(ref kernel) = snap.kernel_boot {
                 // Loaded modules
                 for kmod in &kernel.loaded_modules {
                     if kmod.disposition.is_advisory() || kmod.locked {
@@ -822,7 +872,7 @@ pub async fn batch_toggle_group(
                 }
             }
             // SELinux ports
-            if let Some(ref selinux) = snap.selinux {
+            if include_selinux && let Some(ref selinux) = snap.selinux {
                 for port in &selinux.port_labels {
                     if port.disposition.is_advisory() || port.locked {
                         continue;
