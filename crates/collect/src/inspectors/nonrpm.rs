@@ -764,12 +764,12 @@ fn find_site_packages_walk(
     for entry in &entries {
         let child = format!("{}/{}", dir, entry);
         if exec.read_dir(Path::new(&child)).is_ok() {
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
             if entry == "site-packages" {
                 *result = child;
                 return;
-            }
-            if should_skip_directory(exec, &child, scan_root, visited) {
-                continue;
             }
             find_site_packages_walk(exec, &child, result, scan_root, visited);
         }
@@ -819,6 +819,9 @@ fn scan_dist_info_walk(
     for entry in &entries {
         let child = format!("{}/{}", dir, entry);
         if exec.read_dir(Path::new(&child)).is_ok() {
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
             if entry == "site-packages" {
                 // Scan this site-packages for .dist-info dirs.
                 if let Ok(sp_entries) = exec.read_dir(Path::new(&child)) {
@@ -835,9 +838,6 @@ fn scan_dist_info_walk(
                     }
                 }
             } else {
-                if should_skip_directory(exec, &child, scan_root, visited) {
-                    continue;
-                }
                 scan_dist_info_walk(exec, &child, packages, scan_root, visited);
             }
         }
@@ -5193,6 +5193,44 @@ mod tests {
         assert!(
             result.is_empty(),
             "should complete without hanging when two symlinks resolve to same target"
+        );
+    }
+
+    #[test]
+    fn test_site_packages_symlink_outside_root_rejected() {
+        // site-packages directory that is itself a symlink pointing outside
+        // the scan root should be rejected by the containment guard.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/venv/lib", vec!["site-packages"])
+            .with_dir("/opt/venv/lib/site-packages", vec![])
+            .with_link(
+                "/opt/venv/lib/site-packages",
+                "/etc/system/python/site-packages",
+            );
+        let result = find_site_packages_path(&exec, "/opt/venv/lib");
+        assert!(
+            result.is_empty(),
+            "site-packages symlink pointing outside root should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_site_packages_symlink_within_root_accepted() {
+        // site-packages directory that is a symlink pointing within the scan
+        // root should still be returned normally.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/venv/lib", vec!["site-packages", "python3.9"])
+            .with_dir("/opt/venv/lib/site-packages", vec![])
+            .with_link(
+                "/opt/venv/lib/site-packages",
+                "/opt/venv/lib/python3.9/site-packages",
+            )
+            .with_dir("/opt/venv/lib/python3.9", vec!["site-packages"])
+            .with_dir("/opt/venv/lib/python3.9/site-packages", vec![]);
+        let result = find_site_packages_path(&exec, "/opt/venv/lib");
+        assert_eq!(
+            result, "/opt/venv/lib/site-packages",
+            "site-packages symlink pointing within root should be accepted"
         );
     }
 
