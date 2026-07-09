@@ -9,6 +9,7 @@ import type {
   VersionChangeEntry,
   ItemId,
   TriageTag,
+  TriageReason,
 } from "../api/types";
 import {
   attentionLabelColor,
@@ -69,6 +70,26 @@ function lockedReason(item: DecisionItemKind): string | null {
     return item.data.entry.attention_reason;
   }
   return null;
+}
+
+/** User-visible label for auto-excluded (unlocked, include=false) items.
+ *  Returns null if the reason does not warrant a visible label. */
+const AUTO_EXCLUDE_LABELS: Record<string, string> = {
+  package_installer_default: "Installer default",
+  package_installer_promoted_service: "Installer default",
+  package_installer_promoted_config: "Installer default",
+  package_installer_ambiguous: "Installer default",
+  package_installer_evidence_unavailable: "Installer default",
+  package_config_captured: "Installer default",
+  package_provenance_unavailable: "Unclear provenance",
+  package_no_repo_source: "No repo source",
+  package_local_install: "No repo source",
+  package_platform_plumbing: "Dependency",
+};
+
+function autoExcludeLabel(reason: TriageReason): string | null {
+  if (typeof reason === "object") return null;
+  return AUTO_EXCLUDE_LABELS[reason] ?? null;
 }
 
 function buildItemId(item: DecisionItemKind): ItemId {
@@ -200,6 +221,13 @@ export function DecisionItem({
     };
   })();
 
+  // Auto-exclude reason label for unlocked, excluded items
+  const excludeReasonLabel = (() => {
+    if (included || locked) return null;
+    if (!triageTag) return null;
+    return autoExcludeLabel(triageTag.primary_reason);
+  })();
+
   // Badge text from triage primary_reason or legacy attention
   const badgeText = (() => {
     if (triageTag) {
@@ -309,6 +337,17 @@ export function DecisionItem({
           >
             <Label color="grey" isCompact>
               {reasonText ?? "LOCKED"}
+            </Label>
+          </div>
+        )}
+        {excludeReasonLabel && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid={`exclude-reason-${id}`}
+          >
+            <Label color="grey" isCompact>
+              {excludeReasonLabel}
             </Label>
           </div>
         )}
