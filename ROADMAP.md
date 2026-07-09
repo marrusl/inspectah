@@ -1,16 +1,6 @@
 # inspectah Roadmap
 
-**Current version:** v0.8.6-beta.3 (pure Rust, CLI cutover complete)
-
-```
-Group Rendering: Refine UI (spec'd)
-    |
-    +-- Internals Documentation
-    |
-Aggregate Spec 3: Factor
-    |
-Factor v2 (multi-artifact decomposition)
-```
+**Current version:** v0.8.7-beta.1 (pure Rust, schema 21)
 
 ## High
 
@@ -22,29 +12,32 @@ Detect `eth*` kernel-assigned NIC names on multi-NIC systems. After `bootc switc
 
 Parse `pam.d` module load lists, diff against the base image's module set, flag missing non-base modules (`pam_radius`, `pam_duo`, `pam_ldap`, `pam_centrify`) as HIGH severity. The difference between "your PAM config changed" and "your authentication will break."
 
+### Secrets v2
+
+Structured secrets detection and lifecycle improvements. Separate spec needed.
+
+### Extended Findings Integration
+
+Five integration gaps identified in the extended findings work. Needs manual session to resolve.
+
 ## Ready (Spec'd / Planned)
-
-### Group Rendering: Refine UI
-
-Refine UI shows package groups as collapsible rows with ungroup action. Containerfile rendering (`dnf group install`) already ships; this covers the interactive review experience.
-
-- **Spec:** `process-docs/specs/proposed/2026-06-11-group-rendering-spec.md`
-
-### HTML Audit Report Redesign
-
-Modernizes the HTML audit report output.
-
-- **Status:** Spec approved, plan written
 
 ### Internals Documentation
 
-Plain-English documentation of all inspectah logic for technical users and contributors. Structured as a `docs/internals/` set, tiered by priority:
+Plain-English documentation of inspectah's internal decision logic for
+contributors and maintainers. 5 documents in `docs/internals/`:
 
-- **Tier 1 (ship at 1.0):** Classification engine (baseline subtraction, anaconda gap tiers, leaf/auto classification, service/config classification, aggregate consensus), inspector logic reference (all 12 inspectors), pipeline overview (end-to-end scan flow)
-- **Tier 2 (backfill on demand):** Rendering pipeline, baseline extraction, data model/schema reference
-- **Tier 3 (write if asked):** Refine session state, aggregate/fleet logic, build pipeline, redaction engine
+- Inspector logic reference (all 12 inspectors) — ~3,000-4,500 lines
+- Classification engine (classify.rs, anaconda gap, triage buckets) — ~2,000-3,000 lines
+- Containerfile renderer (section ordering, per-artifact rules) — ~500-800 lines
+- Redaction engine (pattern catalog, confidence, false-positive filtering) — ~400-600 lines
+- Baseline extraction (image pull, RPM diff, suppression) — ~300-500 lines
 
-Estimated 12K-18K lines across 10 documents, 11-16 writing sessions. Scoping assessment: PKA `marks-inbox/project/2026-07-07-inspectah-logic-docs-scoping.md`.
+Estimated total: 6,200-9,400 lines.
+
+### Docs Overhaul
+
+User-facing documentation refresh. See `process-docs/backlog/documentation-backlog.md`.
 
 ## Needs Spec
 
@@ -72,9 +65,30 @@ Rethink the resume experience — show session info, possibly add in-UI "reset t
 
 Parse individual `sshd_config` directives instead of raw file diff. Flag deprecated/removed directives against the target RHEL version.
 
-### Tier 2 Section Promotion
+### Secrets Safety Net
 
-Promote scheduled tasks, SELinux booleans, and boot parameters from Reference to Review. Follows Tier 1 patterns with additional complexity (JSON dedup, cmdline decomposition, RPM-owned filtering).
+Guardrails to prevent accidental credential exposure in inspectah output. Separate spec needed.
+
+## Ecosystem Expansion (Demand-Driven)
+
+### Additional Language Package Ecosystems
+
+- **yarn.lock** parsing + `yarn install --frozen-lockfile --production` rendering
+- **pnpm-lock.yaml** parsing + `pnpm install --frozen-lockfile --prod` rendering
+- **poetry.lock** detection + rendering
+- **Conda/mamba** environment detection
+- **PHP/Composer** detection (`composer.lock` / `composer.json`)
+- **Maven/Gradle** advisory-only detection
+
+Adoption context (as of 2026-07): yarn 21.5% Node.js usage (declining), pnpm 19.9% (rising), poetry ~85M monthly PyPI downloads. None ship as RPMs in RHEL.
+
+### Locale/Timezone Containerfile Rendering
+
+Inspector detects locale (`LANG`, `LC_*`) and timezone settings but the renderer does not emit instructions. Migrated image gets base image defaults. Likely advisory or commented-out since deploy-time config is the expected pattern for image mode.
+
+### Version Pinning for System pip/gems
+
+Same per-package pin toggle as npm globals, for consistency across ecosystems.
 
 ## Testing
 
@@ -105,3 +119,16 @@ Takes refined aggregate tarballs, discovers cross-role hierarchy, exports decomp
 ### Factor v2
 
 Multi-artifact decomposition — decomposes a refined tarball into per-role artifacts.
+
+## Done (since v0.8.6-beta.3)
+
+- **Language Package Detection v2** — npm globals, C-extension detection, `--scan-home`/`--scan-path` scan expansion, `system_site_packages` rendering, bundler deprecation fix, per-package version pinning
+- **Group Rendering: Refine UI** — collapsible group rows, ungroup action, `dnf group install` rendering
+- **HTML Audit Report Redesign** — grouped information architecture, full network data, /var discovery, full-shadow services
+- **Anaconda Gap Classifier** — four-tier reclassification for installer-sourced packages
+- **Section Promotion (Tier 1)** — scheduled tasks, SELinux, boot parameters promoted from Reference to Review
+- **FindingKind Taxonomy** — Advisory, Inventory, and Actionable finding semantics across all surfaces
+- **8-Group Sidebar** — data-driven NavExpandable groups with badges, batch toggles, keyboard navigation
+- **Non-RPM Replication** — pip/npm/gem detection and rendering, unmanaged files, repo-less RPMs, compose reference
+- **Detection Bug Fixes** — RPM false positives, language underdetection, duplicate repo display
+- **TUI Refine** — locked items, compose indicator, help legend, network inventory rows
