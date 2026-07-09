@@ -742,11 +742,18 @@ fn scan_venv_packages(exec: &dyn Executor, venv_path: &str) -> Vec<PipPackage> {
 /// Find a site-packages directory under a venv root.
 fn find_site_packages_path(exec: &dyn Executor, root: &str) -> String {
     let mut result = String::new();
-    find_site_packages_walk(exec, root, &mut result);
+    let mut visited = HashSet::new();
+    find_site_packages_walk(exec, root, &mut result, root, &mut visited);
     result
 }
 
-fn find_site_packages_walk(exec: &dyn Executor, dir: &str, result: &mut String) {
+fn find_site_packages_walk(
+    exec: &dyn Executor,
+    dir: &str,
+    result: &mut String,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
+) {
     if !result.is_empty() {
         return;
     }
@@ -761,7 +768,10 @@ fn find_site_packages_walk(exec: &dyn Executor, dir: &str, result: &mut String) 
                 *result = child;
                 return;
             }
-            find_site_packages_walk(exec, &child, result);
+            if should_skip_directory(exec, &child, scan_root, visited) {
+                continue;
+            }
+            find_site_packages_walk(exec, &child, result, scan_root, visited);
         }
     }
 }
@@ -790,11 +800,18 @@ fn parse_pip_json(json_str: &str) -> Vec<PipPackage> {
 /// Scan dist-info directories inside a venv for package metadata.
 fn scan_dist_info(exec: &dyn Executor, venv_path: &str) -> Vec<PipPackage> {
     let mut packages = Vec::new();
-    scan_dist_info_walk(exec, venv_path, &mut packages);
+    let mut visited = HashSet::new();
+    scan_dist_info_walk(exec, venv_path, &mut packages, venv_path, &mut visited);
     packages
 }
 
-fn scan_dist_info_walk(exec: &dyn Executor, dir: &str, packages: &mut Vec<PipPackage>) {
+fn scan_dist_info_walk(
+    exec: &dyn Executor,
+    dir: &str,
+    packages: &mut Vec<PipPackage>,
+    scan_root: &str,
+    visited: &mut HashSet<String>,
+) {
     let entries = match exec.read_dir(Path::new(dir)) {
         Ok(e) => e,
         Err(_) => return,
@@ -818,7 +835,10 @@ fn scan_dist_info_walk(exec: &dyn Executor, dir: &str, packages: &mut Vec<PipPac
                     }
                 }
             } else {
-                scan_dist_info_walk(exec, &child, packages);
+                if should_skip_directory(exec, &child, scan_root, visited) {
+                    continue;
+                }
+                scan_dist_info_walk(exec, &child, packages, scan_root, visited);
             }
         }
     }
@@ -1864,8 +1884,8 @@ fn should_skip_directory(
 
     let resolved_str = resolved.to_string_lossy().to_string();
 
-    // Reject targets outside the scan root.
-    if !resolved_str.starts_with(scan_root) {
+    // Reject targets outside the scan root (component-aware check).
+    if !Path::new(&resolved_str).starts_with(scan_root) {
         return true;
     }
 
@@ -5120,6 +5140,79 @@ mod tests {
         assert!(
             section.items[0].path.contains("legit"),
             "found repo should be the legit one"
+        );
+    }
+
+    #[test]
+    fn test_should_skip_directory_prefix_containment() {
+        // Symlink resolving to /var/www2 with scan_root /var/www should be REJECTED.
+        // A raw string starts_with check would incorrectly accept "/var/www2"
+        // because "/var/www2".starts_with("/var/www") is true.
+        // Path::starts_with does component-aware matching and correctly rejects it.
+        let exec = MockExecutor::new()
+            .with_dir("/var/www/link", vec!["index.html"])
+            .with_link("/var/www/link", "/var/www2/something");
+        let mut visited = HashSet::new();
+        assert!(
+            should_skip_directory(&exec, "/var/www/link", "/var/www", &mut visited),
+            "symlink to /var/www2 should be rejected when scan_root is /var/www"
+        );
+    }
+
+    #[test]
+    fn test_find_site_packages_walk_skips_symlink_outside_root() {
+        // Symlink inside a venv pointing outside the root should be skipped.
+        // Without the guard, the walker would follow the escape symlink and
+        // find the external site-packages directory.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/venv/lib", vec!["escape"])
+            .with_dir("/opt/venv/lib/escape", vec!["site-packages"])
+            .with_link("/opt/venv/lib/escape", "/etc/sensitive/lib")
+            .with_dir("/opt/venv/lib/escape/site-packages", vec![]);
+        let result = find_site_packages_path(&exec, "/opt/venv/lib");
+        assert!(
+            result.is_empty(),
+            "should not follow symlink outside root to find site-packages"
+        );
+    }
+
+    #[test]
+    fn test_find_site_packages_walk_cycle_detection() {
+        // Two symlinks resolving to the same target: the second should be
+        // skipped by the visited set, preventing infinite recursion.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/venv/lib", vec!["link1", "link2"])
+            .with_dir("/opt/venv/lib/link1", vec!["subdir"])
+            .with_link("/opt/venv/lib/link1", "/opt/venv/lib/shared")
+            .with_dir("/opt/venv/lib/link2", vec!["subdir"])
+            .with_link("/opt/venv/lib/link2", "/opt/venv/lib/shared")
+            .with_dir("/opt/venv/lib/link1/subdir", vec![])
+            .with_dir("/opt/venv/lib/link2/subdir", vec![]);
+        let result = find_site_packages_path(&exec, "/opt/venv/lib");
+        // Should complete without hanging. No site-packages found.
+        assert!(
+            result.is_empty(),
+            "should complete without hanging when two symlinks resolve to same target"
+        );
+    }
+
+    #[test]
+    fn test_scan_dist_info_walk_skips_symlink_outside_root() {
+        // Same guard applies to scan_dist_info_walk: symlink escaping the
+        // venv root should not be followed.
+        let exec = MockExecutor::new()
+            .with_dir("/opt/venv", vec!["lib"])
+            .with_dir("/opt/venv/lib", vec!["escape"])
+            .with_dir("/opt/venv/lib/escape", vec!["site-packages"])
+            .with_link("/opt/venv/lib/escape", "/etc/sensitive/lib")
+            .with_dir(
+                "/opt/venv/lib/escape/site-packages",
+                vec!["requests-2.28.0.dist-info"],
+            );
+        let packages = scan_dist_info(&exec, "/opt/venv");
+        assert!(
+            packages.is_empty(),
+            "should not follow symlink outside root to find dist-info dirs"
         );
     }
 }
