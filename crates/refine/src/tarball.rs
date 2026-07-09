@@ -89,7 +89,7 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
         let entry_type = entry.header().entry_type();
         if !matches!(
             entry_type,
-            tar::EntryType::Regular | tar::EntryType::Directory
+            tar::EntryType::Regular | tar::EntryType::Directory | tar::EntryType::Symlink
         ) {
             return Err(RefineError::ArchiveSafety(format!(
                 "unsupported entry type: {:?} for {}",
