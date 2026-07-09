@@ -22,7 +22,14 @@
   - Decide: automated from git log, manual curation, or hybrid approach?
   - Document changelog update process in CONTRIBUTING.md
 
-- [ ] **Internal logic documentation** — Document how inspectah makes its decisions across ~177K lines of code. Mango's scoping assessment recommends 8-10 documents organized by subsystem (classifier, inspectors, renderer, refine session, etc.), estimated 12,000-18,000 lines. Not user-facing docs — these explain the decision logic for contributors and maintainers. See scoping assessment for full inventory and recommended document set.
+- [ ] **Internal logic documentation** — Document how inspectah makes its decisions. Scoped to 5 documents in `docs/internals/`:
+  - `inspectors.md` — All 12 inspectors: commands run, parsing logic, heuristics, edge cases (~3,000-4,500 lines)
+  - `classification-engine.md` — classify.rs rules, anaconda gap classifier, triage buckets, FindingKind taxonomy (~2,000-3,000 lines)
+  - `containerfile-renderer.md` — Section ordering, include/exclude rendering, safety warnings, per-artifact rules (~500-800 lines)
+  - `redaction-engine.md` — Secret detection patterns, confidence levels, false-positive filtering (~400-600 lines)
+  - `baseline-extraction.md` — Image pull, RPM diff, NEVRA identity, suppression logic (~300-500 lines)
+  - **Not in scope:** pipeline overview, refine engine, aggregate fleet, build pipeline, data model (derivable from code)
+  - Estimated total: 6,200-9,400 lines. Mango owns.
 
 ## Priority 2 (Do When Time Allows)
 
