@@ -670,7 +670,7 @@ export function DecisionList({
             // For disabled repos, count visible include:false rows instead of backend package_count
             const headerPackageCount = isDisabled
               ? part.items.filter(
-                  (item) => item.type === "package" && !item.data.entry.include,
+                  (item) => item.type === "package" && !(item.data.entry.disposition?.include ?? true),
                 ).length
               : repo.package_count;
             const effectiveRg = isDisabled

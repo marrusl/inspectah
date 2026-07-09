@@ -267,9 +267,10 @@ function SingleHostApp({
       const key = `${pkg.entry.name}.${pkg.entry.arch}`;
       const state = rpmUpload.getRowState(key);
       if (state) {
-        if (state === "cached_excluded" && pkg.entry.include) {
+        const pkgIncluded = pkg.entry.disposition?.include ?? true;
+        if (state === "cached_excluded" && pkgIncluded) {
           states[key] = "cached_included";
-        } else if (state === "uploaded_excluded" && pkg.entry.include) {
+        } else if (state === "uploaded_excluded" && pkgIncluded) {
           states[key] = "uploaded_included";
         } else {
           states[key] = state;

@@ -14,7 +14,7 @@ function makePkg(
       release: "1.el9",
       arch: "x86_64",
       state: "added",
-      include: true,
+      disposition: { kind: "actionable", include: true },
       source_repo: "baseos",
       aggregate: null,
       ...overrides,

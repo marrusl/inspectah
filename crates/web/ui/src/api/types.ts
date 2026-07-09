@@ -21,7 +21,7 @@ export interface PackageEntry {
   release: string;
   arch: string;
   state: PackageState;
-  include: boolean;
+  disposition: { kind: string; include?: boolean };
   locked?: boolean;
   acknowledged?: boolean;
   source_repo: string;
@@ -63,7 +63,7 @@ export interface ConfigFileEntry {
   rpm_va_flags: string | null;
   package: string | null;
   diff_against_rpm: string | null;
-  include: boolean;
+  disposition: { kind: string; include?: boolean };
   locked?: boolean;
   attention_reason?: string | null;
   tie: boolean;

@@ -57,7 +57,7 @@ function itemName(item: DecisionItemKind): string {
 }
 
 function isIncluded(item: DecisionItemKind): boolean {
-  return item.data.entry.include;
+  return item.data.entry.disposition?.include ?? true;
 }
 
 function isLocked(item: DecisionItemKind): boolean {
@@ -85,7 +85,7 @@ function buildToggleOp(item: DecisionItemKind): RefinementOp {
   const itemId = buildItemId(item);
   return {
     op: "SetInclude",
-    target: { item_id: itemId, include: !item.data.entry.include },
+    target: { item_id: itemId, include: !(item.data.entry.disposition?.include ?? true) },
   };
 }
 

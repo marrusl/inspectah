@@ -126,7 +126,7 @@ function makePkg(
       release: "1.el9",
       arch: "x86_64",
       state: "added",
-      include: true,
+      disposition: { kind: "actionable", include: true },
       source_repo: "appstream",
       aggregate: null,
       ...overrides,
@@ -149,7 +149,7 @@ function makeConfig(
       rpm_va_flags: null,
       package: "httpd",
       diff_against_rpm: null,
-      include: true,
+      disposition: { kind: "actionable", include: true },
       tie: false,
       tie_winner: false,
       aggregate: null,
@@ -339,7 +339,7 @@ describe("DecisionItem", () => {
     const onToggle = vi.fn();
     const item: DecisionItemKind = {
       type: "package",
-      data: makePkg({ include: true }),
+      data: makePkg({ disposition: { kind: "actionable", include: true } }),
     };
     render(
       <DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />,
@@ -360,7 +360,7 @@ describe("DecisionItem", () => {
     const onToggle = vi.fn();
     const item: DecisionItemKind = {
       type: "package",
-      data: makePkg({ include: false }),
+      data: makePkg({ disposition: { kind: "actionable", include: false } }),
     };
     render(
       <DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />,
@@ -381,7 +381,7 @@ describe("DecisionItem", () => {
     const onToggle = vi.fn();
     const item: DecisionItemKind = {
       type: "config",
-      data: makeConfig({ include: true }),
+      data: makeConfig({ disposition: { kind: "actionable", include: true } }),
     };
     render(
       <DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />,
@@ -2263,7 +2263,7 @@ describe("Disabled repo behavior", () => {
       {
         type: "package",
         data: makePkg(
-          { name: "epel-pkg", source_repo: "epel", include: false },
+          { name: "epel-pkg", source_repo: "epel", disposition: { kind: "actionable", include: false } },
           [NEEDS_REVIEW_TAG],
         ),
       },
@@ -2311,13 +2311,13 @@ describe("Disabled repo behavior", () => {
     const items: DecisionItemKind[] = [
       {
         type: "package",
-        data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [
+        data: makePkg({ name: "pkg1", source_repo: "epel", disposition: { kind: "actionable", include: false } }, [
           NEEDS_REVIEW_TAG,
         ]),
       },
       {
         type: "package",
-        data: makePkg({ name: "pkg2", source_repo: "epel", include: false }, [
+        data: makePkg({ name: "pkg2", source_repo: "epel", disposition: { kind: "actionable", include: false } }, [
           ROUTINE_TAG,
         ]),
       },
@@ -2352,7 +2352,7 @@ describe("Disabled repo behavior", () => {
     const items: DecisionItemKind[] = [
       {
         type: "package",
-        data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [
+        data: makePkg({ name: "pkg1", source_repo: "epel", disposition: { kind: "actionable", include: false } }, [
           NEEDS_REVIEW_TAG,
         ]),
       },
@@ -2386,7 +2386,7 @@ describe("Disabled repo behavior", () => {
     const items: DecisionItemKind[] = [
       {
         type: "package",
-        data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [
+        data: makePkg({ name: "pkg1", source_repo: "epel", disposition: { kind: "actionable", include: false } }, [
           NEEDS_REVIEW_TAG,
         ]),
       },
@@ -3093,7 +3093,7 @@ describe("Repo-first filter and reveal", () => {
     const items: DecisionItemKind[] = [
       {
         type: "package",
-        data: makePkg({ name: "htop", source_repo: "epel", include: false }, [
+        data: makePkg({ name: "htop", source_repo: "epel", disposition: { kind: "actionable", include: false } }, [
           NEEDS_REVIEW_TAG,
         ]),
       },
