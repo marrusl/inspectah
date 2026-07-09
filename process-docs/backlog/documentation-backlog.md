@@ -22,6 +22,8 @@
   - Decide: automated from git log, manual curation, or hybrid approach?
   - Document changelog update process in CONTRIBUTING.md
 
+- [ ] **Internal logic documentation** — Document how inspectah makes its decisions across ~177K lines of code. Mango's scoping assessment recommends 8-10 documents organized by subsystem (classifier, inspectors, renderer, refine session, etc.), estimated 12,000-18,000 lines. Not user-facing docs — these explain the decision logic for contributors and maintainers. See scoping assessment for full inventory and recommended document set.
+
 ## Priority 2 (Do When Time Allows)
 
 - [ ] **API reference docs** — Document HTTP endpoints for `inspectah refine` and `inspectah factor`:
