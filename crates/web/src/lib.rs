@@ -75,6 +75,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/op", post(handlers::apply_op))
         .route("/api/undo", post(handlers::undo))
         .route("/api/redo", post(handlers::redo))
+        .route("/api/reset", post(handlers::reset))
         .route("/api/ops", get(handlers::get_ops))
         .route("/api/changes", get(handlers::get_changes))
         .route("/api/tarball", post(handlers::export_tarball))

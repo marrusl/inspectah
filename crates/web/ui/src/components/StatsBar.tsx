@@ -8,6 +8,10 @@ import {
   Content,
   Popover,
   Badge,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
 } from "@patternfly/react-core";
 import {
   UndoIcon,
@@ -117,6 +121,7 @@ export interface StatsBarProps {
   onUndo: () => void;
   onRedo: () => void;
   onExport: () => void;
+  onReset?: () => void;
   isPending: boolean;
   /** Hamburger menu button rendered at < 1024px. */
   hamburger?: React.ReactNode;
@@ -133,92 +138,146 @@ export function StatsBar({
   onUndo,
   onRedo,
   onExport,
+  onReset,
   isPending,
   hamburger,
   aggregateSummary,
 }: StatsBarProps) {
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const hasOps = (stats?.ops_applied ?? 0) > 0;
+
   return (
-    <Toolbar className="inspectah-statsbar" isSticky>
-      <ToolbarContent>
-        {hamburger && <ToolbarItem>{hamburger}</ToolbarItem>}
-        <ToolbarGroup align={{ default: "alignStart" }}>
-          {aggregateSummary ? (
+    <>
+      <Toolbar className="inspectah-statsbar" isSticky>
+        <ToolbarContent>
+          {hamburger && <ToolbarItem>{hamburger}</ToolbarItem>}
+          <ToolbarGroup align={{ default: "alignStart" }}>
+            {aggregateSummary ? (
+              <ToolbarItem>
+                <Content component="small" data-testid="aggregate-stats-summary">
+                  <HostnamePopover
+                    hostCount={aggregateSummary.hostCount}
+                    hostnames={aggregateSummary.hostnames}
+                  />
+                  {" · "}
+                  <strong>
+                    {aggregateSummary.totalItems.toLocaleString()}
+                  </strong>{" "}
+                  items
+                </Content>
+              </ToolbarItem>
+            ) : (
+              <>
+                <ToolbarItem>
+                  <Content component="small">
+                    <strong>Packages:</strong>{" "}
+                    {stat(
+                      stats?.sections?.find((s) => s.kind === "package")
+                        ?.included,
+                    )}{" "}
+                    included /{" "}
+                    {stat(
+                      stats?.sections?.find((s) => s.kind === "package")
+                        ?.excluded,
+                    )}{" "}
+                    excluded
+                  </Content>
+                </ToolbarItem>
+                <ToolbarItem>
+                  <Content component="small">
+                    <strong>Configs:</strong>{" "}
+                    {stat(
+                      stats?.sections?.find((s) => s.kind === "config")?.included,
+                    )}{" "}
+                    included /{" "}
+                    {stat(
+                      stats?.sections?.find((s) => s.kind === "config")?.excluded,
+                    )}{" "}
+                    excluded
+                  </Content>
+                </ToolbarItem>
+              </>
+            )}
+          </ToolbarGroup>
+          <ToolbarGroup align={{ default: "alignEnd" }}>
             <ToolbarItem>
-              <Content component="small" data-testid="aggregate-stats-summary">
-                <HostnamePopover
-                  hostCount={aggregateSummary.hostCount}
-                  hostnames={aggregateSummary.hostnames}
-                />
-                {" · "}
-                <strong>
-                  {aggregateSummary.totalItems.toLocaleString()}
-                </strong>{" "}
-                items
-              </Content>
+              <Button
+                variant="plain"
+                aria-label="Undo"
+                isDisabled={!stats?.can_undo || isPending}
+                onClick={onUndo}
+                icon={<UndoIcon />}
+              />
             </ToolbarItem>
-          ) : (
-            <>
-              <ToolbarItem>
-                <Content component="small">
-                  <strong>Packages:</strong>{" "}
-                  {stat(
-                    stats?.sections?.find((s) => s.kind === "package")
-                      ?.included,
-                  )}{" "}
-                  included /{" "}
-                  {stat(
-                    stats?.sections?.find((s) => s.kind === "package")
-                      ?.excluded,
-                  )}{" "}
-                  excluded
-                </Content>
-              </ToolbarItem>
-              <ToolbarItem>
-                <Content component="small">
-                  <strong>Configs:</strong>{" "}
-                  {stat(
-                    stats?.sections?.find((s) => s.kind === "config")?.included,
-                  )}{" "}
-                  included /{" "}
-                  {stat(
-                    stats?.sections?.find((s) => s.kind === "config")?.excluded,
-                  )}{" "}
-                  excluded
-                </Content>
-              </ToolbarItem>
-            </>
-          )}
-        </ToolbarGroup>
-        <ToolbarGroup align={{ default: "alignEnd" }}>
-          <ToolbarItem>
+            <ToolbarItem>
+              <Button
+                variant="plain"
+                aria-label="Redo"
+                isDisabled={!stats?.can_redo || isPending}
+                onClick={onRedo}
+                icon={<RedoIcon />}
+              />
+            </ToolbarItem>
+            {onReset && (
+              <>
+                <ToolbarItem variant="separator" />
+                <ToolbarItem>
+                  <Button
+                    variant="link"
+                    isDisabled={!hasOps || isPending}
+                    onClick={() => setResetConfirmOpen(true)}
+                    data-testid="reset-defaults-btn"
+                  >
+                    Reset to defaults
+                  </Button>
+                </ToolbarItem>
+              </>
+            )}
+            <ToolbarItem variant="separator" />
+            <ToolbarItem>
+              <Button variant="primary" onClick={onExport} icon={<ExportIcon />}>
+                Export
+              </Button>
+            </ToolbarItem>
+            <ToolbarItem>
+              <ThemeToggle />
+            </ToolbarItem>
+          </ToolbarGroup>
+        </ToolbarContent>
+      </Toolbar>
+      {resetConfirmOpen && (
+        <Modal
+          isOpen
+          onClose={() => setResetConfirmOpen(false)}
+          aria-label="Reset confirmation"
+          variant="small"
+          data-testid="reset-confirm-modal"
+        >
+          <ModalHeader title="Reset to defaults?" />
+          <ModalBody>
+            Reset all items to analysis defaults? This will revert all
+            include/exclude changes you have made.
+          </ModalBody>
+          <ModalFooter>
             <Button
-              variant="plain"
-              aria-label="Undo"
-              isDisabled={!stats?.can_undo || isPending}
-              onClick={onUndo}
-              icon={<UndoIcon />}
-            />
-          </ToolbarItem>
-          <ToolbarItem>
-            <Button
-              variant="plain"
-              aria-label="Redo"
-              isDisabled={!stats?.can_redo || isPending}
-              onClick={onRedo}
-              icon={<RedoIcon />}
-            />
-          </ToolbarItem>
-          <ToolbarItem variant="separator" />
-          <ToolbarItem>
-            <Button variant="primary" onClick={onExport} icon={<ExportIcon />}>
-              Export
+              variant="primary"
+              onClick={() => {
+                setResetConfirmOpen(false);
+                onReset?.();
+              }}
+              data-testid="reset-confirm-yes"
+            >
+              Reset to defaults
             </Button>
-          </ToolbarItem>
-          <ToolbarItem>
-            <ThemeToggle />
-          </ToolbarItem>
-        </ToolbarGroup>
-      </ToolbarContent>
-    </Toolbar>
+            <Button
+              variant="link"
+              onClick={() => setResetConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+          </ModalFooter>
+        </Modal>
+      )}
+    </>
   );
 }

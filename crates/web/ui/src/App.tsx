@@ -10,7 +10,7 @@ import {
 } from "@patternfly/react-core";
 import { UploadIcon } from "@patternfly/react-icons";
 import type { ViewResponse, RpmUploadRowState } from "./api/types";
-import { fetchOps, batchToggleGroup, setPackagePin, setBulkPackagePin } from "./api/client";
+import { fetchOps, batchToggleGroup, setPackagePin, setBulkPackagePin, resetDefaults } from "./api/client";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -479,6 +479,17 @@ function SingleHostApp({
       });
   }, [mutation]);
 
+  const handleReset = useCallback(async () => {
+    try {
+      const result = await resetDefaults();
+      view.invalidate();
+      onMutationSuccess(result);
+    } catch (err) {
+      view.invalidate();
+      console.error("Reset failed:", err);
+    }
+  }, [view, onMutationSuccess]);
+
   const closeSidebarOverlay = useCallback(() => {
     setSidebarOverlayOpen(false);
     requestAnimationFrame(() => {
@@ -624,6 +635,7 @@ function SingleHostApp({
         sessionIsSensitive={view.data?.session_is_sensitive ?? false}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onReset={handleReset}
         onExportComplete={handleExportViewUpdate}
         isPending={mutation.isPending}
         activeSection={activeSection}

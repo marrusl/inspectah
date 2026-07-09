@@ -131,6 +131,10 @@ export function redo(): Promise<ViewResponse> {
   return postJson("/api/redo", {});
 }
 
+export function resetDefaults(): Promise<ViewResponse> {
+  return postJson("/api/reset", {});
+}
+
 export async function markViewed(id: string): Promise<void> {
   const res = await fetch("/api/viewed", {
     method: "POST",

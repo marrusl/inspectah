@@ -66,6 +66,8 @@ export interface AppShellProps {
   onUndo: () => void;
   /** Redo callback. */
   onRedo: () => void;
+  /** Reset to analysis defaults callback. */
+  onReset?: () => void;
   /** Called after a successful export to refresh view. */
   onExportComplete: (view: import("../api/types").ViewResponse) => void;
   /** Whether a mutation is pending (disables undo/redo buttons). */
@@ -125,6 +127,7 @@ export function AppShell({
   sessionIsSensitive,
   onUndo,
   onRedo,
+  onReset,
   onExportComplete,
   isPending = false,
   activeSection,
@@ -231,6 +234,7 @@ export function AppShell({
         stats={stats}
         onUndo={onUndo}
         onRedo={onRedo}
+        onReset={onReset}
         onExport={handleExport}
         isPending={isPending}
         hamburger={hamburger}

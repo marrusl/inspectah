@@ -902,6 +902,23 @@ impl RefineSession {
         Ok(())
     }
 
+    /// Reset the session to its initial analysis defaults — clears the
+    /// entire timeline so the projected snapshot matches the original.
+    pub fn reset(&mut self) -> Result<(), RefineError> {
+        if self.timeline.is_empty() {
+            return Err(RefineError::NothingToUndo);
+        }
+        self.timeline.clear();
+        self.cursor = 0;
+        self.generation += 1;
+        self.cached_view = None;
+        self.cached_render_context = None;
+        self.cached_decisions = None;
+        self.recompute_view();
+        self.try_autosave();
+        Ok(())
+    }
+
     pub fn ops_history(&self) -> Vec<AnnotatedOp> {
         let mut result = Vec::new();
         for (i, entry) in self.timeline.iter().enumerate() {
