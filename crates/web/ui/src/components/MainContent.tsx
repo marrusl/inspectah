@@ -486,6 +486,25 @@ export function MainContent({
   if (activeSection === "configs" || activeSection === "config") {
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredConfigItems.length === 0;
+    // Hide section header when all config files are excluded.
+    const anyConfigIncluded = configItems.some(
+      (item) =>
+        item.type === "config" &&
+        (item.data.entry.disposition?.include ?? true),
+    );
+    if (!anyConfigIncluded && configItems.length > 0) {
+      return (
+        <EmptyState
+          titleText="All configuration files excluded"
+          headingLevel="h3"
+          data-testid="config-all-excluded"
+        >
+          <EmptyStateBody>
+            Use undo or re-include individual config files to restore them.
+          </EmptyStateBody>
+        </EmptyState>
+      );
+    }
     return (
       <>
         <Content>
