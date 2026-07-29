@@ -10,7 +10,7 @@ Read `process-docs/skills/index.md` for non-obvious patterns and correctness req
 
 ## Key Conventions
 
-- **Clippy clean:** `cargo clippy -- -W clippy::all` with zero warnings. Non-negotiable.
+- **Clippy clean:** `cargo clippy -- -D clippy::all` with zero warnings. Non-negotiable.
 - **Format:** `cargo fmt --check` must pass.
 - **Commit format:** `type(scope): description` in imperative mood. Attribution: `Assisted-by: Claude Code (<model>)`.
 - **Attribution:** LLM-assisted commits include `Assisted-by: <tool> (<model>)` (e.g., `Assisted-by: Claude Code (Opus 4.6)`). No other identifiers.
