@@ -202,6 +202,53 @@ mod tests {
     }
 
     #[test]
+    fn test_el8_default_resolution_composes_to_major_upgrade() {
+        // Composition guard for the same regression. The test above pins a
+        // literal image_ref, so it passes even if the default resolution goes
+        // back to `:latest`; this one resolves the target the way the pipeline
+        // does, and fails if the default ever stops being version-pinned.
+        let os_release = OsRelease {
+            id: "rhel".into(),
+            version_id: "8.10".into(),
+            ..Default::default()
+        };
+        let target_ref = crate::baseline::resolve_base_image(&os_release, None, None, None)
+            .unwrap()
+            .image_ref;
+        let ctx = MigrationContext {
+            source: SourceSystem::PackageBased { os_release },
+            target: TargetSystem::BootcImage {
+                image_ref: target_ref,
+            },
+        };
+        assert_eq!(ctx.migration_kind(), MigrationKind::MajorUpgrade);
+        assert!(ctx.is_cross_major());
+    }
+
+    #[test]
+    fn test_el9_default_resolution_composes_to_same_stream() {
+        // Negative control for the guard above: the floor clamp lifts a 9.4
+        // host to the 9.6 tag, and a within-major minor bump must not read as
+        // a major upgrade.
+        let os_release = OsRelease {
+            id: "rhel".into(),
+            version_id: "9.4".into(),
+            ..Default::default()
+        };
+        let target_ref = crate::baseline::resolve_base_image(&os_release, None, None, None)
+            .unwrap()
+            .image_ref;
+        let ctx = MigrationContext {
+            source: SourceSystem::PackageBased { os_release },
+            target: TargetSystem::BootcImage {
+                image_ref: target_ref,
+            },
+        };
+        assert_eq!(ctx.migration_kind(), MigrationKind::SameStream);
+        assert!(!ctx.is_cross_major());
+    }
+
+    #[test]
     fn test_bootc_source_booted_only() {
         let source = SourceSystem::Bootc {
             os_release: OsRelease::default(),
