@@ -180,6 +180,28 @@ mod tests {
     }
 
     #[test]
+    fn test_el8_mapped_up_default_is_major_upgrade() {
+        // EL8 hosts default-resolve to the EL9 floor tag (rhel-bootc:9.6).
+        // target_major_version() parses the major from the image tag, so the
+        // default must stay version-pinned — a `:latest` default made this
+        // return None and misclassified EL8→EL9 as SameStream.
+        let ctx = MigrationContext {
+            source: SourceSystem::PackageBased {
+                os_release: OsRelease {
+                    id: "rhel".into(),
+                    version_id: "8.10".into(),
+                    ..Default::default()
+                },
+            },
+            target: TargetSystem::BootcImage {
+                image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
+            },
+        };
+        assert_eq!(ctx.migration_kind(), MigrationKind::MajorUpgrade);
+        assert!(ctx.is_cross_major());
+    }
+
+    #[test]
     fn test_bootc_source_booted_only() {
         let source = SourceSystem::Bootc {
             os_release: OsRelease::default(),

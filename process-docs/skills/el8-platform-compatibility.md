@@ -59,6 +59,12 @@ The tmpfiles.d parsing in `storage.rs` (`detect_var_dir_backing`) uses `grep -r`
 
 **Custom profile detection** (added in Task 11) searches `/etc/tuned/*/tuned.conf` — same path on EL8 and EL9.
 
+## Target Image Mapping
+
+EL8 hosts have no bootc base image of their own. Default resolution (`resolve_from_os_release` in `crates/core/src/baseline.rs`) maps them up to the EL9 floor tag: RHEL 8.x → `registry.redhat.io/rhel9/rhel-bootc:9.6`, CentOS 8 → `quay.io/centos-bootc/centos-bootc:stream9`. The `RHEL_BOOTC_MIN` floor clamp handles the mapped-up case naturally (8.x is always below the EL9 floor).
+
+**Correctness requirement: default resolution must produce version-pinned tags.** `MigrationContext::target_major_version()` (`crates/core/src/types/system.rs`) parses the target major from the image tag. A `:latest` default makes it return `None`, and `migration_kind()` then misclassifies EL8→EL9 as `SameStream` instead of `MajorUpgrade`. This happened once (July 2026, reverted): `:latest` is available only as an explicit `--base-image` override, never as the default.
+
 ## Summary
 
-No EL8-specific guards or conditionals are needed in the current codebase. The inspection methods are platform-agnostic and work on both EL8 and EL9+.
+Inspection methods are platform-agnostic and work on both EL8 and EL9+ with no version-specific guards. The only EL8-specific logic in the codebase is the target image mapping above.
