@@ -88,4 +88,4 @@ These were the blockers that prompted the split:
 Brainstorm in a fresh session:
 
 > "Let's brainstorm the group-aware rendering spec for inspectah.
-> The pre-spec is at `process-docs/specs/proposed/2026-06-11-group-rendering-pre-spec.md`."
+> The pre-spec is at `process-docs/specs/implemented/2026-06-11-group-rendering-pre-spec.md`."

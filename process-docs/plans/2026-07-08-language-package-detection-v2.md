@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (core, collect, pipeline, refine, web, cli), React/TypeScript/PatternFly (web UI)
 
-**Spec:** `process-docs/specs/proposed/2026-07-08-language-package-detection-v2.md`
+**Spec:** `process-docs/specs/implemented/2026-07-08-language-package-detection-v2.md`
 
 ## Global Constraints
 

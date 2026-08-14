@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (inspectah-core, inspectah-collect, inspectah-refine, inspectah-pipeline, inspectah-web, inspectah-tui). Cargo workspace, `cargo clippy -- -D warnings`, `cargo test`.
 
-**Spec:** `process-docs/specs/proposed/2026-06-02-unified-include-default-model.md`
+**Spec:** `process-docs/specs/implemented/2026-06-02-unified-include-default-model.md`
 
 **Owners:** Tang (Tasks 1-17, Rust), Kit (Tasks 18-19, frontend). Thorn checkpoints at Tasks 5, 9, 14, 20.
 

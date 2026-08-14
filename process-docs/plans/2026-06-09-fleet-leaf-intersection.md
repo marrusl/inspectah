@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, serde, insta (snapshot tests), minijinja (report templates), std::collections (HashSet, BTreeSet, BTreeMap)
 
-**Spec:** `/Users/mrussell/Work/bootc-migration/inspectah/process-docs/specs/proposed/2026-06-08-fleet-leaf-intersection.md`
+**Spec:** `/Users/mrussell/Work/bootc-migration/inspectah/process-docs/specs/implemented/2026-06-08-fleet-leaf-intersection.md`
 
 **Verification convention:** All `cargo` commands in this plan run without pipe-to-tail. If output is long, the implementer may use context-mode tools to manage it, but the exit code must come from `cargo`, not from a downstream pipe.
 

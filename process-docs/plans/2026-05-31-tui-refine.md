@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, ratatui (terminal UI), crossterm (backend), color-eyre (panic safety), tui-input (text input), signal-hook (SIGTSTP/SIGCONT), insta (snapshot testing)
 
-**Spec:** `docs/specs/proposed/2026-05-30-tui-refine-design.md` — single source of truth. Read it fresh before implementation.
+**Spec:** `process-docs/specs/implemented/2026-05-30-tui-refine-design.md` — single source of truth. Read it fresh before implementation.
 
 **Thorn Checkpoints:** After Tasks 6, 10, 14, 18, 22. Code review at each.
 

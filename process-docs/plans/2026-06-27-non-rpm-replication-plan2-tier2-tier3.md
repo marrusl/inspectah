@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust (2024 edition), clap (CLI args), serde, insta (snapshot testing), sha2/hex (path hashing), axum (upload endpoint), inspectah-core types, inspectah-refine, inspectah-pipeline, inspectah-collect, inspectah-cli, inspectah-refine-web.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 2 and Tier 3 backend. Plan 1 covers Tier 1 and shared contracts. Plan 3 covers Tier 2/3 UI.
+**Spec:** `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 2 and Tier 3 backend. Plan 1 covers Tier 1 and shared contracts. Plan 3 covers Tier 2/3 UI.
 
 **Thorn Checkpoints:** After Tasks 3, 7, 12.
 

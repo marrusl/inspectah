@@ -2741,7 +2741,7 @@ Ansible's `run_once` fires once per `serial` batch, not once per play. With `ser
 - `--ack-sensitive` is added automatically when preserve or no-redaction is set.
 - Sensitive campaigns tighten fetch directory permissions to `0700`.
 - COPR installs are GPG-verified by dnf. RPM push installs are operator-trusted (no provenance check).
-- See the [spec](https://github.com/mrussell/inspectah/blob/main/process-docs/specs/proposed/ansible-role-spec.md) for full security analysis.
+- See the [spec](https://github.com/mrussell/inspectah/blob/main/process-docs/specs/implemented/ansible-role-spec.md) for full security analysis.
 
 ### Digest-pinned base images
 

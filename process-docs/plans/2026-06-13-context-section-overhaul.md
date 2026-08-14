@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (adapter.rs), React + PatternFly + vitest (frontend), `@patternfly/react-table` for the version changes table.
 
-**Spec:** `process-docs/specs/proposed/2026-06-13-context-section-overhaul.md`
+**Spec:** `process-docs/specs/implemented/2026-06-13-context-section-overhaul.md`
 
 ---
 

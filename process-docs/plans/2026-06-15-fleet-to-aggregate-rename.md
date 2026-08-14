@@ -1047,7 +1047,7 @@ Assisted-by: Claude Code (Sonnet 4.6)"
 
 **Leave untouched (historical):**
 - `process-docs/plans/2026-06-09-fleet-leaf-intersection.md` — historical plan
-- `process-docs/specs/proposed/2026-06-08-fleet-leaf-intersection.md` — historical spec
+- `process-docs/specs/implemented/2026-06-08-fleet-leaf-intersection.md` — historical spec
 - `process-docs/nits-2026-03-16.md` — historical nit snapshot
 - `process-docs/RELEASE-*.md` — historical release notes
 

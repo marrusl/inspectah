@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, serde, insta (snapshot testing), inspectah-core types, inspectah-refine classifier
 
-**Spec:** `process-docs/specs/proposed/2026-06-11-anaconda-gap-classifier.md` (R6, approved)
+**Spec:** `process-docs/specs/implemented/2026-06-11-anaconda-gap-classifier.md` (R6, approved)
 
 ---
 

@@ -10,7 +10,7 @@
 
 **Tech Stack:** React 18, TypeScript, PatternFly v6 (components + icons), Vitest, React Testing Library. CSS follows existing `App.css` BEM conventions.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers the "Refine UI: Section Topology" spec section and the per-tier Refine UI subsections, single-host mode only.
+**Spec:** `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers the "Refine UI: Section Topology" spec section and the per-tier Refine UI subsections, single-host mode only.
 
 **Plan 1 Contracts:** This plan consumes the shared contracts defined in Plan 1's "Shared Contracts for Plans 2-4" section. Use `ItemId::LanguageEnv { ecosystem, path }`, `ItemId::UnmanagedFile { path }`, the `method` string table, and the confidence rendering gate exactly as specified there.
 

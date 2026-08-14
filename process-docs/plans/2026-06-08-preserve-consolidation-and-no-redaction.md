@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap (derive API), serde
 
-**Spec:** `process-docs/specs/proposed/2026-06-08-preserve-consolidation-and-no-redaction.md`
+**Spec:** `process-docs/specs/implemented/2026-06-08-preserve-consolidation-and-no-redaction.md`
 
 ---
 

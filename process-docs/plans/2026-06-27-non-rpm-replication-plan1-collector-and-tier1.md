@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust (2024 edition), serde, insta (snapshot testing), inspectah-core types, inspectah-refine, inspectah-pipeline, inspectah-collect.
 
-**Spec:** `process-docs/specs/proposed/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 1 backend + shared contracts. Plan 3 covers Tier 1 UI. Plan 4 covers aggregate.
+**Spec:** `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md` — read fresh before implementation. This plan covers Tier 1 backend + shared contracts. Plan 3 covers Tier 1 UI. Plan 4 covers aggregate.
 
 **Thorn Checkpoints:** After Tasks 3, 7, 11.
 

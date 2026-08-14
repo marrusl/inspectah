@@ -61,7 +61,7 @@ Task 9a.
 
 ## Spec Reference
 
-`process-docs/specs/proposed/2026-06-27-non-rpm-replication.md`
+`process-docs/specs/implemented/2026-06-27-non-rpm-replication.md`
 
 Sections consumed by this plan:
 - "Compose Stacks" — collector changes, sensitivity gating, Containerfile

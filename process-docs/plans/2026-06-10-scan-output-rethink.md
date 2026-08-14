@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, crossterm (ANSI), insta (snapshot tests)
 
-**Spec:** `process-docs/specs/proposed/2026-06-10-scan-output-rethink.md`
+**Spec:** `process-docs/specs/implemented/2026-06-10-scan-output-rethink.md`
 
 **Ordering model:** Arrival order — inspectors print as they complete, no display-order buffering. Only per-inspector verbose child lines are buffered atomically with their parent.
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (2024 edition), serde, insta (snapshot testing), inspectah-core types, inspectah-refine classify functions.
 
-**Spec:** `docs/specs/proposed/2026-05-30-refine-projection-consolidation.md` — read this for full type definitions, decomposition tables, and traceability.
+**Spec:** `process-docs/specs/implemented/2026-05-30-refine-projection-consolidation.md` — read this for full type definitions, decomposition tables, and traceability.
 
 **Team split:** Tang (Tasks 1-13, Rust), Kit (Task 14, frontend TypeScript).
 

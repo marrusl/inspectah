@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (core, collect, pipeline, refine, web, tui), React/TypeScript/PatternFly (web UI), Playwright (e2e tests)
 
-**Spec:** `process-docs/specs/proposed/2026-07-06-refine-ux-convergence.md`
+**Spec:** `process-docs/specs/implemented/2026-07-06-refine-ux-convergence.md`
 
 ## Global Constraints
 

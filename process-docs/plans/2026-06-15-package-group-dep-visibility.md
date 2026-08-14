@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (collector, adapter), React + PatternFly + vitest (frontend).
 
-**Spec:** `process-docs/specs/proposed/2026-06-13-package-group-dep-visibility.md`
+**Spec:** `process-docs/specs/implemented/2026-06-13-package-group-dep-visibility.md`
 
 ---
 

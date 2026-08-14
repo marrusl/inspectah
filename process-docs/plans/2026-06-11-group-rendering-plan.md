@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (serde, thiserror), TypeScript/React (web UI), Playwright (e2e tests)
 
-**Spec:** `process-docs/specs/proposed/2026-06-11-group-rendering-spec.md` (R3, approved)
+**Spec:** `process-docs/specs/implemented/2026-06-11-group-rendering-spec.md` (R3, approved)
 
 **Dependency:** The Anaconda gap classifier spec must ship first — it provides `InstalledGroup` collection in the RPM inspector. This plan assumes group data is available on the snapshot.
 

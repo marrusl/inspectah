@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, minijinja 2.x, PatternFly 6 CSS (vendored), vanilla JS (~100 lines)
 
-**Spec:** `/Users/mrussell/Work/bootc-migration/inspectah/docs/specs/proposed/2026-06-07-html-audit-report-redesign.md`
+**Spec:** `/Users/mrussell/Work/bootc-migration/inspectah/process-docs/specs/implemented/2026-06-07-html-audit-report-redesign.md`
 
 **Owner:** Tang (Rust), with Kit assisting on CSS/JS polish. Thorn checkpoints at T5, T10, T14, T17.
 

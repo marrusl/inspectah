@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (clap, serde, thiserror), inspectah workspace crates (cli, core, collect, pipeline, refine, web), TypeScript (web UI)
 
-**Spec:** `process-docs/specs/proposed/2026-06-12-mandatory-baseline-requirement.md`
+**Spec:** `process-docs/specs/implemented/2026-06-12-mandatory-baseline-requirement.md`
 
 **Task ordering rationale:** Every task leaves `cargo test --workspace` green. The schema version bump lands last (after all `no_baseline` code is removed) so old tests never reference deleted fields. The stderr credential audit lands before the first user-visible classified error output. Frontend and docs land after Rust is clean.
 
