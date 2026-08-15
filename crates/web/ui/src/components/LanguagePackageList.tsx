@@ -141,6 +141,16 @@ export function LanguagePackageList({
     [toggleExpand],
   );
 
+  /** Pin/unpin one package and announce the result. */
+  const handlePackagePin = useCallback(
+    (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => {
+      if (isPending) return;
+      onSetPackagePin?.(ecosystem, envPath, pkg, pinned);
+      setAnnouncement(`${pinned ? "Pinned" : "Unpinned"} ${pkg}`);
+    },
+    [onSetPackagePin, isPending],
+  );
+
   /** Wrap bulk pin to fire aria-live announcement. */
   const handleBulkPin = useCallback(
     (
@@ -323,6 +333,27 @@ export function LanguagePackageList({
                       data-search-match={
                         isSearchMatch ? "true" : undefined
                       }
+                      aria-keyshortcuts={
+                        onSetPackagePin ? "Enter Space" : undefined
+                      }
+                      onKeyDown={
+                        onSetPackagePin
+                          ? (e: React.KeyboardEvent) => {
+                              // The pin checkbox handles Space itself; only
+                              // act when the row is the focused element, or
+                              // one keystroke fires two ops.
+                              if (e.target !== e.currentTarget) return;
+                              if (e.key !== "Enter" && e.key !== " ") return;
+                              e.preventDefault();
+                              handlePackagePin(
+                                env.ecosystem,
+                                env.path,
+                                pkg.name,
+                                !pkg.pinned,
+                              );
+                            }
+                          : undefined
+                      }
                     >
                       <span className="inspectah-lang-pkg-sublist__name">
                         {pkg.name}
@@ -337,7 +368,7 @@ export function LanguagePackageList({
                           disabled={isPending}
                           aria-label={`Pin ${pkg.name} to version ${pkg.detected_version}`}
                           onChange={() =>
-                            onSetPackagePin(
+                            handlePackagePin(
                               env.ecosystem,
                               env.path,
                               pkg.name,

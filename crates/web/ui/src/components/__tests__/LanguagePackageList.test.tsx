@@ -777,3 +777,122 @@ describe("LanguagePackageList aria-live announcements", () => {
     );
   });
 });
+
+// --- Package pin keyboard toggle (Rider A) ---
+
+describe("LanguagePackageList package pin keyboard toggle", () => {
+  const npmGlobalEnv = makeLangEnv(
+    "npm",
+    "/usr/lib/node_modules",
+    [
+      { name: "typescript", detected_version: "5.4.0", pinned: false },
+      { name: "eslint", detected_version: "8.57.0", pinned: true },
+    ],
+    { method: "npm global" },
+  );
+
+  async function expandSublist(onSetPackagePin = vi.fn()) {
+    const user = userEvent.setup();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={false}
+        onSetPackagePin={onSetPackagePin}
+      />,
+    );
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+    return onSetPackagePin;
+  }
+
+  // The package row is focusable, so keyboard users reach it and then have
+  // nowhere to go: arrows navigate, Escape collapses, and the pin was
+  // reachable only by tabbing into the checkbox inside the row.
+  it("Enter on a focused package row pins it", async () => {
+    const onSetPackagePin = await expandSublist();
+    const row = screen.getByTestId("lang-pkg-typescript");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onSetPackagePin).toHaveBeenCalledWith(
+      "npm",
+      "/usr/lib/node_modules",
+      "typescript",
+      true,
+    );
+  });
+
+  it("Space on a focused package row pins it", async () => {
+    const onSetPackagePin = await expandSublist();
+    const row = screen.getByTestId("lang-pkg-typescript");
+    row.focus();
+    fireEvent.keyDown(row, { key: " " });
+    expect(onSetPackagePin).toHaveBeenCalledWith(
+      "npm",
+      "/usr/lib/node_modules",
+      "typescript",
+      true,
+    );
+  });
+
+  it("unpins an already-pinned package", async () => {
+    const onSetPackagePin = await expandSublist();
+    const row = screen.getByTestId("lang-pkg-eslint");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onSetPackagePin).toHaveBeenCalledWith(
+      "npm",
+      "/usr/lib/node_modules",
+      "eslint",
+      false,
+    );
+  });
+
+  it("announces the pin change for screen readers", async () => {
+    await expandSublist();
+    const row = screen.getByTestId("lang-pkg-typescript");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(screen.getByTestId("lang-pkg-announcement")).toHaveTextContent(
+      "Pinned typescript",
+    );
+  });
+
+  it("does not double-toggle when the key lands on the pin checkbox itself", async () => {
+    // The checkbox handles Space natively; the row handler must not fire a
+    // second op for the same keystroke.
+    const onSetPackagePin = await expandSublist();
+    fireEvent.keyDown(screen.getByTestId("lang-pkg-pin-typescript"), {
+      key: " ",
+    });
+    expect(onSetPackagePin).not.toHaveBeenCalled();
+  });
+
+  it("does not toggle a pin while a mutation is in flight", async () => {
+    const user = userEvent.setup();
+    const onSetPackagePin = vi.fn();
+    render(
+      <LanguagePackageList
+        environments={[npmGlobalEnv]}
+        onToggle={vi.fn()}
+        isPending={true}
+        onSetPackagePin={onSetPackagePin}
+      />,
+    );
+    await user.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+    const row = screen.getByTestId("lang-pkg-typescript");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onSetPackagePin).not.toHaveBeenCalled();
+  });
+
+  it("advertises the row shortcut to assistive technology", async () => {
+    await expandSublist();
+    expect(
+      screen.getByTestId("lang-pkg-typescript").getAttribute("aria-keyshortcuts"),
+    ).toBe("Enter Space");
+  });
+});
