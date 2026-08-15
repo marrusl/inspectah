@@ -14,7 +14,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_refine::autosave::{SessionState, compute_tarball_hash, save_session};
-use inspectah_refine::session::RefineSession;
+use inspectah_refine::session::{RefineSession, should_include_in_containerfile};
 use inspectah_refine::types::{ItemId, RefinementOp, TimelineEntry};
 use inspectah_web::adapter::build_web_view;
 
@@ -57,13 +57,12 @@ fn write_tarball(path: &std::path::Path, snap: &InspectionSnapshot) {
     tar.finish().unwrap();
 }
 
-#[test]
-fn resumed_stale_toggle_does_not_downgrade_a_config_advisory() {
-    let dir = tempfile::tempdir().unwrap();
-    let tarball = dir.path().join("scan.tar.gz");
+/// Resume a session whose autosaved timeline carries the stale toggle a
+/// pre-guard build would have recorded.
+fn resume_with_stale_advisory_toggle(dir: &std::path::Path) -> RefineSession {
+    let tarball = dir.join("scan.tar.gz");
     write_tarball(&tarball, &advisory_snapshot());
 
-    // The timeline a pre-guard build would have autosaved.
     let stale = TimelineEntry::Op(RefinementOp::SetInclude {
         item_id: ItemId::Config {
             path: ADVISORY_PATH.into(),
@@ -83,9 +82,46 @@ fn resumed_stale_toggle_does_not_downgrade_a_config_advisory() {
     )
     .unwrap();
 
-    let session = RefineSession::resume_from(&tarball)
+    RefineSession::resume_from(&tarball)
         .expect("resume succeeds")
-        .expect("a session file exists");
+        .expect("a session file exists")
+}
+
+/// The projection is what the export renders from, so a replayed stale toggle
+/// must not reach it as an include decision either. The web view restores
+/// advisories from the original snapshot, which protects the *display* — this
+/// covers the other consumer, where the consequence is the flagged file being
+/// copied into the image rather than merely mislabelled in the browser.
+#[test]
+fn resumed_stale_toggle_does_not_reach_the_export_projection() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = resume_with_stale_advisory_toggle(dir.path());
+
+    let projected = session.snapshot_projected();
+    let entry = &projected
+        .config
+        .as_ref()
+        .expect("config section survives projection")
+        .files[0];
+
+    assert!(
+        entry.disposition.is_advisory(),
+        "a replayed stale toggle must not rewrite an advisory as actionable in \
+         the projection: {:?}",
+        entry.disposition
+    );
+    assert!(
+        !should_include_in_containerfile(&entry.disposition),
+        "the export must not copy a modernization-flagged file into the image \
+         on the strength of a stale toggle: {:?}",
+        entry.disposition
+    );
+}
+
+#[test]
+fn resumed_stale_toggle_does_not_downgrade_a_config_advisory() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = resume_with_stale_advisory_toggle(dir.path());
 
     let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
     let entry = json["config_files"]

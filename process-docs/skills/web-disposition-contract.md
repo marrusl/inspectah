@@ -51,24 +51,35 @@ If you ever make one of those entry types advisory or inventory, the
 collapse becomes the same bug: convert the DTO to carry the disposition
 rather than teaching the frontend to guess.
 
-## 3. Config advisories must be read from the *original* snapshot
+## 3. The projection preserves finding semantics — `with_include`, not `from_bool`
 
 `RefinedView.config_files` is `classify_configs(&projected)`, where
-`projected = project_snapshot()`. `project_snapshot` applies every
-`SetInclude` in the timeline with `FindingKind::from_bool`, which
-overwrites an advisory disposition wholesale.
+`projected = project_snapshot()`.
 
 `apply()` refuses `SetInclude` on an advisory, but **`resume_from` does
 not re-validate** — it restores an autosaved timeline directly, on the
 grounds that the ops were validated when first applied. A session saved
-before that guard shipped can replay a toggle on an advisory config path,
-and the projection then reports the finding as
-`{"kind":"actionable","include":true}`.
+before that guard shipped can replay a toggle on an advisory config path.
 
-So `adapter::build_web_view` calls `restore_config_advisories`, which
+`project_snapshot` therefore applies a config `SetInclude` with
+`entry.disposition.with_include(*include)`, the same merge-safe setter
+`aggregate/merge.rs` uses at 22 sites. **Do not reintroduce
+`FindingKind::from_bool` here.** `from_bool` overwrites an advisory
+wholesale, and the consequence is not cosmetic: `render_refine_export`
+renders from `snapshot_projected()`, so a downgraded advisory means the
+modernization-flagged file is copied into the image. The web view alone
+being correct is not enough — the export is the other consumer, and it is
+the one that changes what ships.
+
+The remaining ten `from_bool` sites in `project_snapshot` cover item kinds
+no collector makes advisory or inventory today. Config is the exception
+because the config inspector folds advisories onto the entry disposition.
+
+`adapter::build_web_view` also calls `restore_config_advisories`, which
 takes both the set of advisory paths and their content from a single
 `pipeline::render::advisory::config_advisories(session.snapshot())` call
-against the original snapshot.
+against the original snapshot. Since the projection fix that restore is
+defense in depth rather than the load-bearing guard it was written as.
 
 **Take the advisory list and any row filter from one call on one
 snapshot.** Reading advisories from the original while filtering rows
@@ -86,10 +97,14 @@ Rust and never round-trips through a session proves nothing. The
 stale-projection case needs a real resume:
 `crates/web/tests/config_advisory_resume_test.rs` writes a tarball, saves
 an autosave sidecar with a stale `SetInclude`, calls
-`RefineSession::resume_from`, and asserts on the serialized view.
+`RefineSession::resume_from`, and asserts on both consumers — the
+serialized web view *and* `snapshot_projected()`, which is what the export
+renders from. Asserting only the view passes while the export still bakes
+the file in.
 
 ## See Also
 
+- `crates/refine/src/session.rs` — `project_snapshot`, the `ItemId::Config` arm
 - `crates/web/src/adapter.rs` — `restore_config_advisories`
 - `crates/web/ui/src/api/disposition.ts` — the predicates
 - `crates/pipeline/src/render/advisory.rs` — the shared collector

@@ -1942,7 +1942,18 @@ impl RefineSession {
                                     && let Some(entry) =
                                         config.files.iter_mut().find(|e| e.path == *path)
                                 {
-                                    entry.disposition = FindingKind::from_bool(*include);
+                                    // `with_include`, not `from_bool`: the op may
+                                    // be a stale `SetInclude` replayed by
+                                    // `resume_from` from a session autosaved
+                                    // before advisory toggles were refused, and
+                                    // `resume_from` does not re-validate per op.
+                                    // `from_bool` would rewrite a modernization
+                                    // or cross-tree-symlink finding as
+                                    // actionable-included, and the export reads
+                                    // this projection — so the flagged file would
+                                    // be copied into the image. Config is the only
+                                    // toggleable item kind that carries advisories.
+                                    entry.disposition = entry.disposition.with_include(*include);
                                 }
                             }
                             ItemId::Repo { path: section_id } => {
