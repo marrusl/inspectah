@@ -3,11 +3,12 @@
 //! Composes section nav, triage list, and status bar widgets into the
 //! main single-host inspection view.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
+use inspectah_pipeline::render::advisory::{advisory_type_str, config_advisories};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, TriageBucket};
 
@@ -360,8 +361,20 @@ pub fn build_list_items(
         }
         SectionId::Configs => {
             let view = session.view();
-            view.config_files
+            // Config entries are the one advisory source that lives on the
+            // disposition rather than in a dedicated snapshot field, so an
+            // advisory reads as `is_included() == false` and would render as
+            // a file the user chose to leave out. Route them into advisory
+            // rows the way the reports do, off the same collector: one
+            // definition of what a config advisory is, so the row half and
+            // the filter half cannot drift apart.
+            let advisories = config_advisories(session.snapshot());
+            let advisory_paths: HashSet<&str> = advisories.iter().map(|a| a.path).collect();
+
+            let mut items: Vec<RawItem> = view
+                .config_files
                 .iter()
+                .filter(|cfg| !advisory_paths.contains(cfg.entry.path.as_str()))
                 .map(|cfg| {
                     let name = cfg.entry.path.clone();
                     let detail = format!("{:?}", cfg.entry.category);
@@ -382,7 +395,18 @@ pub fn build_list_items(
                         cfg.entry.attention_reason.clone(),
                     )
                 })
-                .collect()
+                .collect();
+
+            for advisory in &advisories {
+                items.push(RawItem::advisory(
+                    advisory.path,
+                    format!("advisory ({})", advisory_type_str(advisory.advisory_type)),
+                    TriageGroup::Investigate,
+                    advisory.rationale,
+                ));
+            }
+
+            items
         }
         // ── Decision sections ─────────────────────────────────────
         SectionId::Services => {
@@ -1614,5 +1638,102 @@ mod tests {
         assert!(item.included.is_none());
         assert!(item.has_content);
         assert!(item.item_id.is_some());
+    }
+
+    /// Config entries carry their advisory on the disposition rather than in
+    /// a dedicated snapshot field, so the Configs section built every row
+    /// from `is_included()` — false for an advisory — and the modernization
+    /// and cross-tree symlink detectors reached the list as excluded,
+    /// toggleable files. The reports route those entries into an advisory
+    /// list instead; this asserts the TUI agrees with them.
+    #[test]
+    fn config_advisories_render_as_advisory_rows() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::{AdvisoryType, FindingKind};
+        use inspectah_refine::session::RefineSession;
+
+        const SYSVINIT_PATH: &str = "/etc/init.d/legacy-app";
+        const SYSVINIT_RATIONALE: &str = "sysvinit script — port to a systemd unit";
+        const SYMLINK_PATH: &str = "/etc/alternatives/java";
+        const SYMLINK_RATIONALE: &str = "symlink crosses into read-only /usr";
+        const PLAIN_PATH: &str = "/etc/httpd/conf/httpd.conf";
+
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: SYSVINIT_PATH.into(),
+                    disposition: FindingKind::advisory(
+                        AdvisoryType::Modernization,
+                        SYSVINIT_RATIONALE,
+                    ),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: SYMLINK_PATH.into(),
+                    disposition: FindingKind::advisory(
+                        AdvisoryType::CrossTreeSymlink,
+                        SYMLINK_RATIONALE,
+                    ),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: PLAIN_PATH.into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let session = RefineSession::new(snap);
+        let state = TuiState::new(SECTION_ORDER.len());
+        let items = build_list_items(&session, SectionId::Configs, &state);
+
+        for (path, advisory_type, rationale) in [
+            (SYSVINIT_PATH, "modernization", SYSVINIT_RATIONALE),
+            (SYMLINK_PATH, "cross_tree_symlink", SYMLINK_RATIONALE),
+        ] {
+            let rows: Vec<&ListItem> = items.iter().filter(|i| i.name == path).collect();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{path} must render exactly once, not as both an advisory and a config row"
+            );
+            let row = rows[0];
+            assert!(
+                row.is_advisory,
+                "{path} is an advisory, not an include decision"
+            );
+            assert!(
+                row.included.is_none(),
+                "{path} must not offer a toggle: {:?}",
+                row.included
+            );
+            assert_eq!(
+                row.advisory_rationale.as_deref(),
+                Some(rationale),
+                "{path} must carry its rationale into the detail view"
+            );
+            assert!(
+                row.detail.contains(advisory_type),
+                "{path} must name its advisory type: {}",
+                row.detail
+            );
+        }
+
+        let plain = items
+            .iter()
+            .find(|i| i.name == PLAIN_PATH)
+            .expect("actionable config entries still render");
+        assert!(
+            !plain.is_advisory,
+            "an included config file is not advisory"
+        );
+        assert_eq!(
+            plain.included,
+            Some(true),
+            "actionable config entries keep their toggle"
+        );
     }
 }
