@@ -8,6 +8,7 @@
 | Status       | Pre-spec                                             |
 | Contributors | Mark Russell (PM), image mode specialist, UX lead, competitive analyst |
 | Renamed from | `inspectah architect` (2026-06-27)                   |
+| Superseded by | `2026-08-15-factor-spec.md`                         |
 
 ## Naming
 
