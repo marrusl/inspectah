@@ -1330,6 +1330,7 @@ name = "inspectah-web"
 version = "0.9.0-beta.1"
 dependencies = [
  "axum",
+ "flate2",
  "http-body-util",
  "inspectah-core",
  "inspectah-pipeline",
@@ -1340,6 +1341,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "tokio",
  "tower",

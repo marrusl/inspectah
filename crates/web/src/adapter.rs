@@ -10,11 +10,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+use inspectah_pipeline::render::advisory::config_advisories;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
 use inspectah_refine::projection::{
     GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
@@ -35,8 +37,39 @@ use crate::web_types::{
 /// This is a pure mapping layer: it reads the session's view, decisions,
 /// and baseline summary, then maps each domain type to its DTO counterpart.
 /// The output serializes to JSON identical to the legacy handler path.
+/// Restore the advisory disposition on every config entry the collector
+/// flagged, overwriting whatever the projection left there.
+///
+/// The view's config entries are classified from the *projected* snapshot,
+/// and `project_snapshot` rewrites a config disposition with
+/// `FindingKind::from_bool` for any `SetInclude` in the timeline. A session
+/// autosaved before advisory toggles were refused can still replay one, and
+/// `resume_from` restores that timeline without per-op validation — so the
+/// projection can report an advisory as an ordinary included file.
+///
+/// The original snapshot is authoritative here: a modernization or
+/// cross-tree symlink finding is a fact about the host, not a decision the
+/// user owns. Taking both the set of advisory paths and their content from a
+/// single `config_advisories` call is what keeps the row half and the
+/// content half from disagreeing about what a config advisory is.
+fn restore_config_advisories(
+    config_files: &mut [inspectah_refine::types::RefinedConfig],
+    original: &inspectah_core::snapshot::InspectionSnapshot,
+) {
+    for advisory in config_advisories(original) {
+        if let Some(refined) = config_files
+            .iter_mut()
+            .find(|c| c.entry.path == advisory.path)
+        {
+            refined.entry.disposition =
+                FindingKind::advisory(advisory.advisory_type.clone(), advisory.rationale);
+        }
+    }
+}
+
 pub fn build_web_view(session: &RefineSession) -> ViewResponse {
-    let view = session.view().clone();
+    let mut view = session.view().clone();
+    restore_config_advisories(&mut view.config_files, session.snapshot());
     let decisions = session.decisions();
 
     // Map repo groups from projection type to DTO
@@ -1395,6 +1428,135 @@ mod tests {
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
+
+    mod config_advisory {
+        use super::*;
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_refine::types::{
+            RefinedConfig, Triage, TriageBucket, TriageReason, TriageTag,
+        };
+
+        const ADVISORY_PATH: &str = "/etc/init.d/legacy-app";
+        const RATIONALE: &str = "sysvinit script — port to a systemd unit";
+        const SYMLINK_PATH: &str = "/etc/alternatives/java";
+        const PLAIN_PATH: &str = "/etc/httpd/conf/httpd.conf";
+
+        fn snapshot_with_advisories() -> InspectionSnapshot {
+            let entry = |path: &str, disposition: FindingKind| ConfigFileEntry {
+                path: path.into(),
+                disposition,
+                ..Default::default()
+            };
+            let mut snap = InspectionSnapshot::new();
+            snap.config = Some(ConfigSection {
+                files: vec![
+                    entry(
+                        ADVISORY_PATH,
+                        FindingKind::advisory(AdvisoryType::Modernization, RATIONALE),
+                    ),
+                    entry(
+                        SYMLINK_PATH,
+                        FindingKind::advisory(
+                            AdvisoryType::CrossTreeSymlink,
+                            "symlink crosses into read-only /usr",
+                        ),
+                    ),
+                    entry(PLAIN_PATH, FindingKind::included()),
+                ],
+            });
+            snap
+        }
+
+        /// The wire contract has to carry the advisory type and rationale, not
+        /// just the fact that the entry is not included — an advisory rendered
+        /// as an excluded config file states the opposite of what it means.
+        #[test]
+        fn view_carries_advisory_type_and_rationale() {
+            let session = RefineSession::new(snapshot_with_advisories());
+            let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
+            let files = json["config_files"].as_array().expect("config_files array");
+
+            let advisory = files
+                .iter()
+                .find(|f| f["entry"]["path"] == ADVISORY_PATH)
+                .expect("the advisory entry reaches the client");
+            assert_eq!(advisory["entry"]["disposition"]["kind"], "advisory");
+            assert_eq!(
+                advisory["entry"]["disposition"]["advisory_type"],
+                "modernization"
+            );
+            assert_eq!(advisory["entry"]["disposition"]["rationale"], RATIONALE);
+
+            let symlink = files
+                .iter()
+                .find(|f| f["entry"]["path"] == SYMLINK_PATH)
+                .expect("every advisory variant reaches the client");
+            assert_eq!(
+                symlink["entry"]["disposition"]["advisory_type"],
+                "cross_tree_symlink"
+            );
+
+            let plain = files
+                .iter()
+                .find(|f| f["entry"]["path"] == PLAIN_PATH)
+                .expect("actionable entries are unaffected");
+            assert_eq!(plain["entry"]["disposition"]["kind"], "actionable");
+            assert_eq!(plain["entry"]["disposition"]["include"], true);
+        }
+
+        #[test]
+        fn every_advisory_path_appears_exactly_once() {
+            let session = RefineSession::new(snapshot_with_advisories());
+            let json = serde_json::to_value(build_web_view(&session)).expect("serialize");
+            let files = json["config_files"].as_array().expect("config_files array");
+            for path in [ADVISORY_PATH, SYMLINK_PATH] {
+                let count = files.iter().filter(|f| f["entry"]["path"] == path).count();
+                assert_eq!(count, 1, "{path} must render once, not as two rows");
+            }
+        }
+
+        /// A session autosaved before the advisory guard shipped can replay a
+        /// `SetInclude` on an advisory path — `resume_from` restores the
+        /// timeline without per-op validation, and `project_snapshot` then
+        /// overwrites the disposition with `FindingKind::from_bool`. The
+        /// collector's finding is a fact about the host, not a decision the
+        /// user is entitled to overwrite, so the original snapshot wins.
+        #[test]
+        fn stale_projection_does_not_downgrade_an_advisory() {
+            let original = snapshot_with_advisories();
+            let mut projected: Vec<RefinedConfig> = original
+                .config
+                .as_ref()
+                .unwrap()
+                .files
+                .iter()
+                .map(|entry| RefinedConfig {
+                    entry: entry.clone(),
+                    triage: TriageTag {
+                        triage: Triage::SingleHost(TriageBucket::Investigate),
+                        primary_reason: TriageReason::ConfigUnowned,
+                        annotations: Vec::new(),
+                    },
+                })
+                .collect();
+            // What a replayed stale SetInclude leaves behind.
+            projected[0].entry.disposition = FindingKind::included();
+
+            restore_config_advisories(&mut projected, &original);
+
+            assert_eq!(
+                projected[0].entry.disposition,
+                FindingKind::advisory(AdvisoryType::Modernization, RATIONALE),
+                "a stale op must not turn an advisory into an included file"
+            );
+            assert_eq!(
+                projected[2].entry.disposition,
+                FindingKind::included(),
+                "actionable entries keep whatever the projection decided"
+            );
+        }
+    }
 
     #[test]
     fn build_web_view_empty_snapshot() {
