@@ -14,6 +14,11 @@ use minijinja::{Environment, Value, context};
 
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
 
+/// Advisory discriminant for synthesized orphan full-shadow entries. Not an
+/// `AdvisoryType` variant — the finding lives on the drop-in's `shadow_type`,
+/// so this mirrors the `ShadowType::FullShadow` serialized name instead.
+const ORPHAN_SHADOW_ADVISORY_TYPE: &str = "full_shadow";
+
 const PF_CSS: &str = include_str!("../../assets/patternfly.min.css");
 const REPORT_CSS: &str = include_str!("../../assets/report.css");
 const REPORT_JS: &str = include_str!("../../assets/report.js");
@@ -521,7 +526,10 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 
     // Synthesize advisory entries for orphan full-shadow drop-ins.
     // These are preset-matched services with full shadows — they have no
-    // state_changes entry, so the loop above misses them entirely.
+    // state_changes entry, so the loop above misses them entirely. With no
+    // state change there is nothing to include or exclude, so they carry
+    // advisory semantics, matching how the audit report lists full shadows.
+    let mut orphan_shadow_advisories = 0usize;
     if let Some(svc) = snap.services.as_ref() {
         let state_change_units: std::collections::HashSet<&str> =
             svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
@@ -540,10 +548,13 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 "unit": d.unit,
                 "current_state": "preset-matched",
                 "default_state": "n/a",
-                "include": true,
-                "is_advisory": false,
+                "include": false,
+                "is_advisory": true,
+                "advisory_type": ORPHAN_SHADOW_ADVISORY_TYPE,
+                "rationale": rationale,
                 "shadow_rationale": rationale,
             })));
+            orphan_shadow_advisories += 1;
         }
     }
 
@@ -557,7 +568,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .filter(|s| s.disposition.is_advisory())
                 .count()
         })
-        .unwrap_or(0);
+        .unwrap_or(0)
+        + orphan_shadow_advisories;
     let svc_state = section_state(InspectorId::Services, &snap.completeness);
     let svc_state_str = match svc_state {
         SectionState::Normal => "normal",
@@ -1351,6 +1363,53 @@ mod tests {
             ..Default::default()
         });
         snap
+    }
+
+    /// A full-shadow drop-in whose unit has no `state_changes` row is not a
+    /// decision the user can act on — it belongs in the advisory list, and it
+    /// has to reach the group advisory badge or the badge under-reports.
+    #[test]
+    fn orphan_full_shadow_renders_as_advisory_and_counts() {
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+
+        const ORPHAN_UNIT: &str = "sshd.service";
+        const RATIONALE: &str = "Full shadow: base image updates are ignored";
+
+        let mut snap = test_snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: vec![],
+            drop_ins: vec![SystemdDropIn {
+                unit: ORPHAN_UNIT.into(),
+                path: format!("/etc/systemd/system/{ORPHAN_UNIT}"),
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some(RATIONALE.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let html = render_report(&snap, &RenderContext { target: None });
+
+        assert!(
+            html.contains(&format!(
+                "Advisory: {ORPHAN_SHADOW_ADVISORY_TYPE} - {RATIONALE}"
+            )),
+            "orphan full shadow must render in the advisory list: {html}"
+        );
+        assert!(
+            html.contains(r#"<div class="advisory-rationale">Full shadow: base image updates are ignored</div>"#),
+            "advisory entry must carry its rationale text: {html}"
+        );
+        assert!(
+            !html.contains(&format!("<td>{ORPHAN_UNIT}</td>")),
+            "orphan full shadow must not render as an actionable table row: {html}"
+        );
+        // group.html renders "[N actionable, M advisories]" only when the
+        // group's advisory count is non-zero.
+        assert!(
+            html.contains("[0 actionable, 1 advisories]"),
+            "group advisory badge must count the orphan shadow: {html}"
+        );
     }
 
     #[test]
