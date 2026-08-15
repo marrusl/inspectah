@@ -12,6 +12,7 @@ use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::users::UserGroupDecision;
 use minijinja::{Environment, Value, context};
 
+use super::advisory::{advisory_type_str, config_advisories};
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
 
 /// Advisory discriminant for synthesized orphan full-shadow entries. Not an
@@ -425,11 +426,23 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         .unwrap_or_default()
                         .trim_matches('"')
                         .to_string();
+                    // An advisory config entry is not an include decision:
+                    // it renders in the advisory list, not the table.
+                    let (advisory_type_str, rationale_str) = match &f.disposition {
+                        FindingKind::Advisory {
+                            advisory_type,
+                            rationale,
+                        } => (advisory_type_str(advisory_type), rationale.clone()),
+                        _ => (String::new(), String::new()),
+                    };
                     Value::from_serialize(serde_json::json!({
                         "path": f.path,
                         "kind": kind_str,
                         "category": cat_str,
                         "package": f.package.as_deref().unwrap_or(""),
+                        "is_advisory": f.disposition.is_advisory(),
+                        "advisory_type": advisory_type_str,
+                        "rationale": rationale_str,
                     }))
                 })
                 .collect()
@@ -437,6 +450,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or_default();
 
     let config_count = config_files.len();
+    let config_advisory_count = config_advisories(snap).len();
     let config_state = section_state(InspectorId::Config, &snap.completeness);
     let config_state_str = match config_state {
         SectionState::Normal => "normal",
@@ -1174,6 +1188,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     // ── Section group counts ────────────────────────────────────
     let group_packages_count = pkg_count;
     let group_sysconfig_count = config_count + kernelboot_count + security_count;
+    let group_sysconfig_advisory = config_advisory_count;
     let group_services_count = svc_count + sched_count;
     let group_services_advisory = svc_advisory_count;
     let group_identity_count = users_count;
@@ -1251,6 +1266,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         version_changes => version_changes_val,
         config_files => config_files_val,
         config_count,
+        config_advisory_count,
         config_state => config_state_str,
         config_conflict_count,
         has_config_packages,
@@ -1324,6 +1340,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         // Section group counts
         group_packages_count,
         group_sysconfig_count,
+        group_sysconfig_advisory,
         group_services_count,
         group_services_advisory,
         group_identity_count,
@@ -1409,6 +1426,76 @@ mod tests {
         assert!(
             html.contains("[0 actionable, 1 advisories]"),
             "group advisory badge must count the orphan shadow: {html}"
+        );
+    }
+
+    /// A modernization or cross-tree-symlink finding lives on the config
+    /// entry's disposition, not in a table column. Rendering it as an
+    /// ordinary config row states the opposite of what it means: that the
+    /// file is a decision the user made about the image.
+    #[test]
+    fn config_advisory_renders_as_advisory_not_as_a_table_row() {
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+
+        const ADVISORY_PATH: &str = "/etc/init.d/legacy-app";
+        const RATIONALE: &str = "sysvinit script — port to a systemd unit";
+        const ACTIONABLE_PATH: &str = "/etc/httpd/conf/httpd.conf";
+
+        let mut snap = test_snapshot();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: ADVISORY_PATH.into(),
+                    disposition: FindingKind::advisory(AdvisoryType::Modernization, RATIONALE),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: ACTIONABLE_PATH.into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        // minijinja escapes `/` in HTML text nodes, so paths never appear
+        // literally in the rendered output.
+        let escaped = |path: &str| path.replace('/', "&#x2f;");
+
+        let html = render_report(&snap, &RenderContext { target: None });
+
+        let config_section = html
+            .split_once(r#"<details id="config-files">"#)
+            .and_then(|(_, rest)| rest.split_once("</details>"))
+            .map(|(body, _)| body)
+            .expect("config section must render");
+        let advisory_list = config_section
+            .split_once(r#"<div class="advisory-list""#)
+            .map(|(_, rest)| rest)
+            .expect("config section must render an advisory list");
+
+        assert!(
+            advisory_list.contains(&escaped(ADVISORY_PATH)),
+            "modernization advisory must render in the config advisory list: {config_section}"
+        );
+        assert!(
+            advisory_list.contains(RATIONALE),
+            "config advisory must carry its rationale: {config_section}"
+        );
+        assert!(
+            !config_section.contains(&format!("<td>{}</td>", escaped(ADVISORY_PATH))),
+            "an advisory is not an include decision and must not render as a \
+             config table row: {config_section}"
+        );
+        assert!(
+            config_section.contains(&format!("<td>{}</td>", escaped(ACTIONABLE_PATH))),
+            "actionable config entries must still render as table rows: {config_section}"
+        );
+        // group.html renders "[N actionable, M advisories]" only when the
+        // group's advisory count is non-zero.
+        assert!(
+            html.contains("[1 actionable, 1 advisories]"),
+            "System Configuration group badge must count the config advisory: {html}"
         );
     }
 

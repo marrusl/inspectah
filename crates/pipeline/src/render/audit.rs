@@ -77,6 +77,17 @@ fn collect_group_advisories(snap: &InspectionSnapshot, group: SectionGroup) -> V
                 }
             }
         }
+        SectionGroup::SystemConfig => {
+            // Config entries carry their advisory on the disposition, so the
+            // include-filtered tables in this group drop them alongside the
+            // entries the user excluded deliberately.
+            for advisory in super::advisory::config_advisories(snap) {
+                advisories.push(Advisory {
+                    path_or_pattern: advisory.path.to_string(),
+                    rationale: advisory.rationale.to_string(),
+                });
+            }
+        }
         SectionGroup::Services => {
             // Service drop-ins with FullShadow
             if let Some(services) = &snap.services {
@@ -980,6 +991,70 @@ mod tests {
             image_digest: "sha256:abc123def456".into(),
             packages: HashMap::new(),
             extracted_at: "2026-05-18T14:32:00Z".into(),
+        }
+    }
+
+    /// Config-borne advisories are the only advisory source the report has
+    /// to dig out of a disposition. Every table in the System Configuration
+    /// group filters on `is_included()`, which is false for an advisory, so
+    /// without a collector arm the modernization and cross-tree symlink
+    /// detectors produce findings that reach no reader.
+    #[test]
+    fn config_advisories_reach_the_system_configuration_group() {
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+
+        const SYSVINIT_RATIONALE: &str = "sysvinit script — port to a systemd unit";
+        const SYMLINK_RATIONALE: &str = "symlink crosses into read-only /usr";
+
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/init.d/legacy-app".into(),
+                    disposition: FindingKind::advisory(
+                        AdvisoryType::Modernization,
+                        SYSVINIT_RATIONALE,
+                    ),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "/etc/alternatives/java".into(),
+                    disposition: FindingKind::advisory(
+                        AdvisoryType::CrossTreeSymlink,
+                        SYMLINK_RATIONALE,
+                    ),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let md = render_audit(&snap);
+
+        // Scope to the group: an `### Advisories` subsection elsewhere in
+        // the report would satisfy a bare contains().
+        let after_heading = md
+            .split_once("## System Configuration")
+            .map(|(_, rest)| rest)
+            .expect("System Configuration group must render");
+        let group = after_heading.split("\n## ").next().unwrap_or(after_heading);
+        let advisories = group
+            .split_once("### Advisories")
+            .map(|(_, rest)| rest)
+            .expect("System Configuration group must render an Advisories subsection");
+
+        for (path, rationale) in [
+            ("/etc/init.d/legacy-app", SYSVINIT_RATIONALE),
+            ("/etc/alternatives/java", SYMLINK_RATIONALE),
+        ] {
+            assert!(
+                advisories.contains(path),
+                "advisory for {path} must render in the group: {group}"
+            );
+            assert!(
+                advisories.contains(rationale),
+                "advisory for {path} must carry its rationale: {group}"
+            );
         }
     }
 

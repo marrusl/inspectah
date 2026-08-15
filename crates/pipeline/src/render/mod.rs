@@ -11,6 +11,7 @@
 //! 7. inspection-snapshot.json — the snapshot itself (written by caller)
 //! 8. config/ tree — config files to COPY into the image
 
+pub mod advisory;
 pub mod audit;
 pub mod configtree;
 pub mod containerfile;

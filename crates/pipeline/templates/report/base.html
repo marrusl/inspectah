@@ -36,7 +36,7 @@
       {% include "report/packages.html" %}
     {% endcall %}
 
-    {% call group("system-config", "System Configuration", count=group_sysconfig_count) %}
+    {% call group("system-config", "System Configuration", count=group_sysconfig_count, advisory_count=group_sysconfig_advisory) %}
       {% include "report/config.html" %}
       {% if has_kernelboot or kernelboot_state == "failed" %}
         {% include "report/kernel.html" %}

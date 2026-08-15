@@ -23,7 +23,7 @@
     </tr>
   </thead>
   <tbody>
-    {% for f in config_files %}
+    {% for f in config_files if not f.is_advisory %}
     <tr>
       <td>{{ f.path }}</td>
       <td>{{ f.kind }}</td>
@@ -35,6 +35,25 @@
     {% endfor %}
   </tbody>
 </table>
+
+{% if config_advisory_count > 0 %}
+<div class="advisory-list" role="list" aria-label="Advisory findings">
+  {% for f in config_files if f.is_advisory %}
+  <div class="advisory-item" role="listitem"
+       aria-label="Advisory: {{ f.advisory_type }} - {{ f.rationale }}"
+       tabindex="0">
+    <div class="advisory-item__header">
+      <span class="advisory-badge">
+        <span aria-hidden="true">&#x2139;</span> Advisory
+      </span>
+      <span>{{ f.path }}</span>
+    </div>
+    <div class="advisory-rationale">{{ f.rationale }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% else %}
 <p class="empty-state">No configuration file changes detected</p>
 {% endif %}
