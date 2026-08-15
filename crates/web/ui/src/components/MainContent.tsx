@@ -17,6 +17,7 @@ import type {
   RefinementOp,
   ReferenceSection,
 } from "../api/types";
+import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
@@ -109,7 +110,7 @@ function toPackageListPackages(
   return packages.map((pkg) => ({
     name: `${pkg.entry.name}.${pkg.entry.arch}`,
     source_repo: pkg.entry.source_repo,
-    include: pkg.entry.disposition?.include ?? true,
+    include: isIncluded(pkg.entry.disposition),
     uploaded_version: pkg.entry.uploaded_version,
     installed_version: pkg.entry.uploaded_version ? pkg.entry.version : undefined,
   }));
@@ -264,7 +265,7 @@ export function MainContent({
             kind: "Package",
             key: { name: pkg.entry.name, arch: pkg.entry.arch },
           },
-          include: !(pkg.entry.disposition?.include ?? true),
+          include: !isIncluded(pkg.entry.disposition),
         },
       };
       applyOp(op)
@@ -486,13 +487,19 @@ export function MainContent({
   if (activeSection === "configs" || activeSection === "config") {
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredConfigItems.length === 0;
-    // Hide section header when all config files are excluded.
-    const anyConfigIncluded = configItems.some(
-      (item) =>
-        item.type === "config" &&
-        (item.data.entry.disposition?.include ?? true),
+    // "All excluded" is a statement about decisions the user made, so only
+    // actionable entries can produce it. Advisories are not excluded — they
+    // were never candidates — and a host whose only config findings are
+    // advisories must still see them.
+    const anyConfigIncluded = configItems.some((item) =>
+      isIncluded(item.data.entry.disposition),
     );
-    if (!anyConfigIncluded && configItems.length > 0) {
+    const anyAdvisoryOrInventory = configItems.some(
+      (item) => !isToggleable(item.data.entry.disposition),
+    );
+    const allConfigsExcluded =
+      configItems.length > 0 && !anyConfigIncluded && !anyAdvisoryOrInventory;
+    if (allConfigsExcluded) {
       return (
         <EmptyState
           titleText="All configuration files excluded"

@@ -5,12 +5,14 @@ import type {
   RefinedPackage,
   RefinedConfig,
   AttentionLevel,
+  Disposition,
   RefinementOp,
   VersionChangeEntry,
   ItemId,
   TriageTag,
   TriageReason,
 } from "../api/types";
+import { advisoryTypeLabel, isIncluded, isToggleable } from "../api/disposition";
 import {
   attentionLabelColor,
   extractTriageBucket,
@@ -57,8 +59,8 @@ function itemName(item: DecisionItemKind): string {
   return item.data.entry.path;
 }
 
-function isIncluded(item: DecisionItemKind): boolean {
-  return item.data.entry.disposition?.include ?? true;
+function disposition(item: DecisionItemKind): Disposition {
+  return item.data.entry.disposition;
 }
 
 function isLocked(item: DecisionItemKind): boolean {
@@ -106,7 +108,7 @@ function buildToggleOp(item: DecisionItemKind): RefinementOp {
   const itemId = buildItemId(item);
   return {
     op: "SetInclude",
-    target: { item_id: itemId, include: !(item.data.entry.disposition?.include ?? true) },
+    target: { item_id: itemId, include: !isIncluded(disposition(item)) },
   };
 }
 
@@ -139,7 +141,12 @@ export function DecisionItem({
   const [isExpanded, setIsExpanded] = useState(false);
   const id = itemId(item);
   const name = itemName(item);
-  const included = isIncluded(item);
+  const itemDisposition = disposition(item);
+  const included = isIncluded(itemDisposition);
+  // Advisory and Inventory findings are the tool reporting something, not a
+  // decision the user owns. The session refuses SetInclude on both, so a
+  // toggle here would be a control that silently does nothing.
+  const toggleable = isToggleable(itemDisposition);
   const locked = isLocked(item);
   const reasonText = lockedReason(item);
   const hasBeenToggled = useRef(false);
@@ -162,12 +169,12 @@ export function DecisionItem({
       : null;
 
   const handleToggle = useCallback(() => {
-    if (!onToggleInclude || locked) return;
+    if (!onToggleInclude || locked || !toggleable) return;
     const op = buildToggleOp(item);
     onToggleInclude(op);
     onMarkViewed(id);
     hasBeenToggled.current = true;
-  }, [item, onToggleInclude, onMarkViewed, id, locked]);
+  }, [item, onToggleInclude, onMarkViewed, id, locked, toggleable]);
 
   const handleExpand = useCallback(() => {
     const willExpand = !isExpanded;
@@ -221,9 +228,11 @@ export function DecisionItem({
     };
   })();
 
-  // Auto-exclude reason label for unlocked, excluded items
+  // Auto-exclude reason label for unlocked, excluded items. A non-toggleable
+  // finding is not excluded — it was never a candidate for inclusion — so
+  // labelling it with an exclusion reason would misreport why it is out.
   const excludeReasonLabel = (() => {
-    if (included || locked) return null;
+    if (included || locked || !toggleable) return null;
     if (!triageTag) return null;
     return autoExcludeLabel(triageTag.primary_reason);
   })();
@@ -267,12 +276,19 @@ export function DecisionItem({
       role="row"
       aria-rowindex={rowIndex}
       aria-label={name}
-      aria-describedby={locked ? `locked-reason-${id}` : undefined}
+      aria-describedby={
+        itemDisposition.kind === "advisory"
+          ? `advisory-rationale-${id}`
+          : locked
+            ? `locked-reason-${id}`
+            : undefined
+      }
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
       data-expanded={isExpanded ? "true" : "false"}
       data-locked={locked ? "true" : undefined}
+      data-disposition={itemDisposition.kind}
       className={`inspectah-decision-row${locked ? " inspectah-decision-row--locked" : ""}`}
       style={{ borderLeft }}
     >
@@ -281,7 +297,7 @@ export function DecisionItem({
         onClick={handleExpand}
         style={{ cursor: "pointer" }}
       >
-        {onToggleInclude && (
+        {onToggleInclude && toggleable && (
           <div role="gridcell" className="inspectah-decision-row__toggle">
             <input
               type="checkbox"
@@ -312,6 +328,28 @@ export function DecisionItem({
             {name}
           </span>
         </div>
+        {itemDisposition.kind === "advisory" && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid="advisory-badge"
+          >
+            <Label color="blue" isCompact>
+              Advisory: {advisoryTypeLabel(itemDisposition.advisory_type)}
+            </Label>
+          </div>
+        )}
+        {itemDisposition.kind === "inventory" && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid="inventory-badge"
+          >
+            <Label color="grey" isCompact>
+              Inventory
+            </Label>
+          </div>
+        )}
         {bucketBadge && (
           <div
             role="gridcell"
@@ -363,6 +401,23 @@ export function DecisionItem({
           </button>
         </div>
       </div>
+      {/* Advisory rationale below the row — the whole content of the finding */}
+      {itemDisposition.kind === "advisory" && (
+        <div
+          id={`advisory-rationale-${id}`}
+          className="inspectah-decision-row__helper-text"
+          data-testid={`advisory-rationale-${id}`}
+          style={{
+            paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
+            paddingBottom: "var(--pf-t--global--spacer--xs)",
+            fontSize: "var(--pf-t--global--font--size--xs)",
+            color: "var(--pf-t--global--text--color--subtle)",
+            fontStyle: "italic",
+          }}
+        >
+          {itemDisposition.rationale}
+        </div>
+      )}
       {isExpanded && (
         <div role="gridcell" className="inspectah-decision-row__detail">
           {item.type === "package" ? (

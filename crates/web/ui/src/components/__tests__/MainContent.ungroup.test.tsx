@@ -49,7 +49,7 @@ function makeViewDataWithPackages(
       entry: {
         name: dotIdx > 0 ? nameArch.slice(0, dotIdx) : nameArch,
         arch: dotIdx > 0 ? nameArch.slice(dotIdx + 1) : "x86_64",
-        include: true,
+        disposition: { kind: "actionable", include: true },
         source_repo: "baseos",
       },
       triage: {},

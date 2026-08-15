@@ -11,6 +11,7 @@ import {
 import { UploadIcon } from "@patternfly/react-icons";
 import type { ViewResponse, RpmUploadRowState } from "./api/types";
 import { fetchOps, batchToggleGroup, setPackagePin, setBulkPackagePin, resetDefaults } from "./api/client";
+import { isIncluded } from "./api/disposition";
 import type { AnnotatedTimelineEntry } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -267,7 +268,7 @@ function SingleHostApp({
       const key = `${pkg.entry.name}.${pkg.entry.arch}`;
       const state = rpmUpload.getRowState(key);
       if (state) {
-        const pkgIncluded = pkg.entry.disposition?.include ?? true;
+        const pkgIncluded = isIncluded(pkg.entry.disposition);
         if (state === "cached_excluded" && pkgIncluded) {
           states[key] = "cached_included";
         } else if (state === "uploaded_excluded" && pkgIncluded) {

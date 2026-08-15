@@ -2,6 +2,27 @@
 // Source of truth: inspectah-refine/src/types.rs, inspectah-core/src/types/,
 // inspectah-web/src/handlers.rs
 
+// --- Finding disposition (inspectah-core/src/types/finding.rs) ---
+
+/** Rust: AdvisoryType — #[serde(rename_all = "snake_case")] */
+export type AdvisoryType =
+  | "unbacked_var_dir"
+  | "cross_tree_symlink"
+  | "modernization";
+
+/**
+ * Rust: FindingKind — #[serde(tag = "kind", rename_all = "snake_case")]
+ *
+ * Three dispositions, not a boolean. Only `actionable` carries an `include`
+ * key, so reading `include` off the other two yields `undefined` — which is
+ * why this is a discriminated union and not `{ kind: string; include?: boolean }`.
+ * Use the helpers in `api/disposition.ts` rather than reading fields directly.
+ */
+export type Disposition =
+  | { kind: "actionable"; include: boolean }
+  | { kind: "advisory"; advisory_type: AdvisoryType; rationale: string }
+  | { kind: "inventory" };
+
 // --- Package types (inspectah-core/src/types/rpm.rs) ---
 
 /** Rust: #[serde(rename_all = "snake_case")] */
@@ -21,7 +42,7 @@ export interface PackageEntry {
   release: string;
   arch: string;
   state: PackageState;
-  disposition: { kind: string; include?: boolean };
+  disposition: Disposition;
   locked?: boolean;
   acknowledged?: boolean;
   source_repo: string;
@@ -63,7 +84,7 @@ export interface ConfigFileEntry {
   rpm_va_flags: string | null;
   package: string | null;
   diff_against_rpm: string | null;
-  disposition: { kind: string; include?: boolean };
+  disposition: Disposition;
   locked?: boolean;
   attention_reason?: string | null;
   tie: boolean;
