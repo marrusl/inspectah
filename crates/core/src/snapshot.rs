@@ -184,6 +184,42 @@ mod tests {
         assert_eq!(snap.schema_version, SCHEMA_VERSION);
     }
 
+    /// `--from-snapshot` re-render reads dispositions straight out of JSON.
+    /// Findings whose disposition key is absent must not arrive as
+    /// actionable-and-included, or a re-render bakes inventory-only network
+    /// items and an undecided tuned profile into the Containerfile.
+    #[test]
+    fn load_defaults_absent_dispositions_to_non_included() {
+        let json = format!(
+            r#"{{
+                "schema_version": {SCHEMA_VERSION},
+                "network": {{
+                    "connections": [{{"path": "/etc/sysconfig/network-scripts/ifcfg-eth0",
+                                      "name": "eth0"}}],
+                    "firewall_zones": [{{"path": "/etc/firewalld/zones/public.xml",
+                                         "name": "public"}}],
+                    "firewall_direct_rules": [{{"ipv": "ipv4", "table": "filter",
+                                                "chain": "INPUT"}}]
+                }},
+                "kernel_boot": {{"tuned_active": "my-custom-profile"}}
+            }}"#
+        );
+        let snap = InspectionSnapshot::load(&json).unwrap();
+
+        let network = snap.network.expect("network section present in fixture");
+        assert!(network.connections[0].disposition.is_inventory());
+        assert!(network.firewall_zones[0].disposition.is_inventory());
+        assert!(network.firewall_direct_rules[0].disposition.is_inventory());
+
+        let kernel_boot = snap
+            .kernel_boot
+            .expect("kernel_boot section present in fixture");
+        assert!(
+            !kernel_boot.tuned_disposition.is_included(),
+            "absent tuned_disposition must not survive load() as included"
+        );
+    }
+
     #[test]
     fn test_old_version_rejected() {
         let json = r#"{"schema_version": 16, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;

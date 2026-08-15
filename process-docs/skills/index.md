@@ -12,6 +12,7 @@ development or review.
 | [snapshot-schema-versioning](snapshot-schema-versioning.md) | Snapshot JSON schema version gating, serde annotation requirements, no backward compat |
 | [rpm-epoch-normalization](rpm-epoch-normalization.md) | RPM epoch empty-string vs "0" equivalence across serialization boundaries |
 | [serde-include-default-ambiguity](serde-include-default-ambiguity.md) | `include` field deserialization requires pre-patch via `load_for_refine()` to distinguish absent from explicit-false |
+| [finding-disposition-serde-defaults](finding-disposition-serde-defaults.md) | `disposition: FindingKind` fields must name their serde default; field-level `serde(default)` ignores the struct's `Default` impl |
 | [package-identity-is-name-dot-arch](package-identity-is-name-dot-arch.md) | Package identity is `name.arch` everywhere; bare names cause multiarch collisions |
 | [aggregate-vs-single-host-behavioral-split](aggregate-vs-single-host-behavioral-split.md) | Aggregate and single-host modes diverge on leaf filtering, redaction state, and rendering |
 | [subscription-preserve-flow](subscription-preserve-flow.md) | Subscription PEM collection pipeline, X.509 cert expiry parsing with `x509-parser`, display thresholds, symlink safety |

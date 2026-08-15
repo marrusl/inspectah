@@ -73,7 +73,10 @@ pub struct KernelBootSection {
     pub non_default_modules: Vec<KernelModule>,
     #[serde(default)]
     pub tuned_active: String,
-    #[serde(default)]
+    // Field-level `serde(default)` uses `FindingKind::default()` (actionable,
+    // included). A tuned profile that a snapshot never recorded a decision for
+    // must not be baked into the Containerfile, so the default is excluded.
+    #[serde(default = "crate::types::finding::default_finding_excluded")]
     pub tuned_disposition: FindingKind,
     #[serde(default)]
     pub tuned_custom_profiles: Vec<ConfigSnippet>,
@@ -142,6 +145,18 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: KernelBootSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn absent_tuned_disposition_deserializes_as_excluded() {
+        let json = r#"{"cmdline":"quiet","tuned_active":"my-custom-profile"}"#;
+        let section: KernelBootSection = serde_json::from_str(json).unwrap();
+        assert!(
+            !section.tuned_disposition.is_included(),
+            "absent tuned_disposition must not deserialize as included — an \
+             undecided profile would be baked into the Containerfile"
+        );
+        assert_eq!(section.tuned_disposition, FindingKind::excluded());
     }
 
     #[test]

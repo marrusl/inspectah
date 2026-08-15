@@ -12,7 +12,10 @@ pub struct NMConnection {
     pub method: String,
     #[serde(default, rename = "type")]
     pub conn_type: String,
-    #[serde(default)]
+    // Field-level `serde(default)` uses `FindingKind::default()` (actionable,
+    // included), not the `Default for NMConnection` impl below. Network
+    // findings are inventory, so the default must be named explicitly.
+    #[serde(default = "crate::types::finding::default_finding_inventory")]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
@@ -51,7 +54,7 @@ pub struct FirewallZone {
     pub ports: Vec<String>,
     #[serde(default)]
     pub rich_rules: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "crate::types::finding::default_finding_inventory")]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
@@ -70,7 +73,7 @@ pub struct FirewallDirectRule {
     pub priority: String,
     #[serde(default)]
     pub args: String,
-    #[serde(default)]
+    #[serde(default = "crate::types::finding::default_finding_inventory")]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
@@ -150,5 +153,44 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: NetworkSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn absent_disposition_deserializes_as_inventory() {
+        // A snapshot written before the disposition fields existed — or hand
+        // edited — omits the key entirely. Every network finding is inventory.
+        let json = r#"{
+            "connections": [
+                {"path": "/etc/NetworkManager/system-connections/eth0.nmconnection",
+                 "name": "eth0"}
+            ],
+            "firewall_zones": [
+                {"path": "/etc/firewalld/zones/public.xml", "name": "public"}
+            ],
+            "firewall_direct_rules": [
+                {"ipv": "ipv4", "table": "filter", "chain": "INPUT"}
+            ]
+        }"#;
+        let section: NetworkSection = serde_json::from_str(json).unwrap();
+
+        let cases: [(&str, &FindingKind); 3] = [
+            ("NMConnection", &section.connections[0].disposition),
+            ("FirewallZone", &section.firewall_zones[0].disposition),
+            (
+                "FirewallDirectRule",
+                &section.firewall_direct_rules[0].disposition,
+            ),
+        ];
+        for (name, disposition) in cases {
+            assert_eq!(
+                *disposition,
+                FindingKind::inventory(),
+                "{name}: absent disposition must deserialize as inventory"
+            );
+            assert!(
+                !disposition.is_included(),
+                "{name}: absent disposition must not render into the Containerfile"
+            );
+        }
     }
 }
