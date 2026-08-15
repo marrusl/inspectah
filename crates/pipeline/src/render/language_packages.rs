@@ -128,9 +128,16 @@ fn pinned_package_list(item: &NonRpmItem) -> String {
         .join(" ")
 }
 
-/// Returns true if a string contains shell-unsafe characters (single quote or newline).
+/// Characters that make a token unsafe to interpolate into a rendered
+/// `RUN` line. The single quote and newline break out of the single-quoted
+/// paths the renderers emit; the shell metacharacters matter at the
+/// unquoted interpolation sites, notably the npm global package list.
+const UNSAFE_SHELL_CHARS: &[char] = &['\'', '\n', ';', '$', '`', '|', '&'];
+
+/// Returns true if a string contains characters that are unsafe to render
+/// into a shell command.
 fn contains_unsafe_chars(s: &str) -> bool {
-    s.contains('\'') || s.contains('\n')
+    s.contains(UNSAFE_SHELL_CHARS)
 }
 
 /// Sanitize a path for display in warning comments by replacing unsafe chars.
@@ -1439,6 +1446,119 @@ mod tests {
         assert!(
             !output.contains("evil"),
             "unsafe package must not appear in command: {output}"
+        );
+    }
+
+    /// Package names land in `RUN npm install -g <list>` unquoted, so a
+    /// metacharacter there is a command-injection vector, not a cosmetic
+    /// problem. Every character in `UNSAFE_SHELL_CHARS` must be rejected,
+    /// and ordinary package-name punctuation must survive.
+    #[test]
+    fn npm_global_rejects_every_unsafe_shell_char_in_package_names() {
+        let rejected = [
+            ("single quote", "evil'name"),
+            ("newline", "evil\nname"),
+            ("semicolon", "evil;rm -rf /"),
+            ("dollar", "evil$(id)"),
+            ("backtick", "evil`id`"),
+            ("pipe", "evil|id"),
+            ("ampersand", "evil&id"),
+        ];
+        for (label, name) in rejected {
+            let snap = test_snap(
+                vec![npm_global_item(
+                    "/usr/local/lib/node_modules",
+                    HIGH_CONFIDENCE,
+                    vec![("pm2", "5.3.0", false), (name, "1.0.0", false)],
+                )],
+                &["nodejs"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                output.contains("WARNING: 1 package(s) skipped due to unsafe characters"),
+                "{label}: must warn about the rejected package: {output}"
+            );
+            assert!(
+                !output.contains("evil"),
+                "{label}: rejected package must not reach the RUN line: {output}"
+            );
+            assert!(
+                output.contains("RUN npm install -g pm2"),
+                "{label}: the safe package must still render: {output}"
+            );
+        }
+
+        // Ordinary package-name punctuation must not trip the guard.
+        let accepted = ["@angular/cli", "node-sass", "socket.io", "left_pad"];
+        for name in accepted {
+            let snap = test_snap(
+                vec![npm_global_item(
+                    "/usr/local/lib/node_modules",
+                    HIGH_CONFIDENCE,
+                    vec![(name, "1.0.0", false)],
+                )],
+                &["nodejs"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+            assert!(
+                output.contains(&format!("RUN npm install -g {name}")),
+                "{name}: safe package must render: {output}"
+            );
+            assert!(
+                !output.contains("skipped due to unsafe characters"),
+                "{name}: safe package must not be rejected: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn pip_rejects_every_unsafe_shell_char_in_paths() {
+        let rejected = [
+            ("single quote", "/opt/ev'il/venv"),
+            ("newline", "/opt/ev\nil/venv"),
+            ("semicolon", "/opt/ev;il/venv"),
+            ("dollar", "/opt/ev$il/venv"),
+            ("backtick", "/opt/ev`il/venv"),
+            ("pipe", "/opt/ev|il/venv"),
+            ("ampersand", "/opt/ev&il/venv"),
+        ];
+        for (label, path) in rejected {
+            let snap = test_snap(
+                vec![pip_venv_item(
+                    path,
+                    HIGH_CONFIDENCE,
+                    true,
+                    vec![("flask", "2.3.3")],
+                )],
+                &["python3"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                output.contains("WARNING: path contains unsafe characters, skipping"),
+                "{label}: path must be rejected: {output}"
+            );
+            assert!(
+                !output.contains("RUN python3 -m venv"),
+                "{label}: rejected path must not render a RUN line: {output}"
+            );
+        }
+
+        // Spaces and other benign path characters stay renderable.
+        let snap = test_snap(
+            vec![pip_venv_item(
+                "/opt/my app-1.0/venv",
+                HIGH_CONFIDENCE,
+                true,
+                vec![("flask", "2.3.3")],
+            )],
+            &["python3"],
+        );
+        let output = language_package_lines(&snap).join("\n");
+        assert!(
+            output.contains("RUN python3 -m venv '/opt/my app-1.0/venv'"),
+            "benign path must still render: {output}"
         );
     }
 
