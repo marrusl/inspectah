@@ -145,6 +145,18 @@ fn sanitize_for_comment(s: &str) -> String {
     s.replace('\'', "''").replace('\n', "\\n")
 }
 
+/// Restore the leading `/` on a path the collector stored relative.
+///
+/// Leading-slash normalization is `trim_start_matches('/')` on both halves
+/// of this contract: the collectors in `nonrpm.rs` strip *every* leading
+/// slash before storing, and the renderers strip again before prepending
+/// exactly one. `strip_prefix('/')` removes only the first, so mixing the
+/// two turns a doubled root into `//opt` on one side and `/opt` on the
+/// other for the same stored path.
+fn absolute_path(stored_path: &str) -> String {
+    format!("/{}", stored_path.trim_start_matches('/'))
+}
+
 // ---------------------------------------------------------------------------
 // pip rendering
 // ---------------------------------------------------------------------------
@@ -198,9 +210,7 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         lines.push("# native compilation toolchains (gcc, python3-devel).".into());
     }
 
-    // Normalize path to absolute — the collector strips the leading slash
-    // before storing. npm/gem renderers already do this; pip must too.
-    let abs_path = format!("/{}", item.path.trim_start_matches('/'));
+    let abs_path = absolute_path(&item.path);
 
     // Shell injection safety: reject paths with unsafe characters.
     if contains_unsafe_chars(&abs_path) {
@@ -304,7 +314,7 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
 
     // Low confidence: advisory only (defensive — should not occur after hardening).
     if item.confidence != HIGH_CONFIDENCE && item.confidence != MEDIUM_CONFIDENCE {
-        let project_path = format!("/{}", item.path.trim_start_matches('/'));
+        let project_path = absolute_path(&item.path);
         lines.push(format!(
             "# npm packages: {project_path} (low confidence — review required)"
         ));
@@ -319,7 +329,7 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
     };
 
     let hash = env_hash(&item.path);
-    let project_path = format!("/{}", item.path.trim_start_matches('/'));
+    let project_path = absolute_path(&item.path);
 
     // Shell injection safety: reject paths with unsafe characters.
     if contains_unsafe_chars(&project_path) {
@@ -385,7 +395,7 @@ fn render_npm_global_section(items: &[&NonRpmItem], rpm_names: &[String]) -> Vec
 
 fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
     let mut lines = Vec::new();
-    let prefix = format!("/{}", item.path.trim_start_matches('/'));
+    let prefix = absolute_path(&item.path);
 
     let effective_confidence = if !item.disposition.is_included() {
         MEDIUM_CONFIDENCE
@@ -470,7 +480,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
 
     // Low confidence: advisory only (defensive — should not occur after hardening).
     if item.confidence != HIGH_CONFIDENCE && item.confidence != MEDIUM_CONFIDENCE {
-        let project_path = format!("/{}", item.path.trim_start_matches('/'));
+        let project_path = absolute_path(&item.path);
         lines.push(format!(
             "# gem packages: {project_path} (low confidence — review required)"
         ));
@@ -485,7 +495,7 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
     };
 
     let hash = env_hash(&item.path);
-    let project_path = format!("/{}", item.path.trim_start_matches('/'));
+    let project_path = absolute_path(&item.path);
 
     // Shell injection safety: reject paths with unsafe characters.
     if contains_unsafe_chars(&project_path) {
@@ -536,6 +546,27 @@ mod tests {
     use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmSoftwareSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
+
+    /// The renderer must produce exactly one leading slash for any stored
+    /// form the collector's `trim_start_matches('/')` can emit, including
+    /// the doubled roots it normalizes away.
+    #[test]
+    fn absolute_path_restores_exactly_one_leading_slash() {
+        let cases = [
+            ("opt/app", "/opt/app"),
+            ("/opt/app", "/opt/app"),
+            ("//opt/app", "/opt/app"),
+            ("///opt/app", "/opt/app"),
+            ("", "/"),
+        ];
+        for (stored, expected) in cases {
+            assert_eq!(
+                absolute_path(stored),
+                expected,
+                "stored path {stored:?} must render as {expected:?}"
+            );
+        }
+    }
 
     /// Build a minimal snapshot with given non-RPM items and optional RPM packages.
     fn test_snap(items: Vec<NonRpmItem>, rpm_names: &[&str]) -> InspectionSnapshot {

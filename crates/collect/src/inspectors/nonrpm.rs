@@ -1229,7 +1229,10 @@ fn scan_npm_global_packages(exec: &dyn Executor, section: &mut NonRpmSoftwareSec
             "medium"
         };
 
-        let path = prefix.strip_prefix('/').unwrap_or(prefix).to_string();
+        // Strip every leading '/' to match the relative-path convention the
+        // other language environment detectors use. `strip_prefix` removes
+        // only one, so a doubled root would survive into the snapshot.
+        let path = prefix.trim_start_matches('/').to_string();
 
         section.items.push(NonRpmItem {
             path,
@@ -1579,9 +1582,10 @@ fn scan_system_gems(exec: &dyn Executor, section: &mut NonRpmSoftwareSection) {
 
     let confidence = if rpm_filtered { "medium" } else { "low" };
 
-    // Strip leading '/' to match relative-path convention used by other
-    // language environment detectors.
-    let path = gemdir.strip_prefix('/').unwrap_or(gemdir).to_string();
+    // Strip every leading '/' to match the relative-path convention used by
+    // other language environment detectors. `strip_prefix` removes only one,
+    // so a doubled root would survive into the snapshot.
+    let path = gemdir.trim_start_matches('/').to_string();
 
     section.items.push(NonRpmItem {
         path,
@@ -3898,6 +3902,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn system_gems_path_strips_every_leading_slash() {
+        // A doubled root must normalize the same way the other collectors
+        // normalize it, or the renderer's `/{}` prefix produces `//...`.
+        let exec = MockExecutor::new()
+            .with_command(
+                "gem --version",
+                ExecResult {
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem environment gemdir",
+                ExecResult {
+                    stdout: "//usr/local/share/gems\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "gem list --local --no-details",
+                ExecResult {
+                    stdout: "bundler (2.5.0)\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_system_gems(&exec, &mut section);
+
+        let gem_item = section
+            .items
+            .iter()
+            .find(|i| i.method == "gem system")
+            .expect("should find system gem item");
+        assert_eq!(
+            gem_item.path, "usr/local/share/gems",
+            "every leading slash must be stripped, not just the first"
+        );
+    }
+
     // ---- /usr walk: ancestor collapse tests ----
 
     fn owned_set(paths: &[&str]) -> HashSet<String> {
@@ -4232,6 +4279,49 @@ mod tests {
         assert_eq!(item.packages.len(), 1);
         assert_eq!(item.packages[0].name, "express");
         assert_eq!(item.packages[0].version, "4.18.2");
+    }
+
+    #[test]
+    fn npm_global_path_strips_every_leading_slash() {
+        // `npm root -g` echoes whatever the prefix config holds, doubled
+        // root included. It must normalize like every other collector path.
+        let exec = MockExecutor::new()
+            .with_command(
+                "npm root -g",
+                ExecResult {
+                    stdout: "//usr/lib/node_modules\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "ls -1 //usr/lib/node_modules",
+                ExecResult {
+                    stdout: "express\n".to_string(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_file(
+                "//usr/lib/node_modules/express/package.json",
+                r#"{"name": "express", "version": "4.18.2"}"#,
+            )
+            .with_command(
+                "rpm -qf //usr/lib/node_modules/express",
+                ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let mut section = NonRpmSoftwareSection::default();
+        scan_npm_global_packages(&exec, &mut section);
+
+        assert_eq!(section.items.len(), 1);
+        assert_eq!(
+            section.items[0].path, "usr/lib/node_modules",
+            "every leading slash must be stripped, not just the first"
+        );
     }
 
     #[test]
