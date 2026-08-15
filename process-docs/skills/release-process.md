@@ -16,6 +16,11 @@ Two files need version bumps:
    The tilde sorts *before* the release version in RPM, so
    `0.8.6~beta.5 < 0.8.6`. Using a hyphen would break RPM ordering.
 
+**`ROADMAP.md` is *not* part of this list.** It has a "Current version"
+line near the top that looks like a sync-rule candidate, but history
+shows it's bumped in a separate `docs(roadmap):` commit, not the release
+commit -- leave it alone when preparing a release commit.
+
 ## CHANGELOG.md
 
 Move all entries from `## [Unreleased]` into a new dated section:
