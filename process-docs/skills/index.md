@@ -14,6 +14,7 @@ development or review.
 | [serde-include-default-ambiguity](serde-include-default-ambiguity.md) | `include` field deserialization requires pre-patch via `load_for_refine()` to distinguish absent from explicit-false |
 | [finding-disposition-serde-defaults](finding-disposition-serde-defaults.md) | `disposition: FindingKind` fields must name their serde default; field-level `serde(default)` ignores the struct's `Default` impl |
 | [package-identity-is-name-dot-arch](package-identity-is-name-dot-arch.md) | Package identity is `name.arch` everywhere; bare names cause multiarch collisions |
+| [nonrpm-stored-path-normalization](nonrpm-stored-path-normalization.md) | Non-RPM paths store with `trim_start_matches('/')` and render back through `absolute_path()`; `strip_prefix('/')` diverges on doubled roots |
 | [aggregate-vs-single-host-behavioral-split](aggregate-vs-single-host-behavioral-split.md) | Aggregate and single-host modes diverge on leaf filtering, redaction state, and rendering |
 | [subscription-preserve-flow](subscription-preserve-flow.md) | Subscription PEM collection pipeline, X.509 cert expiry parsing with `x509-parser`, display thresholds, symlink safety |
 | [anaconda-classifier-flow](anaconda-classifier-flow.md) | Anaconda gap classifier pipeline: four tiers, locked plumbing, promoted-via-service/config, user-op preservation after reclassification |
