@@ -142,6 +142,88 @@ async fn apply_valid_op() {
     assert_eq!(pkg_stats["included"], 1);
 }
 
+/// Path of the advisory config entry in [`advisory_state`].
+const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
+
+/// Session state carrying one modernization advisory config entry.
+fn advisory_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: ADVISORY_CONFIG_PATH.into(),
+            kind: ConfigFileKind::Unowned,
+            disposition: FindingKind::advisory(
+                inspectah_core::types::AdvisoryType::Modernization,
+                "sysvinit script — port to a systemd unit",
+            ),
+            ..Default::default()
+        }],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+/// A refused toggle is a client-side contract violation, not a server fault.
+/// Both non-toggleable dispositions must say so with a status the frontend
+/// can branch on — 500 reads as "inspectah broke" and hides the reason.
+#[tokio::test]
+async fn set_include_on_advisory_returns_422() {
+    let app = app(advisory_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Config", "key": {"path": ADVISORY_CONFIG_PATH}},
+                "include": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json["error"]
+        .as_str()
+        .expect("error body carries a message");
+    assert!(
+        message.contains(ADVISORY_CONFIG_PATH),
+        "the refusal must name the item it refused: {message}"
+    );
+    assert!(
+        message.contains("advisory"),
+        "the refusal must say why the item is not toggleable: {message}"
+    );
+}
+
+#[tokio::test]
+async fn set_include_on_inventory_returns_422() {
+    let app = app(test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "NMConnection", "key": {"path": "/etc/NetworkManager/system-connections/eth0.nmconnection"}},
+                "include": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json["error"]
+        .as_str()
+        .expect("error body carries a message");
+    assert!(
+        message.contains("inventory"),
+        "the refusal must say why the item is not toggleable: {message}"
+    );
+}
+
 #[tokio::test]
 async fn apply_unknown_target_returns_422() {
     let app = app(test_state());

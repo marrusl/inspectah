@@ -22,6 +22,18 @@ impl IntoResponse for AppError {
             RefineError::ArchiveSafety(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             RefineError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             RefineError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            // Advisory and Inventory findings are display-only. A toggle on
+            // one is a well-formed request the session is right to refuse,
+            // not a server fault — and the client needs the reason to say
+            // anything useful about it.
+            RefineError::AdvisoryNotToggleable(t) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("advisory finding is not toggleable: {t}"),
+            ),
+            RefineError::InventoryNotToggleable(t) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("inventory finding is not toggleable: {t}"),
+            ),
             // Internal errors — do not leak details
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into()),
         };
