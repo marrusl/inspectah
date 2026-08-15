@@ -336,6 +336,15 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
             continue;
         }
 
+        // Advisory and Inventory findings are display-only and carry their
+        // rationale in the disposition itself. Tier-based include defaults
+        // apply to actionable findings only — assigning one here erases the
+        // advisory before any surface can render it, and turns a
+        // modernization note into a file the export copies into the image.
+        if !matches!(config.files[i].disposition, FindingKind::Actionable { .. }) {
+            continue;
+        }
+
         let bucket = refined.triage.bucket();
         match bucket {
             TriageBucket::Baseline => {
@@ -399,6 +408,40 @@ mod tests {
             shadow_type: None,
             shadow_rationale: None,
         }
+    }
+
+    #[test]
+    fn config_normalization_preserves_advisory_disposition() {
+        use crate::classify::classify_configs;
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{
+            ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+        };
+
+        const RATIONALE: &str = "sysvinit script — port to a systemd unit";
+        let mut snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/init.d/legacy-app".into(),
+                    kind: ConfigFileKind::Unowned,
+                    category: ConfigCategory::Other,
+                    disposition: FindingKind::advisory(AdvisoryType::Modernization, RATIONALE),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let configs = classify_configs(&snap);
+        normalize_config_defaults(&mut snap, &configs);
+
+        let entry = &snap.config.as_ref().unwrap().files[0];
+        assert_eq!(
+            entry.disposition,
+            FindingKind::advisory(AdvisoryType::Modernization, RATIONALE),
+            "tier-based include defaults must not overwrite an advisory disposition"
+        );
     }
 
     #[test]

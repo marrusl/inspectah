@@ -1381,14 +1381,21 @@ impl RefineSession {
                         }
                     }
                     ItemId::Config { path } => {
-                        let found = self
+                        let entry = self
                             .original
                             .config
                             .as_ref()
-                            .map(|c| c.files.iter().any(|e| e.path == *path))
-                            .unwrap_or(false);
-                        if !found {
+                            .and_then(|c| c.files.iter().find(|e| e.path == *path));
+                        let Some(entry) = entry else {
                             return Err(RefineError::UnknownTarget(path.clone()));
+                        };
+                        // Advisory findings are display-only: `with_include()`
+                        // discards the flag, so accepting the op would report
+                        // success and change nothing. Config entries are the
+                        // only toggleable item kind that carries advisories
+                        // (cross-tree symlink, modernization).
+                        if entry.disposition.is_advisory() {
+                            return Err(RefineError::AdvisoryNotToggleable(path.clone()));
                         }
                     }
                     ItemId::Repo { path: section_id } => {
@@ -6909,6 +6916,96 @@ mod tests {
             matches!(result, Err(RefineError::InventoryNotToggleable(_))),
             "FirewallZone should be rejected as inventory"
         );
+    }
+
+    /// Build a snapshot with one advisory and one actionable config entry.
+    fn test_snapshot_with_config_advisory() -> InspectionSnapshot {
+        use inspectah_core::types::config::{
+            ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+        };
+        use inspectah_core::types::{AdvisoryType, FindingKind};
+
+        let entry = |path: &str, disposition: FindingKind| ConfigFileEntry {
+            path: path.into(),
+            kind: ConfigFileKind::Unowned,
+            category: ConfigCategory::Other,
+            disposition,
+            ..Default::default()
+        };
+
+        let mut snap = test_snapshot();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                entry(
+                    ADVISORY_CONFIG_PATH,
+                    FindingKind::advisory(
+                        AdvisoryType::Modernization,
+                        "sysvinit script — port to a systemd unit",
+                    ),
+                ),
+                entry(ACTIONABLE_CONFIG_PATH, FindingKind::included()),
+            ],
+        });
+        snap
+    }
+
+    const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
+    const ACTIONABLE_CONFIG_PATH: &str = "/etc/myapp.conf";
+
+    #[test]
+    fn validate_target_rejects_advisory_config() {
+        let session = RefineSession::new(test_snapshot_with_config_advisory());
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: ADVISORY_CONFIG_PATH.into(),
+            },
+            include: false,
+        };
+        let result = session.validate_target(&op);
+        assert!(
+            matches!(result, Err(RefineError::AdvisoryNotToggleable(_))),
+            "advisory config entry should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn apply_set_include_on_advisory_config_is_refused_not_silently_dropped() {
+        let mut session = RefineSession::new(test_snapshot_with_config_advisory());
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: ADVISORY_CONFIG_PATH.into(),
+            },
+            include: false,
+        });
+        assert!(
+            matches!(result, Err(RefineError::AdvisoryNotToggleable(_))),
+            "apply must surface the refusal to the caller, got {result:?}"
+        );
+        assert_eq!(
+            session.timeline_len(),
+            0,
+            "a refused op must not land on the timeline"
+        );
+    }
+
+    #[test]
+    fn apply_set_include_on_actionable_config_still_succeeds() {
+        let mut session = RefineSession::new(test_snapshot_with_config_advisory());
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config {
+                    path: ACTIONABLE_CONFIG_PATH.into(),
+                },
+                include: false,
+            })
+            .expect("actionable config entries stay toggleable");
+        let projected = session.project_snapshot();
+        let files = &projected.config.expect("config section present").files;
+        let toggled = files
+            .iter()
+            .find(|f| f.path == ACTIONABLE_CONFIG_PATH)
+            .expect("actionable entry present");
+        assert!(!toggled.disposition.is_included());
     }
 
     /// Build a snapshot with non-RPM software for language package pin tests.

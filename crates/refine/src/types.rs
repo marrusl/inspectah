@@ -672,6 +672,8 @@ pub enum RefineError {
     NotFound(String),
     #[error("inventory item is not toggleable: {0}")]
     InventoryNotToggleable(String),
+    #[error("advisory item is not toggleable: {0}")]
+    AdvisoryNotToggleable(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
