@@ -3229,13 +3229,29 @@ mod tests {
             preset_matched_units: vec!["sshd.service".into()],
         });
         let html = render_report(&snap, &RenderContext { target: None });
+
+        // Scope both assertions to the services section: a bare
+        // `html.contains("Advisory")` is satisfied by unrelated markup
+        // elsewhere in the report and passes whether or not the drop-in
+        // rendered as an advisory.
+        let services_section = html
+            .split_once(r#"<details id="services">"#)
+            .and_then(|(_, rest)| rest.split_once("</details>"))
+            .map(|(body, _)| body)
+            .expect("services section must render");
+        let advisory_list = services_section
+            .split_once(r#"<div class="advisory-list""#)
+            .map(|(_, rest)| rest)
+            .expect("services section must render an advisory list");
+
         assert!(
-            html.contains("sshd.service"),
-            "orphan full-shadow drop-in must appear in services section"
+            advisory_list.contains("sshd.service"),
+            "orphan full-shadow drop-in must appear in the services advisory list: {services_section}"
         );
         assert!(
-            html.contains("Advisory"),
-            "orphan shadow entry must be rendered as advisory"
+            !services_section.contains("<td>sshd.service</td>"),
+            "orphan full-shadow drop-in has no state change to act on and must not \
+             render as an actionable table row: {services_section}"
         );
     }
 
