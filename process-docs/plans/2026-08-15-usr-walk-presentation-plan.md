@@ -54,7 +54,15 @@ Release packaging consequence, and the reason this decision belongs in the plan 
 
 **Alternative considered and rejected:** keep `MIN_SCHEMA = 22` and put `#[serde(default)]` on `kind`. This preserves loadability for v22 snapshots at the cost of silently wrong kind badges on exactly the snapshots the window exists to serve. The repo convention is already "no old tarball compatibility, re-scan instead" (`feedback_no_old_tarball_compat`), so the window buys nothing here.
 
-If Mark prefers to keep the window, Task 1's Step 3 has the `#[serde(default)]` variant noted inline. That is the only change required.
+**This is settled: `SCHEMA_VERSION = 23`, `MIN_SCHEMA = 23`.** There is no fallback variant in this plan and no decision left open. Implementers write both constants as 23 and do not add a serde default to `kind`.
+
+**Fixtures that hardcode a schema version.** Closing the window to 23 breaks every test fixture that pins an older number, and those reach past the construction sites Task 1's Step 5 names. Known sites, all of which must move to 23:
+
+- `crates/refine/tests/normalize_test.rs` — schema 21 in the inline JSON of every test (lines 4, 16, 28, 39, 51, 63, 74, 86, 109, 131).
+- `crates/cli/src/commands/aggregate.rs:561,567,651,659,709,720` — in-file tarball fixtures, reached through `InspectionSnapshot::load()` by aggregate tarball loading.
+- `crates/cli/tests/refine_e2e_test.rs:15` — the end-to-end tarball fixture.
+
+Task 1's Step 6 full-workspace run surfaces these as `UnsupportedVersion` failures. Fix them in that step rather than deferring to Task 13; they are part of the schema bump, not a docs task.
 
 ## File Structure
 
@@ -80,7 +88,8 @@ If Mark prefers to keep the window, Task 1's Step 3 has the `#[serde(default)]` 
 - `crates/pipeline/templates/report/section.html`, `base.html` — attention parameter, section include.
 - `crates/cli/src/commands/scan.rs` — /usr bundling and the split size prompt.
 - `crates/web/src/web_types.rs`, `adapter.rs`, `handlers.rs`, `aggregate_handlers.rs` — DTOs, projection, batch ops, aggregate section.
-- `crates/web/ui/src/api/types.ts`, `App.tsx`, `MainContent.tsx`, `Sidebar.tsx` — frontend wiring.
+- `crates/web/ui/src/api/types.ts`, `App.tsx`, `MainContent.tsx`, `Sidebar.tsx` — single-host frontend wiring.
+- `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx`, `AggregateSection.tsx`, `ItemDetailPane.tsx` — aggregate section metadata. Aggregate mode renders through these, not through `UnmanagedUsrList`; see Task 11. `ContainerfilePanel.tsx` is deliberately untouched.
 - `CHANGELOG.md`, `docs/how-to/review-and-refine.md`, `docs/reference/output-artifacts.md` — user-facing docs.
 - `process-docs/skills/snapshot-schema-versioning.md` — correct the stale exact-match claim.
 
@@ -98,7 +107,7 @@ If Mark prefers to keep the window, Task 1's Step 3 has the `#[serde(default)]` 
 | 8 | Kit (web backend) | DTOs and single-host adapter projection |
 | 9 | Kit (web backend) | Aggregate handler section and batch include/exclude routing |
 | 10 | Kit (web UI) | Single-host decision grid, states, keyboard, screen reader |
-| 11 | Kit (web UI) | Aggregate prevalence cell and export preview cost line |
+| 11 | Kit (web UI) | Aggregate row and detail-pane metadata for the /usr section |
 | 12 | Kit (report) | HTML report section, template plus renderer context |
 | 13 | Tang (docs) | CHANGELOG, user docs, skill correction |
 
@@ -264,9 +273,7 @@ Add `usr_bundled` to `UnmanagedFileSection` immediately after `usr_entries` (`cr
 
 Confirm `AggregatePrevalence` is in scope in this module; if the file does not already import it, add `use crate::types::aggregate::AggregatePrevalence;` at the top. Confirm `crate::is_false` exists (it is used by the existing `skip_serializing_if` boolean pattern documented in `process-docs/skills/snapshot-schema-versioning.md`); if the helper lives elsewhere, use the path that file already uses for boolean skipping.
 
-In `crates/core/src/snapshot.rs`, set line 21 to `pub const SCHEMA_VERSION: u32 = 23;` and line 103 to `const MIN_SCHEMA: u32 = 23;`.
-
-*If Mark elects to keep the two-version window instead:* leave `MIN_SCHEMA = 22`, and add `#[serde(default = "default_usr_entry_kind")]` to `kind` with a free function returning `UsrEntryKind::Directory`. Do not do this without an explicit instruction; the plan's default is the bump.
+In `crates/core/src/snapshot.rs`, set line 21 to `pub const SCHEMA_VERSION: u32 = 23;` and line 103 to `const MIN_SCHEMA: u32 = 23;`. Both constants are 23; see § Schema Version Decision. There is no serde default on `kind`.
 
 - [ ] **Step 4: Update the collector to populate `kind`**
 
@@ -299,11 +306,13 @@ Adapt the call signature to whatever `collapse_usr_entries` actually takes at HE
 
 `usr_entries: Vec::new()` sites need no change. Struct literals of `UnmanagedUsrEntry` do. Known sites: `crates/collect/src/inspectors/nonrpm.rs:4089`, `crates/collect/src/inspectors/nonrpm.rs:4105`. `UnmanagedFileSection` literals gain `usr_bundled: false`: `crates/core/src/types/nonrpm.rs:311`, `crates/core/src/aggregate/merge.rs:1821` and the eight test sites at 2939-3088, `crates/web/src/adapter.rs:1974`, `crates/web/src/aggregate_handlers.rs` (five sites), `crates/pipeline/src/render/unmanaged.rs:102`, `crates/refine/tests/export_contract_test.rs:1113,1175`, `crates/refine/tests/export_parity_test.rs:135,331`. Use `..Default::default()` only where the surrounding code already does; otherwise name the field.
 
+Separately from the struct literals, the schema floor bump breaks every test fixture that hardcodes an older `schema_version` in JSON. Those are listed in § Schema Version Decision: `crates/refine/tests/normalize_test.rs` (ten sites), `crates/cli/src/commands/aggregate.rs:561,567,651,659,709,720`, and `crates/cli/tests/refine_e2e_test.rs:15`. Change each `21` to `23`. They fail as `UnsupportedVersion(21)`, not as compile errors, so the compiler will not point at them.
+
 - [ ] **Step 6: Run the full workspace test suite**
 
 Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test --workspace`
 
-Expected: PASS. Any `insta` snapshot that serializes a snapshot will now show `schema_version: 23`; accept those with `cargo insta accept` after reading each diff to confirm the only change is the version number and the new fields.
+Expected: PASS. Any `insta` snapshot that serializes a snapshot will now show `schema_version: 23`; accept those with `cargo insta accept` after reading each diff to confirm the only change is the version number and the new fields. Any remaining `UnsupportedVersion` failure is a hardcoded fixture Step 5 missed; fix it here rather than widening the floor.
 
 - [ ] **Step 7: Lint and format**
 
@@ -352,7 +361,8 @@ Assisted-by: Claude Code (Opus 5)"
 - `AggregatePrevalence { count, total, hosts }` attached exactly as other merged families carry it. `total` is `total_hosts`.
 - `file_count` and `total_size_bytes` carry the **maximum** across contributing hosts. `counts_vary` / `sizes_vary` are true when contributing hosts disagreed.
 - `file_type` and `kind`: take the value from the first contributing host in sorted host order. Deterministic, and the two only disagree in pathological cases.
-- Do not use the generic `merge_items` helper. It requires `AggregateMergeable` plus content-hash variant sub-grouping, and /usr entries have no content hashes. Variant detection is explicitly out of scope until subtree digests arrive.
+- Do not use the generic `merge_items` helper. Its non-variant path picks a representative by serializing every candidate and counting payload frequency, which is the wrong identity model for /usr: entries legitimately differ per host in `file_count` and `total_size_bytes`, and this plan carries the maximum plus a varies flag instead of electing a winner. Variant detection is separately out of scope until subtree digests arrive.
+- **Do reuse `narrow_non_universal`.** Skipping `merge_items` must not skip the narrowing pass. `narrow_non_universal` (`crates/core/src/aggregate/merge.rs:701`) is the single place aggregate narrowing happens: it sets `include = false` on any item whose `AggregatePrevalence` has `count < total`. Both existing callers run it (`merge.rs:584` after `merge_items`, `merge.rs:691` after `merge_with_variants`). Without it, a /usr path present on 1 of 3 hosts would stay `include = true` and auto-export fleet-wide, breaking settled product decision 3 (design note lines 45-50: 100 percent prevalence auto-includes, partial prevalence lands in a review zone). `merge_usr_entries` runs the same pass on its own output.
 - Output sorted by `path` ascending for deterministic merge output. Presentation sorting by size happens at render time.
 
 - [ ] **Step 1: Write the failing tests**
@@ -446,6 +456,45 @@ fn merge_output_is_sorted_by_path() {
     let paths: Vec<&str> = merged.usr_entries.iter().map(|e| e.path.as_str()).collect();
     assert_eq!(paths, vec!["/usr/lib/a", "/usr/share/z"]);
 }
+
+#[test]
+fn merge_narrows_partial_prevalence_entries_to_excluded() {
+    // Settled product decision 3: 100 percent prevalence auto-includes,
+    // partial prevalence lands in review. That behavior comes from
+    // narrow_non_universal, which the /usr merge must run just like the
+    // generic merge does. Without it a path on one host of three would
+    // auto-export to the whole fleet.
+    let hostnames = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let sections = vec![
+        section_with_usr(vec![
+            usr_entry("/usr/lib/everywhere", 10, 100),
+            usr_entry("/usr/lib/only-here", 5, 50),
+        ]),
+        section_with_usr(vec![usr_entry("/usr/lib/everywhere", 10, 100)]),
+        section_with_usr(vec![usr_entry("/usr/lib/everywhere", 10, 100)]),
+    ];
+    let merged = merge_unmanaged_file_sections(sections, 3, &hostnames).unwrap();
+
+    let universal = merged
+        .usr_entries
+        .iter()
+        .find(|e| e.path == "/usr/lib/everywhere")
+        .unwrap();
+    assert!(
+        universal.disposition.is_included(),
+        "3 of 3 hosts auto-includes"
+    );
+
+    let partial = merged
+        .usr_entries
+        .iter()
+        .find(|e| e.path == "/usr/lib/only-here")
+        .unwrap();
+    assert!(
+        !partial.disposition.is_included(),
+        "1 of 3 hosts must land excluded, in the review zone"
+    );
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -456,7 +505,29 @@ Expected: FAIL. `merge_unions_usr_entries_by_path_with_prevalence` fails on `ass
 
 - [ ] **Step 3: Implement `merge_usr_entries`**
 
-Add above `merge_unmanaged_file_sections` in `crates/core/src/aggregate/merge.rs`:
+First, give `UnmanagedUsrEntry` the `AggregateMergeable` impl so the shared narrowing pass applies to it. Put it beside the other impls at the top of `crates/core/src/aggregate/merge.rs` (the trait is at line 12; `PackageEntry`'s impl at line 40 is the model):
+
+```rust
+impl AggregateMergeable for UnmanagedUsrEntry {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.path)
+    }
+
+    fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
+        &mut self.aggregate
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.disposition = self.disposition.with_include(val);
+    }
+}
+```
+
+`variant_selection_mut` and `content_variant_key` keep their defaults: /usr entries carry no content hash, so they have no variants.
+
+This impl exists only so `narrow_non_universal` can run on the merged output. It does **not** mean `merge_items` is used; see the design constraints above.
+
+Then add above `merge_unmanaged_file_sections` in `crates/core/src/aggregate/merge.rs`:
 
 ```rust
 /// Merge `usr_entries` across hosts, keyed by path.
@@ -508,7 +579,7 @@ fn merge_usr_entries(
         }
     }
 
-    by_path
+    let mut merged: Vec<UnmanagedUsrEntry> = by_path
         .into_values()
         .map(|(mut entry, mut hosts, counts_vary, sizes_vary)| {
             hosts.sort();
@@ -522,13 +593,24 @@ fn merge_usr_entries(
             });
             entry.counts_vary = counts_vary;
             entry.sizes_vary = sizes_vary;
+            // The aggregate decision is fresh, not a carry-over of whatever
+            // one contributing host's disposition happened to be. Start
+            // every merged entry included, exactly as merge_items does for
+            // its representative, then let the narrowing pass decide.
+            entry.disposition = entry.disposition.with_include(true);
             entry
         })
-        .collect()
+        .collect();
+
+    // The same narrowing every other merged family gets: partial prevalence
+    // means include = false, which is what puts the row in a review zone.
+    narrow_non_universal(&mut merged);
+
+    merged
 }
 ```
 
-`BTreeMap` gives the path-ascending sort for free. Add `use std::collections::BTreeMap;` if the module does not already import it. Add `UnmanagedUsrEntry` and `AggregatePrevalence` to the module's imports if absent.
+`BTreeMap` gives the path-ascending sort for free. Add `use std::collections::BTreeMap;` if the module does not already import it. Add `UnmanagedUsrEntry`, `AggregatePrevalence`, and `std::borrow::Cow` to the module's imports if absent.
 
 - [ ] **Step 4: Call it from `merge_unmanaged_file_sections`**
 
@@ -543,7 +625,7 @@ fn merge_usr_entries(
 
 Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test -p inspectah-core merge_`
 
-Expected: PASS, all four new tests plus the existing merge suite.
+Expected: PASS, all five new tests plus the existing merge suite.
 
 - [ ] **Step 6: Lint, format, commit**
 
@@ -557,6 +639,11 @@ nothing at all from the /usr walk. Union by path with the standard
 prevalence record. Counts and sizes legitimately differ per host for
 the same path, so carry the maximum and flag the disagreement rather
 than picking one host's number silently.
+
+The dedicated merge skips the generic merge_items helper, which elects
+a representative payload /usr entries do not have. It still runs the
+shared narrowing pass, because that is what makes partial prevalence
+land in a review zone instead of auto-exporting to the whole fleet.
 
 Assisted-by: Claude Code (Opus 5)"
 ```
@@ -653,13 +740,103 @@ fn set_include_on_an_unknown_usr_path_is_rejected() {
 }
 ```
 
-Adapt `RefineSession::new` and `apply` to the real constructor and method names at HEAD; read `crates/refine/src/session.rs` before writing. If the session requires a tarball path, use the existing test helpers in `crates/refine/tests/export_contract_test.rs` as the model.
+**The extraction test. This one is the point of Step 6 and must be red before Step 6 is written.** The projection tests above pass with the existing exact-match filter; only this one fails, and it is the failure mode that ships a Containerfile whose COPY line points at nothing. `extract_payload_dirs_from_tarball` is private, so drive it through the public export path.
+
+Add to the same file:
+
+```rust
+#[test]
+fn exporting_an_included_collapsed_directory_carries_its_whole_subtree() {
+    // Two sibling paths where one is a strict string prefix of the other.
+    // Only /usr/lib/agent is a snapshot entry and only it is included, so
+    // its whole subtree must land in the export and the sibling must not
+    // appear at all. A bare starts_with() match passes the first assertion
+    // and fails the second; exact-set membership fails the first.
+    let mut snap = InspectionSnapshot::new();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: Vec::new(),
+        usr_entries: vec![UnmanagedUsrEntry {
+            path: "/usr/lib/agent".into(),
+            file_count: 2,
+            total_size_bytes: 20,
+            file_type: FileType::Other,
+            kind: UsrEntryKind::Directory,
+            disposition: FindingKind::included(),
+            aggregate: None,
+            counts_vary: false,
+            sizes_vary: false,
+        }],
+        usr_bundled: true,
+        total_size: 0,
+        total_count: 0,
+    });
+
+    // Archive members, all four under unmanaged/:
+    //   usr/lib/agent/bin/run          -> included (subtree member)
+    //   usr/lib/agent/lib/data.so      -> included (subtree member)
+    //   usr/lib/agent-backup/bin/run   -> excluded (sibling, not a subtree)
+    //   opt/other/thing                -> excluded (unrelated Tier 2 path)
+    let tarball = tarball_with_unmanaged_members(&[
+        "usr/lib/agent/bin/run",
+        "usr/lib/agent/lib/data.so",
+        "usr/lib/agent-backup/bin/run",
+        "opt/other/thing",
+    ]);
+    let out = tempfile::tempdir().unwrap();
+
+    export_with_payload(&tarball, &snap, out.path()).expect("export must succeed");
+
+    let unmanaged = out.path().join("unmanaged");
+    assert!(
+        unmanaged.join("usr/lib/agent/bin/run").exists(),
+        "an included collapsed directory carries its whole subtree"
+    );
+    assert!(
+        unmanaged.join("usr/lib/agent/lib/data.so").exists(),
+        "every member beneath the entry extracts, not just the first"
+    );
+    assert!(
+        !unmanaged.join("usr/lib/agent-backup/bin/run").exists(),
+        "a sibling sharing a string prefix is a different entry and must not ride along"
+    );
+    assert!(
+        !unmanaged.join("opt/other/thing").exists(),
+        "unrelated Tier 2 content is unaffected"
+    );
+}
+
+#[test]
+fn excluding_a_usr_entry_keeps_its_subtree_out_of_the_export() {
+    let mut snap = snapshot_with_usr();
+    let mut session = RefineSession::new(snap.clone());
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::UnmanagedUsr {
+                path: "/usr/lib/custom-agent".into(),
+            },
+            include: false,
+        })
+        .unwrap();
+    snap = session.snapshot_projected();
+
+    let tarball = tarball_with_unmanaged_members(&["usr/lib/custom-agent/bin/run"]);
+    let out = tempfile::tempdir().unwrap();
+    export_with_payload(&tarball, &snap, out.path()).unwrap();
+
+    assert!(
+        !out.path().join("unmanaged/usr/lib/custom-agent/bin/run").exists(),
+        "the toggle's visible effect: excluded content does not ship"
+    );
+}
+```
+
+Adapt `RefineSession::new` and `apply` to the real constructor and method names at HEAD; read `crates/refine/src/session.rs` before writing. `tarball_with_unmanaged_members` and `export_with_payload` are stand-in names: `crates/refine/tests/export_contract_test.rs` already builds source tarballs and drives export end to end, so lift its helpers rather than writing new ones. If they are not shareable across test binaries, copy the minimum into this file; do not restructure the export API to make it testable.
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test -p inspectah-refine --test usr_decision_test`
 
-Expected: FAIL to compile with "no variant named `UnmanagedUsr` found for enum `ItemId`".
+Expected: FAIL to compile with "no variant named `UnmanagedUsr` found for enum `ItemId`". After Steps 3-5 land the identity and projection, re-run before writing Step 6: `exporting_an_included_collapsed_directory_carries_its_whole_subtree` must still fail on the missing `usr/lib/agent/bin/run`, proving the exact-match filter is the bug Step 6 fixes.
 
 - [ ] **Step 3: Add the `ItemId` variant**
 
@@ -753,7 +930,7 @@ Change the `should_extract` unmanaged arm to:
         } else if let Some(filename) = rel.strip_prefix("repoless-packages/") {
 ```
 
-The `starts_with('/')` guard is load-bearing: a bare `starts_with(p)` would extract `usr/lib/custom-agent-backup/` when only `usr/lib/custom-agent` was included.
+The `starts_with('/')` guard is load-bearing: a bare `starts_with(p)` would extract `usr/lib/custom-agent-backup/` when only `usr/lib/custom-agent` was included. That is exactly the sibling assertion in `exporting_an_included_collapsed_directory_carries_its_whole_subtree`, so both halves of that test must pass, not just the subtree half.
 
 - [ ] **Step 7: Fix the other exhaustive matches**
 
@@ -1222,7 +1399,7 @@ Assisted-by: Claude Code (Opus 5)"
 - Create: `crates/pipeline/src/render/unmanaged_usr.rs`
 - Modify: `crates/pipeline/src/render/mod.rs` (module declaration)
 - Modify: `crates/pipeline/src/render/containerfile.rs:1218` (block insertion)
-- Test: inline `mod tests` in the new file
+- Test: inline `mod tests` in the new file; `crates/refine/tests/export_contract_test.rs` (export preview pin)
 
 **Interfaces:**
 - Consumes: `UnmanagedUsrEntry`, `UsrEntryKind`, `UnmanagedFileSection.usr_bundled` (Task 1).
@@ -1339,6 +1516,11 @@ mod tests {
 
     #[test]
     fn header_states_the_vendoring_cost() {
+        // This line is also the export preview's cost line. The web panel
+        // renders `containerfile_preview`, which comes from this same
+        // renderer through render_containerfile_with_originals
+        // (crates/refine/src/session.rs:2748), so the frontend computes
+        // nothing and there is one source of truth for the number.
         let snap = snap_with(vec![dir_entry("/usr/lib/a", 212_000_000, true)], true);
         let out = unmanaged_usr_lines(&snap).join("\n");
         assert!(
@@ -1411,11 +1593,32 @@ mod tests {
 }
 ```
 
+Then pin the export preview, so the claim that the block reaches the panel is verified rather than asserted. Add to `crates/refine/tests/export_contract_test.rs`, beside its existing `session.view().containerfile_preview` cases (lines 252, 325, 623):
+
+```rust
+#[test]
+fn the_export_preview_carries_the_usr_block_and_its_cost_line() {
+    // The web panel takes containerfile_preview as opaque text, so the
+    // block and its cost line have to be in the rendered Containerfile.
+    // If this passes, the frontend needs no /usr props at all.
+    let session = session_with_included_usr_entry("/usr/lib/custom-agent", 212_000_000);
+    let preview = session.view().containerfile_preview.clone();
+
+    assert!(preview.contains("# === Unmanaged /usr ==="), "block header: {preview}");
+    assert!(
+        preview.contains("1 entry included, 202.2 MB copied into the image."),
+        "cost line reaches the preview: {preview}"
+    );
+}
+```
+
+Build `session_with_included_usr_entry` from the fixtures already in that file.
+
 - [ ] **Step 2: Run to verify failure**
 
-Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test -p inspectah-pipeline unmanaged_usr`
+Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test -p inspectah-pipeline unmanaged_usr && cargo test -p inspectah-refine --test export_contract_test usr_block`
 
-Expected: FAIL, the module is not declared and `unmanaged_usr_lines` does not exist.
+Expected: FAIL, the module is not declared and `unmanaged_usr_lines` does not exist; the preview test fails on the missing block header.
 
 - [ ] **Step 3: Implement the renderer**
 
@@ -1991,6 +2194,11 @@ fn aggregate_unmanaged_usr_100_pct_includes() {
 
 #[test]
 fn aggregate_unmanaged_usr_partial_lands_in_review() {
+    // Task 2's merge narrows partial prevalence to include = false; this
+    // handler serializes that stored bit straight through, exactly as the
+    // unmanaged_files block does (aggregate_handlers.rs:1434-1440). Pin
+    // the include bit, not just the counts: the counts alone would still
+    // pass if the row auto-included fleet-wide.
     let snap = aggregate_snapshot_with_usr(vec![usr_entry_with_prevalence(
         "/usr/lib/somewhere",
         10,
@@ -2004,8 +2212,14 @@ fn aggregate_unmanaged_usr_partial_lands_in_review() {
     let item = &section.items[0];
     assert_eq!(item.prevalence.as_ref().unwrap().count, 1);
     assert_eq!(item.prevalence.as_ref().unwrap().total, 3);
+    assert!(
+        !item.include,
+        "partial prevalence lands in review, not auto-included"
+    );
 }
 ```
+
+`usr_entry_with_prevalence` must build the entry the way the merge leaves it: `disposition` excluded when `count < total`, included when `count == total`. Building it always-included would make `aggregate_unmanaged_usr_partial_lands_in_review` test the fixture rather than the handler.
 
 Write `aggregate_snapshot_with_usr` and `usr_entry_with_prevalence` as local helpers mirroring the existing `UnmanagedFileSection` fixtures at lines 2499 and 2553. Adapt `build_aggregate_sections` to the real function name at HEAD.
 
@@ -2073,7 +2287,7 @@ In `crates/web/src/aggregate_handlers.rs`, after the `unmanaged_files` section b
 
 **Mirror, do not invent.** The `unmanaged_files` block at `crates/web/src/aggregate_handlers.rs:1402-1455` is the template. Read it first and copy its structure line for line, changing only: the source vector (`usr_entries` rather than `items`), the `ItemId` constructor, the section id and label passed at line 1452, and the metadata builder. `aggregate_item_defaults` and `push_section` above are stand-in names for whatever that block actually calls; use its real calls. The only deliberate divergences from it are `variants: None` and `variant_payload: None`, and the pre-sort by size, both of which the snippet above shows explicitly.
 
-Add `build_unmanaged_usr_metadata` next to `build_unmanaged_file_metadata` (line 1566), returning the same metadata DTO type populated with kind, file count, size, and the varies flags. It is what `ItemDetailPane.tsx` reads.
+Add `build_unmanaged_usr_metadata` next to `build_unmanaged_file_metadata` (line 1566), carrying `kind`, `file_type`, `file_count`, `size`, `counts_vary`, and `sizes_vary`. `file_type` is there for the single-file case, where the badge shows the sniffed type rather than a count. This metadata is the whole input to Task 11's row branch, `AggregateItemRow.tsx`, and to `ItemDetailPane.tsx`, so the field names here and the `UnmanagedUsrMetadata` interface Task 11 adds to `types.ts` must match exactly.
 
 - [ ] **Step 4: Route the batch ops**
 
@@ -2260,8 +2474,70 @@ describe("UnmanagedUsrList", () => {
       "/usr/lib/custom-agent excluded. 1 entry excluded, 1 included.",
     );
   });
+
+  it("toggles the focused row's selection checkbox on Space", async () => {
+    const user = userEvent.setup();
+    renderList();
+    const row = screen.getAllByRole("row")[1];
+    row.focus();
+    await user.keyboard(" ");
+    expect(within(row).getByRole("checkbox")).toBeChecked();
+    await user.keyboard(" ");
+    expect(within(row).getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("does not toggle include/exclude on Space", async () => {
+    // Space selects, Enter decides. Conflating them is the easy bug here.
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    renderList({ onToggle });
+    screen.getAllByRole("row")[1].focus();
+    await user.keyboard(" ");
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("extends selection from the last selected row on Shift+click", async () => {
+    const user = userEvent.setup();
+    renderList({ entries: [dirEntry, fileEntry, thirdEntry] });
+    const boxes = screen.getAllByRole("row").slice(1)
+      .map((r) => within(r).getByRole("checkbox"));
+    await user.click(boxes[0]);
+    await user.click(boxes[2], { shiftKey: true });
+    expect(boxes.every((b) => (b as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it("selects and clears every row from the header checkbox", async () => {
+    const user = userEvent.setup();
+    renderList();
+    const selectAll = screen.getByRole("checkbox", { name: /select all/i });
+    await user.click(selectAll);
+    const rowBoxes = screen.getAllByRole("row").slice(1)
+      .map((r) => within(r).getByRole("checkbox"));
+    expect(rowBoxes.every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    await user.click(selectAll);
+    expect(rowBoxes.some((b) => (b as HTMLInputElement).checked)).toBe(false);
+  });
+
+  it("batch-excludes exactly the selected rows", async () => {
+    const user = userEvent.setup();
+    const onBatchToggle = vi.fn();
+    renderList({ onBatchToggle });
+    const rows = screen.getAllByRole("row").slice(1);
+    await user.click(within(rows[0]).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /exclude selected/i }));
+    expect(onBatchToggle).toHaveBeenCalledWith(["/usr/lib/custom-agent"], false);
+  });
 });
 ```
+
+Add a `thirdEntry` fixture beside `dirEntry` and `fileEntry` for the range-select case. Adapt the select-all accessible name and the batch-toolbar button label to whatever the sibling sections already use; read `UnmanagedFileList.tsx`'s toolbar before naming them, and match it rather than inventing new copy.
+
+**Two criteria are staged to manual verification, deliberately.** The 44 px minimum hit size and the visible focus ring come from stylesheet rules, and jsdom does not apply linked stylesheets, so `getComputedStyle` in vitest returns the unstyled defaults and any assertion on them would pass or fail for reasons unrelated to the contract. Rather than write a test that proves nothing, verify both in a browser during Task 10's review:
+
+- Load a snapshot with /usr entries, tab into the section, and confirm every row control and the header checkbox have a visible focus ring.
+- With devtools, confirm the checkbox, the toggle, and the row hit target each measure at least 44 px in their smaller dimension.
+
+Record the result in the Task 10 review notes. If the Playwright expansion in the backlog lands before this task, move both checks there instead; they are exactly what that harness is for.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2291,6 +2567,8 @@ export interface UnmanagedUsrEntry {
 ```
 
 Add `unmanaged_usr?: UnmanagedUsrEntry[];` to the view data interface alongside `unmanaged_files`.
+
+`prevalence` is on the type because Task 8's DTO carries it, but it is always absent in single-host mode and `UnmanagedUsrList` never renders it. Aggregate rows come from `AggregateItemRow`, not this component; see Task 11. This component takes no aggregate mode and no `isAggregate` prop.
 
 - [ ] **Step 4: Build the component**
 
@@ -2379,112 +2657,138 @@ Assisted-by: Claude Code (Opus 5)"
 
 ---
 
-### Task 11: Aggregate prevalence cell and export preview cost line
+### Task 11: Aggregate row and detail-pane metadata for the /usr section
 
 **Lane:** Kit (web UI)
 
 **Files:**
-- Modify: `crates/web/ui/src/components/UnmanagedUsrList.tsx` (prevalence cell)
-- Modify: `crates/web/ui/src/components/aggregate/AggregateSection.tsx:54`, `aggregate/ItemDetailPane.tsx:186` (section metadata branches)
-- Modify: `crates/web/ui/src/components/ContainerfilePanel.tsx` (section header cost line)
-- Test: `crates/web/ui/src/components/__tests__/UnmanagedUsrList.test.tsx`, `aggregate/__tests__/ItemDetailPane.test.tsx`
+- Modify: `crates/web/ui/src/components/aggregate/AggregateItemRow.tsx:204-236` (section-metadata branch)
+- Modify: `crates/web/ui/src/components/aggregate/AggregateSection.tsx:54-57` (`itemFilterText` branch)
+- Modify: `crates/web/ui/src/components/aggregate/ItemDetailPane.tsx:186` (detail metadata branch)
+- Modify: `crates/web/ui/src/api/types.ts` (`UnmanagedUsrMetadata`, beside `UnmanagedFileMetadata`)
+- Test: `crates/web/ui/src/components/aggregate/__tests__/AggregateItemRow.test.tsx`, `aggregate/__tests__/ItemDetailPane.test.tsx`
 
 **Interfaces:**
-- Consumes: `UnmanagedUsrEntry.prevalence` (Task 8), the aggregate section metadata (Task 9).
+- Consumes: the `unmanaged_usr` aggregate section and its `section_metadata` (Task 9).
 
-**Aggregate rules from the spec (do not vary):**
-- Same section, same rows, plus a prevalence cell reading `14/20 hosts`.
-- One include/exclude decision per path, applied fleet-wide.
-- The row's accessible name includes prevalence, so the scope of the decision is audible.
-- Default sort stays size descending. Prevalence is visible, not the sort key: an entry on 2 of 200 hosts at 3 GB still belongs on top.
-- `sizes_vary` renders sizes as `up to 38 MB`.
+**Read this before writing any code: `UnmanagedUsrList` is not on the aggregate path.** Task 10's component is a single-host component reached through `MainContent.tsx`. Aggregate mode never mounts it. `AggregateApp.tsx:608-623` routes every non-package section to `AggregateSectionContent` (`aggregate/AggregateSection.tsx:45-58`), which renders one `AggregateItemRow` per item inside `ZoneGroup`s. Task 10's component therefore gets **no** `isAggregate` prop and no prevalence cell; this task touches the aggregate components only.
+
+**What the generic aggregate row already does, so do not rebuild it:**
+- **Prevalence.** `AggregateItemRow.tsx:279` already renders `<PrevalenceBadge count={count} total={total} suffix="hosts" />` from `item.prevalence`, for every section. Task 9 populates `prevalence`, so `14/20 hosts` appears with zero frontend change. The badge sits inside the `role="row"` element, so prevalence is already part of the row's accessible name and the decision's scope is already audible.
+- **Include toggle.** `AggregateItemRow.tsx:141,256` already drives `onToggle(item.item_id, !item.include)` from `item.include`. Task 9's `ItemId::UnmanagedUsr` and stored include bit flow through unchanged, one decision per path, fleet-wide.
+
+**What is actually missing** is the `sectionId === "unmanaged_usr"` metadata branch in all three places that switch on section id. That, plus `up to` rendering for the varies flags, is the entire frontend delta.
+
+**Ordering, stated plainly rather than left to discover.** Aggregate sections group items into consensus / near-consensus / divergent zones (`findItemZone` in `AggregateSection.tsx`, rendered through `ZoneGroup`). Size-descending order therefore holds *within a zone*, not across the whole section: a 3 GB entry on 2 of 200 hosts renders in the divergent zone, below smaller universal entries. Two design-note lines pull against each other here — "default sort stays size descending" (line 273) and "aggregates use the existing zone machinery" (lines 45-50, 201-203). The second is a settled product decision, so it governs: zones first, size descending inside each. Task 9 emits items pre-sorted by size, which is what makes the within-zone order right. Do not add a section-level re-sort; it would fight the zone grouping.
+
+**The export preview cost line needs no work in this task.** Task 6 emits `# 6 entries included, 212 MB copied into the image.` as a comment inside the `=== Unmanaged /usr ===` block and asserts it there. `ContainerfilePanel` renders `containerfile_preview`, which comes from `render_containerfile_with_originals` (`crates/refine/src/session.rs:2748`) — the same renderer — so the cost line reaches the preview as part of the text. The panel's interface is `{content, isOpen, onToggle, loading, sessionIsSensitive}` (`ContainerfilePanel.tsx:6-13`), and `AppShell` passes exactly those (`AppShell.tsx:256-261`). Do not add a `usrEntries` prop or recompute the total in the frontend: that would be a second source of truth for a number the renderer already produces. Task 6 carries the end-to-end pin.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `crates/web/ui/src/components/__tests__/UnmanagedUsrList.test.tsx`:
+Add to `crates/web/ui/src/components/aggregate/__tests__/AggregateItemRow.test.tsx`. Reuse that file's existing render helper and `AggregateItem` fixture rather than writing new ones; the `unmanaged_files` cases in it are the direct model.
 
 ```tsx
-it("renders a prevalence cell in aggregate mode", () => {
-  renderList({
-    entries: [{ ...dirEntry, prevalence: { count: 14, total: 20 } }],
-    isAggregate: true,
-  });
-  expect(screen.getByText("14/20 hosts")).toBeInTheDocument();
+const usrItem: AggregateItem = {
+  ...baseItem,
+  item_id: { UnmanagedUsr: { path: "/usr/lib/custom-agent" } },
+  include: true,
+  prevalence: { count: 14, total: 20, hosts: [] },
+  section_metadata: {
+    kind: "directory",
+    file_count: 214,
+    size: 39_845_888,
+    counts_vary: false,
+    sizes_vary: false,
+  },
+};
+
+it("renders kind and rolled-up file count for a /usr directory row", () => {
+  renderRow({ sectionId: "unmanaged_usr", item: usrItem });
+  expect(screen.getByText("Directory, 214 files")).toBeInTheDocument();
 });
 
-it("puts prevalence in the row's accessible name so the decision scope is audible", () => {
-  renderList({
-    entries: [{ ...dirEntry, prevalence: { count: 14, total: 20 } }],
-    isAggregate: true,
+it("renders 'up to' counts and sizes when hosts disagreed", () => {
+  renderRow({
+    sectionId: "unmanaged_usr",
+    item: {
+      ...usrItem,
+      section_metadata: {
+        ...usrItem.section_metadata,
+        counts_vary: true,
+        sizes_vary: true,
+      },
+    },
   });
-  const row = screen.getAllByRole("row")[1];
-  expect(row).toHaveAccessibleName(expect.stringContaining("14 of 20 hosts"));
-});
-
-it("keeps size descending as the sort key regardless of prevalence", () => {
-  renderList({
-    entries: [
-      { ...fileEntry, path: "/usr/a", size: 10, prevalence: { count: 200, total: 200 } },
-      { ...dirEntry, path: "/usr/b", size: 3_000_000_000, prevalence: { count: 2, total: 200 } },
-    ],
-    isAggregate: true,
-  });
-  const rows = screen.getAllByRole("row").slice(1);
-  expect(rows[0]).toHaveAccessibleName(expect.stringContaining("/usr/b"));
-});
-
-it("renders 'up to' sizes when hosts disagreed", () => {
-  renderList({ entries: [{ ...dirEntry, sizes_vary: true }], isAggregate: true });
+  expect(screen.getByText("Directory, up to 214 files")).toBeInTheDocument();
   expect(screen.getByText(/up to 38(\.0)? MB/)).toBeInTheDocument();
 });
-```
 
-Add to the Containerfile panel test file (create it if none exists, modelled on the neighbouring component tests):
+it("carries prevalence in the row so the fleet-wide scope is audible", () => {
+  // Regression guard, not new behavior: PrevalenceBadge already renders
+  // for every section. This pins that the /usr branch did not displace it.
+  renderRow({ sectionId: "unmanaged_usr", item: usrItem });
+  const row = screen.getByRole("row");
+  expect(within(row).getByText(/14.*20/)).toBeInTheDocument();
+});
 
-```tsx
-it("states the vendoring cost in the Unmanaged /usr section header", () => {
-  render(<ContainerfilePanel entries={[
-    { path: "/usr/lib/a", kind: "directory", file_count: 1, size: 212_000_000, include: true },
-  ]} /* plus whatever props the panel really needs */ />);
-  expect(
-    screen.getByText("1 entry included, 202.2 MB copied into the image."),
-  ).toBeInTheDocument();
+it("toggles the fleet-wide decision through the standard row control", () => {
+  const onToggle = vi.fn();
+  renderRow({ sectionId: "unmanaged_usr", item: usrItem, onToggle });
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(onToggle).toHaveBeenCalledWith(usrItem.item_id, false);
+});
+
+it("renders a single-file /usr row with its sniffed type, not a file count", () => {
+  renderRow({
+    sectionId: "unmanaged_usr",
+    item: {
+      ...usrItem,
+      item_id: { UnmanagedUsr: { path: "/usr/share/vendor-blob" } },
+      section_metadata: {
+        kind: "file",
+        file_type: "other",
+        file_count: 1,
+        size: 4096,
+        counts_vary: false,
+        sizes_vary: false,
+      },
+    },
+  });
+  expect(screen.queryByText(/1 files/)).not.toBeInTheDocument();
 });
 ```
 
-Adapt the panel's props to its real interface; read it before writing.
+Add to `crates/web/ui/src/components/aggregate/__tests__/ItemDetailPane.test.tsx`, mirroring its `unmanaged_files` case:
+
+```tsx
+it("shows /usr entry metadata in the detail pane", () => {
+  render(<ItemDetailPane item={usrItem} sectionId="unmanaged_usr" />);
+  expect(screen.getByText(/214/)).toBeInTheDocument();
+  expect(screen.getByText(/38(\.0)? MB/)).toBeInTheDocument();
+});
+```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd crates/web/ui && npm test -- UnmanagedUsr Containerfile`
+Run: `cd crates/web/ui && npm test -- AggregateItemRow ItemDetailPane`
 
-Expected: FAIL on the missing prevalence cell and header text.
+Expected: FAIL. The rows render with a bare display name and no section metadata, because no branch matches `sectionId === "unmanaged_usr"`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement the three branches**
 
-Add an `isAggregate?: boolean` prop to `UnmanagedUsrList`. When true, render a fifth cell before the toggle:
+Add `UnmanagedUsrMetadata` to `crates/web/ui/src/api/types.ts` beside `UnmanagedFileMetadata`, matching the DTO Task 9 emits: `kind`, `file_type`, `file_count`, `size`, `counts_vary`, `sizes_vary`.
 
-```tsx
-{isAggregate && entry.prevalence && (
-  <div role="gridcell" className="inspectah-decision-row__prevalence">
-    {`${entry.prevalence.count}/${entry.prevalence.total} hosts`}
-  </div>
-)}
-```
+In `AggregateItemRow.tsx`, add a `sectionId === "unmanaged_usr"` branch immediately after the `unmanaged_files` branch at line 204, built the same way (a `<span className="aggregate-item-row__section-meta">` holding compact `Label`s). Contents:
 
-Extend the accessible-name composer to append `, ${count} of ${total} hosts` before the include state when prevalence is present. Extend the size formatter to prefix `up to ` when `sizes_vary`.
+- Directory: `Directory, 214 files`, or `Directory, up to 214 files` when `counts_vary`.
+- File: the sniffed type through the existing `formatFileType` helper, the same one the `unmanaged_files` branch uses. No file count on a single file.
+- Size through the existing `formatSize` helper, prefixed `up to ` when `sizes_vary`.
 
-Add the `unmanaged_usr` branch to `AggregateSection.tsx:54` and `ItemDetailPane.tsx:186`, mirroring the `unmanaged_files` branch, rendering kind, file count, and size from the section metadata Task 9 emits.
+Reuse `formatFileType` and `formatSize` from that file. Do not add a second formatter, and do not add a prevalence element: line 279 already renders it for every section.
 
-In `ContainerfilePanel.tsx`, add the section header line above the `=== Unmanaged /usr ===` block, computed from the same included set the Containerfile renders:
+In `AggregateSection.tsx`, add the matching `itemFilterText` branch after the `unmanaged_files` one at line 54, returning the display name plus kind so in-section filtering matches what the row shows.
 
-```tsx
-const usrIncluded = usrEntries.filter((e) => e.include);
-const usrBytes = usrIncluded.reduce((sum, e) => sum + e.size, 0);
-const usrHeader = `${usrIncluded.length} ${usrIncluded.length === 1 ? "entry" : "entries"} included, ${formatSize(usrBytes)} copied into the image.`;
-```
-
-Reuse the panel's existing size formatter. Do not add a second one.
+In `ItemDetailPane.tsx`, add the `sectionId === "unmanaged_usr"` branch after line 186, mirroring the `unmanaged_files` branch.
 
 - [ ] **Step 4: Run tests, typecheck, commit**
 
@@ -2493,19 +2797,22 @@ Run: `cd crates/web/ui && npm test && npm run build`
 Expected: PASS, no type errors.
 
 ```bash
-git add crates/web/ui/src/components/UnmanagedUsrList.tsx \
-        crates/web/ui/src/components/ContainerfilePanel.tsx \
-        crates/web/ui/src/components/aggregate/ \
-        crates/web/ui/src/components/__tests__/
-git commit -m "feat(web): show /usr prevalence in aggregate and cost in the preview
+git add crates/web/ui/src/components/aggregate/ \
+        crates/web/ui/src/api/types.ts
+git commit -m "feat(web): render /usr entry metadata in aggregate rows
 
-Prevalence is visible but is not the sort key. An entry on 2 of 200
-hosts at 3 GB still belongs on top, so size descending stays. The row's
-accessible name carries prevalence, because one toggle here decides for
-the whole fleet and a screen reader user should hear that.
+Aggregate sections render through AggregateItemRow, which switches on
+section id for its metadata cells. Without a /usr branch the rows showed
+a bare path with no kind, count, or size. Add the branch beside the
+unmanaged_files one, plus the matching filter-text and detail-pane
+cases.
 
-The export preview header states the bytes going into the image, so
-three gigabytes announces itself before the build finds it.
+Prevalence and the include toggle needed nothing: both are generic to
+every aggregate row already, which is the point of putting this section
+on the existing zone machinery rather than a bespoke surface.
+
+Counts and sizes read 'up to' when contributing hosts disagreed, so a
+merged maximum is never mistaken for a measurement.
 
 Assisted-by: Claude Code (Opus 5)"
 ```
@@ -2531,7 +2838,13 @@ Assisted-by: Claude Code (Opus 5)"
 
 **Read-only surface.** The report renders the framing copy, the entry table (path, kind, files, size, included/excluded state), and the remediation guidance. A raw scan renders every row at the default include state, matching every other Actionable family; refine decisions appear once the report is rendered from a refined snapshot.
 
-**Placement.** Own section under the existing `Software & Files` TOC group, after the Non-RPM Software content. The group is already gated on `has_nonrpm or nonrpm_state == "failed"` at `base.html:68`; widen that gate so a host with /usr findings but no non-RPM software still gets the group.
+**Placement, and why the group gate goes away.** Own section under the existing `Software & Files` TOC group, after the Non-RPM Software content. The group is gated on `has_nonrpm or nonrpm_state == "failed"` at `base.html:68`.
+
+That gate has to be removed, not widened. The /usr section has three states and **all three render something** (design note lines 115-131): not-scanned, image-clean, populated. The not-scanned state is precisely `unmanaged_files: None`, so any gate expressed in terms of /usr data — including `has_usr_scan`, which is `is_some()` — drops the section in exactly the case the spec requires it. And a host with no non-RPM software and no unmanaged scan hits both halves of the current gate, so the group disappears and takes the not-scanned state with it.
+
+A section that always renders needs a group that always renders. Drop the `{% if %}` around the software group entirely, matching the ungated `secrets` group two blocks below it. `group_software_count` already accounts for an empty non-RPM side.
+
+`has_usr_scan` stays, but only as the state selector **inside** the section template, where it correctly separates not-scanned from scanned-and-clean. It is not a gate.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2593,8 +2906,23 @@ fn report_shows_the_image_clean_state_when_the_walk_found_nothing() {
 
 #[test]
 fn report_shows_the_not_scanned_state_when_the_walk_did_not_run() {
+    // The bare default snapshot is the hard case: unmanaged_files is None
+    // AND there is no non-RPM software, so any gate on either one hides
+    // the section. The spec requires the not-scanned state here, so the
+    // Software & Files group renders unconditionally.
     let html = render_report(&InspectionSnapshot::default()).unwrap();
-    assert!(html.contains("collected without --include-unmanaged"));
+    assert!(
+        html.contains("Software &amp; Files") || html.contains("Software & Files"),
+        "the group renders with no software content at all"
+    );
+    assert!(
+        html.contains("collected without --include-unmanaged"),
+        "not-scanned is a rendered state, not an absent section"
+    );
+    assert!(
+        !html.contains("This host's /usr is image-clean"),
+        "not scanned is not the same claim as clean"
+    );
 }
 
 #[test]
@@ -2730,18 +3058,18 @@ Add to the template variable block at lines 1328-1330:
         has_usr_scan,
 ```
 
-In `crates/pipeline/templates/report/base.html`, widen the group gate at line 68 and add the include after line 70:
+In `crates/pipeline/templates/report/base.html`, remove the group gate at line 68 and add the include after line 70. The `{% if %}` and its `{% endif %}` both go:
 
 ```jinja
-    {% if has_nonrpm or nonrpm_state == "failed" or has_usr_scan %}
     {% call group("software", "Software & Files", count=group_software_count) %}
       {% include "report/nonrpm.html" %}
       {% include "report/unmanaged-usr.html" %}
     {% endcall %}
-    {% endif %}
 ```
 
-Add `("Unmanaged /usr", "unmanaged-usr")` to the report's TOC list. The TOC in `report.rs:305-315` is keyed on `InspectorId`, and /usr has no inspector of its own. Add the entry to the flat TOC vector immediately after the `NonRpmSoftware` push rather than inventing an `InspectorId` variant: /usr is a section of the non-RPM inspector's output, not a new inspector, and adding a variant would ripple into `Completeness` for no gain. Push it with `count = usr_count` and `state = "normal"`.
+`nonrpm.html` keeps whatever internal emptiness handling it already has; removing the outer gate must not change what that template renders when there is no non-RPM software. If it renders nothing for an empty section today, it still renders nothing. Check this before moving on, and if it turns out to depend on the outer gate for its own empty state, fix it inside `nonrpm.html` rather than restoring the gate.
+
+Add `("Unmanaged /usr", "unmanaged-usr")` to the report's TOC list. The TOC in `report.rs:305-315` is keyed on `InspectorId`, and /usr has no inspector of its own. Add the entry to the flat TOC vector immediately after the `NonRpmSoftware` push rather than inventing an `InspectorId` variant: /usr is a section of the non-RPM inspector's output, not a new inspector, and adding a variant would ripple into `Completeness` for no gain. Push it with `count = usr_count` and `state = "normal"`, and push it **unconditionally** — the section always renders, so the TOC entry always points at something.
 
 - [ ] **Step 6: Run tests, accept snapshot diffs, lint, commit**
 
@@ -2761,6 +3089,11 @@ at all get the attention treatment, because content under /usr that no
 package owns will not survive a rebuild and that is worth seeing. An
 empty section gets the image-clean reading instead, and a host scanned
 without --include-unmanaged says it was never checked.
+
+Software & Files was gated on there being non-RPM software. The /usr
+section has to render in all three of its states, including on a host
+with no software content and no unmanaged scan at all, so the gate is
+gone and the group renders like the secrets group does.
 
 The section macro had a hardcoded id == 'warnings' check as its only
 content-driven attention hook. Generalize it into an optional parameter
@@ -2891,11 +3224,11 @@ Assisted-by: Claude Code (Opus 5)"
 
 ## Open Choices Requiring Mark's Decision
 
-Two decisions are recorded with a recommendation rather than settled. Both are safe to execute as recommended; flag them if the answer should be different.
+One decision is recorded with a recommendation rather than settled. It is safe to execute as recommended; flag it if the answer should be different.
 
-1. **Schema window (Task 1).** Recommended: `SCHEMA_VERSION = 23`, `MIN_SCHEMA = 23`, closing the current two-version window. Every snapshot and aggregate on disk must be re-scanned, which belongs in the beta.3 release notes. The alternative is `MIN_SCHEMA = 22` plus `#[serde(default)]` on the new `kind` field, which keeps v22 snapshots loadable at the cost of silently mislabeling every collapsed directory in them.
+1. **/usr content sourcing (Task 5).** Recommended: bundle at scan time with a separate size prompt for /usr, so the exported Containerfile builds by default and the operator sees a multi-gigabyte include before it lands in the tarball. Alternatives are bundling unconditionally with no prompt (simplest, but a surprise tarball) or never bundling (no tarball growth, but the export does not build).
 
-2. **/usr content sourcing (Task 5).** Recommended: bundle at scan time with a separate size prompt for /usr, so the exported Containerfile builds by default and the operator sees a multi-gigabyte include before it lands in the tarball. Alternatives are bundling unconditionally with no prompt (simplest, but a surprise tarball) or never bundling (no tarball growth, but the export does not build).
+The schema window is **not** an open choice. `SCHEMA_VERSION = 23` / `MIN_SCHEMA = 23` is settled; see § Schema Version Decision.
 
 ## Out of Scope for beta.3
 
