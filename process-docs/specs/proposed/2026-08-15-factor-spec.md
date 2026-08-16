@@ -39,12 +39,14 @@ factor materializes how to build it.
 
 ## 2. Input Model
 
-### A directory of refined aggregates
+### Directory or explicit file list
 
-Factor consumes a directory of refined aggregates: the exported output of
-`inspectah refine` run on aggregates, one per intended role grouping.
-Each input arrives pre-refined. Noise is filtered, variants are picked,
-dispositions are set. Factor performs no re-triage.
+Factor accepts either form as positional args: a directory of refined
+aggregates, or an explicit list of aggregate files. Both forms consume
+the same input: the exported output of `inspectah refine` run on
+aggregates, one per intended role grouping. Each input arrives
+pre-refined. Noise is filtered, variants are picked, dispositions are
+set. Factor performs no re-triage.
 
 The input format is the versioned refined-aggregate export contract owned
 by the aggregate convergence workstream (§8). Factor is a consumer of
@@ -73,6 +75,12 @@ minor present in the input set**, and that image becomes the base FROM
 (§7). The resolved target ships in the snapshot as `target_image`
 (`crates/core/src/snapshot.rs:60-62`, verified), so factor reads it
 rather than re-deriving it.
+
+**CentOS Stream and RHEL form one compatibility class.** CentOS Stream N
+and RHEL N are the same major for the lineage rule; a set mixing the two
+is not a family or major mismatch. When a set mixes them, RHEL wins: the
+base FROM is the RHEL ref at the latest minor present in the set. An
+all-CentOS-Stream set uses the CentOS Stream ref.
 
 Family or major mismatch is an error, and the message tells the user to
 split the inputs by lineage and run factor once per lineage.
@@ -181,12 +189,35 @@ is one keystroke, not a naming exercise from scratch.
 - **No timestamps in role names.** Provenance carries time; names carry
   purpose.
 
-### Opt-in fleet naming
+### Opt-in role naming
 
-A load-time flag, `--fleet-names` (named here at spec time), skips
-semantic guessing and names each role from its input's filename stem.
-Teams whose aggregate files already carry meaningful fleet names get
-those names verbatim.
+A load-time flag, `--name-roles`, replaces semantic guessing with an
+interactive naming pass over the inputs.
+
+Invoked, it first prints the full numbered list of inputs, then prompts
+for each input in sequence. Each prompt's bracket default is
+`normalize(stem)`: the input's filename stem, lowercased, with spaces,
+underscores, and dots converted to hyphens, runs of hyphens collapsed,
+and leading and trailing hyphens stripped. An entry that normalizes to
+nothing, to `.` or `..`, or that begins with a leading hyphen is
+rejected, and length is capped; an invalid entry re-prompts with the
+normalized form as the new default.
+
+Duplicate stems are pre-checked before prompting begins and announced up
+front, then resolved interactively with disambiguated defaults. On a
+non-TTY run, `--name-roles` takes `normalize(stem)` for every input
+silently, except for one loud summary line listing the names used; an
+unnormalizable stem is a hard failure, and duplicate stems are a hard
+error naming both source files.
+
+A name that survives a prompt, including a bare Enter accepting the
+default, is explicit and permanent: the semantic-guess default above
+never names a role the flag already covered. Ctrl+C aborts the whole
+load, not just the current prompt.
+
+A future non-interactive form is noted but not built here: a repeatable
+`--role-name <stem>=<name>` mapping keyed on filename stem, never on
+positional order.
 
 ## 5. Tied Changes
 
@@ -250,8 +281,15 @@ Both are **user-initiated**; factor never merges or hoists on its own.
 
 ### Role archives with a typed provenance envelope
 
-The primary output is a set of role archives: base plus one archive per
-role. Each archive set carries a **typed provenance envelope**:
+Factor emits build contexts only; it never invokes podman, buildah, or
+any other build tool. The primary output is an archive tarball
+containing one directory per build context: `base/` plus one directory
+per role. Each directory is self-contained, a Containerfile and its COPY
+payload, with a deterministic default base ref in FROM, overridable per
+the FROM rules below. Building and tagging those contexts is the user's
+step, with their own tools.
+
+Each archive set also carries a **typed provenance envelope**:
 
 - `export_schema_version` of the consumed refined aggregates
 - source-aggregate identities: label, host counts, merged-at,
@@ -292,17 +330,26 @@ time is a possible later export mode, not the primary model.
   tag or digest of their choosing.
 - `:latest` stays opt-in everywhere, never a default.
 
+### Config authoring target
+
+Factor authors user configs to `/etc`, never to `/usr/etc`. Package
+defaults already ship in the base image and are not overwritten; the
+COPY payload lands only the content refine decided belongs in `/etc`.
+
 ### Structural lints
 
 Factor lints the proposed output before export. Ordered by expected
 catch rate:
 
 1. **Unbacked /var state.** No mutable /var file content baked into the
-   image; allow only declarative directory provisioning or controlled
-   fallback. (The repo already models this: the unbacked-var advisory in
-   `crates/collect/src/inspectors/storage.rs:126-145` and the tmpfiles.d
-   staging with `RUN mkdir -p` fallback in
-   `crates/pipeline/src/render/containerfile.rs:1795-1808`, both
+   image; allow only declarative directory provisioning. tmpfiles.d is
+   the primary mechanism, and factor carries no special /var logic
+   beyond this lint: normalizing tmpfiles.d-versus-direct-copy divergence
+   for the same path is refine's job (one declarative story per /var
+   path per fleet), and divergence that survives into factor's inputs
+   surfaces through the ordinary equality-key conflict handling (§3).
+   (The repo already models the underlying advisory: the unbacked-var
+   advisory in `crates/collect/src/inspectors/storage.rs:126-145`,
    verified.)
 2. **Merge-hostile or host-state /etc content.** The repo force-excludes
    `/etc/fstab` and `/etc/crypttab` today
@@ -314,26 +361,13 @@ catch rate:
 4. **Mixed lineage or invalid parent FROM.** Load-time validation (§2)
    catches mismatched inputs; this lint catches per-role FROM overrides
    that break the lineage after the fact.
-5. **Unmanaged /usr payload.** Entries whose dispositions remain
-   unresolved (§10).
-6. **Broken explicit ties.** A service placed without its drop-ins, a
+5. **Broken explicit ties.** A service placed without its drop-ins, a
    package without its owned config, a quadlet without its related
    artifacts.
-7. **Wants-symlink hygiene.** No handcrafted wants-symlink trees; use
+6. **Wants-symlink hygiene.** No handcrafted wants-symlink trees; use
    either explicit service-state actions or generated preset policy.
    (The renderer emits explicit `RUN systemctl enable` today,
    `crates/pipeline/src/render/containerfile.rs:937-945`, verified.)
-
-Flagged for upstream verification, carried from the session unresolved:
-
-- Whether generated build inputs should author shipped defaults to
-  literal `/usr/etc` or continue authoring to `/etc` and rely on
-  bootc/ostree compose semantics.
-- Whether the preferred multi-role build path is published intermediate
-  parent images, local stage inheritance, or another rendering of the
-  shallow chain.
-- Whether the `RUN mkdir -p` fallback for unbacked /var directories is
-  acceptable long-term or factor should require declarative backing.
 
 ## 8. Two-Schema Split
 
@@ -390,7 +424,8 @@ one-time migration exercise.
 
 A CLI-only precursor ships in the 0.9.x line:
 
-- `inspectah factor <dir>` runs the intersection and emits:
+- `inspectah factor <dir>` (or an explicit list of aggregate files) runs
+  the intersection and emits:
   - the **proposal report**: named roles, base contents, composition and
     overlap (shared-across-k with hoist candidates), naming collisions,
     uid/gid flags, tie previews, lint results. Legible and falsifiable:
@@ -423,37 +458,37 @@ inexpensive follow-up work after the flagship, post-1.x.
 
 The /usr walk is a **general inspectah feature**, not a factor feature:
 collection, single-host report, aggregate, refine, and export all handle
-it upstream of factor, with per-entry dispositions (include-in-export,
-package-it-properly, remove, approved exception). The presentation is
-designed in `2026-08-15-usr-walk-presentation-design.md` (this
-directory); implementation targets v0.9.0-beta.3.
+it upstream of factor. /usr entries follow the standard finding process:
+Actionable, default-include on a single host, and the existing aggregate
+zone machinery elsewhere (100 percent prevalence auto-includes, partial
+prevalence lands in a review zone). There is no separate resolution-state
+concept for /usr. The presentation is designed in
+`2026-08-15-usr-walk-presentation-design.md` (this directory);
+implementation targets v0.9.0-beta.3.
 
-Factor is a **future consumer of resolved dispositions**. By the time an
-aggregate reaches factor, each /usr entry carries the user's decision,
-and factor materializes it like any other fact: include-in-export
-entries become COPY content in the owning role or base, and unresolved
-entries trip lint 5 (§7). Resolution gating at export (blocking factor
-output while entries need review) is factor-era future work, noted as
-such in the design note.
+Factor is a **future consumer of these ordinary decisions**. By the time
+an aggregate reaches factor, each /usr entry carries the same
+include/exclude decision as any other artifact family, and factor
+materializes it the same way: included entries become COPY content in
+the owning role or base.
 
 ## 11. Open Questions
 
 Decisions the session did not make, recorded here rather than invented:
 
-1. **Physical archive packaging.** Directories, tarballs, or both. The
-   session settled the envelope and contents, not the container.
-2. **Semantic-name derivation.** What evidence feeds the purpose-name
+1. **Semantic-name derivation.** What evidence feeds the purpose-name
    guess and how candidates are ranked.
-3. **uid/gid conflict resolution mechanics.** The flag is loud by
+2. **uid/gid conflict resolution mechanics.** The flag is loud by
    decision; whether resolution is pick-a-winner like config variants or
    a per-role divergence is undecided.
-4. **Adjustments-file location and naming.** Alongside the archives, in
+3. **Adjustments-file location and naming.** Alongside the archives, in
    a dot-directory, or user-specified.
-5. **Proposal report format.** The required contents are settled (§9);
+4. **Proposal report format.** The required contents are settled (§9);
    the format (markdown, HTML, both) is not.
-6. **Precursor CLI surface.** Flags beyond `--force-mixed-lineage` and
-   `--fleet-names`, and the subcommand split if any (run vs render vs
-   replay).
+5. **Precursor CLI surface.** The subcommand split, if any (run vs
+   render vs replay), is undecided. Input forms (§2), the mixed-lineage
+   override, and `--name-roles` (§4) are settled; further flags beyond
+   those remain open.
 
 ## 12. Glossary
 
