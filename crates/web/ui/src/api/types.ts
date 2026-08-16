@@ -238,8 +238,22 @@ export interface BaselineSummary {
 export interface SectionStats {
   kind: string;
   total: number;
+  /** Actionable findings the user is keeping. */
   included: number;
+  /** Actionable findings the user excluded. A decision, not a state. */
   excluded: number;
+  /**
+   * Display-only findings the user was never offered a decision on.
+   * The three buckets partition the section:
+   * `included + excluded + advisory === total`.
+   *
+   * Optional only so the many `SectionStats` fixtures that predate this
+   * field need not restate a zero. The server always sends it (`usize`,
+   * not `Option`), so a missing value means a hand-built fixture, never
+   * real data -- and reading it as 0 renders one bucket less rather than
+   * asserting a decision the user did not make.
+   */
+  advisory?: number;
 }
 
 export interface RefineStats {

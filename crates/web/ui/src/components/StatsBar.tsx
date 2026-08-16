@@ -21,7 +21,7 @@ import {
   MoonIcon,
   CopyIcon,
 } from "@patternfly/react-icons";
-import type { RefineStats } from "../api/types";
+import type { RefineStats, SectionStats } from "../api/types";
 
 function ThemeToggle() {
   const [dark, setDark] = useState(() =>
@@ -133,6 +133,30 @@ function stat(value: number | null | undefined, fallback = "-"): string {
   return value != null ? String(value) : fallback;
 }
 
+/**
+ * One section's counters. `included` and `excluded` are the user's
+ * decisions; the advisory bucket is what the tool reported without ever
+ * offering a decision, so it is counted apart rather than folded into
+ * `excluded`. It is omitted when empty — most hosts have no advisories,
+ * and a permanent "0 advisory" would be noise on all of them.
+ */
+function SectionCounts({
+  label,
+  section,
+}: {
+  label: string;
+  section: SectionStats | undefined;
+}) {
+  const advisory = section?.advisory ?? 0;
+  return (
+    <Content component="small">
+      <strong>{label}:</strong> {stat(section?.included)} included /{" "}
+      {stat(section?.excluded)} excluded
+      {advisory > 0 && <> / {advisory} advisory</>}
+    </Content>
+  );
+}
+
 export function StatsBar({
   stats,
   onUndo,
@@ -169,32 +193,16 @@ export function StatsBar({
             ) : (
               <>
                 <ToolbarItem>
-                  <Content component="small">
-                    <strong>Packages:</strong>{" "}
-                    {stat(
-                      stats?.sections?.find((s) => s.kind === "package")
-                        ?.included,
-                    )}{" "}
-                    included /{" "}
-                    {stat(
-                      stats?.sections?.find((s) => s.kind === "package")
-                        ?.excluded,
-                    )}{" "}
-                    excluded
-                  </Content>
+                  <SectionCounts
+                    label="Packages"
+                    section={stats?.sections?.find((s) => s.kind === "package")}
+                  />
                 </ToolbarItem>
                 <ToolbarItem>
-                  <Content component="small">
-                    <strong>Configs:</strong>{" "}
-                    {stat(
-                      stats?.sections?.find((s) => s.kind === "config")?.included,
-                    )}{" "}
-                    included /{" "}
-                    {stat(
-                      stats?.sections?.find((s) => s.kind === "config")?.excluded,
-                    )}{" "}
-                    excluded
-                  </Content>
+                  <SectionCounts
+                    label="Configs"
+                    section={stats?.sections?.find((s) => s.kind === "config")}
+                  />
                 </ToolbarItem>
               </>
             )}

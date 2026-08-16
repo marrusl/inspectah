@@ -212,4 +212,51 @@ describe("StatsBar", () => {
 
     expect(writeText).toHaveBeenCalledWith("alpha\nbeta");
   });
+
+  // Advisories are display-only findings the user was never offered a
+  // decision on. Folding them into `excluded` made the bar report a
+  // decision the user never made -- a host whose only config finding is a
+  // modernization advisory read "0 included / 1 excluded" beside the very
+  // row that says the tool, not the user, put it there.
+  it("counts advisories as their own bucket, not as exclusions", () => {
+    render(
+      <StatsBar
+        stats={mockStats({
+          sections: [
+            { kind: "package", total: 10, included: 8, excluded: 2, advisory: 0 },
+            { kind: "config", total: 3, included: 1, excluded: 0, advisory: 2 },
+          ],
+        })}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    expect(
+      screen.getByText(/1 included .* 0 excluded .* 2 advisory/),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the advisory bucket entirely when a section has none", () => {
+    render(
+      <StatsBar
+        stats={mockStats({
+          sections: [
+            { kind: "package", total: 10, included: 8, excluded: 2, advisory: 0 },
+            { kind: "config", total: 4, included: 3, excluded: 1, advisory: 0 },
+          ],
+        })}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    // The overwhelmingly common host has no advisories; a zero-valued
+    // third bucket would be noise on every one of them.
+    expect(screen.queryByText(/advisory/)).not.toBeInTheDocument();
+  });
 });

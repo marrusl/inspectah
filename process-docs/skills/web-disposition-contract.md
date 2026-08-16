@@ -1,6 +1,6 @@
 ---
 name: web-disposition-contract
-description: The refine web API sends `FindingKind` as a three-variant tagged union, not a bool — the TypeScript layer must branch on `kind`, and `adapter.rs` must restore config advisories from the original snapshot because the view is classified from the projection.
+description: The refine web API sends `FindingKind` as a three-variant tagged union, not a bool — the TypeScript layer must branch on `kind`, and `adapter.rs` must restore config advisories from the original snapshot because the view is classified from the projection. Section stats partition into included/excluded/advisory, where `excluded` means a decision the user made.
 ---
 
 # Finding Dispositions Across the Web API
@@ -89,6 +89,57 @@ same rule for the same reason.
 
 `normalize.rs` guarantees non-actionable dispositions survive
 normalization, so the original is safe to read.
+
+## 4. `SectionStats` — three buckets, and `excluded` means a decision
+
+`stats.sections[]` carries `total`, `included`, `excluded`, and
+`advisory`. They partition the section:
+
+```
+included + excluded + advisory === total
+```
+
+`SectionStats::from_dispositions` asserts that in Rust by matching
+exhaustively on `FindingKind` rather than counting off `is_included()`.
+Counting both buckets off that predicate is what filed every advisory
+under `excluded`, because it is false for an advisory as well as for a
+file the user turned off.
+
+**`excluded` now means strictly "the user excluded this actionable
+finding."** It is a decision, not a state. Anything display-only is in
+`advisory`, and no consumer should derive one bucket from the others —
+the TUI group badge does derive advisories as `total - (included +
+excluded)`, and that is precisely why it read `0 adv` while advisories
+were mis-bucketed.
+
+**The Inventory caveat:** `FindingKind::Inventory` is counted in the
+`advisory` bucket, on the grounds that it is the other display-only
+disposition. Only network findings are inventory today, and they belong
+to no section counted here, so the bucket is in practice the advisory
+count. If that ever stops being true, the bucket needs splitting and the
+user-facing label needs revisiting with it.
+
+On the TypeScript side `advisory` is optional in `SectionStats` **only**
+so the many pre-existing fixtures need not restate a zero. The server
+always sends it (`usize`, not `Option`), so an absent value means a
+hand-built fixture, never real data. Reading it as `0` renders one bucket
+less, which is the safe direction — unlike the `include ?? true` fallback
+in section 1, it cannot assert a decision the user never made.
+
+Two web surfaces consume the bucket, both in `crates/web/ui/src/components/`:
+
+- `StatsBar.tsx` — `SectionCounts` renders `N advisory` as a third
+  counter, and omits it when the count is zero so the common host with no
+  advisories keeps a two-counter bar.
+- `ExportDialog.tsx` — sums `advisory` across sections and reports it
+  apart from the exclusion counts.
+
+The export dialog's copy has to stay true to both halves of what export
+does with an advisory: `render::audit` lists it in `audit-report.md`,
+which ships in the tarball, while `configtree::write_config_tree` skips
+it (the write is gated on `is_included()`), so the file itself is never
+copied into the image. Saying only "excluded" or only "not exported"
+gets one of those halves wrong.
 
 ## Regression Test Shape
 

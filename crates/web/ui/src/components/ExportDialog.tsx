@@ -43,6 +43,14 @@ export function ExportDialog({
     stats?.sections.find((s) => s.kind === "package")?.excluded ?? 0;
   const excludedConfigs =
     stats?.sections.find((s) => s.kind === "config")?.excluded ?? 0;
+  // Advisories are not exclusions, so they are no longer inside the two
+  // counts above — but they are still absent from the image, and the
+  // dialog's job is to say what export will do. Summed across sections so
+  // the count stays right if a section other than config ever reports one.
+  const advisoryFindings = (stats?.sections ?? []).reduce(
+    (sum, s) => sum + (s.advisory ?? 0),
+    0,
+  );
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -104,6 +112,12 @@ export function ExportDialog({
             {excludedPackages} packages excluded, {excludedConfigs} configs
             excluded
           </p>
+          {advisoryFindings > 0 && (
+            <p>
+              Advisory findings ({advisoryFindings}) are reported in the audit
+              report; their files are not copied into the image.
+            </p>
+          )}
           <p>
             <strong>Generation:</strong> {generation}
           </p>

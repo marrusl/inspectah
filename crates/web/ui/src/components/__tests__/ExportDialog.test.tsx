@@ -383,4 +383,57 @@ describe("ExportDialog", () => {
       screen.getByText(/0 packages excluded, 0 configs excluded/),
     ).toBeInTheDocument();
   });
+
+  // The dialog's job is to say what export will actually do. Advisories
+  // were counted among the exclusions, so it credited the user with
+  // decisions the tool made. They are reported in the audit report but
+  // their files are skipped by `write_config_tree`, so both halves have to
+  // be said -- reporting only the exclusion count now undercounts what is
+  // absent from the image.
+  it("reports advisory findings apart from the exclusion counts", () => {
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={mockStats({
+          sections: [
+            { kind: "package", total: 10, included: 8, excluded: 2, advisory: 0 },
+            { kind: "config", total: 3, included: 1, excluded: 0, advisory: 2 },
+          ],
+        })}
+        generation={7}
+        sessionIsSensitive={false}
+        onViewUpdate={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/2 packages excluded, 0 configs excluded/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Advisory findings \(2\) are reported in the audit report; their files are not copied into the image\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the advisory note when there are no advisories", () => {
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={mockStats({
+          sections: [
+            { kind: "package", total: 10, included: 8, excluded: 2, advisory: 0 },
+            { kind: "config", total: 4, included: 3, excluded: 1, advisory: 0 },
+          ],
+        })}
+        generation={7}
+        sessionIsSensitive={false}
+        onViewUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/Advisory findings/)).not.toBeInTheDocument();
+  });
 });
