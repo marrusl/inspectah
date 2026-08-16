@@ -72,12 +72,35 @@ binary (both are `aarch64` but different platforms).
 
 ## Pre-commit checks
 
-Run before committing the release:
+Run these yourself and read the output before committing the release.
+Do not trust exit codes here: `-W` warns without failing, and the
+pre-commit hook inherits that, so its clippy step cannot fail.
 
 ```bash
-cargo clippy -- -W clippy::all   # zero warnings
-cargo fmt --check                # formatting clean
+cargo build --workspace
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -W clippy::all
+cargo test --workspace
 ```
+
+**`--all-targets` is required.** Every clippy warning in this tree lives
+in a test target, so plain `cargo clippy` (lib and bin only) reports
+zero and sees nothing. At v0.9.0-beta.2 the baseline is **nine**
+pre-existing warnings -- 4 in `inspectah-web` (test `contract_snapshots`),
+1 in `inspectah-web` (lib test), 2 in `inspectah-cli` (bin test), 2 in
+`inspectah-pipeline` (lib test). Compare against that count; a release
+commit should introduce none. Note this baseline is in tension with the
+`-D clippy::all` standard in `CLAUDE.md`, which those nine would fail.
+
+Build and test are part of the gate even though a release commit changes
+no source: the version bump rewrites `Cargo.lock` and every crate
+version, so confirm the workspace still builds and the suite still
+passes at the bumped version. v0.9.0-beta.2 was 2784 passed, 0 failed,
+6 ignored.
+
+The `inspectah-web` `build.rs` runs `npm ci` and hangs under a sandbox.
+Set `INSPECTAH_SKIP_UI=1` on `git commit` when the release commit touches
+no frontend source. Do not reach for `--no-verify`.
 
 ## Commit and tag
 
