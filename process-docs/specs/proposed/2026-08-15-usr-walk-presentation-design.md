@@ -20,10 +20,12 @@ the result in `usr_entries` (`crates/collect/src/inspectors/nonrpm.rs:2125-2133`
 - The HTML report never references `usr_entries`
   (`crates/pipeline/src/render/report.rs`).
 
-This matters because unmanaged /usr content is a migration blocker in image
-mode: /usr ships from the image and is read-only at runtime, so anything
-under /usr that no package owns will silently vanish on rebuild unless the
-user decides what to do with it.
+This matters because unmanaged /usr content is unexpected in a way
+unmanaged /opt content is not. Content under /usr, /opt, /srv, and
+/usr/local alike ships from the image and is lost on rebuild unless
+carried, but /opt, /srv, and /usr/local are where unpackaged software
+belongs, while unowned content under /usr means package management
+lost track of the estate.
 
 This note designs the presentation. The implementation plan designs the
 types and the wiring.
@@ -105,12 +107,14 @@ here:
 
 Lead with the blocker and what to do. Draft:
 
-> In image mode, /usr ships from the container image and stays read-only
-> at runtime. The files below live under /usr on this host but belong to
-> no RPM package, so a rebuilt image will not carry them unless you
-> include them in the export. For content that should be package-managed,
-> building an RPM that owns it is the durable fix; use include only for
-> what genuinely needs to travel with the image as-is.
+> In image mode /usr ships from the container image and stays read-only
+> at runtime, the same as every directory outside /var. The files below
+> live under /usr but belong to no RPM package, which means package
+> management has lost track of them, and a rebuilt image will not carry
+> them unless you include them in the export. For content that should
+> be package-managed, building an RPM that owns it is the durable fix;
+> use include only for what genuinely needs to travel with the image
+> as-is.
 
 ### Empty and absent states
 

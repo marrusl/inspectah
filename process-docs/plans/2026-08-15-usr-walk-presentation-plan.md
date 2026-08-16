@@ -22,7 +22,7 @@
 - **Section id:** `unmanaged_usr`. **Section label:** `Unmanaged /usr`. **Triage section:** `is_triage: true`. These exact strings appear in `section_group.rs`, the frontend `SECTION_LABELS` map, the report anchor, and the audit heading. Do not vary them.
 - **Containerfile block header:** exactly `# === Unmanaged /usr ===`.
 - **Section framing copy (verbatim, all surfaces):**
-  > In image mode, /usr ships from the container image and stays read-only at runtime. The files below live under /usr on this host but belong to no RPM package, so a rebuilt image will not carry them unless you include them in the export. For content that should be package-managed, building an RPM that owns it is the durable fix; use include only for what genuinely needs to travel with the image as-is.
+  > In image mode /usr ships from the container image and stays read-only at runtime, the same as every directory outside /var. The files below live under /usr but belong to no RPM package, which means package management has lost track of them, and a rebuilt image will not carry them unless you include them in the export. For content that should be package-managed, building an RPM that owns it is the durable fix; use include only for what genuinely needs to travel with the image as-is.
 - **Empty-state copy (verbatim):** `Every file under /usr on this host is owned by an RPM package. This host's /usr is image-clean.`
 - **Not-scanned copy (verbatim):** `This snapshot was collected without --include-unmanaged, so /usr was not checked. Re-scan with --include-unmanaged to check it.`
 - **Voice rules for all user-visible strings:** no em dashes; do not use the word "immutable" (say "image-based" or "read-only"); do not use "shape" as a noun.
@@ -3054,12 +3054,13 @@ Create `crates/pipeline/templates/report/unmanaged-usr.html`:
 <p class="empty-state">Every file under /usr on this host is owned by an
 RPM package. This host's /usr is image-clean.</p>
 {% else %}
-<p>In image mode, /usr ships from the container image and stays read-only
-at runtime. The files below live under /usr on this host but belong to no
-RPM package, so a rebuilt image will not carry them unless you include
-them in the export. For content that should be package-managed, building
-an RPM that owns it is the durable fix; use include only for what
-genuinely needs to travel with the image as-is.</p>
+<p>In image mode /usr ships from the container image and stays read-only
+at runtime, the same as every directory outside /var. The files below
+live under /usr but belong to no RPM package, which means package
+management has lost track of them, and a rebuilt image will not carry
+them unless you include them in the export. For content that should be
+package-managed, building an RPM that owns it is the durable fix; use
+include only for what genuinely needs to travel with the image as-is.</p>
 
 <table class="report-table">
   <thead>
