@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.3] - 2026-08-16
+
 ### Fixed
-- **Stock files with a space in their path were reported as unmanaged `/usr` content** — the set of RPM-owned paths was built by taking the first whitespace-delimited field of each line, so any owned path containing a space was cut at that space and never entered the set. The `/usr` walk then found the real path unowned and listed it as an actionable finding. Packages ship such paths routinely: firmware blobs named after the hardware they drive are the common case. On one RHEL 10 host this accounted for 33 of the 62 reported `/usr` entries, every one of them a stock file the user had nothing to do with. Ownership is now read one path per line, which is also what the `/var` directory backing analysis depends on.
+- **RPM-owned paths containing a space were treated as unmanaged** — the owned-path set was built from the first whitespace-delimited field of each `rpm --query --all --dump` line. `rpm` quotes nothing and puts the path first, so an owned path containing a space was cut at that space and never entered the set. Stock packages ship such paths routinely, firmware blobs named after the hardware they drive being the common case. Two consumers read that set and both were wrong: `/var` directory backing analysis fell through to "unbacked" for directories RPM already provides, so the generated build provisioned them through `tmpfiles.d` when it did not need to, and the `/usr` walk recorded stock files as unmanaged entries in the snapshot. Ownership is now read one path per line via `--qf '[%{FILENAMES}\n]'`. This is a pre-existing defect, not a beta.2 regression.
 
 ## [0.9.0-beta.2] - 2026-08-16
 
@@ -403,7 +405,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...HEAD
+[0.9.0-beta.3]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...v0.9.0-beta.3
 [0.9.0-beta.2]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.1...v0.9.0-beta.2
 [0.9.0-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.7-beta.1...v0.9.0-beta.1
 [0.8.7-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.5...v0.8.7-beta.1
