@@ -188,21 +188,55 @@ Build and test are part of the gate even though a release commit changes
 no source: the version bump rewrites `Cargo.lock` and every crate
 version, so confirm the workspace still builds and the suite still
 passes at the bumped version. v0.9.0-beta.2 was 2784 passed, 0 failed,
-6 ignored.
+6 ignored; v0.9.0-beta.3 was 2785 passed, 0 failed, 6 ignored.
 
-The `inspectah-web` `build.rs` runs `npm ci` and hangs under a sandbox.
-Set `INSPECTAH_SKIP_UI=1` on `git commit` when the release commit touches
-no frontend source. Do not reach for `--no-verify`.
+Two sandbox traps make a clean tree look broken. Neither is a real
+failure, and both cost time on more than one release:
+
+- **`npm ci` hangs.** The `inspectah-web` `build.rs` runs it and it needs
+  network. Set `INSPECTAH_SKIP_UI=1` on `git commit`, and on the gate
+  commands above, when the release commit touches no frontend source.
+  Do not reach for `--no-verify`. (Never set it for release *binaries*
+  -- see "Build targets".)
+- **`refine_e2e_test::refine_server_lifecycle` fails with
+  `PermissionDenied`.** The test binds a TCP listener, which the sandbox
+  refuses:
+  `Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }`.
+  `cargo test` aborts at that point, so the run also reports a *partial*
+  pass count (191, not 2785) and looks like a mass failure. It is
+  pre-existing and unrelated to any release change. Run the gate and the
+  commit with the sandbox disabled, which also lets the pre-commit hook's
+  real test gate run and pass.
 
 ## Commit and tag
 
-Single commit with all release files:
+The release commit is exactly four files. "All release files" is
+narrower than it sounds -- the release notes and the ROADMAP line are
+deliberately *not* in it (see their sections above), so a release cut
+is three commits, not one:
 
-```
-chore(release): v0.8.6-beta.5
-```
+| Commit | Files |
+|---|---|
+| `chore(release): v<version>` | `Cargo.toml`, `Cargo.lock`, `packaging/inspectah.spec`, `CHANGELOG.md` |
+| `docs(release): write v<version> release notes` | `process-docs/release-notes-<version>.md` |
+| `docs(roadmap): bump current version to v<version>` | `ROADMAP.md` |
+
+**Stage the release commit by explicit path.** Other agents commit to
+this repo concurrently, and a plans or skills file being edited in
+another session will be sitting modified in the working tree while you
+cut the release. `git commit -a` or `git add -A` would sweep it into
+the tagged commit. This is not hypothetical: it happened during the
+beta.3 cut, where a `docs(plans):` commit from another session landed
+*between* the release commit and the release-notes commit.
 
 Tag format is v-prefixed: `git tag v0.8.6-beta.5`.
+
+Before tagging, confirm nothing above the release commit touches code,
+since the tag point is the release commit and not HEAD:
+
+```bash
+git diff --stat <release-commit>..HEAD -- crates/ Cargo.toml Cargo.lock
+```
 
 **Do not push.** Mark reviews and pushes commit + tag.
 
