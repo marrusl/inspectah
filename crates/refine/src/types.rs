@@ -974,3 +974,48 @@ mod timeline_entry_tests {
         assert_eq!(entry, back);
     }
 }
+
+#[cfg(test)]
+mod section_stats_tests {
+    use super::*;
+    use inspectah_core::types::AdvisoryType;
+
+    /// Which bucket each disposition belongs in, asserted one variant at
+    /// a time so a swapped arm names itself.
+    ///
+    /// The partition invariant cannot prove this and never could: every
+    /// item increments `total` once and exactly one bucket once, so the
+    /// sum holds whichever bucket receives it. This is the guard for the
+    /// assignment, and it is the only cover `Inventory` has -- no counted
+    /// section can produce one today, so no fixture-driven test reaches
+    /// that arm.
+    #[test]
+    fn every_disposition_lands_in_its_designated_bucket() {
+        // Expectations are the whole bucket vector, not just the bucket
+        // that should be 1: comparing all three at once is what makes a
+        // swapped arm fail, since the two zeros have to hold as well.
+        let cases: &[(&str, FindingKind, [usize; 3])] = &[
+            ("a kept finding", FindingKind::included(), [1, 0, 0]),
+            ("an excluded finding", FindingKind::excluded(), [0, 1, 0]),
+            (
+                "an advisory",
+                FindingKind::advisory(AdvisoryType::Modernization, "rationale"),
+                [0, 0, 1],
+            ),
+            // Display-only like an advisory, and bucketed with it.
+            ("an inventory finding", FindingKind::inventory(), [0, 0, 1]),
+        ];
+
+        for (label, disposition, expected) in cases {
+            let stats =
+                SectionStats::from_dispositions(SectionKind::Config, std::iter::once(disposition));
+
+            assert_eq!(stats.total, 1, "{label} must be counted");
+            assert_eq!(
+                [stats.included, stats.excluded, stats.advisory],
+                *expected,
+                "{label}: [included, excluded, advisory] buckets are wrong: {stats:?}"
+            );
+        }
+    }
+}

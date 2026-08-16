@@ -7019,9 +7019,15 @@ mod tests {
         );
     }
 
-    /// The partition is the invariant every consumer reads the buckets
-    /// through, so it has to hold for every section, not just the one that
-    /// happens to carry an advisory.
+    /// Every finding lands in exactly one bucket, in every section, not
+    /// just the one that happens to carry an advisory.
+    ///
+    /// That is all this proves. It counts, it does not assign: the sum
+    /// holds whichever bucket receives an item, so a swapped arm passes
+    /// here. `every_disposition_lands_in_its_designated_bucket` in
+    /// `types.rs` is the guard for the assignment. What this catches is
+    /// an arm that increments no bucket or two -- the failure mode a new
+    /// `FindingKind` variant introduces.
     #[test]
     fn every_section_stat_partitions_its_section() {
         let mut session = RefineSession::new(test_snapshot_with_config_advisory());
