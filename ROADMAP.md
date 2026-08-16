@@ -16,9 +16,9 @@ Parse `pam.d` module load lists, diff against the base image's module set, flag 
 
 Structured secrets detection and lifecycle improvements. Separate spec needed.
 
-### Extended Findings Integration
+### /usr Walk Presentation
 
-Five integration gaps identified in the extended findings work. Needs manual session to resolve.
+The remaining follow-up from the extended findings pass. `usr_entries` are collected today but still have no user-facing surface. Beta.3 should add a dedicated "Unmanaged /usr" section and carry per-entry decisions (`include-in-export`, `package`, `remove`, `exception`) through aggregate, refine, report, and export.
 
 ## Ready (Spec'd / Planned)
 
@@ -51,15 +51,11 @@ Full-content modal or drawer for config files. Show full file with monospace for
 
 ### Fleet Divergence Review UX
 
-Clarify the variant acknowledgment workflow — the "0/11 confirmed" counter is opaque. Spec the confirmation model and its integration with include/exclude toggles.
+Clarify the divergent-item acknowledgment workflow. The session still tracks confirmed and changed divergent items, but the review model and its integration with include/exclude toggles need a clearer spec and UI.
 
 ### Clean Export Mode
 
 Export option that strips working-state files (`snapshot.json`, `session.json`, `secrets-review.md`) from the tarball, producing build-pipeline-ready output.
-
-### Autosave UX Improvements
-
-Rethink the resume experience — show session info, possibly add in-UI "reset to original" option.
 
 ### sshd_config Structured Parse
 
@@ -98,7 +94,7 @@ Verify driftify's kitchen-sink mode covers all inspectah sections. Expand mutati
 
 ### Playwright E2E: CI Automation, Visual Regression, Multi-Browser
 
-Three incremental improvements to the Playwright suite: (1) auto-start refine server via `webServer` config + GitHub Actions integration, (2) screenshot comparison for key views to catch CSS regressions, (3) Firefox project for cross-engine coverage.
+GitHub Actions coverage is in place, but the suite still needs a shared refine-server startup path for local and CI runs, screenshot assertions for key views, and a Firefox project for cross-engine coverage.
 
 ## Low / Pre-1.0
 
@@ -114,21 +110,13 @@ Add `[profile.release]` settings: `lto = "thin"`, `strip = true`, `codegen-units
 
 ### Aggregate Spec 3: Factor
 
-Takes refined aggregate tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec after current work stabilizes.
+A proposed factor spec now exists in `process-docs/specs/proposed/2026-08-15-factor-spec.md`. Remaining work is the refined-aggregate export contract it depends on, then the factor implementation that consumes refined aggregate tarballs.
 
 ### Factor v2
 
 Multi-artifact decomposition — decomposes a refined tarball into per-role artifacts.
 
-## Done (since v0.8.6-beta.3)
+## Done
 
-- **Language Package Detection v2** — npm globals, C-extension detection, `--scan-home`/`--scan-path` scan expansion, `system_site_packages` rendering, bundler deprecation fix, per-package version pinning
-- **Group Rendering: Refine UI** — collapsible group rows, ungroup action, `dnf group install` rendering
-- **HTML Audit Report Redesign** — grouped information architecture, full network data, /var discovery, full-shadow services
-- **Anaconda Gap Classifier** — four-tier reclassification for installer-sourced packages
-- **Section Promotion (Tier 1)** — scheduled tasks, SELinux, boot parameters promoted from Reference to Review
-- **FindingKind Taxonomy** — Advisory, Inventory, and Actionable finding semantics across all surfaces
-- **8-Group Sidebar** — data-driven NavExpandable groups with badges, batch toggles, keyboard navigation
-- **Non-RPM Replication** — pip/npm/gem detection and rendering, unmanaged files, repo-less RPMs, compose reference
-- **Detection Bug Fixes** — RPM false positives, language underdetection, duplicate repo display
-- **TUI Refine** — locked items, compose indicator, help legend, network inventory rows
+- **Roadmap scope** — this file tracks remaining work. Completed release inventories live in `CHANGELOG.md`.
+- **Recent shipped context** — see `process-docs/release-notes-0.9.0-beta.1.md` and `process-docs/release-notes-0.9.0-beta.2.md`.
