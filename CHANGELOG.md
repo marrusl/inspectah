@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.2] - 2026-08-16
+
 ### Fixed
 - **Config advisories no longer count as files you excluded** — section stats bucketed every finding by its include flag, so an advisory landed in the excluded count. The refine stats bar read "0 included / 1 excluded" beside the advisory row it was describing, and the TUI's System Configuration badge, which reports advisories as whatever the decisions leave over, read "0 adv" for a group holding two of them. Section stats now carry a third `advisory` bucket, and the three partition the section. The refine web stats bar and the TUI status bar each render that bucket as a third counter on the sections that have one, and stay two-counter bars on the hosts that have none — before, a three-item config section holding two advisories read "1 incl / 0 excl" on the TUI bar, leaving two of its three items unaccounted for. The export dialog no longer counts advisories among the files you excluded; it reports them separately, noting that they are listed in the audit report while their files are not copied into the image.
 - **A space in a venv directory name broke the generated build** — the venv directory name is interpolated into `/tmp/<name>-requirements.txt`, a separate token from the venv path and outside the quotes that path gets. A legal path like `/opt/app/my venv` rendered a three-argument `COPY` and handed `pip install -r` a stray token, so the build failed. All three interpolation sites now quote the name. This is a pre-existing issue predating 0.9.0-beta.1.
@@ -398,7 +400,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.1...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...HEAD
+[0.9.0-beta.2]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.1...v0.9.0-beta.2
 [0.9.0-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.7-beta.1...v0.9.0-beta.1
 [0.8.7-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.5...v0.8.7-beta.1
 [0.8.6-beta.5]: https://github.com/marrusl/inspectah/compare/v0.8.6-beta.4...v0.8.6-beta.5
