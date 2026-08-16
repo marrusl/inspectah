@@ -232,6 +232,13 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
     if is_venv && has_requirements && effective_confidence == HIGH_CONFIDENCE {
         // High confidence venv with requirements.txt: executable COPY/RUN.
         let hash = env_hash(&item.path);
+        // The directory name is interpolated into `/tmp/<name>-requirements.txt`,
+        // which is a separate token from the venv path and gets no quoting
+        // from it. Every site below single-quotes it: unquoted, a plain
+        // space in the name gives `COPY` three arguments, and any shell
+        // metacharacter reaching the `RUN` lines would execute. Quoting it
+        // is also what makes narrowing the path predicate safe — do not
+        // narrow `UNSAFE_SHELL_CHARS` while these sites are bare.
         let venv_name = std::path::Path::new(&abs_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -244,7 +251,7 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
 
         lines.push(format!("# pip packages: {abs_path} ({fidelity})"));
         lines.push(format!(
-            "COPY language-packages/pip/{hash}/requirements.txt /tmp/{venv_name}-requirements.txt"
+            "COPY language-packages/pip/{hash}/requirements.txt '/tmp/{venv_name}-requirements.txt'"
         ));
         let venv_flags = if item.system_site_packages {
             "--system-site-packages "
@@ -253,9 +260,9 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         };
         lines.push(format!("RUN python3 -m venv {venv_flags}'{abs_path}' \\"));
         lines.push(format!(
-            "    && '{abs_path}'/bin/pip install -r /tmp/{venv_name}-requirements.txt \\"
+            "    && '{abs_path}'/bin/pip install -r '/tmp/{venv_name}-requirements.txt' \\"
         ));
-        lines.push(format!("    && rm /tmp/{venv_name}-requirements.txt"));
+        lines.push(format!("    && rm '/tmp/{venv_name}-requirements.txt'"));
     } else if is_venv {
         // Medium confidence venv (no requirements.txt): commented out.
         let pkgs = pinned_package_list(item);
@@ -1717,6 +1724,62 @@ mod tests {
             !output_no_rpm.contains("WARNING: nodejs not found"),
             "must NOT warn when no RPM data: {output_no_rpm}"
         );
+    }
+
+    /// The venv directory name lands in `/tmp/<name>-requirements.txt`,
+    /// which sits outside the quotes the path itself gets. Unquoted, a
+    /// plain space gives `COPY` three arguments and hands `pip install -r`
+    /// a stray token: a broken build from a legal path. The existing
+    /// `pip_path_with_spaces_renders_with_quotes` misses this because its
+    /// space is in a parent directory, so the name comes out clean.
+    ///
+    /// The negative assertion is also the guard for the deferred narrowing
+    /// of `UNSAFE_SHELL_CHARS` to `'` and `\n`. Names carrying `$` or `;`
+    /// are rejected by today's path predicate, so nothing renders for them
+    /// and the assertion holds trivially; once the predicate narrows they
+    /// render, and the assertion starts proving that `$(id)` cannot reach
+    /// a `RUN` line unquoted. Quoting has to land before the narrowing,
+    /// never after.
+    #[test]
+    fn venv_directory_name_is_quoted_at_its_own_interpolation_sites() {
+        for (name, renders_under_current_predicate) in [
+            ("my venv", true),
+            ("venv(x)", true),
+            ("venv>out", true),
+            ("venv*", true),
+            ("ve$(id)nv", false),
+            ("venv;id", false),
+        ] {
+            let path = format!("/opt/app/{name}");
+            let snap = test_snap(
+                vec![pip_venv_item(
+                    &path,
+                    HIGH_CONFIDENCE,
+                    true,
+                    vec![("flask", "2.3.3")],
+                )],
+                &["python3"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                !output.contains(&format!(" /tmp/{name}")),
+                "{name}: the temp path must never be interpolated unquoted: {output}"
+            );
+
+            if renders_under_current_predicate {
+                for site in [
+                    format!("requirements.txt '/tmp/{name}-requirements.txt'"),
+                    format!("pip install -r '/tmp/{name}-requirements.txt'"),
+                    format!("rm '/tmp/{name}-requirements.txt'"),
+                ] {
+                    assert!(
+                        output.contains(&site),
+                        "{name}: expected quoted interpolation {site:?}: {output}"
+                    );
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
