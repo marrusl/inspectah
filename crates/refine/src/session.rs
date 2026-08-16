@@ -2756,39 +2756,16 @@ impl RefineSession {
         );
         drop(preview_dir);
 
-        let pkg_total = packages.len();
-        let pkg_included = packages
-            .iter()
-            .filter(|p| p.entry.disposition.is_included())
-            .count();
-        let pkg_excluded = packages
-            .iter()
-            .filter(|p| !p.entry.disposition.is_included())
-            .count();
-        let cfg_total = config_files.len();
-        let cfg_included = config_files
-            .iter()
-            .filter(|c| c.entry.disposition.is_included())
-            .count();
-        let cfg_excluded = config_files
-            .iter()
-            .filter(|c| !c.entry.disposition.is_included())
-            .count();
-
         let stats = RefineStats {
             sections: vec![
-                SectionStats {
-                    kind: SectionKind::Package,
-                    total: pkg_total,
-                    included: pkg_included,
-                    excluded: pkg_excluded,
-                },
-                SectionStats {
-                    kind: SectionKind::Config,
-                    total: cfg_total,
-                    included: cfg_included,
-                    excluded: cfg_excluded,
-                },
+                SectionStats::from_dispositions(
+                    SectionKind::Package,
+                    packages.iter().map(|p| &p.entry.disposition),
+                ),
+                SectionStats::from_dispositions(
+                    SectionKind::Config,
+                    config_files.iter().map(|c| &c.entry.disposition),
+                ),
             ],
             needs_review_count: packages
                 .iter()
@@ -7017,6 +6994,54 @@ mod tests {
             .find(|f| f.path == ACTIONABLE_CONFIG_PATH)
             .expect("actionable entry present");
         assert!(!toggled.disposition.is_included());
+    }
+
+    /// Advisories are display-only facts, not decisions. Counting them as
+    /// excluded made the stats bar contradict the rows beside it and
+    /// zeroed the TUI group advisory badge, which is computed as
+    /// `total - (included + excluded)`.
+    #[test]
+    fn config_advisories_are_not_counted_as_excluded_decisions() {
+        let session = RefineSession::new(test_snapshot_with_config_advisory());
+        let stats = session.view().stats.section(SectionKind::Config);
+
+        assert_eq!(stats.total, 2, "advisories stay visible in the total");
+        assert_eq!(stats.included, 1);
+        assert_eq!(
+            stats.excluded, 0,
+            "the advisory was never a candidate, so it was never excluded"
+        );
+        assert_eq!(stats.advisory, 1);
+        assert_eq!(
+            stats.included + stats.excluded + stats.advisory,
+            stats.total,
+            "the three buckets must partition the section"
+        );
+    }
+
+    /// The partition is the invariant every consumer reads the buckets
+    /// through, so it has to hold for every section, not just the one that
+    /// happens to carry an advisory.
+    #[test]
+    fn every_section_stat_partitions_its_section() {
+        let mut session = RefineSession::new(test_snapshot_with_config_advisory());
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config {
+                    path: ACTIONABLE_CONFIG_PATH.into(),
+                },
+                include: false,
+            })
+            .expect("actionable config entries stay toggleable");
+
+        for section in &session.view().stats.sections {
+            assert_eq!(
+                section.included + section.excluded + section.advisory,
+                section.total,
+                "{:?} buckets must partition the section: {section:?}",
+                section.kind
+            );
+        }
     }
 
     /// Build a snapshot with non-RPM software for language package pin tests.

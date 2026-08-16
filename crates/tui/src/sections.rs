@@ -100,7 +100,11 @@ pub fn build_nav_rows(
             .filter_map(|id| entries.iter().find(|e| e.id == *id))
             .collect();
 
-        // Compute group summary counts.
+        // Compute group summary counts. Advisories are the remainder, so
+        // this is only correct while `included` and `excluded` count
+        // actionable decisions alone -- reference-only sections report
+        // both as zero, and `SectionStats` keeps advisories out of its
+        // excluded bucket for the same reason.
         let actionable: usize = group_entries.iter().map(|e| e.included + e.excluded).sum();
         let total: usize = group_entries.iter().map(|e| e.count).sum();
         let advisories = total.saturating_sub(actionable);
@@ -369,6 +373,74 @@ mod tests {
         if let Some(NavRow::Group { collapsed, .. }) = sc_header {
             assert!(*collapsed);
         }
+    }
+
+    /// The group badge reports advisories as whatever is left after the
+    /// actionable decisions, so it is only ever right when `included` and
+    /// `excluded` are actionable-only. While config advisories were
+    /// counted as excluded, `included + excluded` equalled the total and a
+    /// group holding two advisories rendered `[3, 0 adv]` -- the release's
+    /// headline feature reporting itself absent.
+    ///
+    /// The same `SectionEntry` feeds the single-host status bar's
+    /// included/excluded pair, so the counts asserted here are what that
+    /// bar reads too.
+    #[test]
+    fn config_advisories_count_toward_the_group_advisory_badge() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::{AdvisoryType, FindingKind};
+        use inspectah_refine::session::RefineSession;
+
+        let advisory = |path: &str, advisory_type: AdvisoryType| ConfigFileEntry {
+            path: path.into(),
+            disposition: FindingKind::advisory(advisory_type, "rationale"),
+            ..Default::default()
+        };
+
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                advisory("/etc/init.d/legacy-app", AdvisoryType::Modernization),
+                advisory("/etc/alternatives/java", AdvisoryType::CrossTreeSymlink),
+                ConfigFileEntry {
+                    path: "/etc/myapp.conf".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let entries = build_section_entries(&RefineSession::new(snap));
+        let configs = entries
+            .iter()
+            .find(|e| e.id == SectionId::Configs)
+            .expect("Configs section entry");
+        assert_eq!(configs.count, 3, "advisories stay visible in the total");
+        assert_eq!(configs.included, 1);
+        assert_eq!(
+            configs.excluded, 0,
+            "an advisory is not a file the user excluded"
+        );
+
+        let rows = build_nav_rows(&entries, &HashSet::new());
+        let badge = rows
+            .iter()
+            .find_map(|r| match r {
+                NavRow::Group {
+                    group: NavGroup::SystemConfig,
+                    actionable,
+                    advisories,
+                    ..
+                } => Some((*actionable, *advisories)),
+                _ => None,
+            })
+            .expect("System Config group header");
+        assert_eq!(
+            badge,
+            (1, 2),
+            "the group badge must read [1, 2 adv], not [3, 0 adv]"
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
@@ -513,8 +514,52 @@ pub enum SectionKind {
 pub struct SectionStats {
     pub kind: SectionKind,
     pub total: usize,
+    /// Actionable findings the user is keeping.
     pub included: usize,
+    /// Actionable findings the user has excluded. A decision, not a state.
     pub excluded: usize,
+    /// Display-only findings the user was never offered a decision on.
+    /// Counted apart from `excluded` so that bucket keeps meaning "the
+    /// user excluded it", and so surfaces can report advisories directly
+    /// instead of inferring them from a remainder.
+    pub advisory: usize,
+}
+
+impl SectionStats {
+    /// Bucket a section's findings into the three counts, which partition
+    /// the section: `included + excluded + advisory == total`.
+    ///
+    /// The match is exhaustive on purpose. Counting both buckets off
+    /// `is_included()` filed every advisory under `excluded`, so the stats
+    /// bar claimed a decision the user never made and the TUI group
+    /// advisory badge, computed as the remainder, was structurally zero.
+    /// A new `FindingKind` variant has to fail to compile here rather than
+    /// fall into a bucket by default.
+    pub fn from_dispositions<'a>(
+        kind: SectionKind,
+        dispositions: impl Iterator<Item = &'a FindingKind>,
+    ) -> Self {
+        let mut stats = SectionStats {
+            kind,
+            total: 0,
+            included: 0,
+            excluded: 0,
+            advisory: 0,
+        };
+        for disposition in dispositions {
+            stats.total += 1;
+            match disposition {
+                FindingKind::Actionable { include: true } => stats.included += 1,
+                FindingKind::Actionable { include: false } => stats.excluded += 1,
+                // Inventory shares the advisory bucket: it is the other
+                // display-only disposition, never a decision either. Only
+                // network findings are inventory today, and they belong to
+                // no section counted here.
+                FindingKind::Advisory { .. } | FindingKind::Inventory => stats.advisory += 1,
+            }
+        }
+        stats
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -558,6 +603,7 @@ impl RefineStats {
             total: 0,
             included: 0,
             excluded: 0,
+            advisory: 0,
         };
         self.sections
             .iter()

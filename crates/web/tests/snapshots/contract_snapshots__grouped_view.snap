@@ -126,12 +126,14 @@ expression: json
     "ops_applied": 0,
     "sections": [
       {
+        "advisory": 0,
         "excluded": 2,
         "included": 0,
         "kind": "package",
         "total": 2
       },
       {
+        "advisory": 0,
         "excluded": 0,
         "included": 0,
         "kind": "config",
