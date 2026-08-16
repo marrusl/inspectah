@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-**Current version:** v0.8.7-beta.1 (pure Rust, schema 21)
+**Current version:** v0.9.0-beta.2 (pure Rust, schema 22)
 
 ## High
 
