@@ -157,18 +157,20 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
     SECTION_ORDER
         .iter()
         .map(|&id| {
-            let (count, included, excluded) = match id {
+            let (count, included, excluded, advisory) = match id {
                 // ── Stats-backed sections ────────────────────────
                 SectionId::Packages => {
                     let s = stats.section(SectionKind::Package);
-                    (s.total, s.included, s.excluded)
+                    (s.total, s.included, s.excluded, s.advisory)
                 }
                 SectionId::Configs => {
                     let s = stats.section(SectionKind::Config);
-                    (s.total, s.included, s.excluded)
+                    (s.total, s.included, s.excluded, s.advisory)
                 }
 
                 // ── Decision sections ────────────────────────────
+                // These count from `decisions()` and `reference()`, which
+                // have no advisory bucket, so their advisory count is 0.
                 SectionId::Services => {
                     // Composite: decision states + drop-ins + reference sub-collections.
                     // Decision items have include fields, reference items are read-only.
@@ -194,7 +196,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         + reference.services.warnings.len();
                     let total = dec_count + ref_count;
                     let excluded = dec_count - dec_included;
-                    (total, dec_included, excluded)
+                    (total, dec_included, excluded, 0)
                 }
                 SectionId::Containers => {
                     // Composite: decision quadlets/flatpaks + reference running/compose.
@@ -215,7 +217,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         + reference.containers.flatpaks.len();
                     let total = dec_count + ref_count;
                     let excluded = dec_count - dec_included;
-                    (total, dec_included, excluded)
+                    (total, dec_included, excluded, 0)
                 }
                 SectionId::Sysctls => {
                     let total = decisions.sysctls.len();
@@ -224,12 +226,12 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         .iter()
                         .filter(|s| s.entry.disposition.is_included())
                         .count();
-                    (total, included, total - included)
+                    (total, included, total - included, 0)
                 }
                 SectionId::Tuned => {
                     let total = decisions.tuned.len();
                     let included = decisions.tuned.iter().filter(|t| t.include).count();
-                    (total, included, total - included)
+                    (total, included, total - included, 0)
                 }
                 SectionId::Users => {
                     let total = decisions.users_groups.len();
@@ -238,15 +240,16 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         .iter()
                         .filter(|u| u.disposition.is_included())
                         .count();
-                    (total, included, total - included)
+                    (total, included, total - included, 0)
                 }
 
                 // ── Reference-only sections ──────────────────────
-                // These are read-only; included/excluded are always 0.
+                // These are read-only; included/excluded/advisory are
+                // always 0.
                 SectionId::VerChanges => {
                     let total = reference.version_changes.downgrades.len()
                         + reference.version_changes.upgrades.len();
-                    (total, 0, 0)
+                    (total, 0, 0, 0)
                 }
                 SectionId::KernelBoot => {
                     let kb = &reference.kernel_boot;
@@ -257,7 +260,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         + kb.dracut_conf.len()
                         + kb.custom_tuned_profiles.len()
                         + kb.alternatives.len();
-                    (total, 0, 0)
+                    (total, 0, 0, 0)
                 }
                 SectionId::Network => {
                     let net = &reference.network;
@@ -269,7 +272,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         + net.ip_rules.len()
                         + net.hosts_additions.len()
                         + net.proxy_env.len();
-                    (total, 0, 0)
+                    (total, 0, 0, 0)
                 }
                 SectionId::Storage => {
                     let stor = &reference.storage;
@@ -278,11 +281,11 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                         + stor.lvm_volumes.len()
                         + stor.var_directories.len()
                         + stor.credential_refs.len();
-                    (total, 0, 0)
+                    (total, 0, 0, 0)
                 }
-                SectionId::ScheduledTasks => (reference.scheduled_tasks.len(), 0, 0),
-                SectionId::NonRpmSoftware => (reference.non_rpm_software.len(), 0, 0),
-                SectionId::SELinux => (reference.selinux.len(), 0, 0),
+                SectionId::ScheduledTasks => (reference.scheduled_tasks.len(), 0, 0, 0),
+                SectionId::NonRpmSoftware => (reference.non_rpm_software.len(), 0, 0, 0),
+                SectionId::SELinux => (reference.selinux.len(), 0, 0, 0),
             };
 
             SectionEntry {
@@ -290,6 +293,7 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                 count,
                 included,
                 excluded,
+                advisory,
             }
         })
         .collect()
@@ -334,6 +338,7 @@ mod tests {
                 count: 1,
                 included: 0,
                 excluded: 0,
+                advisory: 0,
             })
             .collect();
         let collapsed = HashSet::new();
@@ -351,6 +356,7 @@ mod tests {
                 count: 10,
                 included: 3,
                 excluded: 2,
+                advisory: 0,
             })
             .collect();
         let mut collapsed = HashSet::new();
@@ -382,9 +388,8 @@ mod tests {
     /// group holding two advisories rendered `[3, 0 adv]` -- the release's
     /// headline feature reporting itself absent.
     ///
-    /// The same `SectionEntry` feeds the single-host status bar's
-    /// included/excluded pair, so the counts asserted here are what that
-    /// bar reads too.
+    /// The same `SectionEntry` feeds the single-host status bar's three
+    /// counters, so the counts asserted here are what that bar reads too.
     #[test]
     fn config_advisories_count_toward_the_group_advisory_badge() {
         use inspectah_core::snapshot::InspectionSnapshot;
@@ -421,6 +426,10 @@ mod tests {
         assert_eq!(
             configs.excluded, 0,
             "an advisory is not a file the user excluded"
+        );
+        assert_eq!(
+            configs.advisory, 2,
+            "the status bar reads its advisory count from this entry"
         );
 
         let rows = build_nav_rows(&entries, &HashSet::new());

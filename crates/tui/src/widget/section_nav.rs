@@ -171,18 +171,21 @@ mod tests {
                 count: 142,
                 included: 130,
                 excluded: 12,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::Configs,
                 count: 47,
                 included: 40,
                 excluded: 7,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::Services,
                 count: 23,
                 included: 20,
                 excluded: 3,
+                advisory: 0,
             },
         ]
     }
@@ -208,30 +211,35 @@ mod tests {
                 count: 47,
                 included: 40,
                 excluded: 7,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::Sysctls,
                 count: 8,
                 included: 5,
                 excluded: 3,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::Tuned,
                 count: 3,
                 included: 2,
                 excluded: 1,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::KernelBoot,
                 count: 10,
                 included: 0,
                 excluded: 0,
+                advisory: 0,
             },
             SectionEntry {
                 id: SectionId::SELinux,
                 count: 2,
                 included: 0,
                 excluded: 0,
+                advisory: 0,
             },
         ];
         let mut collapsed = HashSet::new();

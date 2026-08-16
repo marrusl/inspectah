@@ -282,4 +282,9 @@ pub struct SectionEntry {
     pub count: usize,
     pub included: usize,
     pub excluded: usize,
+    /// Display-only findings the user was never offered a decision on.
+    /// Carried alongside the two decision counts so the status bar can
+    /// report it directly, the same way the web stats bar does, rather
+    /// than leaving it as an unaccounted remainder of `count`.
+    pub advisory: usize,
 }

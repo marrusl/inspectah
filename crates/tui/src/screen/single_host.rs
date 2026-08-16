@@ -248,12 +248,12 @@ impl SingleHostScreen {
         }
 
         // --- Status bar ---
-        // Find current section's entry for included/excluded counts.
+        // Find current section's entry for its three bucket counts.
         let section_entry = entries.iter().find(|e| e.id == active_section_id);
 
-        let (included, excluded) = section_entry
-            .map(|e| (e.included, e.excluded))
-            .unwrap_or((0, 0));
+        let (included, excluded, advisory) = section_entry
+            .map(|e| (e.included, e.excluded, e.advisory))
+            .unwrap_or((0, 0, 0));
 
         // Count reviewed items for this section (items whose viewed key
         // starts with the section's prefix).
@@ -271,7 +271,7 @@ impl SingleHostScreen {
         };
 
         let status = StatusBarWidget::new(tier)
-            .stats(included, excluded)
+            .stats(included, excluded, advisory)
             .reviewed_progress(reviewed, total_reviewable)
             .decision_section(active_section_id.is_decision())
             .flash(state.flash.as_ref());
@@ -1460,6 +1460,111 @@ pub fn build_user_entries(session: &RefineSession) -> Vec<UserEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Render the whole screen with the given section active and return
+    /// only the status bar row.
+    ///
+    /// The row has to be isolated: the sidebar's group badge renders its
+    /// own `[1, 2 adv]` for the same data, so an assertion against the
+    /// full screen would pass with the status bar untouched.
+    fn render_status_bar_row(session: &RefineSession, active: SectionId) -> String {
+        use crate::test_helpers::buffer_to_string;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        const WIDTH: u16 = 120;
+        const HEIGHT: u16 = 24;
+
+        let mut state = TuiState::new(SECTION_ORDER.len());
+        state.active_section = SECTION_ORDER
+            .iter()
+            .position(|&id| id == active)
+            .expect("section is in SECTION_ORDER");
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("test backend never fails");
+        terminal
+            .draw(|frame| SingleHostScreen::new().render(frame, session, &state, ColorTier::Mono))
+            .expect("test backend never fails");
+
+        buffer_to_string(terminal.backend().buffer())
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// A three-item config section holding two advisories read
+    /// "1 incl · 0 excl": every number true, and two of the three items
+    /// unaccounted for. The counts reach this bar through
+    /// `build_section_entries` and the screen's own section lookup, so
+    /// this renders the real screen rather than the widget alone -- it
+    /// was that plumbing, not the widget, that dropped the bucket.
+    #[test]
+    fn the_status_bar_accounts_for_config_advisories() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::{AdvisoryType, FindingKind};
+
+        let advisory = |path: &str, advisory_type: AdvisoryType| ConfigFileEntry {
+            path: path.into(),
+            disposition: FindingKind::advisory(advisory_type, "rationale"),
+            ..Default::default()
+        };
+
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                advisory("/etc/init.d/legacy-app", AdvisoryType::Modernization),
+                advisory("/etc/alternatives/java", AdvisoryType::CrossTreeSymlink),
+                ConfigFileEntry {
+                    path: "/etc/myapp.conf".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let session = RefineSession::new(snap);
+        let status = render_status_bar_row(&session, SectionId::Configs);
+
+        assert!(
+            status.contains("1 incl") && status.contains("0 excl"),
+            "the two decision counts stay: {status:?}"
+        );
+        assert!(
+            status.contains("2 adv"),
+            "the status bar must account for the two advisories: {status:?}"
+        );
+    }
+
+    /// The omit-when-empty half, asserted against the real screen for the
+    /// same reason: a host with no advisories anywhere keeps the
+    /// two-counter bar it has always had.
+    #[test]
+    fn the_status_bar_omits_the_advisory_counter_when_the_bucket_is_empty() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp.conf".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+
+        let session = RefineSession::new(snap);
+        let status = render_status_bar_row(&session, SectionId::Configs);
+
+        assert!(status.contains("1 incl"), "the bar rendered: {status:?}");
+        assert!(
+            !status.contains("adv"),
+            "no advisory counter when the bucket is empty: {status:?}"
+        );
+    }
 
     #[test]
     fn bucket_to_group_maps_all_variants() {

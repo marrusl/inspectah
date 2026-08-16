@@ -8,6 +8,7 @@ use crate::types::FlashMessage;
 pub struct StatusBarWidget<'a> {
     included: usize,
     excluded: usize,
+    advisory: usize,
     containerfile_delta: usize,
     reviewed: usize,
     total_reviewable: usize,
@@ -21,6 +22,7 @@ impl<'a> StatusBarWidget<'a> {
         Self {
             included: 0,
             excluded: 0,
+            advisory: 0,
             containerfile_delta: 0,
             reviewed: 0,
             total_reviewable: 0,
@@ -30,9 +32,13 @@ impl<'a> StatusBarWidget<'a> {
         }
     }
 
-    pub fn stats(mut self, included: usize, excluded: usize) -> Self {
+    /// The three counts partition the active section, so they are set
+    /// together: reporting two of them leaves the third as an unaccounted
+    /// remainder the reader has to notice on their own.
+    pub fn stats(mut self, included: usize, excluded: usize, advisory: usize) -> Self {
         self.included = included;
         self.excluded = excluded;
+        self.advisory = advisory;
         self
     }
 
@@ -82,6 +88,13 @@ impl Widget for StatusBarWidget<'_> {
         if self.is_decision_section {
             parts.push(format!("{} incl", self.included));
             parts.push(format!("{} excl", self.excluded));
+            // Omitted when empty, matching the web stats bar: most hosts
+            // have no advisories and a permanent "0 adv" would be noise
+            // on all of them. Without it, a section holding advisories
+            // shows two counts that do not add up to its item count.
+            if self.advisory > 0 {
+                parts.push(format!("{} adv", self.advisory));
+            }
         }
 
         if self.containerfile_delta > 0 {
@@ -114,10 +127,18 @@ mod tests {
     use super::*;
     use crate::test_helpers::buffer_to_string;
 
+    fn render_status(included: usize, excluded: usize, advisory: usize) -> String {
+        let widget = StatusBarWidget::new(ColorTier::Mono).stats(included, excluded, advisory);
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        buffer_to_string(&buf)
+    }
+
     #[test]
     fn renders_stats_line() {
         let widget = StatusBarWidget::new(ColorTier::Mono)
-            .stats(142, 176)
+            .stats(142, 176, 0)
             .containerfile_delta(3);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -128,11 +149,37 @@ mod tests {
         assert!(output.contains("Containerfile: 3Δ"));
     }
 
+    /// A section's three buckets partition it, so the bar has to account
+    /// for all three or its arithmetic visibly fails: a three-item config
+    /// section holding two advisories read "1 incl · 0 excl" and left two
+    /// of its three items unexplained.
+    #[test]
+    fn advisories_are_counted_on_the_status_bar() {
+        let output = render_status(1, 0, 2);
+        assert!(
+            output.contains("2 adv"),
+            "the advisory count must appear: {output:?}"
+        );
+        assert!(output.contains("1 incl") && output.contains("0 excl"));
+    }
+
+    /// Matching the web stats bar's omit-when-empty rule: the
+    /// overwhelmingly common host has no advisories anywhere and keeps a
+    /// two-counter bar.
+    #[test]
+    fn a_section_without_advisories_keeps_a_two_counter_bar() {
+        let output = render_status(142, 176, 0);
+        assert!(
+            !output.contains("adv"),
+            "no advisory counter when the bucket is empty: {output:?}"
+        );
+    }
+
     #[test]
     fn flash_overrides_stats() {
         let flash = FlashMessage::new("Resumed session (5 ops)", 3);
         let widget = StatusBarWidget::new(ColorTier::Mono)
-            .stats(100, 50)
+            .stats(100, 50, 0)
             .flash(Some(&flash));
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);
