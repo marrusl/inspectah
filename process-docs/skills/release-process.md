@@ -21,6 +21,15 @@ line near the top that looks like a sync-rule candidate, but history
 shows it's bumped in a separate `docs(roadmap):` commit, not the release
 commit -- leave it alone when preparing a release commit.
 
+That separate commit does not reliably happen on its own: it was
+skipped entirely for beta.1, leaving the line two releases stale by the
+time beta.2 shipped. There's no trigger that reminds anyone to do it,
+so check it every release rather than assuming a prior cut caught it.
+The line also carries a schema number in parentheses (e.g.
+`v0.9.0-beta.2 (pure Rust, schema 22)`) -- update that against
+`SCHEMA_VERSION` in `crates/core/src/snapshot.rs` too, don't just swap
+the version string. It has drifted from the actual value before.
+
 ## CHANGELOG.md
 
 Move all entries from `## [Unreleased]` into a new dated section:
@@ -36,8 +45,25 @@ from the most recent release notes file. Key sections:
 
 - Thematic groupings of changes (not just a flat list)
 - "Also included" section if a prior tag was never released on GitHub
+- Schema version section -- state the current value even when unchanged
+  (readers of the previous release's notes will look for it). The
+  source of truth is `SCHEMA_VERSION` in `crates/core/src/snapshot.rs`,
+  not the CHANGELOG or ROADMAP, both of which have carried stale or
+  inconsistent schema numbers.
 - Binaries section listing all 3 platforms
-- Full changelog comparison link at the bottom
+- Full changelog comparison link at the bottom, of the form
+  `.../compare/<previous-tag>...<this-tag>` -- read it off the
+  `CHANGELOG.md` comparison links at the bottom of that file rather
+  than reconstructing it, since skipped/rolled versions (see Gotchas)
+  make the previous tag not always "the last released version."
+
+**This is a separate commit from the release commit, written after Mark
+has already tagged.** `gh release create` needs the file at tag time,
+but the version-bump commit that gets tagged does not include it --
+both the beta.1 and beta.2 cuts wrote it as a standalone follow-up
+commit, `docs(release): write v<version> release notes`, landing after
+the release commit (and after any skill-fix commits on top of it).
+Do not fold it into the release commit or block the tag on it.
 
 ## Build targets
 
