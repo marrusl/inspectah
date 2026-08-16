@@ -114,8 +114,15 @@ fn has_runtime(rpm_names: &[String], runtime: &str) -> bool {
 }
 
 /// Format a pinned package list: `pkg1==ver1 pkg2==ver2`.
+///
+/// The result only ever lands in commented-out `RUN` lines, so it is
+/// sanitized for a comment context rather than rejected: a newline in a
+/// package name would otherwise close the comment and turn the rest of
+/// the name into an active instruction. pip names come from `.dist-info`
+/// directory names, which an app-owned venv's service account can write.
 fn pinned_package_list(item: &NonRpmItem) -> String {
-    item.packages
+    let joined = item
+        .packages
         .iter()
         .map(|p| {
             if p.version.is_empty() {
@@ -125,7 +132,8 @@ fn pinned_package_list(item: &NonRpmItem) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    sanitize_for_comment(&joined)
 }
 
 /// Characters that make a token unsafe to interpolate into a rendered
@@ -395,7 +403,10 @@ fn render_npm_global_section(items: &[&NonRpmItem], rpm_names: &[String]) -> Vec
 
 fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
     let mut lines = Vec::new();
-    let prefix = absolute_path(&item.path);
+    // The prefix is never part of a command, only of the comment that
+    // labels the section — so it is sanitized rather than rejected. Left
+    // raw, a newline in it closes the comment and emits an active `RUN`.
+    let prefix = sanitize_for_comment(&absolute_path(&item.path));
 
     let effective_confidence = if !item.disposition.is_included() {
         MEDIUM_CONFIDENCE
@@ -1706,5 +1717,104 @@ mod tests {
             !output_no_rpm.contains("WARNING: nodejs not found"),
             "must NOT warn when no RPM data: {output_no_rpm}"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Comment-escape tests
+    //
+    // Values that only ever land in comments still reach the build if they
+    // carry a newline: the newline closes the comment and the remainder
+    // becomes an active instruction. These tests assert on the rendered
+    // output, because the output is the contract.
+    // ---------------------------------------------------------------------------
+
+    /// The instructions a build would actually execute: everything that is
+    /// neither a comment nor a blank separator.
+    fn active_lines(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .collect()
+    }
+
+    /// The npm-global prefix is interpolated into a comment line and was
+    /// guarded by nothing at all — not the path predicate the other
+    /// renderers apply, not the token guard applied to the package list
+    /// beside it. A newline in it emits an arbitrary active `RUN`.
+    #[test]
+    fn npm_global_prefix_newline_cannot_emit_an_active_instruction() {
+        const INJECTED: &str = "RUN echo pwned-via-prefix";
+        for confidence in [HIGH_CONFIDENCE, MEDIUM_CONFIDENCE] {
+            let snap = test_snap(
+                vec![npm_global_item(
+                    &format!("/usr/local/lib/node_modules\n{INJECTED}"),
+                    confidence,
+                    vec![("pm2", "5.3.0", false)],
+                )],
+                &["nodejs"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+
+            for line in active_lines(&output) {
+                assert!(
+                    line.starts_with("RUN npm install -g "),
+                    "{confidence}: the npm install is the only instruction this \
+                     renderer may emit, got {line:?}: {output}"
+                );
+            }
+            assert!(
+                output.contains(&format!(r"\n{INJECTED}")),
+                "{confidence}: the newline must be escaped into the comment: {output}"
+            );
+        }
+    }
+
+    /// `pinned_package_list` joins raw package names into commented-out
+    /// `RUN` lines. pip package names come from `.dist-info` directory
+    /// names, and app-owned venvs under `/opt` are routinely writable by a
+    /// non-root service account, so the value is attacker-influenced.
+    #[test]
+    fn pinned_package_newline_cannot_emit_an_active_instruction() {
+        const INJECTED: &str = "RUN echo pwned-via-package-name";
+        let evil_name = format!("flask\n{INJECTED}");
+
+        // The system-level branch (`# RUN pip install ...`) and the
+        // medium-confidence venv branch (`#     && .../bin/pip install ...`)
+        // share the helper, so both sites need covering.
+        let system_pip = NonRpmItem {
+            path: "/usr/lib/python3.9/site-packages".into(),
+            name: "system-pip".into(),
+            method: METHOD_PIP_DIST_INFO.into(),
+            confidence: MEDIUM_CONFIDENCE.into(),
+            disposition: FindingKind::excluded(),
+            packages: vec![LanguagePackage {
+                name: evil_name.clone(),
+                version: "2.3.3".into(),
+                pinned: false,
+            }],
+            rpm_filtered: true,
+            ..Default::default()
+        };
+        let venv = pip_venv_item(
+            "/opt/app/venv",
+            MEDIUM_CONFIDENCE,
+            false,
+            vec![(&evil_name, "2.3.3")],
+        );
+
+        for item in [system_pip, venv] {
+            let method = item.method.clone();
+            let snap = test_snap(vec![item], &["python3"]);
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                active_lines(&output).is_empty(),
+                "{method}: a commented-out block must emit no active instruction: {output}"
+            );
+            assert!(
+                output.contains(&format!(r"\n{INJECTED}")),
+                "{method}: the newline must be escaped into the comment: {output}"
+            );
+        }
     }
 }
