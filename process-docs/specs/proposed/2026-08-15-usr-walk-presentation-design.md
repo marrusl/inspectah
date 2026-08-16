@@ -1,6 +1,6 @@
 # Unmanaged /usr Presentation Design
 
-**Status:** Proposed (design note; implementation targets v0.9.0-beta.3)
+**Status:** Proposed (design note; implementation targets v0.9.0-beta.4)
 **Date:** 2026-08-15
 
 ## Problem
@@ -51,7 +51,7 @@ here:
    percent prevalence auto-includes, partial prevalence lands in review
    zones. No bespoke disposition model.
 4. **Export behavior matches every other Actionable family.** No
-   /usr-specific gating; beta.3 needs none.
+   /usr-specific gating; beta.4 needs none.
 
 ## Design tenets
 
@@ -159,7 +159,7 @@ surface, so it uses the grid idiom rather than the list/checkbox idiom of
 6. **Include/exclude toggle** (§ 3), the standard Actionable-finding
    control.
 
-No expand affordance in beta.3: entries carry no child path list, so
+No expand affordance in beta.4: entries carry no child path list, so
 there is nothing to drill into. A representative child sample is a future
 improvement (§ 7).
 
@@ -167,7 +167,7 @@ improvement (§ 7).
 
 Default sort: total size descending, then path ascending. The largest
 vendoring debt surfaces first; ties read alphabetically. No sort controls
-in beta.3.
+in beta.4.
 
 ### Keyboard interaction
 
@@ -244,12 +244,12 @@ elsewhere in refine.
 
 The audit report gains an Unmanaged /usr section: counts included and
 excluded, and the included-bytes total. Export readiness follows the
-same behavior as every other Actionable finding family; beta.3 needs no
+same behavior as every other Actionable finding family; beta.4 needs no
 /usr-specific export gate.
 
 ## 5. Aggregate treatment
 
-### What beta.3 minimally needs
+### What beta.4 minimally needs
 
 Aggregate merge currently discards `usr_entries`
 (`crates/core/src/aggregate/merge.rs:1819-1824`), so aggregate and
@@ -258,7 +258,7 @@ factor see nothing. Verified. Beta.3 minimum:
 - **Union by path with prevalence.** Merge entries across hosts keyed by
   path, attaching the same `AggregatePrevalence` (count, total, hosts)
   the other merged families carry. Path is the stable identity for
-  beta.3.
+  beta.4.
 - **Representative counts and sizes.** Per-host `file_count` and
   `total_size_bytes` can differ for the same path. Carry the maximum and
   a varies flag; render as "up to 214 files, up to 38 MB" when hosts
@@ -301,7 +301,7 @@ Flagged only; the implementation plan owns the type design.
 
 ## 7. Must have vs future improvement
 
-### Must have (beta.3)
+### Must have (beta.4)
 
 - Aggregate merge preserves `usr_entries` with path prevalence.
 - Schema bump for the entry-kind field.
@@ -313,7 +313,7 @@ Flagged only; the implementation plan owns the type design.
   included-bytes total in the section header and preview.
 - Audit report counts (included and excluded) and included-bytes total.
 
-### Future improvement (explicitly not beta.3)
+### Future improvement (explicitly not beta.4)
 
 - **Subtree digests** and change tracking for collapsed directories;
   variant detection across hosts.

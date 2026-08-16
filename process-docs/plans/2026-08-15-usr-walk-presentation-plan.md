@@ -10,7 +10,7 @@
 
 **Spec:** `process-docs/specs/proposed/2026-08-15-usr-walk-presentation-design.md`. That design note is authoritative. Where this plan and the note disagree, the note wins and the plan is the bug.
 
-**Target release:** v0.9.0-beta.3.
+**Target release:** v0.9.0-beta.4.
 
 ## Global Constraints
 
@@ -27,7 +27,7 @@
 - **Not-scanned copy (verbatim):** `This snapshot was collected without --include-unmanaged, so /usr was not checked. Re-scan with --include-unmanaged to check it.`
 - **Voice rules for all user-visible strings:** no em dashes; do not use the word "immutable" (say "image-based" or "read-only"); do not use "shape" as a noun.
 - **Product tenet:** migration assistance, not a best-practices suite. No hygiene-enforcing states, taxonomies, gates, or scoring anywhere in this feature. /usr entries are ordinary Actionable findings with the ordinary toggle.
-- **Default sort everywhere:** `total_size_bytes` descending, then `path` ascending. No sort controls in beta.3.
+- **Default sort everywhere:** `total_size_bytes` descending, then `path` ascending. No sort controls in beta.4.
 - **Mode-divergence rule:** every behavior added here is checked in both `RefineMode::SingleHost` and `RefineMode::Aggregate` (see `process-docs/skills/aggregate-vs-single-host-behavioral-split.md`).
 
 ## Verification Findings (resolved before planning)
@@ -50,7 +50,7 @@ Current state (`crates/core/src/snapshot.rs:21,103`): `SCHEMA_VERSION = 22`, `MI
 
 Why a bump is required: `UnmanagedUsrEntry` gains a `kind: UsrEntryKind` field whose entire purpose is to record something that cannot be derived from existing data. Today single-file versus collapsed-directory is only inferable from `file_type != Other`, which misclassifies any single file that lands on `FileType::Other`. A `#[serde(default)]` on the new field would therefore silently mislabel rows in every pre-existing snapshot: a collapsed directory defaulting to `File` renders as "File, 214 files," which is nonsense the user cannot detect. Adding aggregate prevalence fields to the same struct compounds it.
 
-Release packaging consequence, and the reason this decision belongs in the plan rather than in implementation: setting `MIN_SCHEMA = 23` means every snapshot and every aggregate on disk stops loading with a clean `UnsupportedVersion` error and must be re-scanned. Aggregate re-aggregation additionally requires re-scanning all constituent hosts. This must appear in the v0.9.0-beta.3 release notes.
+Release packaging consequence, and the reason this decision belongs in the plan rather than in implementation: setting `MIN_SCHEMA = 23` means every snapshot and every aggregate on disk stops loading with a clean `UnsupportedVersion` error and must be re-scanned. Aggregate re-aggregation additionally requires re-scanning all constituent hosts. This must appear in the v0.9.0-beta.4 release notes.
 
 **Alternative considered and rejected:** keep `MIN_SCHEMA = 22` and put `#[serde(default)]` on `kind`. This preserves loadability for v22 snapshots at the cost of silently wrong kind badges on exactly the snapshots the window exists to serve. The repo convention is already "no old tarball compatibility, re-scan instead" (`feedback_no_old_tarball_compat`), so the window buys nothing here.
 
@@ -357,7 +357,7 @@ Assisted-by: Claude Code (Opus 5)"
 - Produces: `fn merge_usr_entries(sections: &[Option<UnmanagedFileSection>], total_hosts: usize, hostnames: &[String]) -> Vec<UnmanagedUsrEntry>`, private to the module, called from `merge_unmanaged_file_sections`.
 
 **Design constraints from the spec (do not vary):**
-- Union keyed by `path`. Path is the stable identity for beta.3.
+- Union keyed by `path`. Path is the stable identity for beta.4.
 - `AggregatePrevalence { count, total, hosts }` attached exactly as other merged families carry it. `total` is `total_hosts`.
 - `file_count` and `total_size_bytes` carry the **maximum** across contributing hosts. `counts_vary` / `sizes_vary` are true when contributing hosts disagreed.
 - `file_type` and `kind`: take the value from the first contributing host in sorted host order. Deterministic, and the two only disagree in pathological cases.
@@ -934,7 +934,7 @@ The `starts_with('/')` guard is load-bearing: a bare `starts_with(p)` would extr
 
 - [ ] **Step 7: Fix the other exhaustive matches**
 
-The compiler will flag `crates/refine/src/aggregate/variant_ops.rs:48,210,282` and `crates/tui/src/app.rs:76`. For `variant_ops.rs:48` (`identity path extraction`) return `Some(path.as_str())`. For 210 and 282 (variant lookup and application), /usr entries have no content variants, so join whatever arm returns "no variants" for hash-free item kinds. For `crates/tui/src/app.rs:76` return `path.clone()`, matching the `UnmanagedFile` arm directly above it. The TUI does not render the section in beta.3 (design note section 7 defers TUI parity), so this arm exists only to keep the match exhaustive.
+The compiler will flag `crates/refine/src/aggregate/variant_ops.rs:48,210,282` and `crates/tui/src/app.rs:76`. For `variant_ops.rs:48` (`identity path extraction`) return `Some(path.as_str())`. For 210 and 282 (variant lookup and application), /usr entries have no content variants, so join whatever arm returns "no variants" for hash-free item kinds. For `crates/tui/src/app.rs:76` return `path.clone()`, matching the `UnmanagedFile` arm directly above it. The TUI does not render the section in beta.4 (design note section 7 defers TUI parity), so this arm exists only to keep the match exhaustive.
 
 - [ ] **Step 8: Run tests, lint, format**
 
@@ -3259,7 +3259,7 @@ version range, and the range has been exactly one version wide at some
 points and two at others:
 
 ```rust
-const MIN_SCHEMA: u32 = 23; // equal to SCHEMA_VERSION as of v0.9.0-beta.3
+const MIN_SCHEMA: u32 = 23; // equal to SCHEMA_VERSION as of v0.9.0-beta.4
 
 if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
     return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
@@ -3268,7 +3268,7 @@ if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSIO
 
 **Read both constants before assuming the window.** As of v0.9.0-beta.2
 `MIN_SCHEMA` was 21 against a `SCHEMA_VERSION` of 22, so two versions
-loaded. v0.9.0-beta.3 closed it back to one, because the /usr entry-kind
+loaded. v0.9.0-beta.4 closed it back to one, because the /usr entry-kind
 field cannot be derived from an older snapshot and any serde default
 would silently mislabel rows. Widen the window only when every field
 added since `MIN_SCHEMA` has a default that is correct rather than merely
@@ -3307,7 +3307,7 @@ No open choices remain. /usr content sourcing (Task 5) was the one decision reco
 
 The schema window was never an open choice. `SCHEMA_VERSION = 23` / `MIN_SCHEMA = 23` is settled; see § Schema Version Decision.
 
-## Out of Scope for beta.3
+## Out of Scope for beta.4
 
 Named here so nobody adds them mid-task. All are from the design note's future-improvement list.
 
