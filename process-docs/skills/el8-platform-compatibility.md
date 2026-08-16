@@ -4,13 +4,9 @@ inspectah is designed to work on both EL8 and EL9+ systems. This document captur
 
 ## RPM Database Format
 
-**`rpm -qa --dump`** field layout is stable across EL8 and EL9. The format has been consistent since early RPM versions:
+`rpm` query output is stable across EL8 and EL9 and requires no version-specific guards. `rpm_ownership.rs` reads owned paths with `--qf '[%{FILENAMES}\n]'`, which works identically on both.
 
-```
-/path/to/file SIZE HASH MODE OWNER GROUP MTIME CONFIG_FLAG DEVICE_FLAGS FLAGS
-```
-
-Current parsing (`rpm_ownership.rs`) extracts the first whitespace-delimited field (the path) via `line.split_whitespace().next()`. This is EL8-safe and requires no version-specific guards.
+It previously parsed `rpm -qa --dump` positionally, and that was a correctness bug on every platform, not a compatibility one — see [rpm-output-field-parsing](rpm-output-field-parsing.md). Do not reintroduce whitespace-splitting of rpm output here on the grounds that the field layout is stable. The layout is stable; the paths are not delimiter-free.
 
 ## systemd Features
 

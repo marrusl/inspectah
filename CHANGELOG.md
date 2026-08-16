@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Stock files with a space in their path were reported as unmanaged `/usr` content** — the set of RPM-owned paths was built by taking the first whitespace-delimited field of each line, so any owned path containing a space was cut at that space and never entered the set. The `/usr` walk then found the real path unowned and listed it as an actionable finding. Packages ship such paths routinely: firmware blobs named after the hardware they drive are the common case. On one RHEL 10 host this accounted for 33 of the 62 reported `/usr` entries, every one of them a stock file the user had nothing to do with. Ownership is now read one path per line, which is also what the `/var` directory backing analysis depends on.
+
 ## [0.9.0-beta.2] - 2026-08-16
 
 ### Fixed
