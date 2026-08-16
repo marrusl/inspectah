@@ -80,8 +80,28 @@ cargo zigbuild --target x86_64-unknown-linux-musl --release -p inspectah-cli
 cargo zigbuild --target aarch64-unknown-linux-musl --release -p inspectah-cli
 ```
 
-Requires `cargo-zigbuild` (`cargo install cargo-zigbuild` if missing).
-Builds take 30-60 seconds each.
+Requires `cargo-zigbuild` (`cargo install cargo-zigbuild` if missing),
+`zig` on `PATH`, and both musl targets added via `rustup target add
+x86_64-unknown-linux-musl aarch64-unknown-linux-musl`. Verify all four
+before starting rather than discovering a gap mid-build.
+
+**Never set `INSPECTAH_SKIP_UI=1` for these builds.** That escape hatch
+exists only for the release *commit*, whose pre-commit hook touches no
+frontend source. A release binary must embed the built frontend, so
+`crates/web/build.rs` has to run `npm ci` and `npm run build` for real.
+A binary built with the variable set ships without a UI and the failure
+is invisible until someone runs `refine`.
+
+**`npm ci` needs network and will hang under the default command
+sandbox.** Run the cargo builds with the sandbox disabled. A build that
+appears to hang with no output is this, not a slow compile -- do not
+wait it out. Note `npm ci` deletes and reinstalls `node_modules`, and
+it runs once per target triple, so a three-target release pays that
+cost three times.
+
+Timings: a cold build (after `cargo clean`) measured 73s / 67s / 69s
+per target, 209s total, on an M-series Mac. The earlier "30-60 seconds
+each" figure was a warm-build number; budget roughly double for cold.
 
 ## Binary naming and staging
 
@@ -95,6 +115,52 @@ Copy binaries from build output to release names in the repo root:
 
 The `-bin` suffix on ARM64 Linux distinguishes it from the macOS ARM64
 binary (both are `aarch64` but different platforms).
+
+Verify the staged files rather than trusting build exit codes -- the
+release names persist between releases, so a copy that silently didn't
+happen leaves the *previous* release's binaries sitting under the right
+names, ready to be uploaded under the new tag:
+
+```bash
+file inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin
+./inspectah-darwin-arm64 version
+shasum -a 256 inspectah-* | tee /dev/stderr
+```
+
+Both Linux binaries must report `statically linked`. Confirm the version
+string is the version being released, not the previous one.
+
+### The embedded commit hash is never the tag commit
+
+`crates/cli/build.rs` stamps the binary with `git rev-parse --short HEAD`
+at compile time, and `inspectah version` prints it:
+
+```
+inspectah 0.9.0-beta.2 (commit c52b02bd, built 2026-08-16)
+```
+
+Because release notes are written as a *separate commit after* tagging
+(see "Release notes" above), HEAD is always ahead of the tag by the time
+the binaries get built. This is structural, not a mistake, and it has
+happened on every recent release:
+
+| Release | Tag commit | Binary stamp | Delta |
+|---|---|---|---|
+| v0.9.0-beta.1 | `ed39bbd6` | `d4857478` | 2 docs commits above tag |
+| v0.9.0-beta.2 | `dfc32f4f` | `c52b02bd` | 4 docs commits above tag |
+
+Acceptable only while those intervening commits are docs-only. **Confirm
+that before building** -- if this returns anything, the binaries would
+ship code that is not in the tag:
+
+```bash
+git diff --stat <tag>..HEAD -- crates/ Cargo.toml Cargo.lock
+```
+
+**Also confirm all three binaries carry the same stamp.** Agents commit
+docs concurrently, so HEAD can move *between* targets and give the three
+binaries different hashes. Compare the `version` line across all three,
+not just the native one.
 
 ## Pre-commit checks
 
@@ -158,12 +224,26 @@ Use `--prerelease` for any beta/alpha/rc tag. Omit for stable releases.
 
 ## Homebrew formula
 
-After the GitHub release exists, update
-`homebrew-inspectah/Formula/inspectah.rb`:
+Update `homebrew-inspectah/Formula/inspectah.rb`:
 
 - Version string
 - Download URL (points to the new GH release asset)
 - SHA256: `shasum -a 256 inspectah-darwin-arm64`
+
+The formula can be *committed* before the GitHub release exists, but
+**must not be pushed until after it does** -- the `url` points at an
+asset that 404s until `gh release create` runs, and a pushed tap in that
+state is broken for every user who taps it.
+
+The tap lives outside the agent sandbox's write allowlist (unlike
+inspectah/driftify/osfragment-assemble), so `git` operations there fail
+with `Unable to create '.git/index.lock': Operation not permitted`.
+Run them with the sandbox disabled.
+
+The formula's `test` block asserts `version.to_s` appears in
+`inspectah version` output. That holds as long as the version string in
+the formula exactly matches `CARGO_PKG_VERSION` -- note the formula uses
+the hyphenated form (`0.9.0-beta.2`), not the RPM tilde form.
 
 ## Gotchas
 
