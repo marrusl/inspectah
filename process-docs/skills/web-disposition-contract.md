@@ -141,6 +141,41 @@ it (the write is gated on `is_included()`), so the file itself is never
 copied into the image. Saying only "excluded" or only "not exported"
 gets one of those halves wrong.
 
+**The TUI consumes it twice, and both go through `SectionEntry`**
+(`crates/tui/src/types.rs`), which carries all three counts:
+
+- The nav group badge (`sections.rs`) derives advisories as
+  `total - (included + excluded)` summed across the group's sections.
+  Being a remainder, it is only correct while the two decision buckets
+  count actionable findings alone, and it also absorbs reference-only
+  sections, whose counts are entirely remainder.
+- The single-host status bar (`screen/single_host.rs` →
+  `widget/status_bar.rs`) reads `SectionEntry.advisory` directly and
+  renders `N adv`, omitted when zero — the same rule `StatsBar.tsx`
+  follows. Correcting the bucket without adding this counter left the
+  bar showing two of three counts, so a three-item section read
+  "1 incl / 0 excl".
+
+So there are four surfaces reporting the same count: the HTML report's
+group badge, the two above, and `StatsBar.tsx`. Change the bucket and
+check all four.
+
+**Testing the status bar means isolating its row.** The sidebar renders
+its own `[1, 2 adv]` badge for the same data, so `contains("2 adv")`
+over a full-screen render passes with the status bar untouched. Render
+via `TestBackend` and assert on the last buffer line only.
+
+**One ordering caveat, pre-existing.** `build_web_view` calls
+`restore_config_advisories` *after* `session.view()` has already computed
+`view.stats` from the unrestored projection, and the TUI reads those same
+stats while taking its rows from `config_advisories(snapshot())`. For the
+one case that restore exists for — a legacy autosave replaying a
+`SetInclude` against an advisory path — the three stats-driven surfaces
+would undercount while the rows still render as advisories, and the HTML
+badge (which counts off the original snapshot) would disagree with them.
+Current code refuses such a toggle, so this is reachable only through an
+old sidecar.
+
 ## Regression Test Shape
 
 The disposition path fails silently, so a test that builds structs in
