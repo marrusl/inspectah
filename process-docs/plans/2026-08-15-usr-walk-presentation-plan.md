@@ -1067,20 +1067,26 @@ Assisted-by: Claude Code (Opus 5)"
 **Lane:** Tang (cli)
 
 **Files:**
-- Modify: `crates/cli/src/commands/scan.rs:738-760` (the bundling prompt), `crates/cli/src/commands/scan.rs:826-832` (the bundle call), `crates/cli/src/commands/scan.rs:1099-1141` (`bundle_unmanaged_files`)
+- Modify: `crates/cli/src/commands/scan.rs:117-171` (`ScanArgs`: new `no_bundle_usr` flag), `crates/cli/src/commands/scan.rs:741-767` (the bundling prompt), `crates/cli/src/commands/scan.rs:826-832` (the bundle call), `crates/cli/src/commands/scan.rs:1099-1141` (`bundle_unmanaged_files`), `crates/cli/src/commands/scan.rs:1242-1256` (`base_args()` test helper)
 - Test: `crates/cli/src/commands/scan.rs` (inline `mod tests`)
 
 **Interfaces:**
 - Consumes: `UnmanagedFileSection.usr_entries`, `UnmanagedFileSection.usr_bundled`, `UsrEntryKind` (Task 1).
 - Produces: `fn bundle_usr_entries(entries: &[UnmanagedUsrEntry], render_dir: &Path) -> Result<u64>` returning the bytes actually copied. Sets `usr_bundled` on the section.
+- Produces: `ScanArgs.no_bundle_usr: bool` (`--no-bundle-usr`), the programmatic decline for the /usr bundling question only. See "Programmatic override" below.
+- Produces: `fn resolve_usr_bundle(no_bundle_usr: bool, assume_yes: bool) -> Option<bool>`, the pure decision the prompt block consults before it ever touches stdin.
 
-**Implementation choice: how /usr content reaches the build context.**
+**Decided (Mark, 2026-08-16): /usr content sourcing.** /usr content participates in scan-time Tier 2 bundling, shown as its own separate line in the existing size prompt (e.g. `unmanaged /usr: N files, X MB` alongside the existing unmanaged-files line), separately declinable from the other unmanaged content. Declining keeps the findings and falls back to the per-path `MISSING FROM BUILD CONTEXT` warning behavior already specified for the Containerfile export (Task 6) and the audit report (Task 7). The /usr bundling answer must also be overridable for programmatic (non-interactive) use, not only via the interactive prompt.
 
-This is the one genuinely open decision in the plan. Three options were considered.
+**Programmatic override.** Today `-y`/`--yes` is a blanket yes: it suppresses every scan prompt, including the new /usr line, and there is no existing way to force a decline short of typing `n` at an interactive prompt. That is asymmetric, and Mark's requirement needs both directions covered for /usr specifically. `-y`/`--yes` continues to cover the accept direction, unchanged. For the decline direction, add `--no-bundle-usr` (field `no_bundle_usr: bool` on `ScanArgs`, plain `#[arg(long)]`, no short form), extending the repo's existing negative-boolean-flag convention: `no_redaction` (`crates/cli/src/commands/scan.rs:134-136`) is the precedent, a `no_`-prefixed flag that turns off a default-on behavior. This name is coined at binding time and is implementation-adjustable if a better one turns up during Task 5 execution. `--no-bundle-usr` takes precedence over `-y`/`--yes` for the /usr decision: if both are passed, /usr does not bundle. Neither flag touches the Tier 2 prompt's own decision.
 
-- **Option A: bundle unconditionally, like Tier 2.** Copy every included /usr entry's subtree into `render_dir/unmanaged/usr/...`. Pro: the exported Containerfile builds as-is, matching every other Actionable family, and the refine export filter from Task 3 already handles it. Con: /usr entries default to included, so every `--include-unmanaged` scan tarball grows by the host's entire unmanaged-/usr footprint with no warning. On a host with a vendored runtime that is multiple gigabytes.
-- **Option B: never bundle; emit path-only COPY lines with warnings.** Pro: no tarball growth. Con: the exported Containerfile does not build. That breaks the contract every other family holds, and the design note's tenet is that export proceeds on whatever the toggle states.
-- **Option C (recommended, and what this task implements): bundle, but give /usr its own line in the existing size prompt.** The scan already prompts "Include in tarball? [Y/n]" for Tier 2 content. Extend it to report /usr bytes separately and accept a separate answer. Declining sets `usr_bundled = false` and the export falls back to Option B's per-path warning comments for /usr only. Pro: keeps the runnable-export contract by default, keeps the operator in control of tarball size, and reuses both mechanisms rather than inventing a third. Con: one new prompt branch and one new boolean.
+**Non-interactive default (no flag, no TTY, no `-y`).** Matches the existing Tier 2 behavior exactly: `prompt_yes_default` reads a closed or empty stdin as yes, so /usr bundles by default when nothing overrides it. This is the existing default carried forward onto the new /usr line, not a new default being introduced.
+
+**Trigger is `usr_entries`, not `items`.** The current gate at `crates/cli/src/commands/scan.rs:741-767` only reaches the prompt block when `!unmanaged.items.is_empty()`, i.e. when Tier 2 findings exist; a host whose only unmanaged content is under /usr would get no prompt at all under that gate alone. Step 4's block below keeps the two questions on independent conditions: the Tier 2 question stays gated on `!unmanaged.items.is_empty()`, the /usr question is gated separately on `usr_included_bytes > 0`. A /usr-only host must still be asked. This independence is load-bearing, not incidental.
+
+**Rejected alternatives:**
+- **Bundle unconditionally, like Tier 2, no prompt.** Simplest, and the refine export filter from Task 3 already handles the subtree. Rejected because /usr entries default to included, so every `--include-unmanaged` scan would silently grow the tarball by the host's entire unmanaged-/usr footprint, sometimes multiple gigabytes, with no warning and no chance to decline before the fact.
+- **Never bundle; path-only COPY lines with warnings.** Rejected because the exported Containerfile would never build for /usr content, breaking the contract every other Actionable family holds and the design note's own tenet that export proceeds on whatever the toggle states.
 
 **Bug this task must also fix:** the current prompt sets `snapshot.unmanaged_files = None` when the operator declines. That clears the whole section, so declining Tier 2 bundling would erase the /usr *findings* along with the Tier 2 bytes. Detection and bundling are different questions. The decline path must clear `items` and reset `total_size`/`total_count`, not null the section.
 
@@ -1181,13 +1187,42 @@ fn bundle_usr_entries_skips_excluded_entries() {
     assert_eq!(copied, 0);
     assert!(!render.path().join("unmanaged").exists());
 }
+
+#[test]
+fn no_bundle_usr_flag_declines_without_a_prompt() {
+    // The programmatic decline direction. Must not depend on stdin at all.
+    assert_eq!(resolve_usr_bundle(true, false), Some(false));
+}
+
+#[test]
+fn no_bundle_usr_flag_overrides_assume_yes() {
+    // Both directions of programmatic control exist for /usr specifically;
+    // an explicit decline is more specific than a blanket -y and wins.
+    assert_eq!(resolve_usr_bundle(true, true), Some(false));
+}
+
+#[test]
+fn assume_yes_bundles_usr_without_a_prompt() {
+    // The programmatic accept direction; unchanged from -y's existing
+    // blanket-yes behavior, confirmed here to also cover /usr.
+    assert_eq!(resolve_usr_bundle(false, true), Some(true));
+}
+
+#[test]
+fn neither_flag_defers_to_the_interactive_prompt() {
+    // With no override, resolve_usr_bundle hands the decision to
+    // prompt_yes_default, which reads a closed or empty stdin as yes --
+    // the same non-interactive default Tier 2 bundling already has. No
+    // new default is being introduced for /usr.
+    assert_eq!(resolve_usr_bundle(false, false), None);
+}
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH" cargo test -p inspectah-cli usr`
 
-Expected: FAIL to compile with "cannot find function `bundle_usr_entries`" and "cannot find function `decline_tier2_bundling`".
+Expected: FAIL to compile with "cannot find function `bundle_usr_entries`", "cannot find function `decline_tier2_bundling`", and "cannot find function `resolve_usr_bundle`".
 
 - [ ] **Step 3: Implement the two functions**
 
@@ -1284,9 +1319,22 @@ fn copy_subtree(src: &Path, dest: &Path) -> Result<u64> {
 
 Add `use inspectah_core::types::nonrpm::{UnmanagedUsrEntry, UsrEntryKind};` to the imports if absent.
 
-- [ ] **Step 4: Rework the prompt**
+- [ ] **Step 4: Add the override flag and rework the prompt**
 
-Replace the prompt block at `crates/cli/src/commands/scan.rs:738-760`. The current block is gated on `!unmanaged.items.is_empty()` and nulls the section on decline. The new block asks up to two questions and never nulls:
+First, add the flag to `ScanArgs` in `crates/cli/src/commands/scan.rs`, immediately after `include_unmanaged` (line 157), following the `no_redaction` precedent at lines 134-136 -- a plain `#[arg(long)]` negative boolean, no short form:
+
+```rust
+    /// Skip bundling included /usr content into the tarball even though
+    /// it would otherwise be included. Overrides -y/--yes for this
+    /// decision only; the export falls back to a per-path
+    /// MISSING FROM BUILD CONTEXT warning for declined /usr content.
+    #[arg(long)]
+    pub no_bundle_usr: bool,
+```
+
+Add `no_bundle_usr: false` to the `base_args()` test helper at `crates/cli/src/commands/scan.rs:1242-1256`. Every other `ScanArgs` test literal in this file is built with `..base_args()`, so that helper is the only construction site the compiler will flag.
+
+Then replace the prompt block at `crates/cli/src/commands/scan.rs:741-767`. The current block is gated on `!unmanaged.items.is_empty()` and nulls the section on decline. The new block asks up to two questions and never nulls:
 
 ```rust
     // Prompt for payload bundling if --include-unmanaged was used.
@@ -1315,17 +1363,18 @@ Replace the prompt block at `crates/cli/src/commands/scan.rs:738-760`. The curre
             .map(|e| e.total_size_bytes)
             .sum();
         if usr_included_bytes > 0 {
-            unmanaged.usr_bundled = if assume_yes {
-                true
-            } else {
-                eprintln!(
-                    "Found {} unmanaged /usr entries ({} total). /usr ships from \
-                     the image and is read-only at runtime, so this content will \
-                     not survive a rebuild unless it travels with the image.",
-                    unmanaged.usr_entries.len(),
-                    format_size(usr_included_bytes),
-                );
-                prompt_yes_default("Include /usr content in tarball?")
+            unmanaged.usr_bundled = match resolve_usr_bundle(args.no_bundle_usr, assume_yes) {
+                Some(decision) => decision,
+                None => {
+                    eprintln!(
+                        "Found {} unmanaged /usr entries ({} total). /usr ships from \
+                         the image and is read-only at runtime, so this content will \
+                         not survive a rebuild unless it travels with the image.",
+                        unmanaged.usr_entries.len(),
+                        format_size(usr_included_bytes),
+                    );
+                    prompt_yes_default("Include /usr content in tarball?")
+                }
             };
         }
     }
@@ -1347,6 +1396,28 @@ fn prompt_yes_default(question: &str) -> bool {
     input != "n" && input != "no"
 }
 ```
+
+Add `resolve_usr_bundle` beside it. This is the programmatic-override binding: it is a pure function so the flag/no-flag/`-y` matrix is testable without touching stdin, and `None` is the single fall-through case that reaches the interactive prompt:
+
+```rust
+/// Decide the /usr bundling answer without any I/O. `--no-bundle-usr` is
+/// the programmatic decline and takes precedence over `-y`/`--yes`;
+/// `-y`/`--yes` alone is the programmatic accept. `None` means neither
+/// flag applies and the interactive prompt must decide -- at which point
+/// `prompt_yes_default`'s existing closed-stdin-is-yes default applies,
+/// unchanged from Tier 2.
+fn resolve_usr_bundle(no_bundle_usr: bool, assume_yes: bool) -> Option<bool> {
+    if no_bundle_usr {
+        Some(false)
+    } else if assume_yes {
+        Some(true)
+    } else {
+        None
+    }
+}
+```
+
+**Acceptance criteria (programmatic override), each covered by a Step 1 test:** `--no-bundle-usr` yields `usr_bundled = false` with no stdin read, including when `-y`/`--yes` is also passed. `-y`/`--yes` without `--no-bundle-usr` yields `usr_bundled = true` with no stdin read. With neither flag, the decision falls through to the interactive prompt, which reads a closed or empty stdin as yes -- the same non-interactive default Tier 2 bundling already has today; no new default is introduced for /usr.
 
 - [ ] **Step 5: Call the bundler**
 
@@ -1381,6 +1452,13 @@ the walk cannot reach outside /usr.
 /usr gets its own prompt because the footprint can dwarf Tier 2 and the
 operator should see it before the tarball does. Declining sets
 usr_bundled = false and the export says so per path.
+
+--no-bundle-usr adds a programmatic decline for /usr specifically: -y
+already covered the accept direction, but there was no way to script a
+decline short of typing n at the interactive prompt. Neither flag
+changes the non-interactive default -- with neither set, the /usr
+question falls through to the same stdin read Tier 2 already has, so a
+closed or empty stdin still bundles.
 
 Declining Tier 2 bundling used to null the whole unmanaged section,
 which would have thrown away the /usr findings along with the /opt
@@ -3224,11 +3302,9 @@ Assisted-by: Claude Code (Opus 5)"
 
 ## Open Choices Requiring Mark's Decision
 
-One decision is recorded with a recommendation rather than settled. It is safe to execute as recommended; flag it if the answer should be different.
+No open choices remain. /usr content sourcing (Task 5) was the one decision recorded with a recommendation rather than settled; Mark bound it 2026-08-16 to the recommended option -- bundle at scan time with /usr as its own separately declinable line in the existing size prompt, plus a `--no-bundle-usr` programmatic override -- with rationale in Task 5's "Decided" and "Programmatic override" sections above.
 
-1. **/usr content sourcing (Task 5).** Recommended: bundle at scan time with a separate size prompt for /usr, so the exported Containerfile builds by default and the operator sees a multi-gigabyte include before it lands in the tarball. Alternatives are bundling unconditionally with no prompt (simplest, but a surprise tarball) or never bundling (no tarball growth, but the export does not build).
-
-The schema window is **not** an open choice. `SCHEMA_VERSION = 23` / `MIN_SCHEMA = 23` is settled; see § Schema Version Decision.
+The schema window was never an open choice. `SCHEMA_VERSION = 23` / `MIN_SCHEMA = 23` is settled; see § Schema Version Decision.
 
 ## Out of Scope for beta.3
 
