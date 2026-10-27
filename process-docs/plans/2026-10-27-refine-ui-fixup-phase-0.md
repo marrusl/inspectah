@@ -20,10 +20,21 @@
 
 Exact values copied from the spec. Every task's requirements implicitly include this section.
 
-- **Clippy clean:** `cargo clippy --all-targets -- -D clippy::all` with zero warnings. Non-negotiable (repo CLAUDE.md).
+- **Clippy clean:** zero warnings. Non-negotiable (repo CLAUDE.md). Read the clippy constraint below for which invocation a task's "clippy clean" acceptance means.
 - **Format:** `cargo fmt --check` must pass before every commit.
-- **Pre-commit hook:** `.githooks/pre-commit` gates on `cargo fmt --check`, `cargo clippy`, and `cargo test`, and fast-paths out when no `.rs`/`Cargo.*`/`build.rs` file is staged. New clones need `git config core.hooksPath .githooks` (already set in this clone).
-- **Toolchain precondition:** as of 2026-10-27 this machine has neither `cargo` nor `npm` on `PATH` and no `~/.cargo` or `~/.rustup`. Install a Rust stable toolchain and Node before starting; every verification step below assumes both are on `PATH`.
+- **Pre-commit hook:** `.githooks/pre-commit` gates on `cargo fmt --check`, `cargo clippy --workspace -- -W clippy::all`, and `cargo test`, and fast-paths out when no `.rs`/`Cargo.*`/`build.rs` file is staged. New clones need `git config core.hooksPath .githooks` (already set in this clone).
+- **Toolchain, and the PATH requirement.** Verified on this machine at `815e65fb` on 2026-10-27: `rustc`/`cargo` 1.99.1 stable (the workspace is edition 2024, which clears), `node` v26.12.1, `npm` 11.20.0. **`cargo` is not on a default shell's PATH here.** `brew install rustup` puts only `rustup` in `/home/linuxbrew/.linuxbrew/bin`; the `cargo`, `rustc`, `cargo-clippy`, and `rustfmt` shims live in `/home/linuxbrew/.linuxbrew/opt/rustup/bin`, which is not on PATH, and `~/.cargo/bin` does not exist. Every step below writes `cargo` bare. Before running any of them, either prepend the shim directory once per shell:
+
+  ```bash
+  export PATH="/home/linuxbrew/.linuxbrew/opt/rustup/bin:$PATH"
+  ```
+
+  or read each bare `cargo ...` as `rustup run stable cargo ...`. `node` and `npm` are already on PATH and need nothing.
+- **Clippy coverage gap, and the baseline at `815e65fb`.** Phase 0 adds a large amount of new test code, and neither gate sees it. The hook and CI (`.github/workflows/rust-ci.yml:44`) both run `cargo clippy --workspace -- -W clippy::all`, with **no `--all-targets`**, so neither lints a test target; and `-W` warns rather than denies, so the command exits 0 on warnings and the hook's `if ! cargo clippy` blocks only on hard errors. A task's **"clippy clean" acceptance means `cargo clippy --workspace --all-targets -- -D clippy::all` reports nothing beyond the baseline below**, which is stricter than either gate and is what catches lint in the new tests.
+
+  Measured baseline at `815e65fb`, all pre-existing and caused by no phase 0 work. `cargo clippy --workspace -- -W clippy::all` is **clean, 0 warnings**. `cargo clippy --workspace --all-targets` reports **9 warnings, every one in test code**: `bool_assert_comparison` x5, `field_reassign_with_default` x2, `needless_range_loop` x1, `op_ref` x1. Per target: `inspectah-web` test `contract_snapshots` 4, `inspectah-web` lib test 1, `inspectah-pipeline` lib test 2, `inspectah-cli` bin test 2. By location, four are in `crates/web/tests/contract_snapshots.rs` (`:334`, `:340`, `:348`, `:354`) and five are in `#[cfg(test)]` modules inside `src/`: `crates/cli/src/commands/scan.rs:1516`, `crates/cli/src/progress/pretty.rs:1150`, `crates/pipeline/src/render/repoless.rs:87`, `crates/pipeline/src/render/unmanaged.rs:100`, `crates/web/src/handlers.rs:2083`. Task 23 edits `contract_snapshots.rs` and will see those four.
+
+  Do not mistake any of the nine for your own regressions, and **do not fix them**: they are outside this spec, as are the hook and the CI workflow, which this plan does not change. `cargo fmt --check` and `cargo test --workspace` are both green at `815e65fb`.
 - **Commit format:** `type(scope): description`, imperative mood. Attribution trailer `Assisted-by: Claude Code (<model>)`. **No team member names anywhere in commits or code** (public repo).
 - **Never push.** Commit freely; the maintainer pushes.
 - **Schema constants:** `SCHEMA_VERSION = 23`, `MIN_SCHEMA = 23` (`crates/core/src/snapshot.rs:21`, `:103`). Exact match, no migration, re-scan. Aggregates re-aggregate from re-scanned hosts.
@@ -2370,10 +2381,12 @@ Open § 4's consumer table and the task map at the top of this plan, and confirm
 
 Run:
 ```bash
-cargo fmt --check && cargo clippy --all-targets -- -D clippy::all && cargo test --workspace
+cargo fmt --check && cargo test --workspace
+cargo clippy --workspace -- -W clippy::all          # what the hook and CI run
+cargo clippy --workspace --all-targets -- -D clippy::all
 cd crates/web/ui && npm test && npx tsc --noEmit && npm run test:e2e
 ```
-Expected: all PASS, zero clippy warnings.
+Expected: `fmt`, `test`, and the three frontend commands PASS. The hook/CI clippy reports **0 warnings**. The `--all-targets` run reports **nothing beyond the 9-warning pre-existing test-code baseline** recorded in Global Constraints; anything else is a phase 0 regression and is fixed before merge. Prepend the shim directory to `PATH` first, per the toolchain constraint.
 
 - [ ] **Step 4: Confirm both merge gates read PASS**
 
