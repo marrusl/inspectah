@@ -4,15 +4,26 @@
 
 **Goal:** Ship phase 0 of the refine single-host UI fix-up: the Rust correctness change set, `SCHEMA_VERSION` 23, and the three small frontend edits that keep the existing web UI compatible with the new server contract.
 
-**Architecture:** One shippable change set with one schema bump. The schema constants move first so every later type change is coherent; then the typed domain models replace the stringly-typed ones (`RepoId`/`RepoAttribution`, `FcontextRule`, `VarDirBacking`), then the session and renderer rules that read them, then the web DTOs, then the frontend compatibility edits. The two unrun host checks (B1, B2) are merge gates and run first, because a failure re-opens § 3.1 or § 3.4 before any of the code is written.
+**Architecture:** One shippable change set with one schema bump. The schema constants move first so every later type change is coherent; then the typed domain models replace the stringly-typed ones (`RepoId`/`RepoAttribution`, `FcontextRule`, `VarDirBacking`), then the session and renderer rules that read them, then the web DTOs, then the frontend compatibility edits. The two host checks (B1, B2) are merge gates, placed first because a failure re-opens § 3.1 or § 3.4 before the code that depends on them is written. **As of 2026-10-27 that is history for both: B2 PASSED against the stock base, and B1 FAILED its first run, which re-opened § 3.1 and produced the install precondition Task 11 now implements.** B1 therefore re-runs in full after Task 11, against the stock base plus the line the renderer emits, and phase 0 does not merge until that re-run reads PASS (Task 26 step 4).
 
 **Tech Stack:** Rust 2024 workspace (`crates/core`, `crates/collect`, `crates/pipeline`, `crates/cli`, `crates/web`, `crates/refine`, `crates/tui`), serde, `thiserror`, `tempfile`, `insta` snapshot tests, axum 0.8, React + TypeScript + PatternFly web UI under `crates/web/ui/`, Vitest + Testing Library, Playwright.
 
-**Spec:** `process-docs/specs/proposed/2026-10-26-refine-ui-fixup.md`, committed at `87498e4b`. The spec is authoritative. Where this plan and the spec disagree, the spec wins and the plan is the bug. Code citations in the spec are at `6e8a52b1`; `git diff --stat 6e8a52b1..HEAD` touches only the spec file, so every citation holds at HEAD.
+**Spec:** `process-docs/specs/proposed/2026-10-26-refine-ui-fixup.md`, committed at `a7ddaf41`, the post-B1 revision that carries the § 3.1 install precondition. The spec is authoritative. Where this plan and the spec disagree, the spec wins and the plan is the bug. Code citations in the spec are at `6e8a52b1`; `git diff --stat 6e8a52b1..HEAD` touches only the spec and this plan, so every source citation holds at HEAD.
 
 **Scope:** The § 7 phasing table's row "0. Correctness and the bump (Rust, plus the frontend repo compatibility edits)" and nothing else. Phases 1, 2, and 3 are separate web releases with their own plans. Two adjacent items are explicitly **not** in this plan and must not be absorbed into any task: the pre-existing unmanaged-extraction path-traversal issue (its own backlog item, its own fix) and the deferred sidebar sections reorganization. Everything in spec § 9 "Out of scope" stays out.
 
 **Target release:** v0.9.0-beta.4, confirmed by the maintainer on 2026-10-27. `Cargo.toml` stays at `0.9.0-beta.3`; the version bump happens when the release is cut, not in this plan.
+
+**Revision, 2026-10-27, after the plan review.** Both review seats returned Fix required. This is the single revision the process allows; what each finding changed, and where to check it:
+
+| Finding | Change | Where |
+|---|---|---|
+| Incomplete fcontext operand validation | The common rule now states the three bytes single quotes do not make inert — apostrophe, newline, NUL — as a rejection applying to `spec` and both equivalence operands, and Task 11 asserts one case per byte per operand kind. | Global Constraints; Task 11 steps 1 and 6 |
+| Absent sections became blanket `/var` provisioning | The absent-section test asserts each backing kind's own § 3.4 outcome instead of `Provision` for every directory, so the three `Unresolved` kinds keep their FIXME. Review Focus 4's scope is stated. | Review Focus 4; Task 19 step 1 |
+| Wrong refusal for a repo with no RPM section | Split into two tests: `NoopTarget` for a repo the index accepts with an empty effective set, `BadRequest` on `Unknown` provenance for the missing-section case, which `validate_target` reaches first. | Review Focus 3; Task 7 step 1 |
+| Task order blocked required PASS boundaries | Four prerequisite edits re-sequenced, no task renumbered and no acceptance dropped. See Self-Review item 3 for the list. | Tasks 13, 16, 19, 21, 22, 23, 24 |
+
+Also corrected without changing any task's work: the § 4 consumer map's owning tasks and the `classify.rs` path, the § 8.12 map's group-422 row, the Tasks 25-26 exception to the § 8 citation claim, the phase 1 attention strip in Task 19, and the gate summary and spec SHA above.
 
 ---
 
@@ -40,7 +51,7 @@ Exact values copied from the spec. Every task's requirements implicitly include 
 - **Schema constants:** `SCHEMA_VERSION = 23`, `MIN_SCHEMA = 23` (`crates/core/src/snapshot.rs:21`, `:103`). Exact match, no migration, re-scan. Aggregates re-aggregate from re-scanned hosts.
 - **Named constants with exact values:** `MAX_UPLOAD_FILENAME_LEN: usize = 200`; `UPLOAD_LIMIT_BYTES` = 500 MiB (`524_288_000`); `VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")]`; `RELEASE_PERMALINKS: &[(&str, &str)] = &[("epel-release", "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{major}.noarch.rpm")]`.
 - **Upload filename allowlist (§ 3.3):** every byte in `[A-Za-z0-9._+~^-]`, checked with `u8::is_ascii_alphanumeric` and never `char::is_alphanumeric`; first byte `[A-Za-z0-9]`; ends in `.rpm` case-insensitively; length 5 to `MAX_UPLOAD_FILENAME_LEN` bytes. Rejection is always rejection, never stripping.
-- **fcontext operand validation (§ 3.1 rule 4):** every host-supplied operand single-quoted. Equivalence operands must begin with `/`, contain no whitespace, and contain none of `* ? [ ] ( ) | \`. A label `spec` must begin with `/`. `type_`, `user`, and `level` must match `^[A-Za-z0-9_.:-]+$`. A rule failing any check renders the two-line FIXME, never a command.
+- **fcontext operand validation (§ 3.1 rule 4):** every host-supplied operand single-quoted. **The common rule, which applies to every quoted operand — `spec` and both equivalence operands alike: an operand containing an apostrophe (`'`), a newline (`\n`), or a NUL byte is rejected.** Those are the only three bytes single quotes do not render inert, so single-quoting an operand is not itself the check (containerfile-value-quoting skill). Then, per operand kind: equivalence operands must begin with `/`, contain no whitespace, and contain none of `* ? [ ] ( ) | \`; a label `spec` must begin with `/`; `type_`, `user`, and `level` must match `^[A-Za-z0-9_.:-]+$`. A rule failing any check — the common rule included — renders the two-line FIXME, never a command. The synthesized constants are not host input and need no check.
 - **Diagnostics are data (§ 3.1 rule 4):** a message the emitted commands print at build time is a static `printf` format written by the renderer with no host bytes in it; each operand is its own argument, single-quoted when it is a validated literal and `"$var"` when it is a shell variable. Never `echo` with an interpolated double-quoted string.
 - **FIXME wording rule (§ 5.6):** every `# FIXME:` and `# MANUAL:` block starts with an imperative instruction and puts the cause after a semicolon or on the next comment line; a block never ends on the failure statement. Rewrite existing violations only where this plan already touches them (fcontext, tuned, the GPG key path at `containerfile.rs:357-368`).
 - **Voice rules for user-visible strings:** no em dashes; do not use "immutable" (say "image-based" or "read-only"); do not use "shape" as a noun. `CHANGELOG.md` keeps the repo's own `- **Label** — description` separator per `process-docs/changelog-policy.md`; the prose after it follows the voice rules.
@@ -54,8 +65,8 @@ Input classes the spec implies but whose behaviour no § 8 entry pins. Each line
 
 1. **`RepoId` case folding must be ASCII-only and consistent across `Eq`, `Hash`, and `Ord`.** § 3.2 says equality is `eq_ignore_ascii_case` and "Hash and Ord over the lowercased form". If `Hash` uses Unicode `to_lowercase()` while `Eq` uses ASCII folding, two ids that compare unequal can hash equal and a `HashMap` silently loses an entry. Test in Task 4.
 2. **`parse_repo_sections` on dnf's full `enabled=` vocabulary and on malformed INI.** It replaces two existing parsers and nothing in § 8 feeds it `enabled=yes`, `enabled = True`, a trailing comment, or a line outside any section. Test in Task 4.
-3. **The `Repo` and `Group` no-op arms when the projected snapshot has no `rpm` section.** § 3.7 names `unwrap_or(true)` for `Group` and § 3.2 says nothing for `Repo`; a repo op on a snapshot with no rpm section must refuse, not cascade over an empty set as if it had changed something. Test in Task 7.
-4. **`effective_var_backing` on a snapshot with no `config` section and no `rpm` section.** The § 3.4 table's first row reads "the `config.files` entry for `conf`"; with no config section there is no entry, and the function must yield `Provision`, not panic or index. Test in Task 19.
+3. **The `Repo` and `Group` no-op arms when the projected snapshot has no `rpm` section.** § 3.7 names `unwrap_or(true)` for `Group` and § 3.2 says nothing for `Repo`; a repo op on a snapshot with no rpm section must refuse, not cascade over an empty set as if it had changed something. **Which refusal is not a free choice:** with no rpm section every id resolves to `Unknown` provenance and `apply` validates before it checks for a no-op, so `Repo` refuses with the § 3.2 `BadRequest`, not with `NoopTarget`. `NoopTarget` stays the answer for a repo the index accepts whose effective set is empty. Test in Task 7.
+4. **`effective_var_backing` on a snapshot with no `config` section and no `rpm` section.** The § 3.4 table's first row reads "the `config.files` entry for `conf`"; with no config section there is no entry, and the function must yield `Provision` **for that row**, not panic or index. **The scope is the first row and the two unconditional rows, not every backing kind:** absent sections are absent evidence, so a `/usr/lib` fragment, an unowned unit, and an unknown RPM provider are `Unresolved` under the same table and must stay `Unresolved`. Test in Task 19, asserting each kind's own outcome.
 5. **`validate_staged_name` at both length boundaries.** § 8.2 tests a 201-byte name but neither the 200-byte acceptance nor the 5-byte minimum, and `a.rpm` is exactly 5. An off-by-one here rejects legal vendor filenames. Test in Task 12.
 
 ---
@@ -66,15 +77,15 @@ Spec § 4's consumer table says what phase 0 does at each site that names a remo
 
 | § 4 consumer row | Owning task |
 |---|---|
-| Aggregate merge, fcontext (`merge.rs:1608-1609`) | Task 9 |
+| Aggregate merge, fcontext (`merge.rs:1608-1609`) | Task 10 |
 | Aggregate merge, kernel (`merge.rs:1685-1695`, `:1731-1755`) | Task 21 |
 | Aggregate merge, PAM and audit (`merge.rs:1619-1660`) | Task 20 |
-| Aggregate merge, storage (`merge.rs:1512`) | Task 17 |
-| Classification (`classify.rs:782-785`) | Task 20 |
+| Aggregate merge, storage (`merge.rs:1512`) | Task 18 |
+| Classification (`crates/refine/src/classify.rs:782-785`) | Task 20 |
 | Redaction (`engine.rs:790-805`, `:990-1028`) | Task 21 |
-| HTML report (`report.rs:910-917`) | Task 10 |
-| Audit report (`audit.rs:593-625`) | Tasks 10 (fcontext), 18 (storage), 20 (PAM/audit), 16 (repo-enabling) |
-| TUI (`sections.rs:254-263`, `screen/single_host.rs:1030`) | Tasks 17 (storage row), 21 (kernel counts) |
+| HTML report (`report.rs:910-917`) | Task 11 |
+| Audit report (`audit.rs:593-625`) | Tasks 11 (fcontext), 19 (storage), 20 (PAM/audit), 17 (repo-enabling) |
+| TUI (`sections.rs:254-263`, `screen/single_host.rs:1030`) | Tasks 18 (storage row), 21 (kernel counts) |
 | Web projections (`reference.rs:549-550`, `:863-897`; `adapter.rs:949-968`, `:1293-1310`) | Tasks 18 (storage), 20 (PAM pointers), 21 (snippet items) |
 | `load_for_refine` (`normalize.rs:54-72`) | Unchanged; asserted in Task 3 |
 
@@ -107,7 +118,7 @@ Spec § 4's consumer table says what phase 0 does at each site that names a remo
 
 ## Merge Gates
 
-Tasks 1 and 2 are **merge gates, not implementation tasks**. Both must pass before phase 0 merges. They are placed first so that a failure re-opens § 3.1 or § 3.4 before the code that depends on them is written.
+Tasks 1 and 2 are **merge gates, not implementation tasks**. Both must pass before phase 0 merges. They were placed first so that a failure would re-open § 3.1 or § 3.4 before the code that depends on them was written, **and that is what happened**: the first run on 2026-10-27 passed B2 and failed B1, which re-opened § 3.1. The positions below are therefore the historical ordering. The operative ordering is the status that follows, and it moves B1's re-run to after Task 11.
 
 **Status, 2026-10-27.** Both have now been run once, and the `Result:` lines below are the record of that run; **they are history, not a pass.**
 
@@ -708,7 +719,7 @@ Closes item 1.9: group exclude returns 200 and records nothing.
 - Modify: `crates/refine/src/session.rs:1816-1836` (the `ItemId::Group` no-op arm), `:2479-2502`, `:2553-2557`, `:2652-2729` (`GroupEvalContext.effective_packages`), `:2670-2690` (the `'group_scan` loop)
 - Modify: `crates/refine/src/group_state.rs:47-101` (`GroupRenderState::Inert`, `is_renderable`)
 - Modify: `crates/web/src/web_types.rs:231-241` (`GroupInfo`), `crates/web/src/error.rs:29-36`
-- Test: `crates/refine/tests/session_test.rs`, `crates/web/src/adapter.rs` `#[cfg(test)]`
+- Test: `crates/refine/tests/session_test.rs`, `crates/web/src/adapter.rs` `#[cfg(test)]`, `crates/web/tests/api_test.rs` (the § 8.12 group case this task claims)
 
 **Interfaces:**
 - Consumes: Task 5's `RepoProvenance` (no direct dependency, but the same release).
@@ -771,10 +782,12 @@ fn group_info_reports_declared_and_effective_counts() {
 }
 ```
 
+In `crates/web/tests/api_test.rs`, the one § 8.12 API case this task owns (the § 8.12 map at the end of this plan assigns it here, not to Task 7): `POST /api/op` with `SetInclude(Group, false)` on the Container Management fixture returns 422 with `error` starting `nothing to change`, and `GET /api/ops` is unchanged before and after.
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cargo test -p inspectah-refine --test session_test group_ && cargo test -p inspectah-web adapter::`
-Expected: FAIL — the exclude returns `Ok(())` and records nothing; `effective_member_count` does not exist.
+Run: `cargo test -p inspectah-refine --test session_test group_ && cargo test -p inspectah-web adapter:: && cargo test -p inspectah-web --test api_test group`
+Expected: FAIL — the exclude returns `Ok(())` and records nothing, so the handler answers 200 and `/api/ops` grows; `effective_member_count` does not exist.
 
 - [ ] **Step 3: Add `NoopTarget` and its 422 mapping, and the `GroupInfo` counts**
 
@@ -865,9 +878,8 @@ fn history_and_members_disagree_in_both_directions() {
 
 #[test]
 fn a_repo_with_no_effective_member_is_refused_in_both_directions() {
-    // § 8.8 + position 26 + Review Focus 3.
-    for mut s in [all_members_locked_repo_session(), repo_known_to_index_with_no_packages(),
-                  session_with_no_rpm_section()] {
+    // § 8.8 + position 26. A repo the index KNOWS and accepts, whose effective set is empty.
+    for mut s in [all_members_locked_repo_session(), repo_known_to_index_with_no_packages()] {
         for include in [true, false] {
             match s.apply(set_include_repo("vendor", include)) {
                 Err(RefineError::NoopTarget(m)) => assert!(m.starts_with("nothing to decide")),
@@ -876,6 +888,26 @@ fn a_repo_with_no_effective_member_is_refused_in_both_directions() {
         }
         assert_eq!(s.timeline().len(), 0);
     }
+}
+
+#[test]
+fn a_repo_op_with_no_rpm_section_is_refused_on_provenance() {
+    // Review Focus 3. This is a DIFFERENT refusal from the one above and must not be
+    // folded into it: `RepoIndex::build` on `rpm: None` returns an empty index
+    // (`repo_index.rs:38-48`), an id absent from it resolves to `Unknown`
+    // (`:119-126`), and `apply` runs `validate_target` before `is_op_noop`
+    // (`session.rs:772-789`). So § 3.2's provenance refusal fires first and the
+    // effective-set arm is never reached. There is no valid repo in this fixture
+    // whose effective set could be examined.
+    let mut s = session_with_no_rpm_section();
+    for include in [true, false] {
+        match s.apply(set_include_repo("vendor", include)) {
+            // the message names the provenance; `validate_target` formats it with `{prov:?}`
+            Err(RefineError::BadRequest(m)) => assert!(m.to_ascii_lowercase().contains("unknown")),
+            other => panic!("expected BadRequest naming the provenance, got {other:?}"),
+        }
+    }
+    assert_eq!(s.timeline().len(), 0);
 }
 ```
 
@@ -899,7 +931,7 @@ fn build_repo_groups_reports_the_two_disagreement_states() {
 }
 ```
 
-In `crates/web/tests/api_test.rs`: post the accepted direction of each state through `POST /api/op`, assert 2xx with exactly one new `/api/ops` entry; post the refused direction, assert 422 with `error` starting `nothing to change`; post either direction at a zero-effective repo and assert 422 with `error` starting `nothing to decide`.
+In `crates/web/tests/api_test.rs`: post the accepted direction of each state through `POST /api/op`, assert 2xx with exactly one new `/api/ops` entry; post the refused direction, assert 422 with `error` starting `nothing to change`; post either direction at a zero-effective repo and assert 422 with `error` starting `nothing to decide`. Also the second of § 8.12's two API lines, which this task owns (the first is Task 6's group 422): `SetInclude(Repo)` on an `incomplete` repo with at least one effective member returns **200** — Task 5 made `validate_target` accept `Incomplete`, and this is the wire-level proof that the new provenance value is not refused.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1297,7 +1329,7 @@ The unrenderable form, two lines, instruction first:
 
 - [ ] **Step 1: Write the failing `insta` render assertions** in `crates/pipeline/tests/smoke_render.rs`
 
-The § 5.1 after-text for the host rule, exactly, plus: two rules render two guarded forms in collected order; a `Directory` rule carries `-f d` on all three commands; an `Unlabel` carries `-t '<<none>>'` inside the same guard; no `RUN` line contains `echo`; a spec containing `'` renders the two-line FIXME with the imperative first, and so does a spec of `--help`, with no `RUN` for either; no line contains `restorecon` outside the `#` sentence; the equivalence `RUN` appears once for two `/srv` rules and not at all for a `/opt` rule; a collected `/var/srv = /srv` plus the synthesis emits one equivalence `RUN`; a collected `/var/srv = /opt/srv` plus the synthesis emits no equivalence `RUN` and a FIXME naming both; no line contains `-m -e`; `/tmp/$(id) = /tmp` and `/srv;rm -rf / = /srv` each appear only inside a `#` line and no `RUN` line contains `;rm`; a `SemanageList` snapshot renders the `# NOTE:` caveat first and a `PolicyStore` one does not.
+The § 5.1 after-text for the host rule, exactly, plus: two rules render two guarded forms in collected order; a `Directory` rule carries `-f d` on all three commands; an `Unlabel` carries `-t '<<none>>'` inside the same guard; no `RUN` line contains `echo`; **the common operand rule, one case per forbidden byte per operand kind** — a label `spec` containing `'`, one containing `\n`, and one containing NUL each render the two-line FIXME with the imperative first, and so do an equivalence `subject` and an equivalence `labeled_like` carrying each of the three, which is the coverage the whitespace and regex-character rules do not give (an apostrophe is neither, and a newline is whitespace only if the check reads it as such); a spec of `--help` renders the same FIXME; no `RUN` is emitted for any of them; no line contains `restorecon` outside the `#` sentence; the equivalence `RUN` appears once for two `/srv` rules and not at all for a `/opt` rule; a collected `/var/srv = /srv` plus the synthesis emits one equivalence `RUN`; a collected `/var/srv = /opt/srv` plus the synthesis emits no equivalence `RUN` and a FIXME naming both; no line contains `-m -e`; `/tmp/$(id) = /tmp` and `/srv;rm -rf / = /srv` each appear only inside a `#` line and no `RUN` line contains `;rm`; a `SemanageList` snapshot renders the `# NOTE:` caveat first and a `PolicyStore` one does not.
 
 **The install precondition, four cases, in the same file:** a snapshot with one fcontext rule and no port label renders the two comment lines and `RUN dnf install -y policycoreutils-python-utils` exactly once, positioned before the first `RUN` containing `semanage`; a snapshot with **a port label and no fcontext rule** renders them too, in the same position relative to `RUN semanage port -a`; a snapshot with neither renders none of the three lines; and in every case the line carries no `--enablerepo` and the string `policycoreutils-python-utils` appears nowhere in the package-install block's active lines.
 
@@ -1334,7 +1366,7 @@ The condition is "this block will render at least one fcontext rule or at least 
 
 - [ ] **Step 6: Rewrite the Containerfile SELinux block at `containerfile.rs:1445-1462`**
 
-Operand validation per the Global Constraints; a rule failing any check renders the two-line FIXME, never a command. Diagnostics are static `printf` formats with operands as arguments. `sanitize_shell_value` is not used on fcontext operands.
+Operand validation per the Global Constraints, the common apostrophe/newline/NUL rejection included; a rule failing any check renders the two-line FIXME, never a command. Diagnostics are static `printf` formats with operands as arguments. `sanitize_shell_value` is not used on fcontext operands.
 
 - [ ] **Step 7: Point the HTML report, audit report, and README at the same data (§ 4 consumer rows)**
 
@@ -1446,6 +1478,7 @@ git commit -m "refactor(refine): move rpm filename parsing into one module with 
 **Implements § 3.3 ("Upload staging", the four-step lifecycle) and § 6.9's `/api/upload-rpm` bullet. Satisfies § 8.2's `crates/web/tests/api_test.rs` filename-rule block, the 413, disconnect, and startup-sweep cases, the overlap cases through `stage`/`commit`, and § 8.6's and § 8.13's `api_test.rs` 200 cases.**
 
 **Files:**
+- Modify: `crates/core/src/types/rpm.rs` (`PackageEntry` gains `uploaded`) — **the prerequisite edit, moved here from Task 16.** `set_uploaded` below is the field's first use anywhere in this plan, and this task's step 5 requires a green workspace, so the field has to exist by the end of this task. Task 16 keeps `repo_enabling_from`, which is its own subject.
 - Modify: `crates/web/src/upload.rs:17-78` (the handler, split into `stage` and `commit`), `:24-28`, `:29-37`, `:39`, `:45-54`, `:62`, `:73-77`
 - Modify: `crates/web/src/lib.rs:110` (the route limit becomes `UPLOAD_LIMIT_BYTES`)
 - Modify: `crates/refine/src/session.rs:585-604` (`ensure_upload_dir`), `:626-690` (`mark_uploaded_rpm` becomes `match_uploaded_rpm`), `:691-697` (`invalidate_caches` is called by `set_uploaded`)
@@ -1454,6 +1487,7 @@ git commit -m "refactor(refine): move rpm filename parsing into one module with 
 **Interfaces:**
 - Consumes: Task 12's `validate_staged_name`, `RpmFilename`, `MAX_UPLOAD_FILENAME_LEN`.
 - Produces:
+  - `PackageEntry.uploaded: bool`, `#[serde(default, skip_serializing_if = "crate::is_false")]`. Distinct from `repoless_cached`, which also covers RPMs found in the dnf cache. Consumed by `set_uploaded` here and by Tasks 14, 15, and 23.
   - `pub const UPLOAD_LIMIT_BYTES: usize = 524_288_000;` (500 MiB) in `crates/web/src/lib.rs`
   - `RefineSession::match_uploaded_rpm(&self, filename: &str) -> Option<UploadMatch>` — today's matcher with every mutation removed (exact NEVRA first, then `RpmFilename` name and arch with progressively shorter name prefixes).
   - `pub struct UploadMatch { pub canonical: String, pub match_kind: UploadMatchKind, pub host_version: String, pub uploaded_version: Option<String> }`; `pub enum UploadMatchKind { Exact, VersionDiffers }` serializing as `exact` | `version_differs`. `host_version` is `format!("{version}-{release}")` of the entry; `uploaded_version` is `Some(parsed version-release)` when it differs.
@@ -1512,7 +1546,9 @@ Expected: FAIL — the handler buffers with `field.bytes()`, defaults a missing 
 
 - [ ] **Step 3: Split the handler into `stage` and `commit` and implement the contract above**
 
-- [ ] **Step 4: Turn `mark_uploaded_rpm` into `match_uploaded_rpm` plus `set_uploaded`, and harden `ensure_upload_dir`**
+- [ ] **Step 4: Add `PackageEntry.uploaded`, then turn `mark_uploaded_rpm` into `match_uploaded_rpm` plus `set_uploaded`, and harden `ensure_upload_dir`**
+
+The field comes first in this step because `set_uploaded` writes it.
 
 - [ ] **Step 5: Run the tests to verify they pass, then the workspace**
 
@@ -1522,7 +1558,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/web crates/refine
+git add crates/core crates/web crates/refine
 git commit -m "fix(web): stage uploads in bounded chunks under one lock hold"
 ```
 
@@ -1674,7 +1710,7 @@ git commit -m "fix(refine): confine upload removal and re-match staged files on 
 Closes item 1.3's classification half: `epel-release` renders twice today, once as an active install and once as a MANUAL block.
 
 **Files:**
-- Modify: `crates/core/src/types/rpm.rs` (`PackageEntry` gains `repo_enabling_from` and `uploaded`; `repo_providing_packages` at `:232` is deleted)
+- Modify: `crates/core/src/types/rpm.rs` (`PackageEntry` gains `repo_enabling_from`; `repo_providing_packages` at `:232` is deleted). `uploaded` is **not** added here: Task 13 adds it, because `set_uploaded` uses it there and this task is later.
 - Modify: `crates/collect/src/inspectors/rpm/repoless.rs:58-79` (`get_available_packages`), `:99-192` (`scan_dnf_cache_for_repoless`), `:129-143` (the anaconda check, unchanged in behaviour)
 - Modify: `crates/core/src/aggregate/merge.rs:949` (the `repo_providing_packages` merge is deleted)
 - Test: `crates/collect/tests/repoless_rpm_test.rs`
@@ -1683,7 +1719,6 @@ Closes item 1.3's classification half: `epel-release` renders twice today, once 
 - Consumes: Task 4's `RepoId`.
 - Produces:
   - `PackageEntry.repo_enabling_from: Vec<RepoId>`, `#[serde(default, skip_serializing_if = "Vec::is_empty")]`. Non-empty means repo-enabling, never repo-less.
-  - `PackageEntry.uploaded: bool`, `#[serde(default, skip_serializing_if = "crate::is_false")]`. Distinct from `repoless_cached`, which also covers RPMs found in the dnf cache.
   - `get_available_packages` returns `Option<HashMap<String, Vec<RepoId>>>` (name to serving section ids) instead of `Option<HashSet<String>>`, with the query format widened from `%{name}\n` to `%{name} %{reponame}\n`.
 
 **The two tests a candidate must both pass (§ 3.3), run in `scan_dnf_cache_for_repoless` before the cache scan:**
@@ -1927,9 +1962,10 @@ The snapshot verdict says what created the directory on the source host; the exp
 **Files:**
 - Create: `crates/pipeline/src/render/var_dirs.rs`
 - Modify: `crates/pipeline/src/render/containerfile.rs:1743-1810` (`render_tmpfiles_conf`, `var_dir_section_lines`)
-- Modify: `crates/web/src/adapter.rs` (Storage rows derive from the same function)
 - Modify: `crates/pipeline/src/render/audit.rs` (source verdict and export outcome side by side)
 - Test: `crates/pipeline/tests/var_backing_export_test.rs` (new)
+
+**Not in this task: the adapter.** The View contract below is this section's, but `ContextItem.advisory` does not exist until Task 23, so `crates/web/src/adapter.rs` cannot be pointed at `effective_var_backing` here and the view assertions cannot be made here. Task 23 already declares this function as an input and owns the DTO; it carries the adapter edit and the view assertions, and Task 24 carries the live-endpoint round trip. This task's acceptance is the function's returned outcomes and the rendered artifacts.
 
 **Interfaces:**
 - Consumes: Task 18's `VarDirBacking`; Task 16's `repo_enabling_from` indirectly through the install set.
@@ -1961,22 +1997,24 @@ A provider package is **carried** when it is in the exported install set or in t
 #d /var/lib/vendor 0755 root root -
 ```
 
-and the Containerfile's Storage block carries the same two-line FIXME in the § 5.6 form so the attention strip counts it. The snapshot verdict is never rewritten.
+and the Containerfile's Storage block carries the same two-line FIXME in the § 5.6 form. The snapshot verdict is never rewritten. **Phase 0 asserts the emitted marker, not a UI count.** The spec's reason for the § 5.6 form is that the attention strip counts it, but that strip is phase 1 in § 7 and in the § 8 map at the end of this plan; the phase 0 assertion is that the two-line FIXME is in the Storage block in the § 5.6 form, and phase 1 asserts the count.
 
-**View (§ 3.4):** the adapter emits one summary `ContextItem` for the `Carried` set, one `ContextItem` with `advisory` per `Provision` outcome with `rationale` naming the lost creator when there was one, and one `ContextItem` with `advisory` per `Unresolved` outcome, the same `advisory_type: unbacked_var_dir` with `rationale` `created on the host by <creator>; this export cannot tell whether the base image carries it (<reason text>)`, counted in the summary row's `<U> unbacked`. A carried directory with a non-root owner or a mode other than `0755` also gets an inventory row. Nothing else reaches the view as a row.
+**View (§ 3.4), the contract this function has to be able to serve, wired in Task 23:** the adapter emits one summary `ContextItem` for the `Carried` set, one `ContextItem` with `advisory` per `Provision` outcome with `rationale` naming the lost creator when there was one, and one `ContextItem` with `advisory` per `Unresolved` outcome, the same `advisory_type: unbacked_var_dir` with `rationale` `created on the host by <creator>; this export cannot tell whether the base image carries it (<reason text>)`, counted in the summary row's `<U> unbacked`. A carried directory with a non-root owner or a mode other than `0755` also gets an inventory row. Nothing else reaches the view as a row. `VarDirOutcome` therefore has to carry the lost creator and the reason text, which it does; the DTO that renders them is Task 23's.
 
-- [ ] **Step 1: Write the failing tests** in `crates/pipeline/tests/var_backing_export_test.rs` (new), through `render_refine_export`
+- [ ] **Step 1: Write the failing tests** in `crates/pipeline/tests/var_backing_export_test.rs` (new), through `effective_var_backing` and `render_refine_export`
+
+Every case asserts the `VarDirOutcome` the function returns **and** the rendered artifacts. No case asserts on `/api/snapshot/sections`: the row it would read does not exist until Task 23 fills `advisory` and is not live until Task 24, and both tasks assert it there.
 
 ```rust
 #[test]
 fn provisions_what_the_export_does_not_carry() {
     // with nothing excluded, inspectah-var.conf contains
     //   `d /var/lib/pgsql <mode> <owner> <group> -` and no appone line;
-    // with /etc/tmpfiles.d/appone.conf excluded under Configuration Files it gains
-    //   `d /var/lib/appone/cache 0750 appone appone -` preceded by the lost-creator comment,
-    //   the tarball lacks config/etc/tmpfiles.d/appone.conf, and /api/snapshot/sections
-    //   carries an advisory row whose rationale names appone.conf;
-    // including it again removes all three;
+    // with /etc/tmpfiles.d/appone.conf excluded under Configuration Files the outcome for
+    //   /var/lib/appone/cache is Provision { lost: Some("/etc/tmpfiles.d/appone.conf") },
+    //   inspectah-var.conf gains `d /var/lib/appone/cache 0750 appone appone -` preceded by
+    //   the lost-creator comment, and the tarball lacks config/etc/tmpfiles.d/appone.conf;
+    // including it again returns the outcome to Carried and removes both;
     // a /run/tmpfiles.d directory is provisioned with its comment unconditionally;
     // a StateDirectory { unit: "myapp.service" } whose unit file is excluded is provisioned,
     //   and carried when the unit is included;
@@ -1986,9 +2024,10 @@ fn provisions_what_the_export_does_not_carry() {
 
 #[test]
 fn unresolved_renders_a_fixme_and_no_active_line() {
-    // Each case asserts: an advisory row in /api/snapshot/sections whose rationale names the
-    // creator and the reason; a two-line FIXME in the Containerfile's Storage block counted by
-    // the attention strip; a commented `#d` line and no active `d` line in inspectah-var.conf;
+    // Each case asserts: the outcome is Unresolved { creator, reason } with the creator and
+    // reason below; a two-line FIXME in the Containerfile's Storage block in the § 5.6 form
+    // (the attention strip that counts it is phase 1 and is not asserted here);
+    // a commented `#d` line and no active `d` line in inspectah-var.conf;
     // and never a Carried summary membership.
     //  (a) /var/lib/vendor backed by /usr/lib/tmpfiles.d/vendor.conf that no file_ownership
     //      entry names, with a known baseline                         -> UnownedFragment
@@ -2015,9 +2054,27 @@ fn etc_fragments_follow_the_config_decision_never_the_provider() {
 }
 
 #[test]
-fn absent_sections_provision_rather_than_panic() {
-    // Review Focus 4: a snapshot with storage directories but no `config` section and no
-    // `rpm` section yields Provision for every directory and no panic.
+fn absent_sections_follow_the_table_rather_than_panicking() {
+    // Review Focus 4. A snapshot with storage directories but no `config` section and no
+    // `rpm` section. The claim under test is that the function reads the absent sections as
+    // absent evidence instead of panicking or indexing — NOT that absence provisions
+    // everything. Each backing kind gets the outcome the § 3.4 table above assigns it when
+    // there is no config entry, no file_ownership, no baseline, and no install set, and the
+    // assertion is per kind:
+    //   Tmpfiles { conf under /etc/tmpfiles.d/ }   -> Provision { lost: Some(conf) }
+    //       (the table's first row: Carried only when the config.files entry is included,
+    //        otherwise Provision; with no config section there is no entry, which is the
+    //        exact case Review Focus 4 names)
+    //   Tmpfiles { conf under /run/tmpfiles.d/ }   -> Provision { lost: None }  (always)
+    //   Unbacked                                   -> Provision { lost: None }  (always)
+    //   Tmpfiles { conf under /usr/lib/tmpfiles.d/ } -> Unresolved { UnownedFragment }
+    //       (no file_ownership entry names conf)
+    //   StateDirectory / CacheDirectory / LogsDirectory { unit } -> Unresolved { UnownedUnit }
+    //       (the unit is neither a config.files entry nor RPM-owned)
+    //   RpmOwned { package }                       -> Unresolved { BaseUnknown }
+    //       (no baseline is known and the package is not in the install set)
+    // and the three Unresolved kinds render the commented `#d` line and no active `d` line,
+    // so no FIXME-requiring case is silently turned into active provisioning.
 }
 ```
 
@@ -2028,9 +2085,9 @@ Expected: FAIL — the function does not exist and the renderer reads the snapsh
 
 - [ ] **Step 3: Implement `effective_var_backing` in `crates/pipeline/src/render/var_dirs.rs`**
 
-- [ ] **Step 4: Point `render_tmpfiles_conf`, `var_dir_section_lines`, the adapter, and the audit report at it**
+- [ ] **Step 4: Point `render_tmpfiles_conf`, `var_dir_section_lines`, and the audit report at it**
 
-The adapter derives the Storage advisory rows from the same function, so excluding `appone.conf` under Configuration Files makes `/var/lib/appone/cache` an advisory row with a `d` line in the export, and including it again removes both: the view reflects the export.
+The adapter is Task 23's, for the reason given above: excluding `appone.conf` under Configuration Files must make `/var/lib/appone/cache` an advisory row with a `d` line in the export, and including it again must remove both, so that the view reflects the export — but the `advisory` field that carries the row lands in Task 23 and the endpoint goes live in Task 24, and those two tasks assert it.
 
 - [ ] **Step 5: Run the tests to verify they pass, then the workspace**
 
@@ -2040,7 +2097,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/pipeline crates/web
+git add crates/pipeline
 git commit -m "feat(pipeline): reconcile /var backing against what the export carries"
 ```
 
@@ -2059,7 +2116,7 @@ Closes items 1.2 and 1.8: PAM and audit rules ship with no disposition, and RPM-
 - Modify: `crates/collect/src/inspectors/selinux.rs:21-30`, `:396-485` (`collect_pam_configs`, `collect_audit_rules`, `pam_configs`, `audit_rules`, `CarryForwardFile`, deleted)
 - Modify: `crates/pipeline/src/render/configtree.rs:525-547` (the carry-forward block, deleted), `:150`, `:231` (`TUNED_PREFIX` and the `tuned/` root, deleted)
 - Modify: `crates/pipeline/src/render/containerfile.rs:1464-1476` (the two comment lines, deleted), `:1365` (`COPY tuned/etc/tuned/ /etc/tuned/`, deleted)
-- Modify: `crates/core/src/aggregate/merge.rs:1619-1660`, `crates/collect/src/inspectors/config/classify.rs:782-785`, `crates/refine/src/projection/reference.rs:863-897`
+- Modify: `crates/core/src/aggregate/merge.rs:1619-1660`, `crates/refine/src/classify.rs:782-785` (the § 4 tuned-finding consumer; the earlier `crates/collect/src/inspectors/config/classify.rs` path was wrong — the `tuned_custom_profiles` read is in the refine crate), `crates/refine/src/projection/reference.rs:863-897`
 - Test: `crates/collect/tests/config_test.rs`, `crates/pipeline/tests/smoke_render_2c.rs`
 
 **Interfaces:**
@@ -2111,7 +2168,7 @@ Expected: FAIL — the two prefixes are excluded from the walk and the files arr
 
 - [ ] **Step 5: Update the three § 4 consumers: the PAM/audit merge, classification, and the SELinux reference pointer list**
 
-`merge.rs:1619-1660` is deleted; the files merge as `config.files` entries through the existing config merge. `classify.rs:782-785` reads `config.files` entries with category `Tuned` instead of `tuned_custom_profiles` paths. The audit report covers both through its existing `config.files` loops (`audit.rs:161`, `:472`, `:492`).
+`merge.rs:1619-1660` is deleted; the files merge as `config.files` entries through the existing config merge. `crates/refine/src/classify.rs:782-785` reads `config.files` entries with category `Tuned` instead of `tuned_custom_profiles` paths. The audit report covers both through its existing `config.files` loops (`audit.rs:161`, `:472`, `:492`).
 
 - [ ] **Step 6: Run the tests to verify they pass, then the workspace**
 
@@ -2129,7 +2186,7 @@ git commit -m "fix(collect): give PAM, audit, and tuned files one owner and one 
 
 ### Task 21: Kernel & Boot — one decision per entity
 
-**Implements § 3.5 (the field removals, `shadowed_by`, `finalize_cross_inspector`, Validation, Projection), open positions 6 and 22. Satisfies § 8.10 in full apart from the schema-version half Task 3 owns: `crates/collect/tests/kernelboot_test.rs`, `crates/cli/tests/scan_shadow_test.rs` (new), `crates/refine/tests/session_test.rs`'s `InventoryNotToggleable` cases, and the tuned FIXME case in `containerfile.rs`. Satisfies the § 4 consumer rows for the kernel aggregate merge (`merge.rs:1685-1695`, `:1731-1755`), redaction (`engine.rs:790-805`, `:990-1028`), the TUI counts (`sections.rs:254-263`), and the web snippet items (`adapter.rs:949-968`).**
+**Implements § 3.5 (the field removals, `shadowed_by`, `finalize_cross_inspector`, Validation, Projection), open positions 6 and 22. Satisfies § 8.10 in full apart from the schema-version half Task 3 owns and the one `decision`-bearing assertion Task 23 owns: `crates/collect/tests/kernelboot_test.rs`, `crates/cli/tests/scan_shadow_test.rs` (new), `crates/refine/tests/session_test.rs`'s `InventoryNotToggleable` cases, and the tuned FIXME case in `containerfile.rs`. Satisfies the § 4 consumer rows for the kernel aggregate merge (`merge.rs:1685-1695`, `:1731-1755`), redaction (`engine.rs:790-805`, `:990-1028`), the TUI counts (`sections.rs:254-263`), and the web snippet items (`adapter.rs:949-968`).**
 
 Closes item 1.7: Kernel & Boot ships two decisions nothing mounts and holds 66 phantom ones.
 
@@ -2141,6 +2198,7 @@ Closes item 1.7: Kernel & Boot ships two decisions nothing mounts and holds 66 p
 - Modify: `crates/tui/src/app.rs:59`, `crates/web/src/handlers.rs:826-852`, `crates/web/src/aggregate_handlers.rs:1278-1290`
 - Modify: `crates/refine/src/projection/types.rs` (`RefKernelBoot.customizations_from_config`), `crates/web/src/adapter.rs:949-968`
 - Modify: `crates/core/src/aggregate/merge.rs:1685-1695`, `:1731-1755`; `crates/pipeline/src/redact/engine.rs:790-805`, `:990-1028`; `crates/tui/src/sections.rs:254-263`
+- Modify: `crates/pipeline/src/render/configtree.rs:285-311` (the ungated kernel snippet block, deleted) — **the prerequisite edit, moved here from Task 22.** That block reads `modules_load_d`, `modprobe_d`, and `dracut_conf` directly, so the compiler will not let this task's step 4 remove the fields while it stands, and step 8 requires a green workspace. Task 22 keeps the `sysctl_source_paths` skip, which is its own subject, and keeps § 8.1.
 - Modify: `crates/pipeline/src/render/containerfile.rs` (the tuned activation FIXME)
 - Test: `crates/collect/tests/kernelboot_test.rs`, `crates/cli/tests/scan_shadow_test.rs` (new), `crates/refine/tests/session_test.rs`
 
@@ -2174,7 +2232,7 @@ In `crates/collect/tests/kernelboot_test.rs`: `loaded_modules[].disposition` des
 
 In `crates/core/tests/snapshot_test.rs`: a schema 23 snapshot round-trips and its serialized `kernel_boot` has no `modules_load_d`, `modprobe_d`, `dracut_conf`, `tuned_custom_profiles`, or `non_default_modules` key, and its `selinux` has no `pam_configs` or `audit_rules` key. Serde ignores unknown fields, so a 23 payload carrying an old key loads and drops it; that is accepted and not tested as a failure.
 
-In `crates/cli/tests/scan_shadow_test.rs` (new), through the `scan` command's own code path with a `MockExecutor` and **not** `run_pipeline()`, each case against the final phase 0 renderer:
+In `crates/cli/tests/scan_shadow_test.rs` (new), through the `scan` command's own code path with a `MockExecutor` and **not** `run_pipeline()`. § 8.10 says these cases run "against the final phase 0 renderer with `sysctl_source_paths` deleted", which is a later boundary than this task: the skip is Task 22's and `ContextItem.decision` is Task 23's. Task 22's deletion changes none of these outcomes — a shadowed entry is `Inventory`, which the `is_included()` gate already drops, and an unshadowed one never appears in `sysctl_overrides[].source`, so the skip set is empty for it — so the only assertion this task cannot make is the `decision`-bearing one, **called out inline below and asserted in Task 23**. Everything else is asserted at this task's own green gate, and the file is re-run green at Task 26 step 3, the final-renderer boundary § 8.10 names.
 
 ```rust
 #[test]
@@ -2188,8 +2246,11 @@ fn degraded_for_an_unrelated_reason_still_shadows() {
     // /proc/cmdline unreadable while the sysctl files and `sysctl -a` answer normally:
     // the section is in completeness.degraded with a non-empty sysctl_overrides, and
     //  - the written snapshot still shadows 99-driftify.conf
-    //  - /api/view `sysctls` and the Kernel & Boot rows of /api/snapshot/sections carry
-    //    ItemId::Sysctl for its keys and no `decision` for the file
+    //  - /api/view `sysctls` carries ItemId::Sysctl for its keys
+    //  - DEFERRED TO TASK 23: the Kernel & Boot rows of /api/snapshot/sections carry
+    //    ItemId::Sysctl for its keys and no `decision` for the shadowed file. The `decision`
+    //    field does not exist until Task 23, which fills it from this task's projection
+    //    (see Step 6) and asserts exactly this; Task 24 asserts it on the live endpoint.
     //  - the Containerfile copies sysctl/etc/sysctl.d/99-inspectah-migrated.conf and nothing
     //    names config/etc/sysctl.d/99-driftify.conf
     //  - the tarball has the synthesized file and not the source file
@@ -2220,7 +2281,9 @@ Expected: FAIL — nothing sets `shadowed_by` and `ItemId::KernelModule` still e
 
 - [ ] **Step 3: Add `shadowed_by`, `ConfigShadow`, and `finalize_cross_inspector`, called from `collect()`**
 
-- [ ] **Step 4: Remove the five `KernelBootSection` fields, `ConfigSnippet`, and `ItemId::KernelModule`**
+- [ ] **Step 4: Delete the ungated kernel snippet block at `configtree.rs:285-311`, then remove the five `KernelBootSection` fields, `ConfigSnippet`, and `ItemId::KernelModule`**
+
+The block goes first, in this order, because it is the last reader of three of the five fields; with it gone, the field removal is a compile-clean edit. Nothing else in the workspace reads them.
 
 The `ItemId::KernelModule` removal touches `session.rs:1521`, the projection arm, `crates/tui/src/app.rs:59`, `handlers.rs:826-852`, and `crates/web/src/aggregate_handlers.rs:1278-1290` — the aggregate Kernel & Boot item list drops loaded modules, which are inventory now. That is the one aggregate touch the enum removal forces (§ 9).
 
@@ -2253,14 +2316,16 @@ git commit -m "fix(core): put each kernel and boot decision on exactly one entit
 `write_config_tree` copies `config.files` entries gated on `disposition.is_included()`, then rewrites three kernel snippet lists with no gate at all, so a Configuration Files exclusion is silently overridden at export.
 
 **Files:**
-- Modify: `crates/pipeline/src/render/configtree.rs:212` (the one gate that stays), `:285-311` (the ungated kernel snippet block, deleted), `:133-140`, `:228` (the `sysctl_source_paths` skip, deleted)
+- Modify: `crates/pipeline/src/render/configtree.rs:212` (the one gate that stays), `:133-140`, `:228` (the `sysctl_source_paths` skip, deleted)
 - Test: `crates/pipeline/tests/configtree_single_source_test.rs` (new)
 
+**The ungated kernel snippet block at `:285-311` is deleted in Task 21, not here.** It reads three fields Task 21 removes, so the compiler forces the deletion into that task; leaving it here would have made Task 21's workspace gate unreachable. This task keeps § 8.1 and the single-source property, and its own remaining code change is the `sysctl_source_paths` skip.
+
 **Interfaces:**
-- Consumes: Task 21's `shadowed_by` and the removed snippet lists; Task 20's deleted carry-forward block and `tuned/` root.
+- Consumes: Task 21's `shadowed_by`, the removed snippet lists, and the block deletion it forced; Task 20's deleted carry-forward block and `tuned/` root.
 - Produces: `write_config_tree` with one source for `/etc` content, `config.files`, gated on `is_included()`. The sysctl synthesis at `configtree.rs:327-345` and the kargs file are unchanged.
 
-**Why the skip is deleted rather than kept as a guard (§ 3.5):** `sysctl_source_paths` skipped an included, actionable entry, which under the shadowing rule is a file that owns itself. The `is_included()` gate at `:212` is the only gate. The § 8.10 degraded-scan test of Task 21 is the regression test for the deletion.
+**Why the skip is deleted rather than kept as a guard (§ 3.5):** `sysctl_source_paths` skipped an included, actionable entry, which under the shadowing rule is a file that owns itself. After Task 21 the skip can no longer reach a file the `is_included()` gate at `:212` would have written — a shadowed entry is `Inventory` and an unshadowed one is not in `sysctl_overrides[].source` — so deleting it removes a second gate that has become dead rather than changing an outcome. That is the point of § 5.3: one gate, one source. The § 8.10 degraded-scan test of Task 21 is the regression test for the deletion.
 
 - [ ] **Step 1: Write the failing test** in `crates/pipeline/tests/configtree_single_source_test.rs` (new)
 
@@ -2285,12 +2350,12 @@ fn an_included_config_entry_is_written() {
 
 The spec's first case populates `kernel_boot` with sysctls and tuned so the snapshot is realistic; after Task 21 the snippet lists no longer exist, so the second source the test guarded against is gone by construction and the assertion is that the gate is the only path.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Run it and record the result**
 
 Run: `cargo test -p inspectah-pipeline --test configtree_single_source_test`
-Expected: FAIL until the ungated block and the skip are gone.
+Expected: **PASS, and that is the correct result here.** This is the one task in the plan whose red state was closed by its predecessor: the ungated block was the failing condition, and Task 21's field removal forced its deletion. The test is written anyway because § 8.1 is this task's acceptance and the property needs a standing regression guard — `write_config_tree` must never regrow a second writer for `/etc`. If it fails, an earlier task left a writer behind; find it before touching this task's own change. Then delete the skip in step 3 and run it again: the result must not move.
 
-- [ ] **Step 3: Delete the ungated kernel snippet block and the `sysctl_source_paths` skip**
+- [ ] **Step 3: Delete the `sysctl_source_paths` skip**
 
 - [ ] **Step 4: Run the test to verify it passes, then the workspace**
 
@@ -2308,13 +2373,13 @@ git commit -m "fix(pipeline): write /etc content from config files alone"
 
 ### Task 23: `ContextItem` gains `decision` and `advisory`, and `empty_reason` everywhere
 
-**Implements § 3.8 and the `/api/snapshot/sections` and `/api/view` bullets of § 6.9, open positions 7 and 8. Satisfies § 8.12's Rust half: the `crates/web/tests/contract_snapshots.rs` fixture move, the reviewed snapshot deltas, `plain_context_item_is_byte_identical`, the `grouped_view` additions, and the `advisory.advisory_type == "unbacked_var_dir"` assertion.**
+**Implements § 3.8 and the `/api/snapshot/sections` and `/api/view` bullets of § 6.9, open positions 7 and 8. Satisfies § 8.12's Rust half: the `crates/web/tests/contract_snapshots.rs` fixture move, the reviewed snapshot deltas, `plain_context_item_is_byte_identical`, the `grouped_view` additions, and the `advisory.advisory_type == "unbacked_var_dir"` assertion. Also carries the § 3.4 View contract (the Storage rows derived from `effective_var_backing`) and the one § 8.10 `decision` assertion Task 21 could not make before this field existed; both are noted at their source tasks.**
 
 The server side only. Phase 1 renders these fields; phase 0 ships them so phase 1 is a web-only release.
 
 **Files:**
 - Modify: `crates/web/src/web_types.rs:102-108` (`ContextItem`), `:130-140` (already widened by Task 7), `:231-253`
-- Modify: `crates/web/src/adapter.rs:70`, `:191-218` (the sysctl and tuned DTOs stay until phase 3)
+- Modify: `crates/web/src/adapter.rs:70`, `:191-218` (the sysctl and tuned DTOs stay until phase 3), and the Storage rows, which derive from Task 19's `effective_var_backing` — **moved here from Task 19**, because `advisory` is this task's field and the rows cannot be written before it exists (`crates/web` already depends on `inspectah-pipeline`, `crates/web/Cargo.toml:10`)
 - Test: `crates/web/tests/contract_snapshots.rs`
 
 **Interfaces:**
@@ -2325,7 +2390,7 @@ The server side only. Phase 1 renders these fields; phase 0 ships them so phase 
   - `pub struct ContextAdvisory { pub advisory_type: AdvisoryType, pub rationale: String }`
   - `item_id` serializes as `ItemId` does in `/api/op` payloads (`#[serde(tag = "kind", content = "key")]`, `types.rs:57`), so a sysctl row carries `"item_id": {"kind":"Sysctl","key":{"key":"vm.swappiness"}}` and a config-backed row `{"kind":"Config","key":{"path":"/etc/modprobe.d/driftify.conf"}}`.
 
-**Where `decision` is filled:** `tuned_active` (`ItemId::TunedSelection`, from `tuned_disposition`), each sysctl row (`ItemId::Sysctl`), and each config-backed Kernel & Boot row (`ItemId::Config`). `advisory` is filled for unbacked `/var` rows from `UnbackedVarAdvisory` and for Task 19's `Provision` and `Unresolved` outcomes. `empty_reason` is set for every empty reference section: `data_unavailable` when the snapshot section is `None`, `zero_drift` when it is present and projects to no items.
+**Where `decision` is filled:** `tuned_active` (`ItemId::TunedSelection`, from `tuned_disposition`), each sysctl row (`ItemId::Sysctl`), and each config-backed Kernel & Boot row (`ItemId::Config`) — and **not** on a row whose config entry is shadowed, which Task 21 made `Inventory`; that row carries the subtitle `merged into 99-inspectah-migrated.conf` instead. `advisory` is filled for unbacked `/var` rows from `UnbackedVarAdvisory` and for Task 19's `Provision` and `Unresolved` outcomes, per the View contract in Task 19: one summary item for the `Carried` set, one advisory item per `Provision` whose `rationale` names the lost creator when there was one, and one advisory item per `Unresolved` with `advisory_type: unbacked_var_dir` and `rationale` `created on the host by <creator>; this export cannot tell whether the base image carries it (<reason text>)`, counted in the summary row's `<U> unbacked`. `empty_reason` is set for every empty reference section: `data_unavailable` when the snapshot section is `None`, `zero_drift` when it is present and projects to no items.
 
 **The only byte-identity this spec promises:** both fields are skipped when `None`, so a plain reference item with neither serializes byte-identically. The endpoint snapshots change for reasons the spec intends, and § 8.12 names each delta.
 
@@ -2341,18 +2406,25 @@ fn plain_context_item_is_byte_identical() {
 
 Then move the fixture (`contract_snapshots.rs:57-67`, `:144-201`): its `audit_rules` and `pam_configs` files become `config.files` entries with category `Audit` and `Pam` (actionable, included), and it drops `modules_load_d`.
 
+**The two assertions earlier tasks deferred to this one, each its own `#[test]`:**
+
+- **From Task 21 (§ 8.10).** On the degraded-but-shadowing fixture, the Kernel & Boot rows carry `decision` with `item_id == {"kind":"Sysctl","key":{"key":"<key>"}}` for each shadowed key, and the row for `/etc/sysctl.d/99-driftify.conf` itself carries **no** `decision` and the subtitle `merged into 99-inspectah-migrated.conf`. This is the assertion `scan_shadow_test.rs` could not make at Task 21's boundary, and the field it needs is added here.
+- **From Task 19 (§ 3.4 View).** With `/etc/tmpfiles.d/appone.conf` excluded under Configuration Files, the Storage section carries an advisory row for `/var/lib/appone/cache` whose `rationale` names `appone.conf`; including it again leaves the row out and puts the directory in the `Carried` summary. An `Unresolved` directory carries `advisory_type == "unbacked_var_dir"` and the reason text in its `rationale`, and is counted in the summary's `<U> unbacked`. Task 24 asserts the same transition on the live endpoint with undo and redo.
+
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `cargo test -p inspectah-web --test contract_snapshots`
 Expected: FAIL — `decision` and `advisory` do not exist.
 
-- [ ] **Step 3: Add the two optional fields and fill them in the adapter**
+- [ ] **Step 3: Add the two optional fields and fill them in the adapter, Storage rows included**
+
+The Storage rows are the part moved from Task 19: derive them from `effective_var_backing` rather than from the snapshot verdict, so the view reflects the export.
 
 - [ ] **Step 4: Set `empty_reason` on every empty reference section**
 
 - [ ] **Step 5: Re-accept the two endpoint snapshots with exactly these reviewed deltas and no others**
 
-In `contract_sections`: the SELinux section loses its two carry-forward rows and gains the two pointer items (`decided under Configuration Files`); the Kernel & Boot `modules_load_d` row leaves; the sysctl row gains `decision` with `item_id == {"kind":"Sysctl","key":{"key":"net.ipv4.ip_forward"}}`; every empty section gains `empty_reason`.
+In `contract_sections`: the SELinux section loses its two carry-forward rows and gains the two pointer items (`decided under Configuration Files`); the Kernel & Boot `modules_load_d` row leaves; the sysctl row gains `decision` with `item_id == {"kind":"Sysctl","key":{"key":"net.ipv4.ip_forward"}}`; the Storage rows are rebuilt from `effective_var_backing` into the `Carried` summary row plus one advisory row per `Provision` and per `Unresolved`; every empty section gains `empty_reason`.
 
 In `contract_view`: `config_files` gains the two entries with their `decision` and `output_path` under `config/etc/pam.d/` and `config/etc/audit/rules.d/`; `packages[0].entry` gains `repo_attribution: {"kind":"unrecorded"}`; `repo_groups[]` gains the three counts; the Containerfile preview loses the two PAM/audit comment lines and the `restorecon` line.
 
@@ -2397,7 +2469,7 @@ Two surfaces cache a projection of `self.original` for the server's lifetime. On
 One table-driven test over the surfaces of § 3.9. Each case: `GET` the surface, `POST /api/op`, `GET` again, `POST /api/undo`, `GET`, `POST /api/redo`, `GET`, and at each step `render_refine_export` on the same session; assert the include state the surface reports equals what the Containerfile and tarball render.
 
 - `/api/snapshot/sections`, `SetInclude(Config("/etc/modprobe.d/driftify.conf"), false)`: the Kernel & Boot row's `decision.include` is `false` after the op and `config/etc/modprobe.d/driftify.conf` is absent from the tarball; both revert on undo, both re-apply on redo. The same for `SetInclude(Sysctl, false)` (row and `99-inspectah-migrated.conf` content) and `SetInclude(TunedSelection, false)` (row and the `active_profile` line).
-- `/api/snapshot/sections`, Storage: `SetInclude(Config("/etc/tmpfiles.d/appone.conf"), false)` produces the advisory row and the `d` line; undo removes both.
+- `/api/snapshot/sections`, Storage: `SetInclude(Config("/etc/tmpfiles.d/appone.conf"), false)` produces the advisory row, with a `rationale` naming `appone.conf`, and the `d` line in `inspectah-var.conf`; undo removes both and returns the directory to the `Carried` summary; redo restores both. This is the live half of the § 3.4 "the view reflects the export" contract whose static half Task 23 asserts, and the reason Task 19 does not assert it: the endpoint is only live from this task.
 - `/api/view`, `SetInclude(Repo, false)` then `SetInclude(Package, true)` on one of its members: `repo_groups[]` counts and `packages[]` dispositions match the install list at each step.
 - `/api/view`, the group sequence of § 8.8 (`render_state` versus `dnf group install`).
 - `POST /api/reset` and a `resume_from` of the autosaved session both return surfaces equal to a fresh export of the same timeline.
@@ -2535,7 +2607,7 @@ git commit -m "docs(changelog): record the phase 0 refine fix-up changes"
 
 ## Coverage Map
 
-Checkable against § 7's phase 0 row and § 8. Every task cites its spec section and its § 8 test in its own heading; this is the same information inverted.
+Checkable against § 7's phase 0 row and § 8. **Tasks 1-24** cite their spec section and their § 8 test in their own heading; this is the same information inverted. Tasks 25 and 26 are documentation and release work and say in their headings that they satisfy no § 8 entry, because § 8 contains no test for a skill file or a CHANGELOG entry.
 
 ### Spec section to task
 
@@ -2576,7 +2648,7 @@ Checkable against § 7's phase 0 row and § 8. Every task cites its spec section
 | 8.9 fcontext collector, parser table, SELinux block | 10 (the collector and parser table, source selection), 11 (`smoke_render.rs` and `selinux_block_shell_test.rs`) | all phase 0 |
 | 8.10 Kernel & Boot after the move | 3 (the schema-22 rejection), 21 (everything else) | all phase 0 |
 | 8.11 PAM and audit through the config tree | 20 | all of it |
-| 8.12 decision rows, containers, and the invariant | 23 (the Rust `contract_snapshots.rs` block and `plain_context_item_is_byte_identical`), 7 (the `api_test.rs` group 422 and incomplete-repo 200), 8 (the `disabled`/`stale`/zero-effective frontend fixtures), 9 (the phase 0 activation block through both live `RepoBar` callers, including the stateful fake and the `repo-disagree` sequences) | **phase 0 only**; everything the entry labels "Frontend, phase 1" (`ListSemantics.test.tsx`, `ContextItem`/`ContextList`, `GroupRow`, `RepoGroup` phase 1 cases, `PackageList`, `UnmanagedFileList`, `DecisionSections`, `Sidebar`, `e2e/triage.spec.ts`, `e2e/keyboard.spec.ts`) and "Phase 2" is not planned here |
+| 8.12 decision rows, containers, and the invariant | 23 (the Rust `contract_snapshots.rs` block and `plain_context_item_is_byte_identical`), 6 (the `api_test.rs` group 422, which Task 6 claims in its own heading), 7 (the `api_test.rs` incomplete-repo 200), 8 (the `disabled`/`stale`/zero-effective frontend fixtures), 9 (the phase 0 activation block through both live `RepoBar` callers, including the stateful fake and the `repo-disagree` sequences) | **phase 0 only**; everything the entry labels "Frontend, phase 1" (`ListSemantics.test.tsx`, `ContextItem`/`ContextList`, `GroupRow`, `RepoGroup` phase 1 cases, `PackageList`, `UnmanagedFileList`, `DecisionSections`, `Sidebar`, `e2e/triage.spec.ts`, `e2e/keyboard.spec.ts`) and "Phase 2" is not planned here |
 | 8.13 error toast and upload modal | 13 (the one Rust line: `POST /api/upload-rpm` with `epel-release-latest-9.noarch.RPM` returns 200) | **phase 0 only**; the whole frontend body of the entry is phase 1 |
 | 8.14 host checks | 1 (B1, including its new sub-case (0)), 2 (B2), re-run triggered by 11 step 10 | all of it; A1 to A3 already passed on 2026-10-26 and are cited inside Tasks 4, 11, and 18. B2 passed 2026-10-27; **B1 failed at (0) and re-runs after Task 11** |
 | 8.15 every decision surface reflects the export | 24 | all of it |
@@ -2595,7 +2667,8 @@ Each of these is a decision, not an omission. The plan review treats a silent na
 4. **B1's sub-cases run through `sh -s` on stdin rather than `sh -c '...'`.** The emitted commands contain single quotes, which cannot nest inside `sh -c '...'`. The image, the commands, and the expectations are the spec's; only the way the script reaches the shell differs, and it differs so the bytes under test are the bytes the renderer writes.
 5. **Resolved, 2026-10-27, no longer a narrowing.** This plan added a B1 step 1 the spec did not list, confirming `semanage` and `matchpathcon` exist in `registry.redhat.io/rhel9/rhel-bootc:9.8`, with a re-open condition rather than a workaround, because inventing an install precondition would have been a redesign. **The step found `semanage` absent, § 3.1 re-opened, and Mark decided the precondition**: the block emits its own `RUN dnf install -y policycoreutils-python-utils`. § 3.1, § 5.1, and § 8.14 (0) now carry it, Task 11 implements it, and Task 1 re-runs against it. The rejected `semanage`-free design is spec position 32.
 6. **Peak resident memory during an upload is not asserted.** § 8.2 says so: there is no portable measurement. The chunk size is a named constant and the bounded-memory claim rests on the `field.chunk()` loop being the only read, which review of the implementation confirms.
-7. **Three adjacent items are out of scope and no task touches them:** the pre-existing unmanaged-extraction path-traversal issue, the deferred sidebar sections reorganization, and everything in § 9. In particular, `rpm.gpg_keys` is still nine copies of one path on the reference host (§ 5.2 notices it and § 9 excludes it), and the "GPG Keys (9)" count stays as it is.
+7. **Four edits sit in a different task than the one whose section defines them, so that every task's completion gate is reachable in order (plan review, 2026-10-27).** `PackageEntry.uploaded` is added in Task 13 rather than Task 16 because `set_uploaded` is its first use. The ungated kernel snippet block at `configtree.rs:285-311` is deleted in Task 21 rather than Task 22 because it is the last reader of three fields Task 21 removes and the compiler will not allow the order the other way. Task 19's adapter edit and its view assertions are in Tasks 23 and 24 because `ContextItem.advisory` is Task 23's field and `/api/snapshot/sections` is live only from Task 24. Task 21's one `decision`-bearing assertion is in Task 23 for the same reason. Each is marked at both ends, no task is renumbered, and every acceptance criterion the four tasks carried is still asserted somewhere in phase 0.
+8. **Three adjacent items are out of scope and no task touches them:** the pre-existing unmanaged-extraction path-traversal issue, the deferred sidebar sections reorganization, and everything in § 9. In particular, `rpm.gpg_keys` is still nine copies of one path on the reference host (§ 5.2 notices it and § 9 excludes it), and the "GPG Keys (9)" count stays as it is.
 
 ---
 
@@ -2607,7 +2680,7 @@ Run against the spec with fresh eyes after the plan was written.
 
 **2. Step scan.** Each step names one action with a checkable result. Code blocks appear only where the spec fixes exact bytes (the two emitted `RUN` forms, the FIXME texts, the CHANGELOG entries) or where a test's assertions are the decision. Function bodies are not written; signatures, files, and the values the spec pins are.
 
-**3. Type consistency.** `RepoId` (Task 4) is the key type in Tasks 5, 7, 16, 17. `RefineError::NoopTarget` (Task 6) is the error Task 7 returns. `validate_staged_name` and `RpmFilename` (Task 12) are consumed under those exact names by Tasks 13, 14, 15, 17. `VarDirBacking` (Task 18) is the input to `effective_var_backing` (Task 19). `ContextDecision` and `ContextAdvisory` (Task 23) are what Task 24's surfaces must keep in step with the export. `UploadMatch`/`UploadMatchKind` (Task 13) feed `VerifiedUpload` (Task 14). No name is introduced in a later task that an earlier one did not define.
+**3. Type consistency, and producer-before-consumer ordering.** `RepoId` (Task 4) is the key type in Tasks 5, 7, 16, 17. `RefineError::NoopTarget` (Task 6) is the error Task 7 returns. `validate_staged_name` and `RpmFilename` (Task 12) are consumed under those exact names by Tasks 13, 14, 15, 17. `PackageEntry.uploaded` (Task 13, where `set_uploaded` first writes it) is read by Tasks 14, 15, 23. `VarDirBacking` (Task 18) is the input to `effective_var_backing` (Task 19). `ContextDecision` and `ContextAdvisory` (Task 23) are what Task 24's surfaces must keep in step with the export, and they are also what Task 19's view contract and Task 21's shadowed-row assertion wait for. `UploadMatch`/`UploadMatchKind` (Task 13) feed `VerifiedUpload` (Task 14). **No name is introduced in a later task that an earlier one uses, and no task's completion gate requires behaviour a later task supplies.** The four places where an earlier draft of this plan broke that rule are fixed and marked in place: the `uploaded` field moved from Task 16 to Task 13; the `configtree.rs:285-311` deletion moved from Task 22 to Task 21, which the compiler forces; Task 19's adapter edit and view assertions moved to Tasks 23 and 24, where `advisory` exists and the endpoint is live; and Task 21's one `decision`-bearing assertion moved to Task 23. No acceptance criterion was dropped in any of the four, and no task was renumbered.
 
 **4. Review Focus.** Five input classes the spec implies and § 8 does not pin, each with a test in the owning task: `RepoId` case folding (Task 4), `parse_repo_sections` on dnf's `enabled=` vocabulary (Task 4), the no-op arms with no `rpm` section (Task 7), `effective_var_backing` with absent sections (Task 19), and the `validate_staged_name` length boundaries (Task 12).
 
