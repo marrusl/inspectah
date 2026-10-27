@@ -107,11 +107,18 @@ Spec § 4's consumer table says what phase 0 does at each site that names a remo
 
 ## Merge Gates
 
-Tasks 1 and 2 are **merge gates, not implementation tasks**. Neither has ever been run. Spec § 8.14: "the spec is not verified on these points until they are." Both must pass before phase 0 merges. They are placed first so that a failure re-opens § 3.1 or § 3.4 before the code that depends on them is written. **Do not start Task 3 until both have run and their results are recorded in this document.**
+Tasks 1 and 2 are **merge gates, not implementation tasks**. Both must pass before phase 0 merges. They are placed first so that a failure re-opens § 3.1 or § 3.4 before the code that depends on them is written.
+
+**Status, 2026-10-27.** Both have now been run once, and the `Result:` lines below are the record of that run; **they are history, not a pass.**
+
+- **B2 PASSED** against the stock base. § 3.4 is verified on its point and Tasks 18 and 19 are unblocked. Task 2 needs nothing further.
+- **B1 FAILED at step 1**: `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`. That re-opened § 3.1, and the spec's revision of 2026-10-27 answers it with the install precondition now in § 3.1 and § 5.1. Sub-cases (i) to (vi) were run on the same base with `policycoreutils-python-utils` added by hand and every one matched its expectation, which is evidence behind the decision but **not closed gate evidence**, because the image was augmented manually rather than by the line the renderer emits. **B1 re-runs in full once Task 11 implements the precondition**, against the stock base plus the emitted install line, and only then does it read PASS.
+
+**Do not start Task 3 until B2 reads PASS and B1's re-run is scheduled.** B1's re-run is the one gate that cannot complete before its implementation task: it tests a line Task 11 writes. Task 11 is therefore the point at which B1 becomes runnable, and Task 26 step 4 is where it must read PASS.
 
 ### Task 1: MERGE GATE B1 — SELinux replay against the target base
 
-**Implements § 3.1 (positions 23, 24, 30). Satisfies § 8.14, the B1 half.**
+**Implements § 3.1 (the install precondition, positions 23, 24, 30, 32). Satisfies § 8.14, the B1 half.**
 
 Runs the forms § 5.1 emits against the real `semanage` on the real target base. Nothing in the Rust change set is correct if these fail.
 
@@ -120,19 +127,46 @@ Runs the forms § 5.1 emits against the real `semanage` on the real target base.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a go/no-go for § 3.1. A differing result on any sub-case re-opens § 3.1 before merge; Task 9 and Task 10 do not start until this reads PASS.
+- Consumes, for the re-run only: Task 11's emitted `RUN dnf install -y policycoreutils-python-utils` line, which is what puts `semanage` on the base.
+- Produces: a go/no-go for § 3.1. A differing result on any sub-case re-opens § 3.1 before merge.
+
+**Ordering, after the 2026-10-27 failure.** The first run happened before any code and found the blocker, which is what a gate placed first is for. The re-run cannot happen there: it exercises a line Task 11 writes. So Tasks 10 and 11 proceed on the strength of the augmented-base evidence recorded below, and **B1's re-run happens immediately after Task 11 and blocks the merge, not Task 3.** Task 26 step 4 checks it.
 
 **Mechanics note.** The spec writes the gate as `podman run --rm registry.redhat.io/rhel9/rhel-bootc:9.8 sh -c '...'`. The emitted commands contain single quotes (`spec='...'`, `awk -v s='...'`), which cannot survive nesting inside `sh -c '...'`. Each sub-case below therefore pipes the identical script through `sh -s` on stdin, which keeps the emitted bytes byte-identical to what the renderer writes. The image, the commands, and the expectations are the spec's.
 
-- [ ] **Step 1: Confirm the tooling the emitted commands need exists in the base**
+- [ ] **Step 1: Confirm the tooling the emitted commands need, per binary, on both images**
+
+**Check each binary separately.** A single `command -v semanage matchpathcon awk grep printf` exits 0 when it resolves **any** of the names, so it reported success on a base with no `semanage` and nearly passed this gate in error. `printf` is a `/bin/sh` builtin and is not checked.
 
 ```bash
-podman run --rm registry.redhat.io/rhel9/rhel-bootc:9.8 sh -c 'command -v semanage matchpathcon awk grep printf; echo "exit=$?"'
+# (a) the stock base: semanage must be ABSENT, the other three present
+podman run --rm -i registry.redhat.io/rhel9/rhel-bootc:9.8 sh -s <<'B1TOOLS'
+for b in semanage matchpathcon awk grep; do
+  if command -v "$b" >/dev/null 2>&1; then echo "$b PRESENT $(command -v "$b")"; else echo "$b ABSENT"; fi
+done
+B1TOOLS
 ```
 
-Expected: paths for `semanage`, `matchpathcon`, `awk`, and `grep` (`printf` is a shell builtin and may print nothing), exit 0.
+```bash
+# (b) the base plus the line the renderer emits: all four must be PRESENT.
+#     This is the state every sub-case below runs in.
+cat > /tmp/b1-precondition.Containerfile <<'CF'
+FROM registry.redhat.io/rhel9/rhel-bootc:9.8
+RUN dnf install -y policycoreutils-python-utils
+CF
+podman build -t localhost/b1-precondition -f /tmp/b1-precondition.Containerfile /tmp
+podman run --rm -i localhost/b1-precondition sh -s <<'B1TOOLS2'
+for b in semanage matchpathcon awk grep; do
+  if command -v "$b" >/dev/null 2>&1; then echo "$b PRESENT $(command -v "$b")"; else echo "$b ABSENT"; fi
+done
+B1TOOLS2
+```
 
-**Re-open condition:** if `semanage` is absent from the base, the `RUN semanage ...` lines § 5.1 emits cannot run as specified and **§ 3.1 is re-opened before merge** — the rendered block would need a package-install precondition the spec does not describe. If only `matchpathcon` is missing, install `libselinux-utils` inside the sub-case (iii) and (iv) containers and note it; the oracle still holds.
+Expected: (a) `semanage ABSENT`, the other three PRESENT. (b) all four PRESENT. (a)'s absence is now the designed-for state, not a failure: § 3.1's precondition exists because of it.
+
+**Re-open conditions:** if (b)'s build does not complete, or `semanage` is still absent after it, **§ 3.1's install precondition is wrong and § 3.1 is re-opened before merge.** If `semanage` turns out to be present in (a), the precondition is unnecessary on this base and § 3.1 is re-opened to decide whether to keep it for the other bases. If only `matchpathcon` is missing, install `libselinux-utils` in the sub-case (iii) and (iv) containers and note it; the oracle still holds.
+
+**Every sub-case below runs against image (b), not the stock base**, because that is the state the rendered block creates. Replace `registry.redhat.io/rhel9/rhel-bootc:9.8` with `localhost/b1-precondition` in each `podman run` of steps 2 to 7 on the re-run.
 
 Result: **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
 
@@ -142,7 +176,9 @@ What the base does carry: `policycoreutils-3.6-5.el9`, `libselinux-utils-3.6-3.e
 
 It is installable in a build layer. A `FROM registry.redhat.io/rhel9/rhel-bootc:9.8` build with a repo definition supplied runs `dnf install -y policycoreutils-python-utils` to completion and `semanage` then works: 8 packages added (`checkpolicy`, `policycoreutils-python-utils`, `python3-audit`, `python3-distro`, `python3-libselinux`, `python3-libsemanage`, `python3-policycoreutils`, `python3-setools`), about 13 MB installed. The base carries **no repo files at all** (`/etc/yum.repos.d` is empty) and no entitlement certificates, so the install needs a repo source the build already supplies. What form that precondition takes in the emitted block is the § 3.1 decision this gate hands back; this plan does not choose it.
 
-Note on the step as written: `command -v semanage matchpathcon awk grep printf; echo "exit=$?"` prints `exit=0` on this base even with `semanage` missing, because bash's `command -v` over several names exits 0 when it resolves any of them. The verdict above rests on the per-binary runs, not on that status.
+Note on the step as first written: `command -v semanage matchpathcon awk grep printf; echo "exit=$?"` prints `exit=0` on this base even with `semanage` missing, because `command -v` over several names exits 0 when it resolves any of them. The verdict above rests on the per-binary runs, not on that status. The step above has since been rewritten to check each binary separately, and § 8.14 (0) with it, so a later gate cannot repeat the error.
+
+**Re-run: pending.** § 3.1 now carries the install precondition this failure produced. Re-run (a) and (b) above after Task 11, and replace this line with the outcome.
 
 - [ ] **Step 2: Sub-case (i) — stock expression, delete-then-add-or-modify**
 
@@ -227,7 +263,7 @@ The spec's § 8.14 (iii) form, "on a clean store" with no equivalence first: bot
 
 The disagreement is the absence of the equivalence, not a defect in rule 1. On this base `/srv` is a symlink to `var/srv`, `file_contexts.subs_dist` has no entry mapping `/var/srv`, and § 3.1 has the renderer emit the synthesized `/var/srv = /srv` before the first rule whose spec starts at a var-symlinked top level. The rendered block therefore always carries the equivalence ahead of these two rules, which is the state this plan's form sets up and the spec's wording omits. Read the clean-store run as confirmation that the synthesis is load-bearing: without it, every `/srv` rule misses the real path.
 
-**This is a spec wording defect in § 8.14 (iii), not a § 3.1 design failure.** As written, § 8.14 (iii) asks for a clean store and for both paths to agree, and on this base those two cannot both hold. The fix is to the test description: state that the equivalence is added first, as the renderer does. Recording it here because § 3.1 is re-opened anyway by step 1, so the correction can ride along; the decision is the maintainer's.
+**This was a spec wording defect in § 8.14 (iii), not a § 3.1 design failure.** As first written, § 8.14 (iii) asked for a clean store and for both paths to agree, and on this base those two cannot both hold. **Settled 2026-10-27: § 8.14 (iii) now starts from a store that already carries the synthesized `/var/srv = /srv`, as the renderer does**, which is the form this step has used all along. The two descriptions agree from here on; the step below needs no change on the re-run beyond the image swap.
 
 - [ ] **Step 5: Sub-case (iv) — preseeded overlapping local key, `matchpathcon` oracle**
 
@@ -1191,9 +1227,11 @@ git commit -m "feat(collect): collect file context rules as typed, ordered recor
 
 ### Task 11: The SELinux block, `selinux_equivalences`, and the executed-shell test
 
-**Implements § 3.1 rules 1 to 4 and § 5.1, open positions 18, 23, 24, 30. Satisfies § 8.9's render half: the `crates/pipeline/tests/smoke_render.rs` `insta` assertions and the whole of `crates/pipeline/tests/selinux_block_shell_test.rs` (new). Also satisfies the § 4 consumer rows for the HTML report (`report.rs:910-917`) and the audit report's fcontext section (`audit.rs:593-625`).**
+**Implements § 3.1's install precondition and rules 1 to 4, and § 5.1, open positions 18, 23, 24, 30, 32. Satisfies § 8.9's render half: the `crates/pipeline/tests/smoke_render.rs` `insta` assertions and the whole of `crates/pipeline/tests/selinux_block_shell_test.rs` (new). Also satisfies the § 4 consumer rows for the HTML report (`report.rs:910-917`) and the audit report's fcontext section (`audit.rs:593-625`).**
 
 Closes the render half of item 1.4. The renderer has no host access, so every decision that depends on target state is made by the emitted commands at build time.
+
+**This task unblocks merge gate B1's re-run** (Task 1). The install precondition below is the line B1 could not test because no release ever emitted it.
 
 **Files:**
 - Create: `crates/pipeline/src/render/selinux.rs`
@@ -1208,6 +1246,23 @@ Closes the render half of item 1.4. The renderer has no host access, so every de
   - `pub enum EquivalenceOrigin { Collected, Synthesized { reason: String }, Conflict { rows: Vec<FcontextRule> } }`
   - `const VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")];`
   - The Containerfile, the audit report, and the HTML report all read the helper, so "synthesized by inspectah" and a conflict are reported the same way everywhere.
+
+**The install precondition, verbatim (§ 3.1, § 5.1; Mark, 2026-10-27, from merge gate B1).** `semanage` is not in `registry.redhat.io/rhel9/rhel-bootc:9.8`; it comes from `policycoreutils-python-utils`, which the base does not install. The block emits, once, immediately before its first `semanage` command:
+
+```
+# The file context and port rules below need semanage, which this base does not
+# carry; policycoreutils-python-utils provides it.
+RUN dnf install -y policycoreutils-python-utils
+```
+
+Four rules govern it, each of which the tests below assert:
+
+1. **Emitted whenever the block will render any fcontext rule *or* any port label**, and not at all otherwise. The port-label path matters: `RUN semanage port -a -t ssh_port_t -p tcp 2222` is pre-existing at `6e8a52b1` and has the identical defect, so this closes a shipped bug as well as covering the new rules. A snapshot with a port label and no fcontext rule still gets the line.
+2. **Its own `RUN`, never folded into the package list** the Containerfile installs from `packages_added`. That list is the package set the refine UI presented for decision; a tool the renderer requires is a different category the user never chose.
+3. **No `--enablerepo`.** `policycoreutils-python-utils` is in AppStream, not CRB and not EPEL. Task 17's CRB rule carries `--enablerepo` on every `dnf ... install -y` for EPEL dependency resolution and **does not reach this line**; Task 17 asserts the exclusion.
+4. **No repo provisioning of its own.** The SELinux block renders after the package install block, which `containerfile.rs:2035-2047` already asserts (`packages_pos < services_pos < selinux_pos`), so whatever repo access the build has is in place by then. The base's empty `/etc/yum.repos.d` matters for a bare `podman run` and not for a build that has reached this block.
+
+**Implementation note on the existing ordering test.** `containerfile.rs:2035` finds the package block with `output.find("dnf install -y")`, the first occurrence. The precondition line contains that substring too, but renders later, so the existing test is unaffected — and its fixture (`:2027-2030`) sets only `fips_mode: true`, with no fcontext rule and no port label, so the line does not render for it at all. Verified at `815e65fb`. A **new** fixture carrying SELinux rules but no packages would make `find` resolve to the precondition line; do not write one for that test.
 
 **The two emitted forms, verbatim (§ 5.1).** Rule 1, with `<spec>` the single-quoted validated spec, `[-f <flag>]` present only when `file_type != All`, and `<args>` identical on the `-a` and the `-m`:
 
@@ -1244,6 +1299,8 @@ The unrenderable form, two lines, instruction first:
 
 The § 5.1 after-text for the host rule, exactly, plus: two rules render two guarded forms in collected order; a `Directory` rule carries `-f d` on all three commands; an `Unlabel` carries `-t '<<none>>'` inside the same guard; no `RUN` line contains `echo`; a spec containing `'` renders the two-line FIXME with the imperative first, and so does a spec of `--help`, with no `RUN` for either; no line contains `restorecon` outside the `#` sentence; the equivalence `RUN` appears once for two `/srv` rules and not at all for a `/opt` rule; a collected `/var/srv = /srv` plus the synthesis emits one equivalence `RUN`; a collected `/var/srv = /opt/srv` plus the synthesis emits no equivalence `RUN` and a FIXME naming both; no line contains `-m -e`; `/tmp/$(id) = /tmp` and `/srv;rm -rf / = /srv` each appear only inside a `#` line and no `RUN` line contains `;rm`; a `SemanageList` snapshot renders the `# NOTE:` caveat first and a `PolicyStore` one does not.
 
+**The install precondition, four cases, in the same file:** a snapshot with one fcontext rule and no port label renders the two comment lines and `RUN dnf install -y policycoreutils-python-utils` exactly once, positioned before the first `RUN` containing `semanage`; a snapshot with **a port label and no fcontext rule** renders them too, in the same position relative to `RUN semanage port -a`; a snapshot with neither renders none of the three lines; and in every case the line carries no `--enablerepo` and the string `policycoreutils-python-utils` appears nowhere in the package-install block's active lines.
+
 **Rendered bodies, not a lexical ban (§ 8.9).** Compare every `RUN` of the block whole against its expected body, the rule 1 or rule 2 template above with its placeholders filled. The only command substitutions it may hold are the two fixed queries, each verbatim, and every operand appears only as a single-quoted validated literal or as `"$eq"` or `"$spec"`. A `Label` with spec `/x/$(id)` renders `spec='/x/$(id)'`, its `$(` inside the single quotes, and passes. One negative case substitutes the round 2 double-quoted diagnostic, `echo "FIXME: <subject> is already equivalent to $eq on the target, not <labeled_like>; ..." >&2`, for the `printf` line of the expected equivalence body and asserts the comparison fails.
 
 - [ ] **Step 2: Write the failing executed-shell test** in `crates/pipeline/tests/selinux_block_shell_test.rs` (new)
@@ -1271,25 +1328,33 @@ Expected: FAIL — the renderer still emits the `sanitize_shell_value` FIXME and
 
 Key the list on `subject` over the collected `Equivalence` rows plus the synthesized `/var/srv = /srv`. A collected row equal to the synthesized one is emitted once as the collected row, and the audit report notes the synthesis was redundant. Two rows with one subject and different `labeled_like`, or a collected row mapping the other direction (`/srv = /var/srv`), are a `Conflict`: neither is emitted, and the two-line FIXME lists both and asks the operator to keep one.
 
-- [ ] **Step 5: Rewrite the Containerfile SELinux block at `containerfile.rs:1445-1462`**
+- [ ] **Step 5: Emit the install precondition at the head of the SELinux block**
+
+The condition is "this block will render at least one fcontext rule or at least one port label", evaluated before any rule is written, so the three lines precede the first `semanage` command whichever kind comes first. Its four rules and the ordering-test note are above.
+
+- [ ] **Step 6: Rewrite the Containerfile SELinux block at `containerfile.rs:1445-1462`**
 
 Operand validation per the Global Constraints; a rule failing any check renders the two-line FIXME, never a command. Diagnostics are static `printf` formats with operands as arguments. `sanitize_shell_value` is not used on fcontext operands.
 
-- [ ] **Step 6: Point the HTML report, audit report, and README at the same data (§ 4 consumer rows)**
+- [ ] **Step 7: Point the HTML report, audit report, and README at the same data (§ 4 consumer rows)**
 
 `report.rs:910-917` renders each rule as the command the Containerfile emits, or its FIXME text, with its disposition; equivalences come from `selinux_equivalences`, synthesized and conflict rows marked. `audit.rs:593-625` lists commands, dispositions, `fcontext_source`, and the helper's equivalence origins; its "File context rules: N" count line (`audit.rs:617-621`) counts decision-bearing rules only. `readme.rs:228` carries the restored-data `restorecon` sentence.
 
-- [ ] **Step 7: Run both tests to verify they pass, then the workspace**
+- [ ] **Step 8: Run both tests to verify they pass, then the workspace**
 
 Run: `cargo insta test -p inspectah-pipeline --review` then `cargo test --workspace`
 Expected: PASS, with the SELinux snapshot deltas reviewed and accepted.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/pipeline
 git commit -m "fix(pipeline): render file context rules as commands valid against the target"
 ```
+
+- [ ] **Step 10: Re-run merge gate B1 (Task 1) against the stock base plus this line**
+
+The emitted precondition now exists, so B1 can run as § 8.14 specifies for the first time. Build image (b) of Task 1 step 1 from the Containerfile this task renders rather than the hand-written one, run steps 1 to 7 of Task 1 against it, and replace each `Result:` line with the outcome. **Until that reads PASS, phase 0 does not merge** (Task 26 step 4). A differing result on any sub-case re-opens § 3.1.
 
 ---
 
@@ -1704,6 +1769,8 @@ git commit -m "feat(collect): classify repo-enabling packages by proven availabi
 
 **CRB (position 17):** `crb_ids` is every section with `enabled = true` whose id, lowercased, starts with `codeready-builder-` and contains neither `-debug-` nor `-source-`, kept as the host wrote it. Every `RUN dnf ... install -y` the Containerfile emits — repo-enabling packages, `dnf group install`, the package list, module streams — carries `--enablerepo=<id>` for each id in `crb_ids`, and the first such transaction carries `# CRB was enabled on the source host; EPEL packages may depend on it.` No id is reconstructed from a prefix and no `$(arch)` literal is written.
 
+**The one `dnf ... install -y` the CRB rule does not reach (§ 3.1 precondition, Mark 2026-10-27).** Task 11's `RUN dnf install -y policycoreutils-python-utils` at the head of the SELinux block is **excluded** from "every `RUN dnf ... install -y`". `policycoreutils-python-utils` is in AppStream, not CRB and not EPEL, and the CRB rule exists for EPEL dependency resolution. Scope `crb_ids` application to the package, group, module-stream, and repo-enabling transactions by name rather than by a textual sweep over every `dnf install` line, so the exclusion cannot regress when a later transaction is added.
+
 **Block text, verbatim (§ 5.2),** with the permalink on a `#` line only:
 
 ```
@@ -1750,6 +1817,14 @@ fn crb_flags_every_dnf_transaction() {
     // [codeready-builder-rhel9-internal] enabled is passed through verbatim;
     // [crb-mirror-rhel9] is not matched; the -debug- and -source- sections alone emit nothing;
     // no line contains `$(arch)`.
+}
+
+#[test]
+fn the_selinux_precondition_never_takes_an_enablerepo() {
+    // The same CRB fixture plus one fcontext rule, so Task 11's precondition renders:
+    // the line is exactly `RUN dnf install -y policycoreutils-python-utils`, with no
+    // --enablerepo on it, while every other RUN dnf install line still carries the flag.
+    // Repeat with a port label and no fcontext rule.
 }
 ```
 
@@ -2447,7 +2522,7 @@ Expected: `fmt`, `test`, and the three frontend commands PASS. The hook/CI clipp
 
 - [ ] **Step 4: Confirm both merge gates read PASS**
 
-Tasks 1 and 2. If either does not, phase 0 does not merge.
+Task 2 (B2) passed on 2026-10-27 and needs nothing. Task 1 (B1) failed its first run and **must have been re-run after Task 11, against the stock base plus the emitted install line**, with every `Result:` line replaced by the re-run's outcome. The augmented-base evidence from 2026-10-27 does not count: it was produced by hand, not by the renderer. If B1 does not read PASS on that re-run, phase 0 does not merge.
 
 - [ ] **Step 5: Commit**
 
@@ -2466,7 +2541,7 @@ Checkable against § 7's phase 0 row and § 8. Every task cites its spec section
 
 | Spec section | Tasks |
 |---|---|
-| § 3.1 fcontext rules | 10 (types, collector), 11 (renderer, helper, reports) |
+| § 3.1 fcontext rules | 10 (types, collector), 11 (the install precondition, renderer, helper, reports), 17 (the precondition's `--enablerepo` exclusion) |
 | § 3.2 repo attribution and `RepoIndex` | 4 (types, normalization), 5 (`RepoIndex`, provenance, `validate_target`), 7 (effective set, counts, no-op), 8 and 9 (the frontend half) |
 | § 3.3 repo-enabling packages and the upload path | 12 (filename), 13 (handler), 14 (export), 15 (removal, rescan), 16 (classification), 17 (render, CRB) |
 | § 3.4 tmpfiles.d parser and `/var` backing | 2 (gate), 18 (parser, payloads), 19 (effective backing) |
@@ -2503,7 +2578,7 @@ Checkable against § 7's phase 0 row and § 8. Every task cites its spec section
 | 8.11 PAM and audit through the config tree | 20 | all of it |
 | 8.12 decision rows, containers, and the invariant | 23 (the Rust `contract_snapshots.rs` block and `plain_context_item_is_byte_identical`), 7 (the `api_test.rs` group 422 and incomplete-repo 200), 8 (the `disabled`/`stale`/zero-effective frontend fixtures), 9 (the phase 0 activation block through both live `RepoBar` callers, including the stateful fake and the `repo-disagree` sequences) | **phase 0 only**; everything the entry labels "Frontend, phase 1" (`ListSemantics.test.tsx`, `ContextItem`/`ContextList`, `GroupRow`, `RepoGroup` phase 1 cases, `PackageList`, `UnmanagedFileList`, `DecisionSections`, `Sidebar`, `e2e/triage.spec.ts`, `e2e/keyboard.spec.ts`) and "Phase 2" is not planned here |
 | 8.13 error toast and upload modal | 13 (the one Rust line: `POST /api/upload-rpm` with `epel-release-latest-9.noarch.RPM` returns 200) | **phase 0 only**; the whole frontend body of the entry is phase 1 |
-| 8.14 host checks | 1 (B1), 2 (B2) | all of it; A1 to A3 already passed on 2026-10-26 and are cited inside Tasks 4, 11, and 18 |
+| 8.14 host checks | 1 (B1, including its new sub-case (0)), 2 (B2), re-run triggered by 11 step 10 | all of it; A1 to A3 already passed on 2026-10-26 and are cited inside Tasks 4, 11, and 18. B2 passed 2026-10-27; **B1 failed at (0) and re-runs after Task 11** |
 | 8.15 every decision surface reflects the export | 24 | all of it |
 | 8.16 attention strip targets | — | phase 1, not planned here |
 | 8.17 narrow layout | — | phase 1, not planned here |
@@ -2518,7 +2593,7 @@ Each of these is a decision, not an omission. The plan review treats a silent na
 2. **The `tuned/` promoted root and `TUNED_PREFIX` are deleted in Task 20, not Task 21.** § 3.5 groups them with the tuned move and § 7 lists them in phase 0's deleted column. Task 20 owns the walker and the configtree blocks; splitting them across two tasks would leave the workspace uncompilable between them.
 3. **The § 4 consumer checklist is distributed across the tasks that force each site, not held in one task.** Every row names a field removal or type change, and the compiler will not let the owning task commit without it. The checklist lands coherently through the task map at the top of this plan and Task 26's walk, which is the acceptance.
 4. **B1's sub-cases run through `sh -s` on stdin rather than `sh -c '...'`.** The emitted commands contain single quotes, which cannot nest inside `sh -c '...'`. The image, the commands, and the expectations are the spec's; only the way the script reaches the shell differs, and it differs so the bytes under test are the bytes the renderer writes.
-5. **B1 gains a step 1 the spec does not list:** confirming `semanage` and `matchpathcon` exist in `registry.redhat.io/rhel9/rhel-bootc:9.8`. § 3.1 assumes `semanage` is present in the target base and the spec never checks it. The step carries its own re-open condition rather than a workaround, because inventing an install precondition would be a redesign.
+5. **Resolved, 2026-10-27, no longer a narrowing.** This plan added a B1 step 1 the spec did not list, confirming `semanage` and `matchpathcon` exist in `registry.redhat.io/rhel9/rhel-bootc:9.8`, with a re-open condition rather than a workaround, because inventing an install precondition would have been a redesign. **The step found `semanage` absent, § 3.1 re-opened, and Mark decided the precondition**: the block emits its own `RUN dnf install -y policycoreutils-python-utils`. § 3.1, § 5.1, and § 8.14 (0) now carry it, Task 11 implements it, and Task 1 re-runs against it. The rejected `semanage`-free design is spec position 32.
 6. **Peak resident memory during an upload is not asserted.** § 8.2 says so: there is no portable measurement. The chunk size is a named constant and the bounded-memory claim rests on the `field.chunk()` loop being the only read, which review of the implementation confirms.
 7. **Three adjacent items are out of scope and no task touches them:** the pre-existing unmanaged-extraction path-traversal issue, the deferred sidebar sections reorganization, and everything in § 9. In particular, `rpm.gpg_keys` is still nine copies of one path on the reference host (§ 5.2 notices it and § 9 excludes it), and the "GPG Keys (9)" count stays as it is.
 
