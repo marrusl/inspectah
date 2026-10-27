@@ -12,7 +12,7 @@
 
 **Scope:** The § 7 phasing table's row "0. Correctness and the bump (Rust, plus the frontend repo compatibility edits)" and nothing else. Phases 1, 2, and 3 are separate web releases with their own plans. Two adjacent items are explicitly **not** in this plan and must not be absorbed into any task: the pre-existing unmanaged-extraction path-traversal issue (its own backlog item, its own fix) and the deferred sidebar sections reorganization. Everything in spec § 9 "Out of scope" stays out.
 
-**Target release:** v0.9.0-beta.4.
+**Target release:** v0.9.0-beta.4, confirmed by the maintainer on 2026-10-27. `Cargo.toml` stays at `0.9.0-beta.3`; the version bump happens when the release is cut, not in this plan.
 
 ---
 
@@ -134,7 +134,15 @@ Expected: paths for `semanage`, `matchpathcon`, `awk`, and `grep` (`printf` is a
 
 **Re-open condition:** if `semanage` is absent from the base, the `RUN semanage ...` lines § 5.1 emits cannot run as specified and **§ 3.1 is re-opened before merge** — the rendered block would need a package-install precondition the spec does not describe. If only `matchpathcon` is missing, install `libselinux-utils` inside the sub-case (iii) and (iv) containers and note it; the oracle still holds.
 
-Result: _not yet run_
+Result: **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
+
+Per-binary `command -v` inside the base: `semanage` status 1 and no path; `matchpathcon` `/usr/sbin/matchpathcon`; `awk` `/usr/bin/awk`; `grep` `/usr/bin/grep`; `printf` a builtin. Neither `/usr/sbin/semanage` nor `/usr/bin/semanage` exists. Everything the emitted commands need except `semanage` is present.
+
+What the base does carry: `policycoreutils-3.6-5.el9`, `libselinux-utils-3.6-3.el9`, `libsemanage-3.6-5.el9_6`, `selinux-policy-targeted-38.1.75-2.el9_8.1`, and `python3-3.9.25`. `policycoreutils` ships `semodule`, `restorecon`, `setfiles`, `setsebool`, and `fixfiles`, but not `semanage`. `/usr/sbin/semanage` comes from a separate package, `policycoreutils-python-utils-3.6-5.el9.noarch` (`dnf repoquery --whatprovides /usr/sbin/semanage`), which the base does not install.
+
+It is installable in a build layer. A `FROM registry.redhat.io/rhel9/rhel-bootc:9.8` build with a repo definition supplied runs `dnf install -y policycoreutils-python-utils` to completion and `semanage` then works: 8 packages added (`checkpolicy`, `policycoreutils-python-utils`, `python3-audit`, `python3-distro`, `python3-libselinux`, `python3-libsemanage`, `python3-policycoreutils`, `python3-setools`), about 13 MB installed. The base carries **no repo files at all** (`/etc/yum.repos.d` is empty) and no entitlement certificates, so the install needs a repo source the build already supplies. What form that precondition takes in the emitted block is the § 3.1 decision this gate hands back; this plan does not choose it.
+
+Note on the step as written: `command -v semanage matchpathcon awk grep printf; echo "exit=$?"` prints `exit=0` on this base even with `semanage` missing, because bash's `command -v` over several names exits 0 when it resolves any of them. The verdict above rests on the per-binary runs, not on that status.
 
 - [ ] **Step 2: Sub-case (i) — stock expression, delete-then-add-or-modify**
 
@@ -157,7 +165,11 @@ Expected: exit 0. `-d` fails on a key defined in policy and is swallowed by `2>/
 
 **Re-open condition:** the spec allows exactly one surprise here — if a RHEL downstream `semanage` accepts the duplicate `-a`, the `|| -m` fallback stays (harmless) and § 3.1 rule 1 gains a note on the downstream behaviour. Any other failure re-opens § 3.1. "The duplicate-add allowance is not permission to ignore any other failure" (§ 8.14).
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27: step 1 failed and the stock base has no `semanage`.** Run against the same base with `policycoreutils-python-utils` added, as evidence toward the § 3.1 decision. `policycoreutils` and `libsemanage` are 3.6, the versions § 3.1 cites, so the behaviour transfers.
+
+Observed: exit 0, and the final listing shows `/var/www(/.*)?  all files  system_u:object_r:public_content_t:s0`, the outcome the step expects. **The one allowed surprise is present:** `-a` on an already-defined key does not fail. `semanage fcontext -a -t public_content_t '/var/www(/.*)?'` prints `File context for /var/www(/.*)? already defined, modifying instead` and **exits 0**, auto-modifying, on a stock key and again on a local one; only `-d` fails, with `ValueError: File context for /var/www(/.*)? is defined in policy, cannot be deleted` (exit 1, swallowed as designed). So the `|| -m` fallback never fires for a duplicate on this base. Per § 8.14 the fallback stays (harmless) and § 3.1 rule 1 gains the downstream note. The end state is the one rule 1 intends, so the recency model is unaffected: sub-cases (iii) and (iv) measure it directly and both hold.
+
+Incidental, on every mutating `semanage` call in a container: stderr carries `libsemanage.semanage_rename: WARNING: rename(/etc/selinux/targeted/active, /etc/selinux/targeted/previous) failed: Invalid cross-device link, fall back to non-atomic semanage_copy_dir_flags()`. It is benign (libsemanage falls back to a copy) and comes from the overlay mount, not the rule, but it will appear in real build output and should not be read as a rule failure.
 
 - [ ] **Step 3: Sub-case (ii) — equivalence added, then identical**
 
@@ -178,7 +190,7 @@ Expected: `pass1 exit=0`, `pass2 exit=0`, and exactly one `/var/srv = /srv` line
 
 **Re-open condition:** a second entry, a nonzero exit, or a mutation on pass 2 re-opens § 3.1 rule 2.
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation exactly.** Output was `pass1 exit=0`, `pass2 exit=0`, and the final listing held exactly one line, `/var/srv = /srv`, with the whole equivalence section containing nothing else. Pass 2 found the mapping identical and ran no `semanage` mutation. § 3.1 rule 2's absent-add and identical-no-op branches hold on this base.
 
 - [ ] **Step 4: Sub-case (iii) — two overlapping rules in reversed specificity**
 
@@ -207,7 +219,15 @@ Expected: both replays exit 0, and both `matchpathcon` paths report the **later*
 
 **Re-open condition:** if the two paths disagree, or the winner is `httpd_sys_content_t`, § 3.1 rule 1's recency claim is wrong and § 3.1 is re-opened.
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base in both forms, because the spec and this plan set up the store differently, and the difference is load-bearing.**
+
+This plan's form, equivalence added first: both replays exit 0, `matchpathcon /var/srv/www/index.html` and `matchpathcon /srv/www/index.html` both give `system_u:object_r:public_content_t:s0`, they agree, and the winner is the later rule, B. `file_contexts.local` lists A (`/srv/www(/.*)?`) before B (`/srv/.*`). **§ 3.1 rule 1's recency claim holds.**
+
+The spec's § 8.14 (iii) form, "on a clean store" with no equivalence first: both replays still exit 0 and `/srv/www/index.html` still resolves to `public_content_t`, the later rule, so the recency claim holds there too. But the two paths **disagree**: `/var/srv/www/index.html` resolves to `system_u:object_r:var_t:s0`, the stock `/srv/.*` rule reached through no alias, while `/srv/www/index.html` gets `public_content_t`.
+
+The disagreement is the absence of the equivalence, not a defect in rule 1. On this base `/srv` is a symlink to `var/srv`, `file_contexts.subs_dist` has no entry mapping `/var/srv`, and § 3.1 has the renderer emit the synthesized `/var/srv = /srv` before the first rule whose spec starts at a var-symlinked top level. The rendered block therefore always carries the equivalence ahead of these two rules, which is the state this plan's form sets up and the spec's wording omits. Read the clean-store run as confirmation that the synthesis is load-bearing: without it, every `/srv` rule misses the real path.
+
+**This is a spec wording defect in § 8.14 (iii), not a § 3.1 design failure.** As written, § 8.14 (iii) asks for a clean store and for both paths to agree, and on this base those two cannot both hold. The fix is to the test description: state that the equivalence is added first, as the renderer does. Recording it here because § 3.1 is re-opened anyway by step 1, so the correction can ride along; the decision is the maintainer's.
 
 - [ ] **Step 5: Sub-case (iv) — preseeded overlapping local key, `matchpathcon` oracle**
 
@@ -237,7 +257,9 @@ Expected: both replays exit 0; the listing shows `/srv/.*` with the source's `pu
 
 **Re-open condition:** if `matchpathcon` names `httpd_sys_content_t`, or `file_contexts.local` lists B before A, § 3.1 is wrong and is re-opened before merge.
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying the source's `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A (`/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0`) before B (`/srv/.*  system_u:object_r:public_content_t:s0`). The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — **the source winner, not `httpd_sys_content_t`.**
+
+This is the sub-case that measures what § 3.1 rule 1 says it gives up: a target-local key the source does not define, overlapping a collected key, loses to it. The preseeded `var_t` on `/srv/.*` was replaced by the source's type and the source's relative order survived. `semanage` printed `File context for /srv/.* already defined, modifying instead` twice, once for the preseed (stock policy defines `/srv/.*`) and once for B; the `-d` before B removed the preseeded local key, so B still landed last in the local list. The auto-modify of sub-case (i) does not disturb the ordering model.
 
 - [ ] **Step 6: Sub-case (v) — conflicting target equivalence stops the build**
 
@@ -263,7 +285,15 @@ and the final listing still shows `/var/srv = /opt/srv` with no `/srv` mapping.
 
 **Re-open condition:** if the mapping was replaced, § 3.1 rule 2 is wrong and is re-opened.
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation.** The emitted form exits 1, stdout is empty, and stderr carries exactly the one expected line and nothing else:
+
+```
+FIXME: /var/srv is already equivalent to /opt/srv on the target, not /srv; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild
+```
+
+The mapping survives unreplaced: the equivalence listing after the run still reads `/var/srv = /opt/srv`, and no mapping to `/srv` was added. § 3.1 rule 2's conflict branch holds, with no mutation.
+
+Note on the step as written: the `elif` branch ends in `exit 1`, so the `echo "exit=$?"` and the listing after the `fi` are unreachable when the conflict fires and print nothing. The exit status and the surviving mapping above were confirmed by running the emitted form in a subshell and inspecting the store afterward; the conclusion does not rest on the exit status alone.
 
 - [ ] **Step 7: Sub-case (vi) — a target equivalence subject under a label spec is refused without mutation**
 
@@ -294,7 +324,21 @@ Expected: the three `/var/srv` replays each exit 0 with the rule 1 skip FIXME on
 
 **Re-open condition:** if the equivalence is gone or a `/var/srv` label row appears, § 3.1 is wrong and is re-opened before merge.
 
-Result: _not yet run_
+Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** The three `/var/srv` replays print `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv`:
+
+```
+FIXME: skipped the file context rule for /var/srv; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild
+```
+
+The listing after them holds `/var/srv = /srv` under the equivalence header and **no `/var/srv` label row**, so the guard refused all three without mutation, which is the whole point of position 30.
+
+The descendant spec behaves as § 3.1 predicts. `/var/srv/www(/.*)?` does not fire the guard (it is not itself a subject), `semanage` refuses both `-a` and `-m` with its own equivalency-conflict message, that replay exits 1, and the equivalence survives:
+
+```
+ValueError: File spec /var/srv/www(/.*)? conflicts with equivalency rule '/var/srv /srv'; Try adding '/srv/www(/.*)?' instead
+```
+
+printed once for `-a` and once for `-m`, after which the listing still reads `/var/srv = /srv`. Stopping the build on that message is the outcome § 3.1 rule 1 calls correct, and `semanage`'s own text names the fix.
 
 - [ ] **Step 8: Record the verdict**
 
@@ -346,7 +390,20 @@ Expected: `cache: PRESENT` and `sub: ABSENT`. That is the whole claim: a `d` lin
 
 **Re-open condition:** anything else, and **§ 3.4 is wrong and is re-opened before merge**.
 
-Result: _not yet run_
+Result: **PASS, 2026-10-27.** Run inside `registry.redhat.io/rhel9/rhel-bootc:9.8` as the step directs, on `systemd 252 (252-67.el9_8.6)`, the 252 line § 3.4 cites. Output:
+
+```
+exit=0
+cache:
+PRESENT
+sub:
+ABSENT
+drwxr-x---. 1 4242 4242 0 Oct 27 21:31 /tmp/tmp.ZhteNhvaGh/var/lib/appone/cache
+```
+
+`systemd-tmpfiles --create` exited 0, created `<root>/var/lib/appone/cache` and nothing under it, and applied the line's mode and ownership (`0750`, uid and gid 4242, printed numerically because the container's own `/etc/passwd` has no `appone` while the `--root` tree does — which is the ownership-identity preparation working as intended). The leading parents `var`, `var/lib`, `var/lib/appone` were created and are the only other entries in the tree, matching systemd's documented implicit parent creation. **§ 3.4's claim holds: a `d` line creates exactly its own path and nothing below it, so deleting the ancestor walk outright is correct and a directory that only an ancestor's entry names is `Unbacked`.**
+
+Cross-check against the workstation, and why the in-base run is the one that counts. The same script on the Fedora 44 host (`systemd 259 (259.9-1.fc44)`, unprivileged) reached the same path result, `cache: PRESENT` and `sub: ABSENT`, but exited **73** with `fchownat() of <root>/var/lib/appone/cache failed: Operation not permitted`, because a non-root user cannot chown to uid 4242. A host run would therefore have been weaker twice over: wrong systemd generation, and an ownership failure masking a nonzero exit onto a check whose path claim had in fact passed. The in-base run settles both. That the two systemd generations agree on the creation semantics raises confidence that the behaviour is stable rather than version-specific.
 
 - [ ] **Step 2: Record the verdict and commit**
 
