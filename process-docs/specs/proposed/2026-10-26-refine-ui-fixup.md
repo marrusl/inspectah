@@ -1,0 +1,766 @@
+# Refine Single-Host UI Fix-up Spec
+
+## Metadata
+
+| Field      | Value |
+|------------|-------|
+| Date       | 2026-10-26 |
+| Status     | Proposed |
+| Basis      | The 2026-10-26 single-host refine test of a driftify-prepared RHEL 9.8 aarch64 host (`rhel9-20261026-182040`, schema 22, inspectah 0.9.0-beta.3) against `registry.redhat.io/rhel9/rhel-bootc:9.8`, and the four assessments it produced: the Rust assessment (collect/refine/render, five claims executed), the frontend assessment (web UI and handlers, reproduced against the Homebrew beta.3 binary), the interaction-model critique, and the image-mode rulings. The interaction contract written from the critique is the frontend default. |
+| Verified   | Code citations checked against inspectah commit `6e8a52b1`. The frontend citations were first taken at `648c3b82` (two commits behind, zero diff in `crates/web`) and re-checked against `6e8a52b1` by the web co-author pass on 2026-10-26. The three host checks of § 2 (A1 to A3) ran on 2026-10-26 after the draft and confirmed the positions taken. |
+
+Section 6, the frontend rows of § 7, and § 8 items 12 and 13 were co-authored by the web developer on 2026-10-26.
+
+## 1. Problem
+
+Each item names the bug, where it lives at `6e8a52b1`, and the evidence class. "Executed" means a throwaway integration test was run against HEAD and the observed output is quoted; "read from source" means the behaviour was traced but not run.
+
+### 1.1 configtree writes the kernel snippet lists ungated
+
+`write_config_tree` copies `config.files` entries gated on `disposition.is_included()` (`crates/pipeline/src/render/configtree.rs:212`), then rewrites `kernel_boot.modules_load_d`, `modprobe_d`, and `dracut_conf` with no gate at all (`configtree.rs:285-311`). The same file exists in both places on this host: `/etc/modules-load.d/driftify.conf` is a `config.files` entry (actionable, included) and a `ConfigSnippet` in `modules_load_d`.
+
+**Executed against `6e8a52b1`.** `write_config_tree` on a snapshot whose `config.files` holds `/etc/modules-load.d/driftify.conf` with `disposition: excluded`: with `kernel_boot.modules_load_d` empty, `config/etc/modules-load.d/driftify.conf` is absent and the materialized roots are `[]`; with the same path present in `modules_load_d`, the file is present and the roots are `["etc"]`. A Configuration Files exclusion is silently overridden at export.
+
+### 1.2 RPM-owned, unmodified modprobe.d files ship in every image
+
+`collect_config_snippets` (`crates/collect/src/inspectors/kernelboot.rs:447-484`) reads every file in the directory and takes no `RpmState`. On this host `kernel_boot.modprobe_d` holds `firewalld-sysctls.conf` (owned by `firewalld`), `tuned.conf` (owned by `tuned`), and `driftify.conf`; `rpm_va` lists neither of the first two. The config inspector correctly left them out of `config.files`; the kernel inspector put them back, and item 1.1's ungated write ships them under `COPY config/etc/ /etc/`, overriding whatever the target base's own `firewalld` and `tuned` install. Read from source; the tarball listing confirms both files present.
+
+### 1.3 Relaxed-matched uploads export nothing, and epel-release renders twice
+
+`mark_uploaded_rpm` (`crates/refine/src/session.rs:626-690`) matches `epel-release-latest-9.noarch.rpm` to `epel-release.noarch` through the progressive-prefix path and sets `cache_path` to the staged file under its uploaded name. `copy_uploaded_rpms` (`session.rs:3259-3300`) allowlists staged files by snapshot-NEVRA filename equality and never reads `cache_path`; `repoless_rpm_lines` (`crates/pipeline/src/render/repoless.rs:28-29`) names the COPY source from the NEVRA too.
+
+**Executed against `6e8a52b1`.** Same session, `set_upload_dir`, file staged under the uploaded name, `mark_uploaded_rpm`, `SetInclude` on the package, `render_refine_export(..., Some(&upload_dir))`:
+- upload `epel-release-9-11.el9.noarch.rpm`: Containerfile `COPY repoless-packages/epel-release-9-11.el9.noarch.rpm /tmp/`, tarball contains `export/repoless-packages/epel-release-9-11.el9.noarch.rpm`. Correct.
+- upload `epel-release-latest-9.noarch.rpm`: matched, included, `repoless_cached = true`, the same active `COPY repoless-packages/epel-release-9-11.el9.noarch.rpm`, and the tarball contains only the empty `export/repoless-packages/` directory. `podman build` fails on the missing COPY source.
+
+The same package also renders twice. `is_package_installable` (`crates/pipeline/src/render/service_intent.rs:70`) passes any package whose `state` is `Added` and whose `source_repo` is non-empty, so `epel-release` (`source_repo: "@commandline"`, `repoless_annotation` set) reaches the install list and the `-release` name partition (`crates/pipeline/src/render/containerfile.rs:638`) emits an active `RUN dnf install -y epel-release` under "Repo-enabling packages (1)"; `repoless_rpm_lines` then emits `# MANUAL: epel-release (no repo source, RPM not in cache)` for the same package. `rpm.repo_providing_packages` (`crates/core/src/types/rpm.rs:232`) is dead: its only writer is the aggregate merge of empty lists (`crates/core/src/aggregate/merge.rs:949`), and it is `[]` in this snapshot.
+
+The matcher table, executed, is in § 8.6; the client-side gate that blocks the Fedora filename before the server sees it is item 1.11.
+
+### 1.4 The fcontext rule renders as a FIXME
+
+`collect_fcontext_rules` (`crates/collect/src/inspectors/selinux.rs:318-345`) pushes each trimmed non-header line of `semanage fcontext -l -C` as a `String`. The snapshot holds one row with its column padding intact:
+
+```
+/srv/www(/.*)?                                     all files          system_u:object_r:httpd_sys_content_t:s0
+```
+
+The renderer (`containerfile.rs:1445-1462`) passes the row through `sanitize_shell_value`, whose regex rejects `( ) ? \s` among others (`crates/pipeline/src/render/safety.rs:11`), so every real rule fails and prints `# FIXME: fcontext rule contains unsafe characters: ...`, followed by `# RUN restorecon -Rv /`. The commented `# RUN semanage fcontext -a {row}` form could never have been a command either; the row is a table line. Read from source; the rendered Containerfile confirms. The same file also appears as `config.files` entry `/etc/selinux/targeted/contexts/files/file_contexts.local` (`rpm_owned_modified`, excluded): two representations of one fact.
+
+### 1.5 Repo attribution relabels packages, and `RepoIndex` splits one repo in two
+
+`normalize_source_repos` (`crates/collect/src/inspectors/rpm/source_repos.rs:184-207`) rewrites each package's short `%{from_repo}` id to the first section id, over every section in every repo file in file order and disabled sections included, whose lowercased form contains the lowercased short id. `redhat.repo` is first in `repo_files` and carries a console.redhat.com content-template section `[EPEL_10_Everything_x86_64]` with `enabled = 0`; `epel.repo`'s `[epel]` is last.
+
+**Executed against `6e8a52b1`.** `normalize_source_repos` fed the snapshot's own four `repo_files` and one package `htop.aarch64` with `source_repo = "epel"`: host order (`redhat.repo, epel-cisco-openh264.repo, epel-testing.repo, epel.repo`) yields `"EPEL_10_Everything_x86_64"`; the same files reversed yield `"epel"`. The eight relabeled packages are `.el9` aarch64 builds, which an x86_64 EPEL 10 repo cannot have served (host check A1 in § 2 settled it: dnf recorded `epel`). The repo-less scan did not flag them only because `repo_matches_enabled` (`crates/collect/src/inspectors/rpm/repoless.rs:48`) runs on the pre-normalization value.
+
+Downstream, `RepoIndex::build` keys `repo_file_by_section` by the header as written (`crates/refine/src/repo_index.rs:58-66`) and `packages_by_repo` by `source_repo.to_lowercase()` (`repo_index.rs:85-93`), so the provenance map holds `EPEL_10_Everything_x86_64 -> Verified` and `epel_10_everything_x86_64 -> Incomplete` (`repo_index.rs:97-108`). `build_repo_groups` looks up with the lowercased key (`crates/web/src/handlers.rs:209`), gets `Incomplete`, and `validate_target` refuses any non-`Verified` repo toggle with HTTP 400 (`session.rs:1401-1413`). Any mixed-case section id can never be `Verified` today. The frontend assessment reproduced the 400 and showed that posting the original-case id is accepted and recorded. Both repo surfaces render the Switch for `incomplete` (`RepoGroupHeader.tsx:26-27`, `RepoBar.tsx:32-34`: `!is_distro && provenance !== "unknown"`), so the control is offered and refused.
+
+### 1.6 The tmpfiles classifier backs everything
+
+`check_tmpfiles_backing` (`crates/collect/src/inspectors/storage.rs:374-398`) runs `grep -r --include=*.conf -l <path> /etc/tmpfiles.d/ /usr/lib/tmpfiles.d/` (unanchored, regex, substring) and walks up until the parent is `/var`, so it reaches `/var/lib`, `/var/log`, and `/var/cache`.
+
+**Executed against `6e8a52b1`, two halves.** (i) systemd v252 `tmpfiles.d/var.conf` has `d /var/lib 0755 - - -`. The renderer's literal grep run in a shell against a directory holding only that file: `/var/lib/pgsql` exits 1, `/var/lib` prints `var.conf` and exits 0. (ii) `StorageInspector::inspect` with a `MockExecutor` answering those two greps the same way classified `/var/lib/pgsql` as `Some(Tmpfiles)` and set `unbacked_var_advisory = None`. On this host 66 of 66 directories are `tmpfiles`, including `/var/lib/pgsql` and `/var/lib/mydb`, which driftify's fixture design marks as unbacked on purpose; the one storage advisory that matters never fires, and the `inspectah-var.conf` tmpfiles emission (`containerfile.rs:1743-1810`) has nothing to emit.
+
+### 1.7 Kernel & Boot shows no decisions and holds 66 phantom ones
+
+`/api/view` ships `sysctls` (2) and `tuned` (1) as decision DTOs (`crates/web/src/adapter.rs:191-215`), and the Containerfile renders both (`containerfile.rs:1345-1375`). Nothing in the UI mounts them: `SystemTuningSection.tsx`, `SysctlSection.tsx`, and `TunedSection.tsx` are imported only by their tests since `ec309758` retired the `system_tuning` section id (`crates/pipeline/src/section_group.rs:18`). Meanwhile `loaded_modules` carries 66 `Actionable { include: true }` dispositions (`crates/core/src/types/kernelboot.rs:39-40`, bare `serde(default)`), `kernel_boot_section_lines` never reads them, and the sidebar kebab's `batch_toggle_group` flips all 66 plus the sysctls and tuned selection in one request (`handlers.rs:826-870`). `non_default_modules` is `Vec::new()` at the collector (`kernelboot.rs:141`). The kernel snippet lists duplicate `config.files` entries with no disposition of their own (item 1.1). Read from source.
+
+### 1.8 PAM and audit rules ship with no disposition
+
+`CROSS_INSPECTOR_EXCLUDE_PREFIXES` (`crates/collect/src/inspectors/config/walk.rs:183`) keeps the config walker out of `/etc/pam.d/` and `/etc/audit/rules.d/`; the SELinux inspector collects them as `CarryForwardFile { path, content }` (`selinux.rs:396-485`), a `ConfigFileEntry` without a disposition. configtree writes them unconditionally (`configtree.rs:525-547`), the Containerfile says "1 custom PAM config file(s) materialized" (`containerfile.rs:1471-1476`), the web view lists them read-only by basename (`crates/refine/src/projection/reference.rs:863-897`), and the audit report (`crates/pipeline/src/render/audit.rs:593-625`) never mentions them. Read from source.
+
+### 1.9 Group exclude returns 200 and records nothing
+
+`installed_groups` holds `Container Management` with members `buildah`, `containernetworking-plugins`, `podman`. The first two are in `packages_added` and in `auto_packages`, not `leaf_packages`; `podman` is baseline-suppressed and absent from `packages_added`. `normalize_package_defaults` (`crates/refine/src/normalize.rs:116-165`) excludes the two non-leaf members at session construction. `is_op_noop`'s `ItemId::Group` arm (`session.rs:1816-1836`) asks whether every present member already has the requested state, which for "exclude" is yes, so `apply` returns `Ok(())` without recording (`session.rs:789-791`). `GroupInfo` (`crates/web/src/web_types.rs:231-241`) reports `member_count: 3` from the declaration; the set the op acts on is never surfaced. The frontend assessment reproduced HTTP 200 with no entry in `/api/ops`; `GroupRow.tsx:146-157` offers only `ungroup`, and `MainContent.handleGroupToggle` (`MainContent.tsx:304-319`) is wired but ignored by the row.
+
+### 1.10 Four filename matchers
+
+`validateRpmFile` in `RpmUploadModal.tsx:34-59`, `extractPackageName`/`validateFilename`/`batchMatch` in `useRpmUpload.ts:63-74`, `:169-210`, `:222-274`, `extractCanonicalKey`/`bareNameFromCanonical` in `RpmBatchUploadModal.tsx:23-57`, and `parse_rpm_filename` in `session.rs:3567` all parse filenames and disagree. The client regex `^(.+?)-\d` extracts `epel-release-latest` from Fedora's canonical filename and blocks the upload with "filename suggests epel-release-latest" before the server's prefix matcher runs; the batch modal lists the same file under "Unmatched Files" and never posts it. `uploadedSet` is set before the server's `status` is read (`useRpmUpload.ts:126-130`), and it is keyed on the argument rather than on `result.matched`.
+
+### 1.11 Silent server errors
+
+Three error paths exist. App's `onMutationError` (`App.tsx:216-223`), the callback of the `useMutation` that language-package, unmanaged-file, and pin toggles use, invalidates the view and calls `console.error`. The `onMutationError` prop handed to `MainContent` (`App.tsx:719-721`) only calls `console.error`, and it is the path the package, repo, and group toggles take (`MainContent.tsx:255-319`). Only `DecisionList.tsx:308-357` shows anything: a `warning` toast `Error: <message>` that auto-dismisses after 3 seconds, so Configuration Files errors are visible and Packages, repo, and group errors are not. Items 1.5 and 1.9 travelled the silent path and read as "the button does nothing".
+
+### 1.12 Storage noise and dead fields
+
+`VarDirectory.size_estimate` and `recommendation` (`crates/core/src/types/storage.rs:81-83`) are written by nothing in `crates/collect` (`discover_var_directories`, `storage.rs:167-259`, sets path, mode, and ownership only). The adapter renders them as `~` and ` (0755 root:root)` (`adapter.rs:1293-1310`); so do `crates/tui/src/screen/single_host.rs:1030` and the projection (`crates/refine/src/projection/reference.rs:549-550`). Combined with item 1.6, 66 rows say nothing.
+
+### 1.13 The kebab inventory and the false premise
+
+The 2026-07-06 convergence spec assumed per-section batch controls already existed in the content area. They do not for Packages, Configuration Files, Services, or Scheduled Tasks; the sidebar kebab (`Sidebar.tsx`, roughly 285 of 755 lines), `batch_toggle_group` (`handlers.rs:715-1089`), the `/api/batch-toggle/{group_slug}` route (`crates/web/src/lib.rs:98-101`), and their tests (`Sidebar.test.tsx:950-1367`, `handlers.rs:1695-1830`; about 1,250 lines in all, § 6.4) are the only bulk include/exclude for the big sections and the only control at all for the kernel and SELinux decisions. No Playwright test references the kebab.
+
+### 1.14 Snippet titles by basename
+
+`snippet_items` (`adapter.rs:949-968`) titles kernel snippets by `file_name()`, so `/etc/modprobe.d/tuned.conf` and `/etc/tuned/myapp/tuned.conf` both read `tuned.conf`. `project_ref_selinux` does the same for PAM and audit files (`reference.rs:864-867`, `882-885`).
+
+## 2. Settled decisions
+
+Each paragraph records a decision made on 2026-10-26 and what it closes.
+
+**EPEL and repo-enabling packages: mirror-safe order.** A `@commandline` package whose name ends in `-release` and whose owned repo files and GPG keys are all present in the captured `repo_files` and `gpg_keys` is repo-enabling, not repo-less. It leaves the repo-less section: no MANUAL block, no upload prompt. The Containerfile copies the repo files and keys first, then runs `dnf install -y <name>` resolved from the copied repo, so the build works connected or behind a mirror; the `dl.fedoraproject.org` permalink appears only as a commented alternative. A cosmetic `epel.repo.rpmnew` from installing after the COPY is accepted. CRB is enabled only when the host had a `codeready-builder-*` section enabled. `repo_providing_packages` is removed in the same bump. Genuine repo-less uploads keep the upload path with the staging bug fixed. Closes item 1.3 and the 2026-06-29 pre-spec's open question for this class.
+
+**Package groups: exclude members; inert groups say so.** The group control is `SetInclude(Group)` over the group's effective members (present in `packages_added`, actionable, not locked). `GroupInfo` gains `effective_member_count` and `effective_included`; a group op whose effective members are all already in the requested state is refused with 422, never accepted with 200. A group with zero effective members shows no control and states why. Baseline-suppressed members stay in `members[]`, marked. Non-leaf members stay hidden by the leaf filter. Closes item 1.9.
+
+**Kebab: hide in phase 1, header checkbox in phase 2, delete in phase 3.** Phase 1 hides the sidebar kebab menu with a prop that leaves the Ctrl+Shift+A/X chords working (they stay one release). Phase 2 moves bulk include/exclude onto a tri-state header checkbox on section lists and group rows. Phase 3 deletes the batch-toggle route, handlers, Sidebar code, confirm modal, and tests. The Kernel & Boot batch arm stops existing because `loaded_modules` becomes inventory. Closes item 1.13.
+
+**Kernel & Boot: the `decision?` contract lands in phase 1; no remount.** `ContextItem` gains an optional `decision`, filled for sysctl and tuned rows now (their DTOs and `ItemId::Sysctl`/`ItemId::TunedSelection` already exist) and for config-backed rows once they carry dispositions. The three dead components and their tests are deleted. The data-model rule stands: a decision lives exactly once, on the entity the renderer reads. Kernel snippet lists leave `KernelBootSection`; every file under `/etc` is a `ConfigFileEntry` with one `ItemId::Config`; the ungated configtree write goes away; Kernel & Boot Customizations becomes a read-only projection over `config.files` by directory prefix. `tuned_custom_profiles` becomes a `ConfigCategory::Tuned` entry with `tuned_disposition` as the one activation decision. `sysctl_overrides` stays key-level, with `shadowed_by: Sysctl` recorded on the suppressed source entries. `loaded_modules` becomes `FindingKind::Inventory` through the serde default and `ItemId::KernelModule` leaves the toggle vocabulary. `non_default_modules` is dropped. Closes items 1.1, 1.2, 1.7.
+
+**PAM and audit rules: the config walker owns them.** The two prefixes leave `CROSS_INSPECTOR_EXCLUDE_PREFIXES`; `/etc/pam.d/` gets `ConfigCategory::Pam`; `pam_configs`, `audit_rules`, the unconditional configtree write, and `CarryForwardFile` are deleted. They toggle through `ItemId::Config`, count in config stats, and appear in the audit report. authselect-managed symlinks are not local files. The SELinux reference section keeps a derived read-only pointer list. Closes item 1.8.
+
+**Ruling: fcontext at build time.** `RUN semanage fcontext -a [-f <flag>] -t <type> '<spec>'`, `-s`/`-r` only when the user is not `system_u` or the level not `s0`; no `restorecon` line at all, because bootc labels the deployed tree from the image's own policy under `/etc/selinux` and ignores layer xattrs; `RUN semanage fcontext -a -e /srv /var/srv` emitted once before any `/srv` rule as a renderer-synthesized equivalence; collected equivalence rows render as `-a -e`; `Unlabel` renders with `'<<none>>'`; unrenderable rules print a two-line FIXME, instruction first. `file_contexts.local` leaves the config walk as derived policy-store state. Closes item 1.4.
+
+**Ruling: backed `/var` directories are inventory.** Only unbacked directories change a Containerfile decision. Backed ones collapse to a count; only `Unbacked` (plus non-root ownership or non-default mode) reach the view as rows; the tmpfiles.d parser replaces the substring grep and the ancestor walk stops strictly below `/var/{lib,log,cache}`. Closes items 1.6 and 1.12.
+
+**Ruling: `EPEL_10_Everything_x86_64` is inspectah's bug.** The relabeling is `normalize_source_repos`, not host data; `from_repo` is whatever dnf saw at install time and inspectah displays it rather than improving it. The `RepoIndex` case split, the other half of the same item, closes by keying `RepoIndex` on a case-insensitive `RepoId` (§ 3.2). Closes item 1.5.
+
+**Interaction model.** The critique's minimum consistent model and the interaction contract are the frontend default. One repo component replaces `RepoBar` plus `RepoGroupHeader` in single-host mode; `verified` and `incomplete` both get the control and `validate_target` accepts `Incomplete`; `unknown`, `disabled`, `stale`, and distro get state text and no control. Server errors surface as a `role="alert"` toast carrying the server's `error` string after the optimistic revert. One upload modal; the server is the only matcher; the client checks `.rpm` only; rows key on the server's `matched`; an `uploaded` signal on `PackageEntry` survives reload. Snippet and PAM titles are the path under `/etc`. Storage drops `size_estimate` and `recommendation`. Closes items 1.10, 1.11, 1.14.
+
+### Host checks
+
+Three one-line checks ran on 2026-10-26 after the draft, A1 and A3 on the source host and A2 against the image. Each confirmed the position the spec takes; § 8.14 notes that the paired tests stand as written.
+
+| # | Check | Command | Observed | Settles |
+|---|---|---|---|---|
+| A1 | dnf recorded `epel`, not the EPEL 10 content-template id, for the EPEL packages. | `dnf repoquery --installed --qf '%{name} %{from_repo}' htop bat fd-find`, run on the source host on 2026-10-26 | printed `epel` for all three | dnf recorded `epel`; the `EPEL_10_Everything_x86_64` label is `normalize_source_repos`'s relabeling, confirmed end to end. On this host the attribution is `Exact` on `[epel]`. |
+| A2 | The SELinux policy store on `rhel-bootc:9.8` is under `/etc/selinux` and image-carried. | `podman run --rm registry.redhat.io/rhel9/rhel-bootc:9.8 sh -c 'grep store-root /etc/selinux/semanage.conf; ls -ld /var/lib/selinux /etc/selinux/targeted/active'`, run against the image on 2026-10-26 | `store-root=/etc/selinux`, then `ls: cannot access '/var/lib/selinux': No such file or directory`, then `drwxr-xr-x. 1 root root 4096 Oct 27 03:30 /etc/selinux/targeted/active` | The policy store on the RHEL 9.8 bootc base is under `/etc/selinux` and image-carried; `/var/lib/selinux` does not exist in the image (the rpm-ostree compat symlink is a tmpfiles entry created at boot, not image content). `semanage` at build time writes into the store the image ships. The fcontext ruling holds at high confidence. |
+| A3 | Nothing in tmpfiles.d backs `/var/lib/pgsql`, `/var/lib/mydb`, or `/var/lib/myapp`; the classifier's `tmpfiles` verdict on them is the ancestor-walk false positive. | the `grep -rl` below over `/usr/lib/tmpfiles.d` and `/etc/tmpfiles.d`, run on the source host on 2026-10-26 | matched only `/etc/tmpfiles.d/cleanup.conf`, whose sole entry is `D /run/myapp 0755 root root -`; `/usr/lib/tmpfiles.d/var.conf` line 21 is `d /var/lib 0755 - - -` | nothing backs `/var/lib/pgsql`, `/var/lib/mydb`, or `/var/lib/myapp`; `var.conf` line 21 is the line the ancestor walk matches. Classifier false positive confirmed on real data. |
+
+A3's command, written outside the table because it contains pipe characters:
+
+```
+grep -rl 'pgsql\|mydb\|myapp' /usr/lib/tmpfiles.d /etc/tmpfiles.d
+```
+
+### Open positions
+
+Positions this spec takes where the inputs disagreed or left a gap. Each is reversible without rereading the spec.
+
+1. **Group include overrides the leaf default for its members.** "Install @Container Management" is explicit intent, and `containerfile.rs:597-604` already bypasses the leaf filter for any package whose include flag the user changed. Reverse: drop the bypass and a group include does nothing visible for non-leaf members.
+2. **`Incomplete` is redefined; `Stale` takes its old meaning.** Today `Incomplete` means "referenced by packages, no section in any repo file". That is exactly the new `Stale`. `Incomplete` becomes "section exists and is enabled, but the build cannot fetch from it as captured" (no `baseurl`/`metalink`/`mirrorlist`, or a `gpgkey=file://` path not in `gpg_keys`). Reverse: delete `Stale` and keep `Incomplete` for both cases, at the cost of one state text for two causes.
+3. **The repo-enabling file check is scoped to `/etc/yum.repos.d/` and `/etc/pki/rpm-gpg/`.** `epel-release` also owns `/usr/bin/crb`, a systemd preset, and licence files, which the capture never includes and the `dnf install` restores. Reverse: require every owned path, and no `-release` package ever qualifies.
+4. **The recorded repo id lives inside `RepoAttribution`, not as a sibling `source_repo_recorded` field.** Every variant carries or implies it (`recorded()` accessor). Reverse: add the field and accept two writers for one fact.
+5. **`in_base_image` is the baseline marker.** It is computed today as "absent from `packages_added`", which on an installed group means baseline-suppressed or base-image-only. The spec makes the computation explicit instead of adding a `baseline: true` twin. Reverse: add `baseline` and keep both.
+6. **Sysctl-shadowed config entries become `Inventory` with `shadowed_by: Some(Sysctl)`.** The key-level override is the one decision; the file is a fact about where it came from. Reverse: keep them actionable and add a `Shadowed` refusal in `validate_target`.
+7. **`advisory?` on `ContextItem` is adopted** (the contract left it unsettled). The Advisory label must come from a typed field, not subtitle text. Reverse: keep the subtitle string and accept that Storage advisories look unlike every other advisory.
+8. **The collapsed `/var` summary row carries its list in `detail`.** `ContextItem` has no children; the expansion is the `<pre>` detail, one directory per line. Reverse: add a `children` array to `ContextItem` and teach `ContextList` to nest.
+9. **`ConfigCategory::AuditRules` is not added; the existing `ConfigCategory::Audit` already classifies exactly `/etc/audit/rules.d/`** (`crates/collect/src/inspectors/config/classify.rs:20-23`). The decision text named a new variant; the code already has it under another name. Reverse: rename `Audit` to `AuditRules` in the same bump.
+10. **`RepolessResolution` is replaced by a `repo_enabling: bool` on `PackageEntry`.** Of the three proposed variants, `Upload` is the default and `CommandlineAlternative` is out of scope, leaving one bit. Reverse: keep the enum for the pre-spec's future variant.
+11. **An `Unparsed { raw }` variant on `FcontextRule`** keeps a line the parser rejected so the renderer can print it in the FIXME. Reverse: drop unparseable lines at collection with a warning and lose the raw text in the Containerfile.
+12. **`-r` is the MLS range, not the role.** `semanage fcontext` has no role flag; the ruling's "`-s`/`-r` only when user is not `system_u` or level not `s0`" is read as `-s <user>` and `-r <level>` respectively.
+13. **Carried from the interaction contract, with its labels:** mixed header state moves toward include-all (strong); `role="grid"` on list containers (recommendation, list/listitem everywhere is the valid alternative); no Packages confirm modal in phase 2, an undo toast instead (moderate; assumes batch undo is one Ctrl+Z, which § 3.7 confirms); the `Inventory` label leaves `DecisionItem` in phase 3 (moderate).
+14. **Upload-dir rescan on session start** re-marks staged NEVRA-named files so `uploaded` survives a server restart, not only a browser reload. Small once staging is NEVRA-keyed. Reverse: browser-reload survival only.
+
+## 3. Design per item, types first
+
+### 3.1 fcontext rules
+
+```rust
+// crates/core/src/types/selinux.rs
+
+/// The `-f` flag of `semanage fcontext`; `All` emits no flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FcontextFileType { All, RegularFile, Directory, CharDevice, BlockDevice, Socket, Symlink, NamedPipe }
+
+impl FcontextFileType {
+    /// `semanage fcontext -f` letter, or `None` for `All`.
+    pub fn semanage_flag(self) -> Option<char> { /* f d c b s l p */ }
+    /// Parses the `-l -C` type column ("all files", "regular file", ...).
+    pub fn parse_column(text: &str) -> Option<Self>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelinuxContext {
+    pub user: String,
+    pub role: String,
+    pub type_: String,
+    /// MLS level, `None` when the policy prints no fourth field.
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FcontextRule {
+    Label {
+        spec: String,
+        file_type: FcontextFileType,
+        context: SelinuxContext,
+        #[serde(default)]
+        disposition: FindingKind,
+    },
+    /// `<<None>>` in the context column: do not relabel.
+    Unlabel {
+        spec: String,
+        file_type: FcontextFileType,
+        #[serde(default)]
+        disposition: FindingKind,
+    },
+    /// `subject = labeled_like` in the equivalence section; renders as
+    /// `semanage fcontext -a -e <labeled_like> <subject>`.
+    Equivalence {
+        subject: String,
+        labeled_like: String,
+        #[serde(default)]
+        disposition: FindingKind,
+    },
+    /// A line the parser could not place. Display-only; the renderer prints
+    /// it inside the FIXME so the operator can transcribe it.
+    Unparsed { raw: String },
+}
+```
+
+`SelinuxSection.fcontext_rules: Vec<FcontextRule>`. The three decision-bearing variants use bare `#[serde(default)]`: a collected rule is a customization the user made, and included-by-default is the intended contract, the same as `SelinuxPortLabel`. `Unparsed` has no disposition; `FindingKind` matching on it is the renderer's FIXME path.
+
+**Parser** (`crates/collect/src/inspectors/selinux.rs`). The `-l -C` output has two sections. Lines before `SELinux Local fcontext Equivalence` are table rows; split on a run of two or more spaces (column gaps are never a single space; path regexes can contain one). Three columns give `Label` (or `Unlabel` when the third is `<<None>>`, case-insensitive); the context splits on `:` into user, role, type, and an optional level that may itself contain `:`. Lines after the equivalence header match `^(\S+) = (\S+)$` and give `Equivalence { subject, labeled_like }`. Anything else that is non-blank and not a header becomes `Unparsed`. The `file_contexts.local` fallback has the format `regex [-f] user:role:type[:level]` (whitespace-separated, `-x` flag optional, `<<none>>` as the context for unlabel) and parses into the same enum. `file_contexts.local` leaves the config walk: add `/etc/selinux/*/contexts/files/file_contexts.local` to the walker's exclusion globs (`walk.rs:128-130` already exclude the `contexts/files/*` family for unowned files; the `rpm_va` path at `config/mod.rs:150` needs the same skip, since the file is `rpm_owned_modified` on this host).
+
+**Renderer** (`containerfile.rs`, SELinux block). The equivalence check and the quoting are the whole safety story: the spec is single-quoted, so the only unsafe characters inside it are `'` and `\n` (containerfile-value-quoting skill); `type_`, `user`, and `level` are bare tokens and must match `^[A-Za-z0-9_.:-]+$`. A rule failing either check renders as the two-line FIXME of § 5.1. The renderer walks included `Label`/`Unlabel` rules and, before the first whose `spec` begins with a var-symlinked top level, emits the equivalence once:
+
+```rust
+/// Top-level directories that are symlinks into /var on bootc derivation
+/// bases and have no `subs_dist` alias in the policy. Verified for `/srv`
+/// on fedora-bootc:42 and centos-bootc:stream10; CoreOS-lineage extras
+/// (`/opt`, `/usr/local`, `/home`, `/root`, `/mnt`) already have aliases.
+const VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")];
+```
+
+The synthesized line is an `FcontextRule::Equivalence { subject: "/var/srv", labeled_like: "/srv" }` constructed by the renderer, not by the collector, so `render::audit` can list it under "synthesized by inspectah" with the reason. `spec` begins with a top level when it equals it or continues with `/` or `(`.
+
+### 3.2 Repo attribution and `RepoIndex`
+
+```rust
+// crates/core/src/types/repo.rs
+
+/// A yum repo section id. Equality, hashing, and ordering are ASCII
+/// case-insensitive; `Display` keeps the id as the host wrote it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RepoId(String);
+// PartialEq/Eq via eq_ignore_ascii_case; Hash and Ord over the lowercased
+// form so BTreeMap and HashSet keys collapse the case split structurally.
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PseudoRepo { Commandline, Anaconda, System }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RepoAttribution {
+    /// `%{from_repo}` equals a section id on the host (case-insensitive).
+    Exact { id: RepoId },
+    /// Short name matched exactly one enabled section by substring.
+    Resolved { recorded: String, id: RepoId },
+    /// Short name matched several enabled sections; `source_repo` keeps the recorded value.
+    Ambiguous { recorded: String, candidates: Vec<RepoId> },
+    /// No section on the host matches (repo removed or renamed since install).
+    Stale { recorded: String },
+    Pseudo { which: PseudoRepo, recorded: String },
+    Unrecorded,
+}
+
+/// One parsed `[section]` of a `.repo` file. Shared by collect and refine;
+/// replaces `extract_section_ids` (source_repos.rs) and `parse_repo_sections`
+/// (repo_index.rs), which parse the same INI two different ways today.
+pub struct RepoSectionDef {
+    pub id: RepoId,
+    /// `enabled=` value, `true` when absent (dnf semantics).
+    pub enabled: bool,
+    pub has_source: bool,          // baseurl, metalink, or mirrorlist present
+    pub gpg_key_paths: Vec<String>,
+}
+pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef>;
+```
+
+`PackageEntry` gains `#[serde(default)] pub repo_attribution: RepoAttribution` (default `Unrecorded`). `source_repo: String` keeps its meaning for the forty-odd consumers: the resolved id for `Exact` and `Resolved`, the recorded value otherwise.
+
+**Normalization rule** (`normalize_source_repos`): exact case-insensitive match against any section, enabled or not, wins first (`Exact`). Otherwise substring against sections with `enabled = true` only; exactly one match is `Resolved`, more than one is `Ambiguous` and `source_repo` is left as recorded. No match: `@commandline`, `anaconda`, `@System` are `Pseudo`; empty is `Unrecorded`; anything else is `Stale`. On this host `epel` matches `[epel]` exactly (A1) and the content-template sections never participate. The rule is order-independent by construction: it never iterates sections looking for a first hit. `Exact` is permitted to land on a section with `enabled = 0`: dnf recorded that id, so the packages keep the attribution, and the repo surfaces with provenance `Disabled` and its packages listed under it (§ 6.3). What `Exact` never does is relabel.
+
+**`RepoIndex`** keys `packages_by_repo`, `repo_file_by_section`, `gpg_keys_by_section`, and `provenance_map` by `RepoId`, so `handlers.rs:209`'s `to_lowercase()` and the comment at `repo_index.rs:77-80` go away. `ItemId::Repo { path }` comparisons go through `RepoId`, which also closes the hole where the server accepted an id the view never emitted.
+
+```rust
+// crates/refine/src/types.rs
+pub enum RepoProvenance {
+    Verified,     // section present, enabled, has_source, keys captured
+    Incomplete,   // section present and enabled, but not fetchable as captured (position 2)
+    Disabled,     // section present, enabled = 0
+    Stale,        // referenced by packages, no section on the host
+    Unknown,      // pseudo repo or empty
+}
+```
+
+`validate_target` accepts `Verified` and `Incomplete` for `ItemId::Repo` and refuses `Disabled`, `Stale`, and `Unknown` with `BadRequest` as today (`session.rs:1401-1413`), the message naming the provenance; excluding an incomplete repo is a package cascade with no repo-file step, so there is nothing to refuse. `RepoGroupInfo` carries the new `provenance` values; `section_id` is the `RepoId`'s display form.
+
+### 3.3 Repo-enabling packages and the upload path
+
+```rust
+// PackageEntry
+/// Set by the repo-less pass for a `@commandline` package named `*-release`
+/// whose owned paths under /etc/yum.repos.d/ and /etc/pki/rpm-gpg/ are all
+/// present in the captured repo files and GPG keys. Never repo-less.
+#[serde(default, skip_serializing_if = "crate::is_false")]
+pub repo_enabling: bool,
+
+/// Set when the refine session staged an upload for this package; distinct
+/// from `repoless_cached`, which also covers RPMs found in the dnf cache.
+#[serde(default, skip_serializing_if = "crate::is_false")]
+pub uploaded: bool,
+```
+
+**Classification** happens in `scan_dnf_cache_for_repoless` (`repoless.rs:99-192`) before the cache scan: a candidate with `source_repo == "@commandline"`, a name ending in `-release`, and an `rpm.file_ownership` entry whose paths under the two directories are a subset of `repo_files[].path ∪ gpg_keys[].path` (and at least one repo file among them) gets `repo_enabling = true`, no `repoless_annotation`, and is dropped from the repo-less set. `rpm.repo_providing_packages` and its merge at `merge.rs:949` are deleted. On this host `epel-release` owns `epel.repo`, `epel-testing.repo`, `epel-cisco-openh264.repo`, and `RPM-GPG-KEY-EPEL-9`, all captured.
+
+**Render.** The install partition at `containerfile.rs:635-640` becomes `pkg.repo_enabling || base.ends_with("-release")`. The block order is already mirror-safe (Custom Repositories, GPG Keys, then Repo-enabling packages); what changes is the content of the block (§ 5.2): a comment naming the copied repo file as the source, the permalink as a commented alternative from a table keyed on the host major version (`os.version_id`), and a conditional CRB flag:
+
+```rust
+/// Documented bootstrap URLs for repo-enabling packages, keyed by package
+/// name; `{major}` is the host's OS major version.
+const RELEASE_PERMALINKS: &[(&str, &str)] = &[
+    ("epel-release", "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{major}.noarch.rpm"),
+];
+```
+
+CRB: when `parse_repo_sections` over `repo_files` finds any section whose id starts with `codeready-builder-` and `enabled`, the `dnf install` line gains `--enablerepo=codeready-builder-for-rhel-{major}-$(arch)-rpms` with a one-line comment. On this host every CRB section is `enabled = 0`, so nothing is emitted. `$(arch)` is a literal the renderer writes, not host data.
+
+**Upload staging** (`crates/web/src/upload.rs`, `session.rs`). The handler keeps streaming the body to `upload_dir.join(filename)` (the 500 MiB route limit is why it writes before matching). After `mark_uploaded_rpm` returns a match, the handler renames the file to `upload_dir.join(nevra_filename)` where `nevra_filename` is `format!("{name}-{version}-{release}.{arch}.rpm")` of the matched entry, and `cache_path` records the renamed path. `copy_uploaded_rpms` and `repoless_rpm_lines` then agree without either learning about `cache_path`. `mark_uploaded_rpm` sets `uploaded = true`; `unmark_uploaded_rpm` clears it. On `ensure_upload_dir`, the session re-marks any staged file whose name equals a repo-less entry's NEVRA filename (position 14). Unmatched files stay under their uploaded name and are never copied.
+
+```rust
+// crates/refine/src/rpm_filename.rs (moved from session.rs:3554-3600)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RpmFilename {
+    pub name: String,
+    pub arch: String,
+    pub version_release: Option<String>,
+}
+impl RpmFilename {
+    /// `.rpm` suffix matched case-insensitively; arch from `KNOWN_ARCHES`
+    /// after `.` or `_`; name is everything before the first `-<digit>`.
+    pub fn parse(filename: &str) -> Option<Self>;
+}
+```
+
+`upload.rs:39` accepts the suffix case-insensitively. The response becomes `{ "status", "matched", "uploaded", "parsed": RpmFilename | null, "staged_as": "<filename>" }`; the client renders `parsed` and `matched` and guesses nothing.
+
+### 3.4 tmpfiles.d parser and `/var` backing
+
+```rust
+// crates/core/src/types/storage.rs
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VarDirBacking {
+    /// `conf` is the tmpfiles.d file, `entry_path` the entry that claims the
+    /// directory (the directory itself or a strict ancestor below the root).
+    Tmpfiles { conf: String, entry_path: String },
+    StateDirectory { unit: String },
+    CacheDirectory { unit: String },
+    LogsDirectory { unit: String },
+    RpmOwned,
+    Unbacked,
+}
+
+pub struct VarDirectory {
+    pub path: String,
+    pub backing: Option<VarDirBacking>,
+    pub mode: Option<String>,
+    pub owner_name: Option<String>,
+    pub group_name: Option<String>,
+    pub owner_uid: Option<u32>,
+    pub owner_gid: Option<u32>,
+}
+```
+
+`size_estimate` and `recommendation` are removed from `VarDirectory`, `RefVarDirectory` (`projection/types.rs:334-335`), the adapter, the TUI, `report.rs:654-660`, and `readme.rs:264`.
+
+**Parser** (`crates/collect/src/inspectors/storage.rs`). `exec.read_dir` over `/etc/tmpfiles.d`, `/run/tmpfiles.d`, `/usr/lib/tmpfiles.d`; a basename in an earlier directory masks the same basename in a later one (systemd precedence). Each non-blank, non-comment line splits on whitespace into a type token and a path; the type's first character selects the entry kind. Entries whose path contains a `%` specifier never match. A directory is backed by tmpfiles when an entry of any kind except `r`, `R`, `x`, `X` has the exact path, or when a directory-creating entry (`d`, `D`, `v`, `q`, `Q`) has a path that is a strict ancestor of the directory **and** strictly below the root the directory was discovered under. Roots are `/var/lib`, `/var/log`, `/var/cache`; `d /var/lib` in `var.conf` therefore backs nothing. The `StateDirectory=`/`CacheDirectory=`/`LogsDirectory=` and RPM-ownership checks (`storage.rs:417-456`) are unchanged except that the unit filename grep returns is recorded in the payload.
+
+On this host the parser yields `/var/lib/appone/cache` as `Tmpfiles { conf: "/etc/tmpfiles.d/appone.conf", .. }`, `/var/lib/myapp` as `StateDirectory { unit: "myapp.service" }`, and `/var/lib/pgsql`, `/var/lib/mydb`, `/var/cache/myapp` as `Unbacked`, so `unbacked_var_advisory` fires on three paths (A3 confirmed that nothing backs them).
+
+**View.** The snapshot keeps every discovered directory (the aggregate dedups them at `merge.rs:1512`). The adapter emits one summary `ContextItem` for the backed set (§ 6.6) and one `ContextItem` with `advisory` per unbacked path; a backed directory with a non-root owner or a mode other than `0755` also gets an inventory row of its own. Nothing else reaches the view as a row.
+
+### 3.5 Kernel & Boot and the one-decision rule
+
+`KernelBootSection` loses `modules_load_d`, `modprobe_d`, `dracut_conf`, `tuned_custom_profiles`, and `non_default_modules`; `ConfigSnippet` has no remaining users and is deleted. `loaded_modules[].disposition` becomes `#[serde(default = "crate::types::finding::default_finding_inventory")]` and the collector sets `FindingKind::inventory()`. `ItemId::KernelModule` is removed: the arms at `session.rs:1521` (validate), the projection arm, `crates/tui/src/app.rs:59`, `handlers.rs:826-852`, and `crates/web/src/aggregate_handlers.rs:1278-1290` (the aggregate Kernel & Boot item list drops loaded modules, which are inventory now; this is the one aggregate touch the enum removal forces).
+
+**Config walker changes** (`walk.rs`). Remove `"/etc/tuned/*/tuned.conf"` from `UNOWNED_EXCLUDE_GLOBS` (`walk.rs:155`) so custom profiles become `ConfigFileEntry` rows; `active_profile`, `profile_mode`, and `bootcmdline` stay excluded (`walk.rs:112-115`) because `tuned_disposition` renders them. The three kernel directories are already walked (this host's `config.files` has all three `driftify.conf` entries as `unowned`); RPM-owned unmodified files are already skipped by the walker's ownership check, which is the filter item 1.2 needs and the reason `SnippetOrigin` is not introduced.
+
+```rust
+// ConfigCategory gains
+Pam,     // /etc/pam.d/
+Tuned,   // /etc/tuned/
+// Audit already covers /etc/audit/rules.d/ (position 9)
+
+// ConfigFileEntry gains
+/// Set when another finding renders this file's content in transformed form,
+/// so the file itself must not be copied. The entry's disposition is
+/// `Inventory` whenever this is `Some`.
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub shadowed_by: Option<ConfigShadow>,
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigShadow { Sysctl }
+```
+
+`shadowed_by` is set by a post-collection pass in `crates/pipeline/src/orchestrate.rs` once both sections exist: every `config.files` entry whose path appears in `kernel_boot.sysctl_overrides[].source` gets `shadowed_by: Some(Sysctl)` and `disposition: FindingKind::inventory()` (position 6). The renderer's `sysctl_source_paths` skip (`configtree.rs:133-140`, `:228`) becomes redundant and is deleted; the `is_included()` gate at `:212` is the only gate. On this host `99-driftify.conf` and `thp.conf` become inventory with a reason; `hugepages.conf`, which produced no override, stays an actionable entry.
+
+**Tuned.** `/etc/tuned/myapp/tuned.conf` is a `ConfigCategory::Tuned` entry with its own `ItemId::Config`, copied through `config/etc/` like any file. The `tuned/` promoted root, the `TUNED_PREFIX` skip (`configtree.rs:150`, `:231`), and the `COPY tuned/etc/tuned/ /etc/tuned/` line (`containerfile.rs:1365`) are deleted. `tuned_disposition` remains the activation decision and gates `active_profile`, `profile_mode`, and `systemctl enable tuned.service`. When activation is included and `tuned_active` names a profile whose `config.files` entry `/etc/tuned/<profile>/tuned.conf` exists but is excluded, the renderer emits `# FIXME: include /etc/tuned/<profile>/tuned.conf under Configuration Files or activate a stock profile; the active profile is custom and its file is excluded` in place of the activation lines.
+
+**Projection.** `RefKernelBoot` loses the snippet lists and gains `customizations_from_config: Vec<RefConfigRef { path, category, disposition, shadowed_by }>` built from `config.files` entries under `/etc/modules-load.d/`, `/etc/modprobe.d/`, `/etc/dracut.conf.d/`, `/etc/sysctl.d/`, `/etc/tuned/`. The adapter renders them as `ContextItem`s titled by path under `/etc`, with `decision` filled from the config entry (so the row is a live mirror: Space posts `ItemId::Config`, the same op the Configuration Files row posts) or, for shadowed entries, no `decision` and the subtitle `merged into 99-inspectah-migrated.conf`.
+
+### 3.6 PAM and audit rules
+
+`CROSS_INSPECTOR_EXCLUDE_PREFIXES` and its loop (`walk.rs:183`, `:209-213`) are deleted. The eight `EXCLUDED_PAM_CONFIGS` entries (`selinux.rs:21-30`) already appear verbatim in the walker's exact-exclusion list (`walk.rs:102-110`), so nothing moves. `collect_pam_configs`, `collect_audit_rules`, `SelinuxSection.pam_configs`, `SelinuxSection.audit_rules`, `CarryForwardFile`, the configtree block at `configtree.rs:525-547`, the two Containerfile comment lines (`containerfile.rs:1464-1476`), and the merge code at `merge.rs:1619-1660` are deleted.
+
+**authselect.** On this host `rpm_va` shows `....L....` on `system-auth`, `password-auth`, `fingerprint-auth`, `smartcard-auth`, and `postlogin`: RPM-owned symlinks whose target changed. The walker's `rpm_va` path would classify them `rpm_owned_modified` and copy the target's content. Rule: an `rpm_va` entry under `/etc/pam.d/` whose flags are exactly `L` and whose symlink target resolves under `/etc/authselect/` is skipped; the customization lives in `/etc/authselect/`, which the walker already collects as unowned files. Implemented next to `is_rpm_owned_via_symlink` (`config/mod.rs:376`).
+
+**Reference section.** `project_ref_selinux` keeps one `GenericRefItem` per `config.files` entry with category `Pam` or `Audit`: key is the path under `/etc`, summary `decided under Configuration Files`, no content. The audit report covers both through its existing `config.files` loops (`audit.rs:161`, `:472`, `:492`).
+
+### 3.7 Groups and sections
+
+```rust
+// crates/web/src/web_types.rs
+pub struct GroupInfo {
+    pub name: String,
+    pub member_count: usize,            // declared by the group
+    pub effective_member_count: usize,  // in packages_added, actionable, not locked
+    pub effective_included: usize,      // of those, currently included
+    pub added_count: usize,
+    pub locked_count: usize,
+    pub optional_spillover_count: usize,
+    pub render_state: String,
+    pub degradation_reason: Option<String>,
+    pub members: Vec<GroupMemberInfo>,
+}
+// GroupMemberInfo is unchanged; `in_base_image` is computed from membership in
+// `baseline_suppressed` or `base_image_only` rather than from absence (position 5).
+```
+
+```rust
+// crates/refine/src/types.rs
+#[error("nothing to change: {0}")]
+NoopTarget(String),
+// crates/web/src/error.rs maps it to 422 like the two *NotToggleable variants.
+```
+
+`apply` keeps the silent idempotent return for single items (the client never posts a toggle whose state it already shows). For `ItemId::Group` the no-op check runs before the idempotency shortcut and returns `Err(NoopTarget("all 2 effective members of 'Container Management' are already excluded"))`. The effective set is `packages_added` members that are actionable and not locked; locked members leave the count entirely, which matches the contract's "locked members are not in M". `is_op_noop`'s `.unwrap_or(true)` for a missing rpm section is the one case where "no members" must also refuse rather than succeed.
+
+For this host: `effective_member_count = 2`, `effective_included = 0`, `member_count = 3`, `podman` with `in_base_image: true`. The header checkbox renders unchecked; Space posts include, which sets both members included and, under position 1, they render (`containerfile.rs:597-604` already bypasses the leaf filter when the include flag differs from the original). A second Space posts exclude and succeeds. A fresh exclude on this group is 422.
+
+Batch undo is one entry: `SetInclude(Group)` is a single timeline op whose projection fans out at `session.rs:2130`, so one Ctrl+Z restores every member.
+
+**Section-level op** (phase 2, § 6.4). The header checkbox on a section list posts one op, built the same way as `Group`:
+
+```rust
+// crates/refine/src/types.rs
+
+/// A triage section whose list header carries the bulk include/exclude control.
+/// Closed: an id outside this set fails to deserialize, so there is no arm to
+/// write for an unknown section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionId { Packages, Config, Services, ScheduledTasks, UnmanagedFiles }
+
+// ItemId gains
+Section { section: SectionId },
+```
+
+`SetInclude(Section)` carries no decision of its own: its projection arm, beside `ItemId::Group`'s at `session.rs:2130`, fans out over the section's effective members, the rows that are actionable and not locked, which are exactly the `ItemId`s those rows post on their own. Nothing is added to the snapshot (§ 4 is unchanged) and a row's state still lives on its entry alone. `is_op_noop` applies the `Group` rule: every effective member already in the requested state, or no effective members at all, is `Err(NoopTarget("all 212 rows of packages are already included"))`, so the § 6.3 invariant holds for section headers without a second rule. One op is one timeline entry, so one Ctrl+Z restores every row and the undo toast of § 6.4 is true. The alternative, N row ops batched under one timeline entry, was rejected: the timeline has no batch entry type, and a per-row no-op check would accept a batch in which one row flips and the rest are already set, where the group rule refuses, so the two bulk controls would disagree on what "nothing to change" means.
+
+### 3.8 `ContextItem` DTO
+
+```rust
+// crates/web/src/web_types.rs
+pub struct ContextItem {
+    pub id: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub detail: Option<String>,
+    pub searchable_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<ContextDecision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisory: Option<ContextAdvisory>,
+}
+pub struct ContextDecision { pub item_id: ItemId, pub include: bool, pub locked: bool }
+pub struct ContextAdvisory { pub advisory_type: AdvisoryType, pub rationale: String }
+```
+
+`item_id` serializes as `ItemId` does in `/api/op` payloads (`#[serde(tag = "kind", content = "key")]`, `types.rs:57`; the variant name is the tag as written, so a sysctl row carries `"item_id": {"kind":"Sysctl","key":{"key":"vm.swappiness"}}` and a config-backed row `{"kind":"Config","key":{"path":"/etc/modprobe.d/driftify.conf"}}`). Both fields are skipped when `None`, so every existing `ContextItem` serializes byte-identically; `crates/web/tests/contract_snapshots.rs` must not change. The adapter fills `decision` for `tuned_active` (`ItemId::TunedSelection`, from `tuned_disposition`), for each sysctl row (`ItemId::Sysctl`), and for each config-backed Kernel & Boot row (`ItemId::Config`); the `sysctls` and `tuned` arrays on `ViewResponse` stay until phase 3 and are then removed with the TypeScript types. `advisory` is filled for unbacked `/var` rows from `UnbackedVarAdvisory`. `empty_reason` is set for every empty reference section: `data_unavailable` when the snapshot section is `None`, `zero_drift` when it is present and projects to no items.
+
+## 4. The single schema bump
+
+`SCHEMA_VERSION` goes from 22 to 23 and `MIN_SCHEMA` to 23 (`crates/core/src/snapshot.rs:21`, `:103`). Removed fields and changed types make 22 unloadable by definition, so the window closes to an exact match per the versioning skill's stance: no migration, re-scan. If the `/usr` walk plan's bump lands first, this spec takes the next number. Aggregates re-aggregate from re-scanned hosts.
+
+| Change | Field | Serde |
+|---|---|---|
+| type | `selinux.fcontext_rules`: `Vec<String>` to `Vec<FcontextRule>` | tagged `kind`; `disposition` bare default (actionable, included) on `label`, `unlabel`, `equivalence` |
+| removed | `selinux.pam_configs`, `selinux.audit_rules` | |
+| removed | `kernel_boot.modules_load_d`, `modprobe_d`, `dracut_conf`, `tuned_custom_profiles`, `non_default_modules` | |
+| default | `kernel_boot.loaded_modules[].disposition` | `default_finding_inventory` |
+| added | `rpm.packages_added[].repo_attribution` | `default` = `unrecorded` |
+| added | `rpm.packages_added[].repo_enabling`, `uploaded` | `default, skip_serializing_if = is_false` |
+| removed | `rpm.repo_providing_packages` | |
+| added | `config.files[].shadowed_by` | `default, skip_serializing_if = Option::is_none` |
+| added | `config.files[].category` variants `pam`, `tuned` | |
+| type | `storage.var_directories[].backing`: unit variants to tagged payloads | tagged `kind` |
+| removed | `storage.var_directories[].size_estimate`, `recommendation` | |
+
+**`load_for_refine()`.** No new work for `include`. Every disposition-bearing field this bump adds is a tagged `FindingKind` whose absent-key default is named on the field, which carries no absent-versus-false ambiguity. `patch_missing_includes` (`normalize.rs:54-72`) keeps patching `packages_added`, `base_image_only`, and `config.files`; the patch inserts a `disposition` key, not an `include` key, and the serde-include-default-ambiguity skill's text is stale on that point (§ 9 lists the skill updates that follow implementation). `normalize_package_defaults` is unchanged; `shadowed_by` entries arrive already `Inventory` from the orchestrator and `with_include` preserves them.
+
+## 5. Export and Containerfile contract changes
+
+### 5.1 SELinux block
+
+Before (rendered at `6e8a52b1` for this host, quoted):
+
+```
+# === Security & Access Control ===
+# FIXME: 1 custom fcontext rule(s) detected — apply in image
+# FIXME: fcontext rule contains unsafe characters: "/srv/www(/.*)?                                     all files          system_u:object_r:httpd_sys_content_t:s0"
+# RUN restorecon -Rv /  # apply fcontext changes after all COPYs
+# 2 custom audit rule file(s) materialized under config/etc/audit/rules.d/
+# 1 custom PAM config file(s) materialized under config/etc/pam.d/
+# 1 custom SELinux port label(s) detected
+RUN semanage port -a -t ssh_port_t -p tcp 2222
+```
+
+After:
+
+```
+# === Security & Access Control ===
+# SELinux file contexts (1 custom rule). Labels are computed at deploy time from
+# the image's own policy under /etc/selinux, so the rule only needs to be in the
+# policy store. No restorecon at build time.
+# /srv is a symlink to /var/srv on this base and the policy has no /var/srv alias;
+# this makes every /srv rule, stock and custom, apply to the real path.
+RUN semanage fcontext -a -e /srv /var/srv
+RUN semanage fcontext -a -t httpd_sys_content_t '/srv/www(/.*)?'
+# 1 custom SELinux port label(s) detected
+RUN semanage port -a -t ssh_port_t -p tcp 2222
+```
+
+Rendering rules: `-f <flag>` appears only when `file_type != All`; `-s <user>` when `user != "system_u"`; `-r <level>` when `level` is `Some` and not `s0`; `Unlabel` renders `-t '<<none>>'`; a collected `Equivalence { subject, labeled_like }` renders `RUN semanage fcontext -a -e <labeled_like> <subject>`. An unrenderable rule prints:
+
+```
+# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' (labels apply at deploy; no restorecon needed)
+#   the collected rule could not be rendered: <raw line or the offending field>
+```
+
+The PAM and audit comment lines are gone; those files now travel in `COPY config/etc/ /etc/` under Configuration Files and are listed there in the audit report. The PAM comment that remains in the audit report says which `config.files` entries have category `pam` or `audit`.
+
+### 5.2 Repo-enabling block and the dropped MANUAL block
+
+Before (quoted):
+
+```
+# === Custom Repositories (3) ===
+COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
+
+# === GPG Keys (9) ===
+COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/
+
+# === Repo-enabling packages (1) ===
+RUN dnf install -y \
+    epel-release \
+    && dnf clean all \
+    ...
+# === Repo-less RPM packages ===
+# MANUAL: epel-release (no repo source, RPM not in cache)
+# Provide the RPM via the refine UI upload, add a repo, or uncomment:
+# RUN dnf install epel-release
+```
+
+After:
+
+```
+# === Custom Repositories (3) ===
+COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
+
+# === GPG Keys (1) ===
+COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/
+
+# === Repo-enabling packages (1) ===
+# epel-release was installed outside any repo on the source host; its repo files
+# and key are copied above, so it installs from the copied definition and works
+# connected or behind a mirror. Installing after the COPY may leave a cosmetic
+# epel.repo.rpmnew. Alternative, when dl.fedoraproject.org is reachable:
+# RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+RUN dnf install -y \
+    epel-release \
+    && dnf clean all \
+    ...
+```
+
+The "Repo-less RPM packages" section is not emitted when no package carries `repoless_annotation`. When the host had CRB enabled the `RUN dnf install -y` line reads `RUN dnf install -y --enablerepo=codeready-builder-for-rhel-9-$(arch)-rpms \` with the comment `# CRB was enabled on the source host; EPEL packages may depend on it.` The "GPG Keys (9)" count on this host is nine copies of one path (`rpm.gpg_keys` is not deduplicated by the collector, `crates/collect/src/inspectors/rpm/mod.rs:187-189`); noticed, not fixed here (§ 9).
+
+### 5.3 configtree writes only from `config.files`
+
+`write_config_tree` has one source for `/etc` content: `config.files`, gated on `is_included()`. The kernel snippet block, the carry-forward block, the `tuned/` root, and the `sysctl_source_paths` skip are deleted. The sysctl synthesis (`configtree.rs:327-345`) and the kargs file are unchanged. The `COPY tuned/etc/tuned/ /etc/tuned/` line leaves the Kernel & Boot block; the activation lines stay gated on `tuned_disposition` with the FIXME of § 3.5 for an excluded custom profile.
+
+### 5.4 tmpfiles.d emission
+
+`inspectah-var.conf` and the `RUN mkdir -p` fallback (`containerfile.rs:1743-1810`) render only for `backing == Some(Unbacked)`, as today; the change is upstream, where the classifier now produces `Unbacked` for the directories that are. On this host the block gains `/var/lib/pgsql`, `/var/lib/mydb`, and `/var/cache/myapp` with their captured mode and ownership (A3 confirmed).
+
+### 5.5 Audit report
+
+`render_audit` gains: the synthesized `/srv` equivalence under SELinux with the reason; fcontext rules listed as rendered commands with their disposition; PAM and audit files through the existing config loops (category shown); the three unbacked directories under Storage as today. The "File context rules: N" count line (`audit.rs:617-621`) counts decision-bearing rules only.
+
+### 5.6 FIXME wording rule
+
+Every `# FIXME:` and `# MANUAL:` block starts with an imperative instruction and puts the cause after a semicolon or on the next comment line; a block never ends on the failure statement. Existing lines that violate it are rewritten in phase 0 where this spec touches them (fcontext, tuned, GPG key path at `containerfile.rs:357-368`) and left alone elsewhere. The degraded-inspector lines become `# FIXME: verify <section> by hand; its inspector returned partial data`.
+
+## 6. Frontend and handler contract
+
+The interaction contract of 2026-10-26, sections 1 to 10, is the frontend default; this section carries its content at contract level, by file. Where the contract labelled a decision of its own, the label is kept. Conventions: "the view" is `/api/view`; "the sections" are `/api/snapshot/sections`; "state text" is plain text in a row's badge cell; "announce" means setting the enclosing list's `role="status"` live region (`aria-live="polite"`, `aria-atomic="true"`, cleared after 5 seconds, as `UnmanagedFileList.tsx:136-137` does; the Sidebar's batch region at `Sidebar.tsx:696-702` is `aria-live="assertive"` with no role and is not the pattern). Frontend paths are under `crates/web/ui/src/`; unit tests live in `components/__tests__/` and `hooks/__tests__/` (Vitest with Testing Library, `npm test`), browser tests in `crates/web/ui/e2e/*.spec.ts` (Playwright). Line citations are against `6e8a52b1`.
+
+### 6.1 The row rule
+
+Every row answers one question with its left edge. A checkbox means **decide**; an `Advisory: <type>` label in the badge cell with an empty left edge means **homework**; nothing at the left edge and no label means **look**. Containers (section header, package group, repo, unmanaged directory) follow the same rule with a tri-state checkbox acting on their effective members. A control is never rendered for an operation the server will refuse (§ 6.3 states the testable invariant).
+
+Shared markup is what `DecisionItem.tsx:276-425` renders: `role="row"` with `aria-rowindex`, `aria-label`, roving `tabIndex`, and `aria-describedby` pointing at the locked or advisory cell; `role="gridcell"` cells `inspectah-decision-row__toggle`, `__name`, `__badge` (zero or more), `__expand`; the checkbox is `<input type="checkbox" role="checkbox" id="switch-<id>">` (`:302-315`). Containers today: `PackageList.tsx:496` and `:530` wrap rows in `role="list"`, `DecisionList.tsx` wraps them in a div with no role, `RepoGroup.tsx:74` uses `role="rowgroup"` for members, and `GroupRow.tsx:165-174` uses `role="list"`/`listitem`. Phase 2 gives every list container `role="grid"` with `aria-rowcount` and leaves rows alone. *Grid over list/listitem is a recommendation; list/listitem everywhere is valid if applied to every row kind at once.*
+
+### 6.2 `ContextItem` with `decision?` and `advisory?`
+
+**Types** (`api/types.ts:349-355`). `ContextItem` gains `decision?: ContextDecision` and `advisory?: ContextAdvisory`, with `interface ContextDecision { item_id: ItemId; include: boolean; locked: boolean }` and `interface ContextAdvisory { advisory_type: AdvisoryType; rationale: string }` (`ItemId` union at `:881`, `AdvisoryType` at `:8`). `ItemIdKernelModule` (`:658-661`) leaves the union with phase 0.
+
+**`ContextItem.tsx`** (59 lines) gains `onToggleInclude?: (op: RefinementOp) => void`, `isPending?: boolean`, `grid?: boolean`, `rowIndex?: number`, `tabIndex?: number`, and `onKeyDown?`. With `grid` false (the default) the markup is byte-identical to today (`role="listitem"`, `tabIndex={-1}`, `data-testid="context-item-<id>"`, `.inspectah-context-row`, expand button only when `detail` is non-empty): no new element, class, or handler. With `grid` true the row renders the § 6.1 structure with `className="inspectah-decision-row"` (copied from `DecisionItem`, not imported; the detail body differs) and:
+
+- `decision` present: checkbox `id="switch-<item.id>"`, `checked={decision.include}`, `aria-label="Toggle <title>"`, click stops propagation, `disabled` while `isPending`. Locked: `disabled`, `aria-label="<title> (locked)"`, badge `Locked` with `id="locked-reason-<item.id>"` in the row's `aria-describedby`. A disabled checkbox is for a state that exists but is fixed; no checkbox is for a state that does not exist. `locked_reason` is a could-have (§ 9). *Confidence strong.*
+- Space / x: `onToggleInclude({ op: "SetInclude", target: { item_id: decision.item_id, include: !decision.include } })`, the same optimistic pattern `DecisionItem` uses; announce `"<title> included"`/`"<title> excluded"` through the list's live region; no-op when locked or pending. Enter toggles detail; row click expands; checkbox click toggles.
+- `advisory` present: empty left edge, badge `Advisory: <advisoryTypeLabel(advisory_type)>` (`api/disposition.ts`), rationale in a helper-text line with `id="advisory-rationale-<item.id>"` in `aria-describedby`.
+- Neither: empty `__toggle` cell and no `Inventory` label. *Departs from `DecisionItem.tsx:342-351`; phase 3 drops that label there too. Confidence moderate.*
+
+**`ContextList.tsx`** (61 lines) gains `onToggleInclude?` and `isPending?`. For `section.items` (`:33`) and each subsection (`:52`) it computes `grid = items.some((i) => i.decision)`. A non-grid list is untouched. A grid list renders `role="grid"` with `aria-rowcount`, passes `grid` to every item (the ones without `decision` get the empty left edge; `role="row"` and `role="listitem"` never mix under one parent), and adopts the flat-index roving pattern of `DecisionList.tsx:469-563` (`flatItemIds` by `item.id`; j/k/ArrowDown/ArrowUp/g/G; `tabIndex` 0 for the focused row, -1 otherwise). Row `key` stays `item.id` (`:35`, `:54`) and `MainContent.tsx:740` keeps `key={lookupId}`, so neither a sections refetch nor a view refetch remounts the list and focus stays on the row through the toggle. Kernel & Boot > Customizations is the first mixed grid: sysctl, tuned, and config-backed rows decide, shadowed rows look.
+
+**Wiring.** `MainContent.tsx:740` passes `onToggleInclude` and `isPending` into `ContextList` from the context branch (`:706-713`); the handler is App's `mutation.mutate` (`App.tsx:225`), the path the language-package and unmanaged-file toggles take today (`:291-360`). `App.onMutationSuccess` (`:191-213`) also calls `sections.invalidate()` (`useSections`, `:177`): a decision row reads `include` from the sections, and a Configuration Files toggle mirrors into Kernel & Boot, so one extra GET per op is simpler than a per-kind filter. `useKeyboard.ts:18` drops `system_tuning` from `SINGLE_HOST_SECTION_IDS` (`hooks/__tests__/useKeyboard.test.ts:130-136` changes with it).
+
+**Deleted in phase 1:** `SystemTuningSection.tsx` (94 lines), `SysctlSection.tsx` (183), `TunedSection.tsx` (158) and `__tests__/SystemTuningSection.test.tsx` (121), `SysctlSection.test.tsx` (187), `TunedSection.test.tsx` (162). Nothing outside those tests imports them.
+
+### 6.3 Container header row
+
+Applies to the section list header (Packages, Configuration, Services, Scheduled Tasks, Unmanaged Files), `GroupRow.tsx`, the repo row, and the unmanaged directory header. **The one repo component is `RepoGroupHeader.tsx` (145 lines), reworked in place**; `MainContent.tsx:436-439` stops rendering `RepoBar` in phase 1, so single-host mode has one repo surface from then on. `RepoBar.tsx` (147) stays as an aggregate component (`AggregateApp.tsx:38`, `:590`) with `__tests__/RepoBar.test.tsx` (239); its `provenance !== "unknown"` predicate (`:32-34`) is aggregate behaviour and out of scope (§ 9). `types.ts:376` `RepoProvenance` gains `"disabled" | "stale"`; `types.ts:519-529` `GroupInfo` gains `effective_member_count: number` and `effective_included: number`.
+
+**Tri-state checkbox** (phase 2), rendered only when the container has at least one effective member (present, actionable, not locked). Native `<input type="checkbox">` with `indeterminate` from a ref (`UnmanagedFileList.tsx:238`), `aria-label="Toggle all in <name>"`. In phase 1 the repo row keeps its PatternFly `Switch` (`RepoGroupHeader.tsx:129-142`) and `GroupRow` keeps no control; only the predicate and the state text change.
+
+| Header state | Meaning | Space / x / click posts |
+|---|---|---|
+| `false` | 0 effective members included | `SetInclude(<container>, include: true)` |
+| `mixed` | some included | `SetInclude(<container>, include: true)` |
+| `true` | all effective members included | `SetInclude(<container>, include: false)` |
+
+Mixed moves toward include-all: `UnmanagedFileList` already does it, it is the convention of every data table the users know, and exclude-all from mixed being two presses is the right friction for the destructive direction. *Reverses a line in the earlier critique. Confidence strong.* Checked state derives from the server: `GroupInfo.effective_included / effective_member_count`; a repo's `enabled`; a section's count of included actionable rows; a directory's items. After the op resolves, announce `"<N> of <M> included in <name>"` with the server's numbers. The group checkbox posts through `MainContent.handleGroupToggle` (`MainContent.tsx:304-319`), which `GroupRow` already receives as `onToggle` and ignores (`GroupRow.tsx:28`); the repo checkbox through `handleRepoToggle` (`:281-303`).
+
+**Expand and collapse.** `aria-expanded` on the row, chevron `aria-hidden`. Enter toggles; ArrowRight expands, ArrowLeft collapses (already in `UnmanagedFileList.tsx:196-204`; new for `GroupRow` and the repo row). Headers are entries in the flat roving index, as repo headers already are in `DecisionList.tsx:623`; ArrowDown/j from an expanded header lands on its first member, ArrowUp/k from the first member returns; a collapsed header's members are skipped. Space never expands or collapses a container (the `UnmanagedFileList` binding moves to Enter/ArrowRight).
+
+**No-control states and their exact text.** Left-edge cell empty, badge cell carries the text, `aria-describedby` points at it. Never a disabled checkbox here.
+
+| Container | Condition | Badge cell text | Detail (expanded) |
+|---|---|---|---|
+| Repo, distro | `is_distro` | `always included` | none |
+| Repo, verified | `provenance: verified` | control; `N packages` / `N packages excluded` | none |
+| Repo, incomplete | `provenance: incomplete` | control; count text plus `repo definition incomplete` | `Packages from this repo may not be fetchable by the build as captured (no baseurl, metalink, or mirrorlist, or a GPG key the scan did not capture). Excluding removes them from the image; including keeps the package lines and leaves the repo setup to you.` |
+| Repo, unknown | `@commandline` | title `Local / Manual installs`; `installed outside any repo` | none; member rows carry their own upload affordance (§ 6.5) |
+| Repo, disabled | `provenance: disabled` | `disabled on host` | `This repo is defined in a .repo file but disabled on the host, so the build cannot fetch from it. Its N packages are listed here because the host recorded them as installed from it.` |
+| Repo, stale | `provenance: stale` | `repo id not found in any .repo file` | `Packages recorded as coming from "<id>" cannot be attributed to a repo on this host.` |
+| Group, degraded | `render_state = "degraded"` | `rendered individually: <degradation_reason>` | members listed |
+| Group, zero effective members | `effective_member_count = 0` | `nothing to decide: all members are locked or from base` | members with `(locked)` or `(from base)` after each name |
+| Group with base members | `effective_member_count > 0`, some `in_base_image` | control; `N of M included, K from base (stays)` | base members labelled `(from base)` |
+| Group, excluded | `render_state = "excluded"` | control (`false`); existing `N optional still included` text | |
+| Section with no actionable rows | computed | no checkbox; sidebar badge shows grey item count | |
+
+The `incomplete` row text differs from the contract's `no .repo file on host`, which now belongs to `stale` (position 2); the `disabled` detail differs from the contract's because under § 3.2 an `Exact` match can land on a disabled section (the case host check A1 ruled out for this host and § 3.2 keeps reachable for others), so a disabled repo can own packages. The predicate at `RepoGroupHeader.tsx:26-27` (`!isDistro && provenance !== "unknown"`) becomes `!isDistro && (provenance === "verified" || provenance === "incomplete")`, and the badge cell renders the table's text for every other value. Repo tier colours and underline styles on package rows are removed in phase 1: `PackageList.tsx:583` `repoStyles[tier]` and the `repoStyles` map go, the repo name stays as text, and `TIER_ORDER` (`:187-190`) stays because it is a sort key. `ungroup` (`GroupRow.tsx:146-157`) leaves the group header and becomes a link-style button inside the expanded member list (`:165`), label `Render as individual packages`, disabled when degraded; its toast at `MainContent.tsx:343-346` is unchanged, and the comment at `GroupRow.tsx:158-163` explaining the removed toggle goes. Phase 1 already shows the zero-effective state text and the `(locked)`/`(from base)` member marks, since they add no control.
+
+**Invariant (testable).** For every rendered left-edge control, the op it would post returns 2xx and appears in `/api/ops`; for every row in a no-control state, the same op returns 4xx. The contract test walks the view, posts each container op once in each direction, and asserts both halves. `NoopTarget` (§ 3.7) is what makes the second half testable for groups.
+
+### 6.4 Bulk ops transition and the kebab prop
+
+**Phase 1: `hideBatchMenu`.** `SidebarProps` (`Sidebar.tsx:29-51`) gains `hideBatchMenu?: boolean`, named like the Sidebar's other flags (`overlay`, `hasUnmanagedScan`: absent is the default, present is the exception; `showBatchMenu={false}` would be the only boolean prop in the file passed as `false`). `App.tsx:693-705` and `:742-756` pass `hideBatchMenu` and keep passing `onBatchToggle`. The mechanism matters more than the name. The chord handler (`:312-335`) finds its target with `closest("[data-group-slug][data-group-actionable]")`, and the only elements carrying those attributes are the singleton wrapper rendered under `if (hasKebab)` (`:507-518`) and the per-section wrapper rendered under `if (secKebab)` (`:636-648`). Nulling the kebab through either gate removes the wrapper, and the chords with it, exactly as dropping `onBatchToggle` does through `executeBatchToggle`'s early return (`:262`). So the wrapper gates keep their conditions (`hasKebab` at `:413`; `sec.is_triage && !!onBatchToggle` at `:535`) and only the menu JSX is gated on `!hideBatchMenu`: `kebabMenu` (`:418`) becomes `null`, and `sectionKebab` returns a wrapper with no menu. The Packages confirm modal (`:706-731`) stays reachable from Ctrl+Shift+X through `handleBatchAction` (`:278-288`); `.inspectah-sidebar__kebab*` (`App.css:1396-1420`) is unused but stays until phase 3. `ShortcutOverlay.tsx:19-25` Actions gains `Ctrl+Shift+A / Ctrl+Shift+X` "Include / exclude all in the focused sidebar group" (`__tests__/ShortcutOverlay.test.tsx:40` changes), so the phase 2 deprecation is visible.
+
+**Phase 2.** Ctrl+Shift+A sets the active section's header checkbox to include-all, Ctrl+Shift+X to exclude-all; both are directional and fire from the sidebar NavItem, the section header, or any row in its grid; no-ops in reference-only sections. Both post the same `SetInclude(<section>)` op the header posts, one timeline entry, same announcement. The Packages confirm modal goes; exclude-all on Packages announces and toasts `"<N> packages excluded from <section>. Ctrl+Z to undo."` (the `MainContent` toast pattern ungroup uses). *Recommendation; the alternative is an inline confirm below the header when N exceeds a named constant. Confidence moderate; § 3.7 confirms batch undo is one Ctrl+Z.* `ShortcutOverlay` Actions: `Space / x` "Toggle include/exclude (on a header: all members)", `Enter` "Expand/collapse", `ArrowRight / ArrowLeft` "Expand / collapse a group", `Ctrl+Shift+A / Ctrl+Shift+X` "Include / exclude all in section (deprecated: use Space on the section header)".
+
+**Phase 3** drops the chords and their overlay line, the Sidebar batch code (`Sidebar.tsx:50`, `:131`, `:252-297`, `:311-335`, `:413-460`, `:507-518`, `:534-600`, `:636-648`, `:696-702`, `:706-735`, about 285 of 755 lines, with `hideBatchMenu`), `__tests__/Sidebar.test.tsx:950-1367` (about 418), `/api/batch-toggle` (`lib.rs:98-101`), `batch_toggle_group` and `BatchTogglePayload` (`handlers.rs:715-1089`, 375) with their tests (`:1695-1830`, 136), `client.ts:70-76` `batchToggleGroup`, `App.tsx:227-234` `handleBatchToggle` and both `onBatchToggle` props, and `App.css:1396-1420`. `section_group.rs::has_actionable_sections()` stays as sidebar metadata. Phase 2's section-level op is `SetInclude(Section)` over `ItemId::Section { section: SectionId }` (§ 3.7).
+
+### 6.5 Upload flow
+
+One modal, `RpmUploadModal.tsx` (244 lines), replacing both, in phase 1. `RpmBatchUploadModal.tsx` (431) and `__tests__/RpmBatchUploadModal.test.tsx` (98) are deleted with `App.tsx:775-783`, `batchUploadOpen`, and `applyBatchMatch`, because the batch modal's matcher (`:23-57`, `:104-160`) is the one that files the Fedora filename under "Unmatched Files" and never posts it; keeping it one release keeps the bug one release. The server is the only matcher; the client checks the `.rpm` extension case-insensitively and nothing else. `validateRpmFile` (`RpmUploadModal.tsx:34-59`), the `validation` state (`:70-73`) and its gates (`:110`, `:226`) go; `useRpmUpload.ts` loses `ValidationResult`, `BatchMatchResult`, `extractPackageNameArch`, `extractPackageName`, `validateFilename`, `batchMatch`, and `applyBatchMatch` (`:11-28`, `:63-74`, `:169-210`, `:222-290`, about 150 of 304) and keeps `initFromBackend`, `getRowState`, `uploadRpm`, `removeUpload`, `needsUploadPackages`. `UploadMatchResult` (`useRpmUpload.ts:17-21`) moves to `api/types.ts` and gains `parsed: RpmFilename | null` and `staged_as: string` (§ 3.3). The matcher cases in `hooks/__tests__/useRpmUpload.test.ts` (about 250 of 373) go with the functions; `__tests__/RpmUploadModal.test.tsx:22-61` (validation cases) are replaced by test 13.
+
+- Open from a row (`PackageList.tsx:664`; the label becomes `Upload RPM for <name.arch>`, today it omits the arch): title `Upload RPM for <name.arch>`, hint `Any filename; the server matches it to the package.`, focus returns to the row button through `triggerRef`. Open from the toolbar (`Upload RPMs (N)`): title `Upload RPMs`, the "Packages needing RPMs" checklist (`needsUploadPackages`) from the batch modal, focus returns to the toolbar button.
+- Drop zone plus `Choose RPM`, one or many files. Non-`.rpm` files are listed with `not an .rpm file` and not posted. Files post to `/api/upload-rpm` in sequence through `uploadRpm` (`useRpmUpload.ts:110-151`).
+- Per-file verdict in a `role="list"`, `HelperText` items: `matched <result.matched>` (success); `no matching package` (warning) with body `The server could not match <filename> to any package that needs an RPM. The file is staged; remove it or try another.`; `upload failed: <server error or network message>` (danger) with `Retry`. The swallowing `catch` at `RpmUploadModal.tsx:123-125` is gone. Opened from a row with `result.matched` naming another package: `matched <result.matched> (not <target>)`.
+- `uploadRpm` adds `result.matched` to `uploadedSet` only when `result.status === "matched"` (today `:126-130` adds the argument before reading `status`). The matched row flips from upload button to checkbox; `PackageList.tsx:609-616` announces `"RPM provided for <name>, now available for inclusion"` and focuses the checkbox, and does so only when the modal was opened from that row. Unmatched files change no row.
+- `Done` enabled once every file has a verdict; `Cancel` aborts remaining files. Summary announced on Done: `"<K> of <N> files matched"`.
+- Row state comes from `PackageEntry.uploaded` (new, § 3.3; `types.ts:38-56` gains `uploaded?: boolean` and `repo_enabling?: boolean`) and `repoless_cached`; `uploadedSet` caches it, so a reload keeps the row. `uploaded_version` (`:55`) is rendered nowhere today and stays that way. Phase 3 collapses `RpmUploadRowState` (`types.ts:874-879`), `App.tsx:264-282` `rpmRowStates`, `getRowState`, and the branches at `PackageList.tsx:587-620` to two booleans with labels `RPM needed` (upload button in place of the checkbox), `RPM provided` with `Remove`, or `cached`.
+
+### 6.6 Storage summary row and other inventory containers
+
+- Backed `/var` directories collapse into one `ContextItem` at the top of Storage: title `<N> /var directories`, state text `all backed by tmpfiles.d or unit directives`, `detail` listing one directory per line as `<path>  <mode> <owner>:<group>  <backing kind>` (position 8). When some are unbacked: state text `<U> unbacked`, unbacked ones listed first.
+- Unbacked directories are rows with `advisory` (§ 6.2), badge `Advisory: Unbacked /var directory`.
+- `ContextList.tsx:16-28` renders `empty_reason` (`ReferenceSection.empty_reason?: string`, `types.ts:368`) in `EmptyStateBody`: `data_unavailable` as `Not collected: the <display_name> inspector returned no data for this host.`, `zero_drift` as `No changes: this host matches the base image.`, any other value verbatim. Title stays `No <display_name> data in this snapshot`. `__tests__/ContextList.test.tsx:51-79` changes with it.
+- Kernel & Boot and PAM rows are titled by the path under `/etc` (`modprobe.d/tuned.conf`, `tuned/myapp/tuned.conf`, `pam.d/custom-sshd`); the full path stays in `searchable_text`; the directory family is the subtitle.
+- Everything in this subsection except the `empty_reason` mapping is adapter-side (`adapter.rs:1293-1310`, `:1324-1359`, `:949-968`); the frontend renders it through § 6.2 with no Storage-specific code.
+
+### 6.7 Server-error toast
+
+The three error paths of item 1.11 become one. App's `onMutationError` (`App.tsx:216-223`) takes `(err: Error, rowName: string)`, is also the value of the `MainContent` prop (`:719-721`, which today only logs), and replaces `DecisionList.tsx:308-357` `handleError` and its `AlertGroup` (`:578-593`); the 409 stale-generation auto-refetch (`:310-325`) moves into the shared handler. Ordering: `useView.invalidate` (`hooks/useView.ts:25`) is a counter bump and cannot be awaited, so the handler calls `fetchView().then(onViewUpdate)` first, as `DecisionList.tsx:347-351` does today, and enqueues the toast in the same `.then`; the user never sees the toast while the row still shows the refused state. The row name: `MainContent`'s direct `applyOp` callers (`:255-364`) pass the name they hold; `useMutation` (`hooks/useMutation.ts:15-18`) passes the failed op as a second `onError` argument and App labels it from `item_id.key`.
+
+Content: PatternFly `Alert variant="danger"` with `role="alert"` (PatternFly spreads extra props to the root element), title `Change not applied`, body `<row name>: <err.message>`; `ApiError.message` is the server's `error` field verbatim (`types.ts:1067-1077`, `client.ts:17-20`), no client rewording. The error toasts render from `App` in one `AlertGroup isToast` without `isLiveRegion` (the alert role announces), so they do not stack against `MainContent`'s success group (`MainContent.tsx:468-481`); every other toast stays `status`. Close button, no auto-dismiss for errors; a later successful op on the same row dismisses its error toast. Focus never moves to the toast. Network failure (`err` is not an `ApiError`) uses the same toast with body `<row name>: could not reach the refine server`.
+
+### 6.8 Containerfile attention strip
+
+A marker line is a comment line beginning `# FIXME:` or `# MANUAL:`; consecutive marker lines form one block; N is the block count. When N > 0, a `<nav aria-label="Attention items">` above the `<pre>` reads `<N> items need your attention` with a `role="list"` of buttons, one per block, text `<FIXME|MANUAL>: <first line without prefix>`; Enter or click scrolls the block's first line to one third from the panel top (the `useContainerfileDiff` offset logic) and focuses it; `prefers-reduced-motion` makes the scroll instant. Marker lines get `tabIndex={-1}`, `id="cf-marker-<n>"`, class `inspectah-cf-panel__line--marker`, `white-space: pre-wrap`, and an `aria-hidden` `ExclamationTriangleIcon` gutter glyph; text unchanged for copy and export. `diffSummary` appends `, <N> items need attention` when N changed. Files: `ContainerfilePanel.tsx` (`tokenizeLine` `:121` gains the marker branch, `scrollTo` `:280`, `diffSummary` `:300`, `<pre>` `:381`, live region `:423-425`) and `hooks/useContainerfileDiff.ts:219`; tests in `__tests__/ContainerfilePanel.test.tsx` and `e2e/containerfile.spec.ts`. The renderer-side wording rule is § 5.6.
+
+### 6.9 Handler changes
+
+All in `crates/web/src/` unless named otherwise; phase 0 unless named otherwise.
+
+- `/api/view` (`adapter.rs:70`, `web_types.rs:130-140`, `:231-253`): `repo_groups[].provenance` gains `disabled` and `stale`; `package_groups[]` gains `effective_member_count` and `effective_included`; `packages[].entry` gains `repo_attribution`, `repo_enabling`, `uploaded`; `sysctls` and `tuned` (`web_types.rs:207-226`, `adapter.rs:191-218`) stay until phase 3. `build_repo_groups` (`handlers.rs:197-252`) keys by `RepoId`, so the `to_lowercase()` at `:209` goes (§ 3.2).
+- `/api/snapshot/sections` (`web_types.rs:102-108` `ContextItem`): gains optional `decision` and `advisory` (§ 3.8); `empty_reason` set on every empty section; Kernel & Boot Customizations items come from `config.files`; Storage items are the summary row, advisory rows, and non-default inventory rows.
+- `/api/op`: `SetInclude(Group)` returns 422 `{"error": "nothing to change: ..."}` on a no-op (`error.rs:29-36` gains the `NoopTarget` arm beside the two `*NotToggleable` arms); `SetInclude(Repo)` accepts `incomplete`; `ItemId::KernelModule` is no longer a valid `kind`. Phase 2 adds `SetInclude(Section)` with the same 422 no-op rule (§ 3.7).
+- `/api/upload-rpm` (`upload.rs`): `:39` `ends_with(".rpm")` becomes case-insensitive; the response at `:73-77` gains `parsed` and `staged_as`; after a match the staged file is renamed to the NEVRA filename (§ 3.3).
+- `/api/batch-toggle/{group_slug}` (`handlers.rs:724`): the kernel arm (`:826-871`) loses its two `KernelModule` loops (`:827-850`) and toggles sysctls and tuned only; the route (`lib.rs:98-101`), handler, and tests are deleted in phase 3.
+
+### 6.10 Implementation notes
+
+Reuse: `DecisionItem.tsx:276-425` for row structure, `aria-describedby` wiring, and the Space/x/Enter handler (`:190-194`; copy the structure into `ContextItem`, do not import the component); `DecisionList.tsx:469-563` `flatItemIds` and `handleRowKeyDown`; `RepoGroup.tsx:74` for the `rowgroup` wrapper; `UnmanagedFileList.tsx:136-137`, `:196-204`, `:238` for the live region, ArrowRight/ArrowLeft, and `indeterminate`; `MainContent.tsx:281-319` `handleRepoToggle` and `handleGroupToggle`, `:96` `ToastEntry`, `:468-481` `AlertGroup isToast`; `PackageList.tsx:609-616` for the upload announcement and `requestAnimationFrame` focus move; `api/disposition.ts` `advisoryTypeLabel`; `ShortcutOverlay.tsx:8-37` `SHORTCUT_GROUPS` edits only. Tests that import the components this spec changes and must be updated rather than deleted: `__tests__/DecisionSections.test.tsx` (23 `RepoBar`/`RepoGroupHeader` references), `ResponsiveLayout.test.tsx` (8), `FocusAndNavigation.test.tsx` (2), `RepoGroup.test.tsx`, `GroupRow.test.tsx` (593), the three `MainContent.ungroup*.test.tsx` files (1,086), `e2e/groups.spec.ts` (197). Retire by phase: § 7.
+
+## 7. Phasing
+
+Line counts are at `6e8a52b1` and approximate; frontend paths are under `crates/web/ui/src/`.
+
+| Phase | Lands | Deleted | Muscle memory preserved | Shippable alone |
+|---|---|---|---|---|
+| **0. Correctness and the bump** (Rust) | `FcontextRule` and the SELinux block; `RepoId`/`RepoAttribution`/`parse_repo_sections`, order-independent normalization, `RepoIndex` by `RepoId`, `Disabled`/`Stale` provenance, `validate_target` accepting `Incomplete`; `repo_enabling` classification, mirror-safe block content, CRB rule, permalink comment; NEVRA-keyed upload staging, `RpmFilename`, `uploaded`, upload-dir rescan; tmpfiles.d parser and `VarDirBacking` payloads; config walker owns kernel dirs, PAM, audit, tuned profiles, with `ConfigCategory::Pam` and `ConfigCategory::Tuned`; `shadowed_by`; `loaded_modules` inventory; `GroupInfo` effective counts and `NoopTarget`; `ContextItem` `decision`/`advisory` on the server side; `empty_reason` everywhere; `SCHEMA_VERSION` 23 | kernel snippet lists, `ConfigSnippet`, `tuned_custom_profiles`, `non_default_modules`, `CarryForwardFile`, `pam_configs`, `audit_rules`, `repo_providing_packages`, `size_estimate`, `recommendation`, `ItemId::KernelModule`, `CROSS_INSPECTOR_EXCLUDE_PREFIXES`, `sysctl_source_paths`, `TUNED_PREFIX`, the `tuned/` root, the kernel-module batch arm, `restorecon` | every existing key and control; `/api/view` is additive except `KernelModule`; reference rows without `decision` byte-identical | Yes. Changes what the Containerfile and tarball contain for this host; the UI keeps working against the additive view. |
+| **1. Restore the rule where it is broken** (web) | `ContextItem`/`ContextList` render `decision` and `advisory` (§ 6.2); sysctl, tuned, and config-backed rows decide inside Kernel & Boot; PAM and audit rows appear under Configuration Files (no frontend change: they arrive as `config_files`); `RepoGroupHeader` is the one repo component, predicate `verified`/`incomplete`, state text for the rest, `RepoBar` leaves `MainContent`; `GroupRow` zero-effective text and member marks; Storage summary row and `empty_reason` body; titles by path; one upload modal with server verdicts (§ 6.5); error toast (§ 6.7); attention strip (§ 6.8); `hideBatchMenu`; overlay lists the chords | `SystemTuningSection.tsx` (94), `SysctlSection.tsx` (183), `TunedSection.tsx` (158) and their tests (470); `RpmBatchUploadModal.tsx` (431) and test (98); `validateRpmFile` and the hook matchers (about 180) with their tests (about 290); `DecisionList` error toast (about 60); `<RepoBar>` mount in `MainContent.tsx:436-439`; `repoStyles` in `PackageList.tsx`; `system_tuning` in `SINGLE_HOST_SECTION_IDS`. Net about 1,900 lines out. | every existing key; `DecisionItem` unchanged; repo `Switch` and `ungroup` where they are; chords still work (the kebab is hidden, not removed); reference rows without `decision` byte-identical | Yes. Needs only phase 0's view and sections: `decision` is filled for sysctl and tuned from DTOs and `ItemId`s that exist today, so even a phase 0 that shipped without the Kernel & Boot move would light up those two rows. `AggregateApp` keeps `RepoBar`, so aggregate mode is untouched. |
+| **2. Move bulk ops to where the rows are** (web, one Rust op) | tri-state header checkbox on section grids, `GroupRow`, the repo row (replacing its `Switch`), and the unmanaged directory; group checkbox returns on effective members through `handleGroupToggle`; `ungroup` moves into the expanded row as `Render as individual packages`; chords alias the header checkbox and the overlay marks them deprecated; Space on an unmanaged header means decide, Enter/ArrowRight expand; `role="grid"` with `aria-rowcount` on `DecisionList` and `PackageList` containers; `ItemId::Section` and the section-level `SetInclude` op as one timeline entry (Rust, § 3.7) | `UnmanagedFileList` `Reset to All`/include-none buttons (`:470-500`) and their App/MainContent props; `GroupRow.tsx:146-163` header `ungroup` and comment. The kebab, confirm modal, and route stay in the tree, unreachable, until phase 3 (§ 2). | j/k/g/G, Space/x on rows, Enter expand, 1-8, `/`, Ctrl+K, Ctrl+Z; chords keep their direction | Yes, once the section-level op exists; without it the header checkbox lands on `GroupRow`, the repo row, and the unmanaged directory only, which is still a coherent release. |
+| **3. Collapse duplicates** (web) | row state as two booleans; `Inventory` label dropped from `DecisionItem`; `sysctls`/`tuned` arrays leave `/api/view` | Sidebar batch code (about 285) and `Sidebar.test.tsx:950-1367` (about 418); `handlers.rs:715-1089` (375) and tests `:1695-1830` (136); `lib.rs:98-101`; `client.ts:70-76`; `App.tsx` `handleBatchToggle` and props; `App.css:1396-1420`; `hideBatchMenu`; the chords and overlay line; `RpmUploadRowState` and `rpmRowStates`; `SysctlDecisionDto`/`TunedDecisionDto` (`web_types.rs:207-226`, `types.ts:465-485`) and `adapter.rs:191-218`. Net about 1,300 lines out. | all of the above | Yes. Pure deletion plus the row-state collapse; `/api/view` loses two arrays no component reads after phase 1. |
+
+Phase 0 is one Rust change set with one schema bump and ships before any web phase; phases 1 to 3 each follow their predecessor. Nothing in phases 1 to 3 changes what the Containerfile emits. Against the interaction contract's § 9 table, this moves the single upload modal and the single repo component from phase 3 to phase 1 (each removes a live source of the bugs in items 1.3 and 1.5, and the phase 3 version would have carried both duplicates one more release) and moves the kebab, confirm modal, and route deletion from phase 2 to phase 3, as § 2 settled.
+
+## 8. Test plan
+
+Each entry names the crate, the test file (new files are marked), and the assertion. Assertions follow the quoting skill: on rendered output, never on a predicate's return value. Frontend unit tests are Vitest with Testing Library under `crates/web/ui/src/components/__tests__/` and `src/hooks/__tests__/`; browser tests are Playwright under `crates/web/ui/e2e/`.
+
+1. **configtree honours a config exclusion with no kernel list to override it.** `crates/pipeline/tests/configtree_single_source_test.rs` (new): snapshot with `config.files` holding `/etc/modules-load.d/driftify.conf` excluded and `kernel_boot` populated with sysctls and tuned; `write_config_tree` produces no `config/etc/modules-load.d/driftify.conf` and roots `[]`. A second case with the entry included yields the file and roots `["etc"]`. Replaces the executed throwaway.
+2. **Relaxed-matched upload reaches the tarball.** `crates/refine/tests/upload_export_test.rs` (new): session on an `epel-release` entry, `set_upload_dir`, stage `epel-release-latest-9.noarch.rpm`, `mark_uploaded_rpm`, `SetInclude`, `render_refine_export(.., Some(&dir))`; assert the Containerfile's active `COPY repoless-packages/epel-release-9-11.el9.noarch.rpm /tmp/` and that `export/repoless-packages/epel-release-9-11.el9.noarch.rpm` exists in the tarball; assert `PackageEntry.uploaded == true` in the view and `false` after `unmark_uploaded_rpm`. Also: a fresh session over the same upload dir re-marks the entry.
+3. **Repo-enabling classification and block.** `crates/collect/tests/repoless_rpm_test.rs`: `epel-release` `@commandline` with `file_ownership` paths all captured gets `repo_enabling == true`, empty `repoless_annotation`; the same package with `epel.repo` missing from `repo_files` stays repo-less. `crates/pipeline/src/render/containerfile.rs` unit tests: active lines are `COPY config/etc/yum.repos.d/`, `COPY config/etc/pki/rpm-gpg/`, then `RUN dnf install -y \` with `epel-release`; the permalink appears only on a `#` line; no `MANUAL` line; `--enablerepo=codeready-builder-` appears only when a `codeready-builder-*` section has `enabled=1`.
+4. **`normalize_source_repos` is order-independent and never attributes to a disabled section.** `crates/collect/src/inspectors/rpm/source_repos.rs` unit tests: the host's four repo files in both orders yield `source_repo == "epel"` and `RepoAttribution::Exact`; a short name matching only a disabled section yields `Stale`; a short name substring-matching two enabled sections yields `Ambiguous` with `source_repo` unchanged; `anaconda` yields `Pseudo(Anaconda)`.
+5. **`RepoIndex` collapses case.** `crates/refine/tests/repo_index_test.rs`: a repo file with `[EPEL_10_Everything_x86_64]` and a package with `source_repo: "epel_10_everything_x86_64"` produce one key and `Verified` (or `Disabled` when the section has `enabled = 0`); `validate_target` accepts `SetInclude(Repo)` for an `Incomplete` section and refuses `Disabled`, `Stale`, `Unknown` with 400 text naming the provenance.
+6. **`RpmFilename` table.** `crates/refine/src/rpm_filename.rs`, one table-driven test over the executed matcher table: `epel-release-latest-9.noarch.rpm` to `(epel-release-latest, noarch, Some("9"))` and `mark_uploaded_rpm` to `Some("epel-release.noarch")` with `uploaded_version == Some("9")`; `epel-release-9-11.el9.noarch.rpm` exact, `uploaded_version == None`; `epel-release-9-10.el9.noarch.rpm` `Some("9-10.el9")`; `epel-release-latest-10.noarch.rpm` `Some("10")`; `epel-release.noarch.rpm` matches; `epel-release-latest-9.noarch (1).rpm`, `epel-release-latest-9.noarch-1.rpm`, `epel-release-latest-9.rpm` parse to `None`; `epel-next-release-latest-9.noarch.rpm` parses but matches nothing; `epel-release-latest-9.noarch.RPM` parses (new behaviour). `crates/web/tests/api_test.rs`: `POST /api/upload-rpm` with the `.RPM` name returns 200, `status: "matched"`, `parsed.name == "epel-release-latest"`, and the staged file is named by NEVRA.
+7. **tmpfiles classifier.** `crates/collect/src/inspectors/storage.rs` unit tests: `MockExecutor` serving systemd's `var.conf` (`d /var/lib`, `d /var/log`, `d /var/cache`) and the host's `appone.conf` (`d /var/lib/appone/cache`); `/var/lib/pgsql` is `Unbacked` and `unbacked_var_advisory` lists it; `/var/lib/appone/cache` is `Tmpfiles { conf: ".../appone.conf", entry_path: "/var/lib/appone/cache" }`; `/var/lib/appone/cache/sub` is backed by the same entry (strict ancestor below the root); `/var/lib/foo` with only `var.conf` present is `Unbacked`; a `/etc` file masks its `/usr/lib` namesake; `%`-specifier entries match nothing. `crates/pipeline/src/render/containerfile.rs`: `inspectah-var.conf` contains `/var/lib/pgsql` with the captured mode and owner.
+8. **Group no-op is 422 and records nothing.** `crates/refine/tests/session_test.rs`: the Container Management fixture (two non-leaf present members, one baseline-suppressed); after `RefineSession::new`, `apply(SetInclude(Group, false))` returns `Err(NoopTarget(_))`, `/api/ops` equivalent (`timeline.len()`) is unchanged; `apply(SetInclude(Group, true))` is `Ok`, both members included, one timeline entry, and `render_refine_export` shows both in the install list (position 1); undo restores both in one step. `crates/web/src/adapter.rs`: `GroupInfo` for the fixture has `member_count 3`, `effective_member_count 2`, `effective_included 0`, and `podman` with `in_base_image: true`. `crates/web/src/error.rs`: `NoopTarget` maps to 422 with the message in `error`. Phase 2, same file: `apply(SetInclude(Section(Packages), true))` on a fixture with two included, one excluded, and one locked actionable package flips the one, leaves the locked row excluded, adds one timeline entry, and undo restores it in one step; the same op repeated returns `Err(NoopTarget(_))` with the timeline unchanged.
+9. **fcontext parser table and SELinux block snapshot.** `crates/collect/tests/selinux_test.rs`, table-driven: the host's padded `Label` row; a `<<None>>` row to `Unlabel`; `regular file` to `RegularFile`; a `user_u:object_r:foo_t:s0-s0:c0` context with the level kept intact; an equivalence line `/home1 = /home` to `Equivalence { subject: "/home1", labeled_like: "/home" }`; a stray line to `Unparsed`; the `file_contexts.local` form `/srv/www(/.*)?  -d  system_u:object_r:httpd_sys_content_t:s0` to `Label { file_type: Directory, .. }`. `crates/pipeline/tests/smoke_render.rs` (`insta`): the SELinux block for the host rule renders exactly the § 5.1 after-text; a spec containing `'` renders the two-line FIXME with the imperative first; no line contains `restorecon`; the equivalence line appears once for two `/srv` rules and not at all for a `/opt` rule.
+10. **Kernel & Boot after the move.** `crates/collect/tests/kernelboot_test.rs`: `loaded_modules[].disposition` deserializes to `Inventory` when the key is absent; `KernelBootSection` JSON with `modules_load_d` present fails to load at schema 23 (the field is gone, so `deny_unknown_fields` is not the mechanism; assert the schema gate instead). `crates/collect/tests/config_test.rs`: `/etc/tuned/myapp/tuned.conf` becomes a `ConfigFileEntry` with category `Tuned`; `/etc/sysctl.d/99-driftify.conf` becomes `Inventory` with `shadowed_by: Some(Sysctl)` after the orchestrator pass while `hugepages.conf` stays actionable. `crates/pipeline/src/render/containerfile.rs`: an excluded custom profile with activation included renders the § 3.5 FIXME and no `active_profile` line; `COPY tuned/` never appears.
+11. **PAM and audit through the config tree.** `crates/collect/tests/config_test.rs`: `/etc/pam.d/custom-sshd` is a `ConfigFileEntry` with category `Pam`; `/etc/audit/rules.d/driftify.rules` has category `Audit`; an `rpm_va` entry `....L....` for `/etc/pam.d/system-auth` pointing into `/etc/authselect/` produces no entry. `crates/pipeline/tests/smoke_render_2c.rs`: excluding the PAM entry leaves `config/etc/pam.d/custom-sshd` out of the tarball and the audit report lists it as excluded; `render_audit` output contains the path under Configuration Files.
+12. **Decision rows, containers, and the invariant.** Rust: `crates/web/tests/contract_snapshots.rs`: the `contract_sections` and `contract_view` snapshots are unchanged by the type additions (both fields skip when `None`); `grouped_view` gains `effective_member_count` and `effective_included`; new assertions that a Kernel & Boot sysctl item carries `decision.item_id == {"kind":"Sysctl","key":{"key":...}}`, an unbacked `/var` item carries `advisory.advisory_type == "unbacked_var_dir"`, and every empty section carries `empty_reason`. `crates/web/tests/api_test.rs`: `POST /api/op` with `SetInclude(Group, false)` on the Container Management fixture returns 422 with `error` starting `nothing to change`, and `GET /api/ops` is unchanged before and after; `SetInclude(Repo)` on an `incomplete` repo returns 200. Frontend, phase 1: `__tests__/ContextItem.test.tsx` (102, extended) adds an inline snapshot of today's markup for an item without `decision`, written before the component changes, and asserts the `grid` prop renders `role="row"` with the four cells; with `decision`, Space and `x` call `onToggleInclude` with `{ op: "SetInclude", target: { item_id, include: !include } }`, the row keeps `document.activeElement` through a rerender with the flipped `include`, and the live region reads `<title> included`; `locked` renders `disabled` with `aria-describedby` on `locked-reason-<id>`; `advisory` renders the `Advisory:` badge and no checkbox. `__tests__/ContextList.test.tsx` (218, extended): a section with no `decision` renders `role="list"` and no `role="row"` (the existing cases keep passing unmodified); a mixed subsection renders `role="grid"`, `aria-rowcount`, an empty `__toggle` cell on the plain items, and j/k/ArrowDown move `tabIndex=0` between rows; `empty_reason` renders the § 6.6 sentences. `__tests__/GroupRow.test.tsx` (593, rewritten in phase 2): `effective_member_count === 0` renders no checkbox and the text `nothing to decide: all members are locked or from base` referenced by `aria-describedby`; `effective_included < effective_member_count` renders `aria-checked="mixed"` and Space calls `onToggle(name, true)`; all included renders `true` and Space calls `onToggle(name, false)`; `degraded` renders no checkbox and `rendered individually: <reason>`; `Render as individual packages` is inside the expanded member list. `__tests__/RepoGroup.test.tsx` (188, extended): the Switch (phase 1) or checkbox (phase 2) renders only for `provenance` `verified` and `incomplete`, and the badge cell renders the exact § 6.3 text for `disabled`, `stale`, `unknown`, and distro. `__tests__/Sidebar.test.tsx` (phase 1, new cases in the `batch-toggle kebab menu` block): with `hideBatchMenu` no `kebab-<slug>` test id renders, while Ctrl+Shift+X on a singleton group wrapper and on a multi-section group heading still calls `onBatchToggle(slug, false)`, and Ctrl+Shift+X on `packages-group` still opens `packages-confirm-modal`. `e2e/triage.spec.ts` (phase 2): the contract invariant of § 6.3 walks every container header in the single-host fixture, posts the op each rendered control would post and asserts 2xx plus a new `/api/ops` entry, and posts the same op for each no-control row and asserts 4xx. Deleted with their components: `SystemTuningSection.test.tsx` (121), `SysctlSection.test.tsx` (187), `TunedSection.test.tsx` (162) in phase 1; `Sidebar.test.tsx:950-1367` (about 418) and `handlers.rs:1695-1830` (136) in phase 3. Updated, not deleted: `DecisionSections.test.tsx`, `ResponsiveLayout.test.tsx`, `FocusAndNavigation.test.tsx` (`RepoBar`/`RepoGroupHeader` fixtures), the three `MainContent.ungroup*.test.tsx` files (1,086; the button moves, the directive does not), `e2e/groups.spec.ts` (197), `hooks/__tests__/useKeyboard.test.ts:130-136`.
+13. **Error toast and upload modal.** Frontend, phase 1: `src/__tests__/App.routing.test.tsx` or a new `__tests__/App.errors.test.tsx`: with `fetch` mocked so `/api/op` returns 422 `{"error":"cannot exclude repo 'x': provenance is Disabled"}` and `/api/view` resolves on a deferred promise, no `role="alert"` exists until the view promise resolves, then exactly one `role="alert"` renders with text `Change not applied` and `x: cannot exclude repo 'x': provenance is Disabled`, has no auto-dismiss timer (advance 10 s, still present), and `document.activeElement` is still the row that posted; a network rejection renders `could not reach the refine server`; a later 200 on the same row removes the alert. `__tests__/DecisionSections.test.tsx` loses the cases that assert `DecisionList`'s own `Error:` toast. `__tests__/RpmUploadModal.test.tsx` (213, rewritten): selecting `epel-release-latest-9.noarch.rpm` enables `Upload` with no validation message (the `validates RPM filename` and `shows expected NEVRA pattern` cases are deleted); `Upload` posts the file to `/api/upload-rpm` as multipart with the filename unchanged (assert on the `fetch` mock's `FormData`, not on any parsed name); a mocked `{status:"matched", matched:"epel-release.noarch", uploaded:1, parsed:{...}, staged_as:"epel-release-9-11.el9.noarch.rpm"}` renders `matched epel-release.noarch`; `{status:"unmatched"}` renders `no matching package` with the staged-file body; a rejected upload renders `upload failed:` with `Retry`; `foo.txt` renders `not an .rpm file` and is not posted; `FOO.RPM` is posted; opened from row `a.x86_64` with `matched: "b.x86_64"` renders `matched b.x86_64 (not a.x86_64)`. `hooks/__tests__/useRpmUpload.test.ts` (373, reduced to about 120): `uploadRpm("a.x86_64", file)` with `{status:"matched", matched:"b.x86_64"}` makes `getRowState("b.x86_64")` uploaded and leaves `getRowState("a.x86_64")` at `needs_upload`; `{status:"unmatched"}` changes no row; `initFromBackend` with `uploaded: true` on an entry yields the uploaded state with an empty `uploadedSet`; the `validateFilename`, `batchMatch`, and `extractPackageName` cases are deleted with the functions. Deleted: `__tests__/RpmBatchUploadModal.test.tsx` (98). Rust: `crates/web/tests/api_test.rs`: `POST /api/upload-rpm` with `epel-release-latest-9.noarch.RPM` returns 200 (test 6 covers the body).
+14. **Host checks and the tests they back.** All three checks of § 2 passed on 2026-10-26, so tests 4 (`Exact { id: epel }` in both file orders, A1), 9 (`RUN semanage fcontext` lines and no `restorecon`, A2), and 7 (`/var/lib/pgsql` is `Unbacked` against `var.conf`, A3) stand as written. Test 7's mock can carry the real `cleanup.conf` entry `D /run/myapp 0755 root root -` as a non-matching line, since that is the only tmpfiles.d line on the host that names any of the three directories.
+
+## 9. Out of scope
+
+- Aggregate and fleet UI, beyond the one mechanical change the `ItemId::KernelModule` removal forces in `aggregate_handlers.rs`.
+- Computing `non_default_modules` (loaded, not built in or autoloaded by the base, not declared in `modules-load.d`). The dead constant is dropped; a real computation is its own spec.
+- The machine-local data advisory from the `/var` ruling (needs `size_estimate` populated by a real measurement, which this spec removes rather than fakes).
+- Relocating the container-storage note to Container Workloads, and suppressing `/var` rows owned by packages present in the target base.
+- Tier colour removal beyond what phase 1 names (`repoStyles` on package rows); aggregate views keep their vocabulary.
+- The 2026-06-29 commandline-repo pre-spec's `repo_alternative` fields and the `dnf repoquery --available` lookup for `Stale` packages. `RepoAttribution::Stale` is where that lookup would attach, and this spec stops at naming the slot.
+- `locked_reason` on `ContextDecision`; the badge reads `Locked` until a reason string exists.
+- Deduplicating `rpm.gpg_keys` (nine copies of one path on this host); noticed, not part of the bump.
+- Re-validating the `/srv` equivalence on the RHEL 9 policy build (`matchpathcon /var/srv/www/index.html` on a booted host); the line is harmless if redundant.
+- Skill and CHANGELOG updates. Implementation of phase 0 updates `serde-include-default-ambiguity.md` (it describes patching `include`; `normalize.rs:64` patches `disposition`), `snapshot-schema-versioning.md` (constants), `web-disposition-contract.md` (the `ContextItem` decision path, the DTO retirement, and the `Inventory` bucket caveat once `loaded_modules` and shadowed config entries are inventory), `rpm-repo-name-mismatch.md` (the substring rule is replaced), and `codebase-layout.md` (`rpm_filename.rs`); and adds `[Unreleased]` entries for the Containerfile changes.
