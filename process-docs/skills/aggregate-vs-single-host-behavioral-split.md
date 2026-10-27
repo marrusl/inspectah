@@ -41,6 +41,40 @@ non-leaf manual follow-up comments.
 
 The renderer checks `pkg.aggregate.is_some()` to decide which path to take.
 
+### 4. Cross-inspector invariants established at collection do not survive the merge
+
+Anything one inspector pass reconciles across sections holds per host and
+**stops holding in the merged snapshot**. `merge_snapshots()` calls each
+section merger independently (`crates/core/src/aggregate/mod.rs:240-255`);
+no pass reconciles a config entry against the kernel, service, or container
+section afterwards. Three properties combine to break the invariant:
+
+- Config variant identity hashes **content**, not disposition
+  (`crates/core/src/aggregate/merge.rs:119-125`). Two hosts with byte-identical
+  files land in one variant group however they were dispositioned.
+- A single-content group clones the **lowest-host-index** entry and calls
+  `set_include(true)` on it (`merge.rs:622-635`). `FindingKind::with_include`
+  preserves `Inventory` and `Advisory` but rewrites `Actionable`
+  (`crates/core/src/types/finding.rs:57-65`), so the merged disposition is
+  whichever kind the first host happened to contribute.
+- The other host's section entry survives in full alongside it, including
+  fields the renderer keys off.
+
+Worked example: hosts A and B carry an identical `/etc/sysctl.d/foo.conf`.
+The sysctl collector records an override only where the runtime value differs
+from the file value (`crates/collect/src/inspectors/kernelboot.rs:280-296`),
+so if A's runtime matches and B's differs, only B gets an override and only
+B's config entry is shadowed to `Inventory`. If A sorts first, the merged
+snapshot carries A's **included** config entry **and** B's override naming the
+same path. Both `inspectah scan` and `inspectah aggregate` then render through
+the same `render_all`/`write_config_tree`
+(`crates/cli/src/commands/aggregate.rs:202`), so renderer logic that assumes
+the per-host invariant sees a state no single host could produce.
+
+Before relying on a cross-section invariant in a renderer, ask whether it was
+established in `finalize_cross_inspector` (collection boundary, per host) or
+after the merge. Only the latter holds for aggregate output.
+
 ## Why This Matters
 
 The most common mistake is writing code that works for single-host
@@ -54,6 +88,8 @@ Specific failure modes:
   the refine view and Containerfile.
 - **Checking `redaction_state` on a aggregate snapshot** always returns
   `None`, even if constituent hosts had redaction applied.
+- **Trusting a collection-time cross-section invariant in a renderer.** It
+  holds per host and does not survive independent section merges.
 
 ## Evidence
 
