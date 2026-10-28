@@ -911,9 +911,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .selinux
         .as_ref()
         .map(|s| {
+            // Placeholder text: `FcontextRule` is now a typed enum (task
+            // 10); the real per-variant display text is a renderer task.
             s.fcontext_rules
                 .iter()
-                .map(|f| Value::from(f.as_str()))
+                .map(|f| Value::from(format!("{f:?}")))
                 .collect()
         })
         .unwrap_or_default();
@@ -2379,7 +2381,17 @@ mod tests {
             boolean_overrides: vec![
                 serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
             ],
-            fcontext_rules: vec!["/opt/app(/.*)?".into()],
+            fcontext_rules: vec![inspectah_core::types::selinux::FcontextRule::Label {
+                spec: "/opt/app(/.*)?".into(),
+                file_type: inspectah_core::types::selinux::FcontextFileType::All,
+                context: inspectah_core::types::selinux::SelinuxContext {
+                    user: "system_u".into(),
+                    role: "object_r".into(),
+                    type_: "httpd_sys_content_t".into(),
+                    level: Some("s0".into()),
+                },
+                disposition: inspectah_core::types::FindingKind::included(),
+            }],
             fips_mode: false,
             ..Default::default()
         });

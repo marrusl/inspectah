@@ -22,7 +22,10 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{
+    CarryForwardFile, FcontextFileType, FcontextRule, SelinuxContext, SelinuxPortLabel,
+    SelinuxSection,
+};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, readme, report};
 use tempfile::TempDir;
 
@@ -131,7 +134,17 @@ fn snapshot_with_selinux() -> InspectionSnapshot {
             serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
             serde_json::json!({"name": "container_manage_cgroup", "state": true}),
         ],
-        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        fcontext_rules: vec![FcontextRule::Label {
+            spec: "/opt/app(/.*)?".into(),
+            file_type: FcontextFileType::All,
+            context: SelinuxContext {
+                user: "system_u".into(),
+                role: "object_r".into(),
+                type_: "httpd_sys_content_t".into(),
+                level: Some("s0".into()),
+            },
+            disposition: FindingKind::included(),
+        }],
         fips_mode: true,
         port_labels: vec![SelinuxPortLabel {
             protocol: "tcp".into(),

@@ -729,6 +729,73 @@ pub fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
     result
 }
 
+/// Semantic identity for an [`FcontextRule`], used to dedup across hosts:
+/// `Label`/`Unlabel` key on `(spec, file_type)`, `Equivalence` on `subject`,
+/// `Unparsed` on `raw`.
+fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
+    match rule {
+        FcontextRule::Label {
+            spec, file_type, ..
+        } => (0, spec.clone(), format!("{file_type:?}")),
+        FcontextRule::Unlabel {
+            spec, file_type, ..
+        } => (1, spec.clone(), format!("{file_type:?}")),
+        FcontextRule::Equivalence { subject, .. } => (2, subject.clone(), String::new()),
+        FcontextRule::Unparsed { raw } => (3, raw.clone(), String::new()),
+    }
+}
+
+/// Merges `fcontext_rules` across hosts by semantic key rather than string
+/// equality, preserving order: hostname order (the order `sections` is
+/// given in), then each host's own collected order. Losing that order would
+/// silently change which overlapping local expression the target policy
+/// resolves to by recency (see `collect_fcontext_rules`).
+///
+/// A key's surviving rule keeps the first host's spec/context (hosts that
+/// disagree on content for one key do not overwrite it); its disposition is
+/// included only when every host carrying that key included it, the same
+/// convention `narrow_non_universal` applies to `merge_items` output.
+fn merge_fcontext_rules(sections: &[Option<SelinuxSection>]) -> Vec<FcontextRule> {
+    let mut order: Vec<(u8, String, String)> = Vec::new();
+    let mut representative: HashMap<(u8, String, String), FcontextRule> = HashMap::new();
+    let mut included_on_all: HashMap<(u8, String, String), bool> = HashMap::new();
+
+    for section in sections.iter().flatten() {
+        for rule in &section.fcontext_rules {
+            let key = fcontext_rule_key(rule);
+            if !representative.contains_key(&key) {
+                representative.insert(key.clone(), rule.clone());
+                order.push(key.clone());
+            }
+            let included = match rule {
+                FcontextRule::Label { disposition, .. }
+                | FcontextRule::Unlabel { disposition, .. }
+                | FcontextRule::Equivalence { disposition, .. } => disposition.is_included(),
+                FcontextRule::Unparsed { .. } => true,
+            };
+            let entry = included_on_all.entry(key).or_insert(true);
+            *entry = *entry && included;
+        }
+    }
+
+    order
+        .into_iter()
+        .map(|key| {
+            let mut rule = representative.remove(&key).expect("key was just recorded");
+            let include = included_on_all[&key];
+            match &mut rule {
+                FcontextRule::Label { disposition, .. }
+                | FcontextRule::Unlabel { disposition, .. }
+                | FcontextRule::Equivalence { disposition, .. } => {
+                    *disposition = disposition.with_include(include);
+                }
+                FcontextRule::Unparsed { .. } => {}
+            }
+            rule
+        })
+        .collect()
+}
+
 /// Deduplicate JSON values by serialized equality.
 pub fn dedup_json_values(lists: Vec<Vec<serde_json::Value>>) -> Vec<serde_json::Value> {
     let mut seen = HashSet::new();
@@ -864,7 +931,7 @@ use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
-use crate::types::selinux::SelinuxSection;
+use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
 use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
 use crate::types::users::UserGroupSection;
@@ -1606,7 +1673,16 @@ pub fn merge_selinux_sections(
     );
 
     let custom_modules = dedup_strings(collect_string_lists(&sections, |s| &s.custom_modules));
-    let fcontext_rules = dedup_strings(collect_string_lists(&sections, |s| &s.fcontext_rules));
+    let fcontext_rules = merge_fcontext_rules(&sections);
+    let fcontext_source = if sections
+        .iter()
+        .flatten()
+        .all(|s| s.fcontext_source == FcontextSource::PolicyStore)
+    {
+        FcontextSource::PolicyStore
+    } else {
+        FcontextSource::SemanageList
+    };
 
     // Dedup boolean_overrides by JSON equality
     let boolean_overrides = dedup_json_values(
@@ -1655,6 +1731,7 @@ pub fn merge_selinux_sections(
         custom_modules,
         boolean_overrides,
         fcontext_rules,
+        fcontext_source,
         audit_rules,
         fips_mode,
         pam_configs,

@@ -19,7 +19,10 @@ use inspectah_core::types::rpm::{
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{
+    CarryForwardFile, FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
+    SelinuxPortLabel, SelinuxSection,
+};
 use inspectah_core::types::services::{
     ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
 };
@@ -1462,6 +1465,22 @@ fn test_merge_scheduled_sections_cron_and_timers() {
 // Section adapter: SELinux
 // ===========================================================================
 
+/// An included `Label` rule for a spec, with a fixed context -- content
+/// doesn't matter for the dedup-by-key tests below.
+fn fcontext_label(spec: &str) -> FcontextRule {
+    FcontextRule::Label {
+        spec: spec.into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "httpd_sys_content_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::included(),
+    }
+}
+
 #[test]
 fn test_merge_selinux_sections_all_none() {
     let result = merge_selinux_sections(vec![None], 1, &["h1".into()]);
@@ -1478,7 +1497,8 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             ..Default::default()
         }],
         custom_modules: vec!["mymodule".into()],
-        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
+        fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
         audit_rules: vec![CarryForwardFile {
             path: "etc/audit/rules.d/custom.rules".into(),
@@ -1495,7 +1515,8 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             ..Default::default()
         }],
         custom_modules: vec!["mymodule".into(), "othermodule".into()],
-        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
+        fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
         audit_rules: vec![CarryForwardFile {
             path: "etc/audit/rules.d/custom.rules".into(),
@@ -1513,7 +1534,12 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // String lists deduped
     assert_eq!(result.custom_modules, vec!["mymodule", "othermodule"]);
-    assert_eq!(result.fcontext_rules, vec!["/opt/app(/.*)?"]);
+    // Fcontext rules deduped by semantic key (same spec + file_type)
+    assert_eq!(
+        result.fcontext_rules,
+        vec![fcontext_label("/opt/app(/.*)?")]
+    );
+    assert_eq!(result.fcontext_source, FcontextSource::PolicyStore);
 
     // JSON deduped
     assert_eq!(result.boolean_overrides.len(), 1);
@@ -1523,6 +1549,77 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.mode, "enforcing");
+}
+
+#[test]
+fn test_merge_selinux_fcontext_order_and_disposition() {
+    // h1: an h1-only rule, then a rule shared with h2 (included, context Y1).
+    let h1_shared = FcontextRule::Label {
+        spec: "/opt/shared".into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "y1_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::included(),
+    };
+    let s1 = SelinuxSection {
+        fcontext_rules: vec![fcontext_label("/opt/a"), h1_shared],
+        ..Default::default()
+    };
+
+    // h2: the shared rule again, excluded and with a different context
+    // (disagreement), then an h2-only rule.
+    let h2_shared = FcontextRule::Label {
+        spec: "/opt/shared".into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "y2_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::excluded(),
+    };
+    let s2 = SelinuxSection {
+        fcontext_rules: vec![h2_shared, fcontext_label("/opt/c")],
+        ..Default::default()
+    };
+
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Order: hostname order, then each host's collected order -- not
+    // sorted by spec and not grouped by host.
+    let specs: Vec<&str> = result
+        .fcontext_rules
+        .iter()
+        .map(|r| match r {
+            FcontextRule::Label { spec, .. } => spec.as_str(),
+            other => panic!("expected Label, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(specs, vec!["/opt/a", "/opt/shared", "/opt/c"]);
+
+    // Disagreement on content: the merged rule keeps h1's (first-seen)
+    // context ("y1_t"), not h2's ("y2_t").
+    match &result.fcontext_rules[1] {
+        FcontextRule::Label { context, .. } => assert_eq!(context.type_, "y1_t"),
+        other => panic!("expected Label, got {:?}", other),
+    }
+
+    // Disposition: h1-only and h2-only rules are included (the only host
+    // carrying each included it); the shared rule is excluded because h2,
+    // one of the two hosts carrying it, excluded it.
+    let included = |rule: &FcontextRule| match rule {
+        FcontextRule::Label { disposition, .. } => disposition.is_included(),
+        other => panic!("expected Label, got {:?}", other),
+    };
+    assert!(included(&result.fcontext_rules[0]));
+    assert!(!included(&result.fcontext_rules[1]));
+    assert!(included(&result.fcontext_rules[2]));
 }
 
 #[test]

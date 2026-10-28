@@ -4,13 +4,19 @@
 //! and verifies output is structurally correct.
 
 use inspectah_collect::executor::mock::MockExecutor;
-use inspectah_collect::inspectors::selinux::SelinuxInspector;
+use inspectah_collect::inspectors::selinux::{
+    SelinuxInspector, parse_file_contexts_local_line, parse_file_contexts_subs_line,
+    parse_semanage_line,
+};
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::selinux::SelinuxSection;
+use inspectah_core::types::selinux::{
+    FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxSection,
+};
 use inspectah_core::types::system::SourceSystem;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -381,5 +387,235 @@ fn test_selinux_inspector_json_roundtrip() {
     assert_eq!(
         json, roundtrip_json,
         "inspector output must round-trip faithfully through SelinuxSection"
+    );
+}
+
+// ── Fcontext rule parsing and ordered collection (Task 10) ───────────
+
+/// Builds a `Label` rule with `FindingKind::included()` disposition, the
+/// collector's default for every rule it emits.
+fn label(
+    spec: &str,
+    file_type: FcontextFileType,
+    user: &str,
+    role: &str,
+    type_: &str,
+    level: Option<&str>,
+) -> FcontextRule {
+    FcontextRule::Label {
+        spec: spec.to_string(),
+        file_type,
+        context: SelinuxContext {
+            user: user.to_string(),
+            role: role.to_string(),
+            type_: type_.to_string(),
+            level: level.map(str::to_string),
+        },
+        disposition: FindingKind::included(),
+    }
+}
+
+#[test]
+fn fcontext_parser_table() {
+    let cases: &[(&str, FcontextRule)] = &[
+        // the host's padded Label row
+        (
+            "/srv/www(/.*)?                                     all files          system_u:object_r:httpd_sys_content_t:s0",
+            label(
+                "/srv/www(/.*)?",
+                FcontextFileType::All,
+                "system_u",
+                "object_r",
+                "httpd_sys_content_t",
+                Some("s0"),
+            ),
+        ),
+        // <<None>> -> Unlabel; "regular file" -> RegularFile
+        (
+            "/srv/private(/.*)?                                 regular file       <<None>>",
+            FcontextRule::Unlabel {
+                spec: "/srv/private(/.*)?".into(),
+                file_type: FcontextFileType::RegularFile,
+                disposition: FindingKind::included(),
+            },
+        ),
+        // a user_u:object_r:foo_t:s0-s0:c0 context with the level kept intact
+        (
+            "/srv/foo(/.*)?                                     all files          user_u:object_r:foo_t:s0-s0:c0",
+            label(
+                "/srv/foo(/.*)?",
+                FcontextFileType::All,
+                "user_u",
+                "object_r",
+                "foo_t",
+                Some("s0-s0:c0"),
+            ),
+        ),
+        // "/home1 = /home" -> Equivalence { subject: "/home1", labeled_like: "/home" }
+        (
+            "/home1 = /home",
+            FcontextRule::Equivalence {
+                subject: "/home1".into(),
+                labeled_like: "/home".into(),
+                disposition: FindingKind::included(),
+            },
+        ),
+        // a stray line -> Unparsed
+        (
+            "this is not a valid fcontext line",
+            FcontextRule::Unparsed {
+                raw: "this is not a valid fcontext line".into(),
+            },
+        ),
+    ];
+    for (line, want) in cases {
+        assert_eq!(parse_semanage_line(line), Some(want.clone()), "{line}");
+    }
+}
+
+#[test]
+fn policy_store_forms_and_order() {
+    // "-d" flag -> Directory
+    assert_eq!(
+        parse_file_contexts_local_line(
+            "/srv/www(/.*)?  -d  system_u:object_r:httpd_sys_content_t:s0"
+        ),
+        Some(label(
+            "/srv/www(/.*)?",
+            FcontextFileType::Directory,
+            "system_u",
+            "object_r",
+            "httpd_sys_content_t",
+            Some("s0"),
+        )),
+    );
+
+    // "--" -> RegularFile
+    assert_eq!(
+        parse_file_contexts_local_line(
+            "/srv/www(/.*)?  --  system_u:object_r:httpd_sys_content_t:s0"
+        ),
+        Some(label(
+            "/srv/www(/.*)?",
+            FcontextFileType::RegularFile,
+            "system_u",
+            "object_r",
+            "httpd_sys_content_t",
+            Some("s0"),
+        )),
+    );
+
+    // a file_contexts.subs line -> Equivalence
+    assert_eq!(
+        parse_file_contexts_subs_line("/home1 /home"),
+        Some(FcontextRule::Equivalence {
+            subject: "/home1".into(),
+            labeled_like: "/home".into(),
+            disposition: FindingKind::included(),
+        }),
+    );
+
+    // With file_contexts.local readable the collector runs no `semanage`
+    // and sets PolicyStore, and two rules written in the order
+    // "/srv/www(/.*)?", "/srv/.*" come out in that order.
+    let exec = MockExecutor::new()
+        .with_command(
+            "getenforce",
+            ExecResult {
+                stdout: GETENFORCE_ENFORCING.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_file("/etc/selinux/config", SELINUX_CONFIG)
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.local",
+            "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n/srv/.*  system_u:object_r:var_t:s0\n",
+        )
+        .with_dir("/etc/pam.d", vec![])
+        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+
+    let source = pkg_source();
+    let rpm_state = mock_rpm_state();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output = SelinuxInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed with policy store files present");
+    let section = match &output.section {
+        SectionData::Selinux(s) => s,
+        other => panic!("expected Selinux, got {:?}", other),
+    };
+
+    assert_eq!(section.fcontext_source, FcontextSource::PolicyStore);
+    let specs: Vec<&str> = section
+        .fcontext_rules
+        .iter()
+        .map(|r| match r {
+            FcontextRule::Label { spec, .. } => spec.as_str(),
+            other => panic!("expected Label, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(
+        specs,
+        vec!["/srv/www(/.*)?", "/srv/.*"],
+        "collected order must match file order, not sorted order"
+    );
+    assert!(
+        !exec
+            .command_log()
+            .iter()
+            .any(|c| c.contains("semanage fcontext")),
+        "policy store files present -- collector must not shell out to semanage"
+    );
+
+    // With neither store file readable it runs `semanage fcontext -l -C`
+    // and sets SemanageList.
+    let exec2 = MockExecutor::new()
+        .with_command(
+            "getenforce",
+            ExecResult {
+                stdout: GETENFORCE_ENFORCING.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_file("/etc/selinux/config", SELINUX_CONFIG)
+        .with_command(
+            "chroot / semanage fcontext -l -C",
+            ExecResult {
+                stdout: SEMANAGE_FCONTEXT.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/pam.d", vec![])
+        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+    let ctx2 = InspectionContext {
+        source_system: &source,
+        executor: &exec2,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output2 = SelinuxInspector::new()
+        .inspect(&ctx2, &NullProgress)
+        .expect("inspector should succeed via semanage fallback");
+    let section2 = match &output2.section {
+        SectionData::Selinux(s) => s,
+        other => panic!("expected Selinux, got {:?}", other),
+    };
+    assert_eq!(section2.fcontext_source, FcontextSource::SemanageList);
+    assert!(
+        exec2
+            .command_log()
+            .iter()
+            .any(|c| c == "chroot / semanage fcontext -l -C"),
+        "neither store file readable -- collector must fall back to semanage"
     );
 }

@@ -253,6 +253,59 @@ fn test_config_inspector_happy_path() {
     assert_eq!(paths, sorted, "files should be sorted by path");
 }
 
+/// `file_contexts.local`/`file_contexts.subs` are derived SELinux
+/// policy-store state, collected separately as typed `FcontextRule`s (task
+/// 10, item 1.4). Even when `rpm -Va` reports one as RPM-owned-modified
+/// (true on a host where policycoreutils owns and ships it), it must not
+/// also enter `config.files` -- that would be the same fact represented
+/// twice, once correctly typed and once as an opaque config blob.
+#[test]
+fn test_config_inspector_excludes_selinux_fcontext_store_file() {
+    let exec = MockExecutor::new()
+        // An empty but present /etc -- ConfigInspector early-exits on a
+        // missing /etc, which would make this test pass vacuously
+        // regardless of the fcontext-store skip under test.
+        .with_dir("/etc", vec![])
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.local",
+            "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n",
+        );
+
+    let rpm_state = RpmState {
+        verification_results: vec![RpmVaEntry {
+            path: "/etc/selinux/targeted/contexts/files/file_contexts.local".into(),
+            flags: "S.5....T.".into(),
+            package: Some("policycoreutils".into()),
+        }],
+        ..Default::default()
+    };
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path.contains("file_contexts.local")),
+        "file_contexts.local is derived policy-store state, not config"
+    );
+}
+
 /// No /etc directory -- produces empty section.
 #[test]
 fn test_config_inspector_no_etc() {

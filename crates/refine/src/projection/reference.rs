@@ -770,7 +770,8 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
 /// - **boolean_overrides**: key = boolean name, summary = value/state, tags = `["boolean"]`
 /// - **custom_modules**: key = module name, tags = `["module"]`
-/// - **fcontext_rules**: key = rule text, tags = `["fcontext"]`
+/// - **fcontext_rules**: key = rule debug text (placeholder pending the
+///   real per-variant renderer), tags = `["fcontext"]`
 /// - **audit_rules** (CarryForwardFile): key = file basename, content = file content, tags = `["audit-rule"]`
 /// - **pam_configs** (CarryForwardFile): key = file basename, content = file content, tags = `["pam"]`
 fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
@@ -848,11 +849,13 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
         });
     }
 
-    // Fcontext rules
+    // Fcontext rules. Placeholder key text: `FcontextRule` is now a typed
+    // enum (task 10); the real per-variant display text is a renderer task.
     for rule in &se.fcontext_rules {
+        let text = format!("{rule:?}");
         items.push(GenericRefItem {
-            id: rule.clone(),
-            key: rule.clone(),
+            id: text.clone(),
+            key: text,
             summary: Some("fcontext".into()),
             content: None,
             tags: vec!["fcontext".into()],

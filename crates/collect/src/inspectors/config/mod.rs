@@ -131,6 +131,9 @@ impl Inspector for ConfigInspector {
             if dhcp_paths.contains(*path) {
                 continue;
             }
+            if is_selinux_fcontext_store_file(path) {
+                continue;
+            }
 
             let content = read_config_content(exec, path, &mut degraded_reasons);
 
@@ -337,6 +340,20 @@ impl Inspector for ConfigInspector {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// `file_contexts.local`/`file_contexts.subs` under the SELinux policy
+/// store are derived policy-store state collected as typed `FcontextRule`s
+/// (see `inspectors::selinux::collect_fcontext_rules`), not config. The
+/// unowned-file walk already excludes them via `UNOWNED_EXCLUDE_GLOBS`
+/// (`contexts/files/*`), but `rpm -Va` can also report them as a modified
+/// owned file (they are `rpm_owned_modified` on a host where policycoreutils
+/// owns them), which takes the separate code path above and needs its own
+/// skip.
+fn is_selinux_fcontext_store_file(path: &str) -> bool {
+    path.starts_with("/etc/selinux/")
+        && (path.ends_with("/contexts/files/file_contexts.local")
+            || path.ends_with("/contexts/files/file_contexts.subs"))
+}
 
 /// Classify an RPM-verified config file as Modified or Default based on
 /// verification flags.

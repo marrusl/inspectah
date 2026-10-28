@@ -6,7 +6,10 @@ use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
-use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{
+    CarryForwardFile, FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
+    SelinuxPortLabel, SelinuxSection,
+};
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
 use std::path::Path;
@@ -38,6 +41,14 @@ static BOOL_RE: LazyLock<Regex> =
 ///   type  protocol  port[,port...]
 static PORT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^(\S+)\s+(tcp|udp)\s+([\d,\-\s]+)").unwrap());
+
+/// Splits a `semanage fcontext -l -C` table row into columns. Column gaps
+/// are never a single space; path regexes can contain one.
+static FCONTEXT_TABLE_SPLIT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" {2,}").unwrap());
+
+/// Matches a `semanage fcontext -l -C` equivalence row: `subject = labeled_like`.
+static FCONTEXT_EQUIV_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\S+) = (\S+)$").unwrap());
 
 /// Inspects SELinux/security state: mode, custom modules, boolean overrides,
 /// fcontext rules, port labels, audit rules, FIPS mode, PAM configs.
@@ -313,33 +324,194 @@ fn collect_boolean_overrides(
 // Custom fcontext rules
 // ---------------------------------------------------------------------------
 
-/// Tries `semanage fcontext -l -C` via chroot, then falls back to reading
-/// `file_contexts.local` from the policy store.
+/// Reads custom local fcontext rules, preferring the policy store files and
+/// falling back to `semanage fcontext -l -C` via chroot.
+///
+/// Order is the property this collector has to preserve, not just the data:
+/// `file_contexts.local` and `file_contexts.subs` hold rules in insertion
+/// order, which is also the order the policy resolves overlapping local
+/// expressions by (recency). `semanage fcontext -l -C` prints the same
+/// local table sorted by expression instead, which can silently invert
+/// which rule wins — so it is read only when neither store file is.
+/// `file_contexts.subs_dist` is the distro's own substitutions and is never
+/// collected.
 fn collect_fcontext_rules(exec: &dyn Executor, section: &mut SelinuxSection, policy_type: &str) {
-    let host_root = exec.host_root().to_string_lossy().to_string();
-    let res = exec.run("chroot", &[&host_root, "semanage", "fcontext", "-l", "-C"]);
-    if res.success() && !res.stdout.trim().is_empty() {
-        for line in res.stdout.trim().lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("SELinux") {
-                section.fcontext_rules.push(trimmed.to_string());
-            }
+    let local_path = format!("/etc/selinux/{policy_type}/contexts/files/file_contexts.local");
+    let subs_path = format!("/etc/selinux/{policy_type}/contexts/files/file_contexts.subs");
+
+    let local = exec.read_file(Path::new(&local_path)).ok();
+    let subs = exec.read_file(Path::new(&subs_path)).ok();
+
+    if local.is_none() && subs.is_none() {
+        let host_root = exec.host_root().to_string_lossy().to_string();
+        let res = exec.run("chroot", &[&host_root, "semanage", "fcontext", "-l", "-C"]);
+        if res.success() {
+            section.fcontext_rules = parse_semanage_fcontext_list(&res.stdout);
         }
-        if !section.fcontext_rules.is_empty() {
-            return;
+        section.fcontext_source = FcontextSource::SemanageList;
+        return;
+    }
+
+    let mut rules = Vec::new();
+    if let Some(content) = local {
+        rules.extend(content.lines().filter_map(parse_file_contexts_local_line));
+    }
+    if let Some(content) = subs {
+        rules.extend(content.lines().filter_map(parse_file_contexts_subs_line));
+    }
+    section.fcontext_rules = rules;
+    section.fcontext_source = FcontextSource::PolicyStore;
+}
+
+/// Parses `user:role:type[:level]`. `level`, when present, may itself
+/// contain `:` (an MLS range like `s0-s0:c0`), so it captures everything
+/// after the third colon.
+fn parse_selinux_context(text: &str) -> Option<SelinuxContext> {
+    let mut parts = text.splitn(4, ':');
+    let user = parts.next()?.to_string();
+    let role = parts.next()?.to_string();
+    let type_ = parts.next()?.to_string();
+    if user.is_empty() || role.is_empty() || type_.is_empty() {
+        return None;
+    }
+    let level = parts.next().map(|s| s.to_string());
+    Some(SelinuxContext {
+        user,
+        role,
+        type_,
+        level,
+    })
+}
+
+/// Maps a `file_contexts.local` flag token to its file type. These are the
+/// literal tokens the policy store file uses, distinct from both the CLI
+/// `-f` letter ([`FcontextFileType::semanage_flag`]) and the `-l -C` type
+/// column text ([`FcontextFileType::parse_column`]).
+fn parse_local_flag_token(token: &str) -> Option<FcontextFileType> {
+    match token {
+        "--" => Some(FcontextFileType::RegularFile),
+        "-d" => Some(FcontextFileType::Directory),
+        "-c" => Some(FcontextFileType::CharDevice),
+        "-b" => Some(FcontextFileType::BlockDevice),
+        "-s" => Some(FcontextFileType::Socket),
+        "-l" => Some(FcontextFileType::Symlink),
+        "-p" => Some(FcontextFileType::NamedPipe),
+        _ => None,
+    }
+}
+
+/// Parses one `file_contexts.local` line: `regex [flag] user:role:type[:level]`,
+/// whitespace-separated. `<<none>>` as the context means `Unlabel`; an
+/// absent flag token means [`FcontextFileType::All`]. Lines this shape
+/// cannot place are skipped rather than reported, matching the collector's
+/// prior tolerance of blank/comment lines in this file.
+pub fn parse_file_contexts_local_line(line: &str) -> Option<FcontextRule> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let (spec, file_type, context_token) = match tokens.as_slice() {
+        [spec, context] => (*spec, FcontextFileType::All, *context),
+        [spec, flag, context] => (*spec, parse_local_flag_token(flag)?, *context),
+        _ => return None,
+    };
+
+    if context_token.eq_ignore_ascii_case("<<none>>") {
+        return Some(FcontextRule::Unlabel {
+            spec: spec.to_string(),
+            file_type,
+            disposition: FindingKind::included(),
+        });
+    }
+
+    let context = parse_selinux_context(context_token)?;
+    Some(FcontextRule::Label {
+        spec: spec.to_string(),
+        file_type,
+        context,
+        disposition: FindingKind::included(),
+    })
+}
+
+/// Parses one `file_contexts.subs` line: `subject labeled_like`,
+/// whitespace-separated, exactly two tokens.
+pub fn parse_file_contexts_subs_line(line: &str) -> Option<FcontextRule> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut tokens = trimmed.split_whitespace();
+    let subject = tokens.next()?.to_string();
+    let labeled_like = tokens.next()?.to_string();
+    if tokens.next().is_some() {
+        return None;
+    }
+    Some(FcontextRule::Equivalence {
+        subject,
+        labeled_like,
+        disposition: FindingKind::included(),
+    })
+}
+
+/// Parses the full `semanage fcontext -l -C` output, skipping header lines
+/// (both the table header and the `SELinux Local fcontext Equivalence`
+/// section header start with `SELinux`). Every other non-blank line is
+/// handed to [`parse_semanage_line`], whose own shape-based matching
+/// decides table row, equivalence row, or `Unparsed` regardless of which
+/// section it came from.
+fn parse_semanage_fcontext_list(text: &str) -> Vec<FcontextRule> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("SELinux"))
+        .filter_map(parse_semanage_line)
+        .collect()
+}
+
+/// Parses one non-header, non-blank line of `semanage fcontext -l -C`
+/// output. A row split by a run of two or more spaces into exactly three
+/// columns with a recognized type column is `Label` (or `Unlabel` when the
+/// context is `<<None>>`, case-insensitively); an `x = y` row is
+/// `Equivalence`; anything else becomes `Unparsed` so the renderer can
+/// print it for the operator to transcribe.
+pub fn parse_semanage_line(line: &str) -> Option<FcontextRule> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let columns: Vec<&str> = FCONTEXT_TABLE_SPLIT_RE.split(trimmed).collect();
+    if let [spec, type_col, context_col] = columns.as_slice()
+        && let Some(file_type) = FcontextFileType::parse_column(type_col)
+    {
+        if context_col.eq_ignore_ascii_case("<<none>>") {
+            return Some(FcontextRule::Unlabel {
+                spec: spec.to_string(),
+                file_type,
+                disposition: FindingKind::included(),
+            });
+        }
+        if let Some(context) = parse_selinux_context(context_col) {
+            return Some(FcontextRule::Label {
+                spec: spec.to_string(),
+                file_type,
+                context,
+                disposition: FindingKind::included(),
+            });
         }
     }
 
-    // Fallback: read file_contexts.local
-    let fc_local = format!("/etc/selinux/{policy_type}/contexts/files/file_contexts.local");
-    if let Ok(content) = exec.read_file(Path::new(&fc_local)) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                section.fcontext_rules.push(trimmed.to_string());
-            }
-        }
+    if let Some(caps) = FCONTEXT_EQUIV_RE.captures(trimmed) {
+        return Some(FcontextRule::Equivalence {
+            subject: caps[1].to_string(),
+            labeled_like: caps[2].to_string(),
+            disposition: FindingKind::included(),
+        });
     }
+
+    Some(FcontextRule::Unparsed {
+        raw: trimmed.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -885,9 +1057,16 @@ SELinux fcontext                                   type               Context\n\
         let result = inspector.inspect(&ctx, &NullProgress);
         let section = extract_section(&result);
         assert_eq!(section.fcontext_rules.len(), 3);
-        assert!(section.fcontext_rules[0].contains("/opt/myapp"));
-        assert!(section.fcontext_rules[1].contains("/srv/data"));
-        assert!(section.fcontext_rules[2].contains("/var/lib/mydb"));
+        fn spec(rule: &FcontextRule) -> &str {
+            match rule {
+                FcontextRule::Label { spec, .. } => spec.as_str(),
+                other => panic!("expected Label, got {other:?}"),
+            }
+        }
+        assert_eq!(spec(&section.fcontext_rules[0]), "/opt/myapp(/.*)?");
+        assert_eq!(spec(&section.fcontext_rules[1]), "/srv/data(/.*)?");
+        assert_eq!(spec(&section.fcontext_rules[2]), "/var/lib/mydb(/.*)?");
+        assert_eq!(section.fcontext_source, FcontextSource::SemanageList);
     }
 
     // ---- Test 11: test_parse_semanage_ports ----

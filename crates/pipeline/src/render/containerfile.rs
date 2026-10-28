@@ -1449,12 +1449,19 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
         let limit = sel.fcontext_rules.len().min(10);
         for fc in &sel.fcontext_rules[..limit] {
-            if sanitize_shell_value(fc).is_some() {
-                body.push(format!("# RUN semanage fcontext -a {}", fc));
+            // Placeholder rendering: `FcontextRule` is now a typed enum
+            // (collection side, item 1.4/task 10) rather than a raw row
+            // string. The real per-variant renderer from spec § 3.1
+            // (replay via semanage -d/-a/-m, quoting, equivalence
+            // synthesis) is a separate task; this keeps the type change
+            // compiling without inventing that design here.
+            let fc_text = format!("{fc:?}");
+            if sanitize_shell_value(&fc_text).is_some() {
+                body.push(format!("# RUN semanage fcontext -a {}", fc_text));
             } else {
                 body.push(format!(
                     "# FIXME: fcontext rule contains unsafe characters: {:?}",
-                    fc
+                    fc_text
                 ));
             }
         }

@@ -15,7 +15,9 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackag
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
-use inspectah_core::types::selinux::SelinuxSection;
+use inspectah_core::types::selinux::{
+    FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
+};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
 };
@@ -755,7 +757,17 @@ fn rich_snapshot() -> InspectionSnapshot {
         mode: "enforcing".into(),
         fips_mode: true,
         custom_modules: vec!["my_policy".into()],
-        fcontext_rules: vec!["/opt/app(/.*)? system_u:object_r:httpd_sys_content_t:s0".into()],
+        fcontext_rules: vec![FcontextRule::Label {
+            spec: "/opt/app(/.*)?".into(),
+            file_type: FcontextFileType::All,
+            context: SelinuxContext {
+                user: "system_u".into(),
+                role: "object_r".into(),
+                type_: "httpd_sys_content_t".into(),
+                level: Some("s0".into()),
+            },
+            disposition: FindingKind::included(),
+        }],
         ..Default::default()
     });
 
