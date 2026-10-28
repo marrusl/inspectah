@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChange;
 use inspectah_core::types::users::UserGroupDecision;
 
@@ -85,8 +86,8 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
     }
 
     // Also include repos known to the index but not visible (0-count)
-    for section_id in repo_index.packages_by_repo.keys() {
-        repo_counts.entry(section_id.clone()).or_insert(0);
+    for section_id in repo_index.packages_by_repo().keys() {
+        repo_counts.entry(section_id.to_string()).or_insert(0);
     }
 
     let mut groups: Vec<RepoGroup> = repo_counts
@@ -95,7 +96,7 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
             let provenance = if section_id.is_empty() {
                 crate::types::RepoProvenance::Unknown
             } else {
-                repo_index.provenance(&section_id)
+                repo_index.provenance(&RepoId::new(section_id.as_str()))
             };
             let is_distro = if section_id.is_empty() {
                 false

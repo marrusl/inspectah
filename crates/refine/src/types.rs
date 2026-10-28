@@ -257,8 +257,20 @@ pub struct AnnotatedTimelineEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoProvenance {
+    /// Section present, enabled, has a source (`baseurl`/`metalink`/
+    /// `mirrorlist`), and any `gpgkey=file://` paths it declares were
+    /// captured in `rpm.gpg_keys`.
     Verified,
+    /// Section present and enabled, but not fetchable as captured: no
+    /// source, or a declared `gpgkey=file://` path missing from the
+    /// captured GPG keys.
     Incomplete,
+    /// Section present with `enabled = 0`.
+    Disabled,
+    /// Referenced by packages, but no section on the host -- likely
+    /// removed or renamed since install.
+    Stale,
+    /// Pseudo repo (e.g. `@commandline`) or an empty id.
     Unknown,
 }
 

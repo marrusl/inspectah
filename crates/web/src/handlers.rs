@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
@@ -201,18 +202,19 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let repos_excluded = changes.repos_excluded();
     let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
-    // Count visible packages per source_repo (lowercased for consistency
-    // with RepoIndex, which normalizes section IDs to lowercase).
+    // Count visible packages per source_repo, keeping the package's recorded
+    // spelling as-is -- RepoIndex and RepoId fold ASCII case internally, so
+    // the lookups below match regardless of case.
     let mut repo_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
     for pkg in &view.packages {
-        let section = pkg.entry.source_repo.to_lowercase();
+        let section = pkg.entry.source_repo.clone();
         *repo_counts.entry(section).or_insert(0) += 1;
     }
 
     // Also include repos known to the index but not visible (0-count)
-    for section_id in repo_index.packages_by_repo.keys() {
-        repo_counts.entry(section_id.clone()).or_insert(0);
+    for section_id in repo_index.packages_by_repo().keys() {
+        repo_counts.entry(section_id.to_string()).or_insert(0);
     }
 
     let mut groups: Vec<RepoGroupInfo> = repo_counts
@@ -221,7 +223,7 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
             let provenance = if section_id.is_empty() {
                 RepoProvenance::Unknown
             } else {
-                repo_index.provenance(&section_id)
+                repo_index.provenance(&RepoId::new(section_id.as_str()))
             };
             let is_distro = if section_id.is_empty() {
                 false
@@ -1274,9 +1276,8 @@ mod tests {
             ],
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/redhat.repo".into(),
-                content:
-                    "[appstream]\nname=AppStream\ngpgcheck=1\n[baseos]\nname=BaseOS\ngpgcheck=1"
-                        .into(),
+                content: "[appstream]\nname=AppStream\nbaseurl=http://example.invalid/appstream\ngpgcheck=1\n[baseos]\nname=BaseOS\nbaseurl=http://example.invalid/baseos\ngpgcheck=1"
+                    .into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1314,8 +1315,8 @@ mod tests {
             .expect("should have epel group");
         assert!(!epel.is_distro);
         assert_eq!(epel.tier, RepoTier::ThirdParty);
-        // epel has packages but no repo file -> Incomplete
-        assert_eq!(epel.provenance, RepoProvenance::Incomplete);
+        // epel has packages but no section on the host -> Stale
+        assert_eq!(epel.provenance, RepoProvenance::Stale);
         assert!(epel.enabled);
     }
 

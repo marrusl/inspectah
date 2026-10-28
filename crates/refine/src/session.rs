@@ -6,6 +6,7 @@ use inspectah_core::aggregate::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
+use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -1032,7 +1033,9 @@ impl RefineSession {
         let repos_excluded_set = self.excluded_sections_at(&projected);
         let repo_excluded: Vec<ItemId> = repos_excluded_set
             .into_iter()
-            .map(|s| ItemId::Repo { path: s })
+            .map(|id| ItemId::Repo {
+                path: id.to_string(),
+            })
             .collect();
 
         // --- Build sections vec (only non-empty sections) ---
@@ -1404,8 +1407,10 @@ impl RefineSession {
                                 "cannot toggle distro repo: {section_id}"
                             )));
                         }
-                        let prov = self.repo_index.provenance(section_id);
-                        if !matches!(prov, RepoProvenance::Verified) {
+                        let prov = self
+                            .repo_index
+                            .provenance(&RepoId::new(section_id.as_str()));
+                        if !matches!(prov, RepoProvenance::Verified | RepoProvenance::Incomplete) {
                             let verb = if *include { "include" } else { "exclude" };
                             return Err(RefineError::BadRequest(format!(
                                 "cannot {verb} repo '{section_id}': provenance is {prov:?}"
@@ -1805,12 +1810,13 @@ impl RefineSession {
                     .unwrap_or(false),
                 ItemId::Repo { path: section_id } => {
                     let excluded = self.excluded_sections_at(&projected);
+                    let id = RepoId::new(section_id.as_str());
                     if *include {
                         // Noop if the section is NOT in the excluded set
-                        !excluded.contains(section_id)
+                        !excluded.contains(&id)
                     } else {
                         // Noop if the section is already in the excluded set
-                        excluded.contains(section_id)
+                        excluded.contains(&id)
                     }
                 }
                 ItemId::Group { name } => {
@@ -1957,6 +1963,7 @@ impl RefineSession {
                                 }
                             }
                             ItemId::Repo { path: section_id } => {
+                                let id = RepoId::new(section_id.as_str());
                                 if !*include {
                                     // Exclude repo: cascade to packages, repo files, GPG keys
                                     let excluded_sections = self.excluded_sections_at(&snap);
@@ -1972,12 +1979,12 @@ impl RefineSession {
                                         // 2. For repo files: exclude only if ALL sections
                                         // defined in that file are now excluded
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section.get(section_id)
+                                            self.repo_index.repo_file_by_section().get(&id)
                                         {
                                             for file_path in file_paths {
                                                 let all_sections_excluded = self
                                                     .repo_index
-                                                    .repo_file_by_section
+                                                    .repo_file_by_section()
                                                     .iter()
                                                     .filter(|(_, paths)| paths.contains(file_path))
                                                     .all(|(sid, _)| {
@@ -1997,12 +2004,12 @@ impl RefineSession {
                                         // 3. For GPG keys: exclude only if ALL sections
                                         // that reference this key are excluded
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                            self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
                                                 if let Some(referencing_sections) = self
                                                     .repo_index
-                                                    .sections_by_gpg_key
+                                                    .sections_by_gpg_key()
                                                     .get(key_path)
                                                 {
                                                     let all_excluded = referencing_sections
@@ -2032,7 +2039,7 @@ impl RefineSession {
 
                                         // 2. Re-enable repo files for this section
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section.get(section_id)
+                                            self.repo_index.repo_file_by_section().get(&id)
                                         {
                                             for file_path in file_paths {
                                                 if let Some(rf) = rpm
@@ -2047,7 +2054,7 @@ impl RefineSession {
 
                                         // 3. Re-enable GPG keys for this section
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                            self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
                                                 if let Some(k) = rpm
@@ -2361,7 +2368,10 @@ impl RefineSession {
 
     /// Compute the set of section IDs that are currently excluded based on the
     /// active op stack. A SetInclude(Repo, false) adds to the set, SetInclude(Repo, true) removes.
-    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
+    ///
+    /// Keyed by `RepoId` so a mixed-case `SetInclude` target still matches
+    /// an already-excluded section of a different case.
+    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<RepoId> {
         let mut excluded = HashSet::new();
         for entry in &self.timeline[..self.cursor] {
             let ops: &[RefinementOp] = match entry {
@@ -2375,10 +2385,11 @@ impl RefineSession {
                     include,
                 } = op
                 {
+                    let id = RepoId::new(section_id.as_str());
                     if *include {
-                        excluded.remove(section_id);
+                        excluded.remove(&id);
                     } else {
-                        excluded.insert(section_id.clone());
+                        excluded.insert(id);
                     }
                 }
             }
