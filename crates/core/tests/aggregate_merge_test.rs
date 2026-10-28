@@ -1654,13 +1654,14 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
         "/opt/c is on 1 of 2 hosts, must be excluded"
     );
 
-    // "/opt/shared" the *key* is universal (both hosts carry a rule at
-    // this spec/file_type, they just disagree on its content), so
-    // narrowing -- which answers "is this policy entry universal," not
-    // "is this exact content universal" -- includes the surviving row.
+    // "/opt/shared" the key is universal, but the hosts disagree on its
+    // content -- narrowing is computed on content, matching the engine, so
+    // the surviving row is excluded even though every host carries the key.
+    // An included row would render as an active `semanage fcontext -a`,
+    // silently imposing h1's content on h2.
     assert!(
-        included(&result.fcontext_rules[1]),
-        "shared key is universal even though its content disagrees"
+        !included(&result.fcontext_rules[1]),
+        "shared key's content disagrees across hosts, must be excluded"
     );
 
     // The surviving row is h1's (first in hostname order); its count/hosts
@@ -1745,10 +1746,11 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
                 spec, "/opt/x",
                 "h1's Label survives, first in hostname order"
             );
-            // The key itself is universal (both hosts carry a rule at
-            // this spec/file_type, they just disagree on Label vs
-            // Unlabel), so narrowing includes it.
-            assert!(disposition.is_included());
+            // The key itself is universal, but the hosts disagree on
+            // content (Label vs Unlabel) -- narrowing is computed on
+            // content, matching the engine, so the surviving row is
+            // excluded even though every host carries the key.
+            assert!(!disposition.is_included());
             let agg = aggregate.as_ref().expect("aggregate must be populated");
             // count/hosts describe only the hosts sharing the surviving
             // row's exact content: h1 alone.

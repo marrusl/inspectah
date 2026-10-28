@@ -762,10 +762,14 @@ fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
 /// precise failure the shared-key merge exists to surface, re-created
 /// through a different door.
 ///
-/// A key's disposition is narrowed the way `narrow_non_universal` narrows
-/// `merge_items` output -- included only when every host in the run carries
-/// the key (`count == total`), not merely when every host that happens to
-/// carry it agreed to include it.
+/// A row's disposition is narrowed on content, matching the engine: included
+/// only when every host in the run carries the key with the same content
+/// (`count == total` on the surviving content, not merely on the key). A
+/// content disagreement excludes the row, the same way `narrow_non_universal`
+/// excludes every variant of a contested item in `merge_with_variants` --
+/// an included fcontext rule renders as an active `semanage fcontext -a`, so
+/// shipping a contested row would silently impose one host's label on hosts
+/// that disagree.
 ///
 /// A disagreement on content does not vanish, it moves into metadata:
 /// `count`/`hosts` describe the hosts that share the surviving row's exact
@@ -810,7 +814,6 @@ fn merge_fcontext_rules(
         let mut key_host_idxs: Vec<usize> = entries.iter().map(|(idx, _)| *idx).collect();
         key_host_idxs.sort_unstable();
         key_host_idxs.dedup();
-        let include = key_host_idxs.len() == total_hosts;
         let mut key_hosts: Vec<String> = key_host_idxs
             .iter()
             .map(|&i| hostnames[i].clone())
@@ -836,12 +839,13 @@ fn merge_fcontext_rules(
         let mut rep_hosts: Vec<String> = rep_idxs.iter().map(|&i| hostnames[i].clone()).collect();
         rep_hosts.sort();
         rep_hosts.dedup();
+        let include = rep_hosts.len() == total_hosts;
 
         let prevalence = AggregatePrevalence {
             count: rep_hosts.len() as i32,
             total: total_hosts as i32,
             hosts: rep_hosts,
-            aggregate_count: has_disagreement.then_some(key_host_idxs.len() as i32),
+            aggregate_count: has_disagreement.then_some(key_hosts.len() as i32),
             aggregate_hosts: has_disagreement.then_some(key_hosts),
         };
         match &mut rule {
