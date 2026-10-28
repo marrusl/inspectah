@@ -202,13 +202,18 @@ pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoF
 /// parsed `.repo` sections. See [`normalize_source_repos`] for the
 /// resolution order.
 fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAttribution {
-    // `.min_by` rather than `.find`: when more than one section matches
-    // exactly (duplicate definitions), the result must not depend on
-    // which one happened to come first from `read_dir`.
+    // `.min_by` over the *raw* spelling (`as_str`), not `RepoId`'s own
+    // `Ord`: that `Ord` folds ASCII case to stay coherent with `Eq`
+    // (Review Focus 1), which means every section surviving the filter
+    // below compares `Equal` to every other -- `min_by` on the folded
+    // `Ord` degenerates to `.find()` and leaves the choice depending on
+    // `read_dir` order. Comparing raw spelling instead gives a real total
+    // order: ties occur only when the spelling is byte-identical, where
+    // either choice writes the same value to `source_repo` anyway.
     if let Some(section) = sections
         .iter()
         .filter(|s| s.id == RepoId::new(recorded))
-        .min_by(|a, b| a.id.cmp(&b.id))
+        .min_by(|a, b| a.id.as_str().cmp(b.id.as_str()))
     {
         return RepoAttribution::Exact {
             id: section.id.clone(),
@@ -235,11 +240,14 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
             id: substring_matches[0].clone(),
         },
         n if n > 1 => {
-            // Sorted so the result doesn't depend on `read_dir` order --
-            // this list serializes straight into a byte-pinned contract
-            // snapshot.
+            // Sorted by raw spelling, not `RepoId`'s folded `Ord` (same
+            // reasoning as the exact-match arm above): `Vec::sort` is
+            // stable, so sorting by the folded order would leave
+            // case-variant candidates in `read_dir` order relative to
+            // each other. This list serializes straight into a
+            // byte-pinned contract snapshot.
             let mut candidates: Vec<RepoId> = substring_matches.into_iter().cloned().collect();
-            candidates.sort();
+            candidates.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             RepoAttribution::Ambiguous {
                 recorded: recorded.to_string(),
                 candidates,
@@ -719,5 +727,43 @@ Repository  : baseos
             &pkgs[1].repo_attribution,
             RepoAttribution::Unrecorded
         ));
+
+        // "@CommandLine" (observed casing, see repo_tier's own
+        // "@CommandLine" case) -> Pseudo(Commandline), case-folded like the
+        // lowercase spelling.
+        let mut pkgs = vec![pkg_with_repo("local-tool", "@CommandLine")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Pseudo { which: PseudoRepo::Commandline, recorded } if recorded == "@CommandLine"
+        ));
+    }
+
+    #[test]
+    fn exact_match_duplicate_sections_is_order_independent() {
+        // F4(a) regression: two files defining the same repo id with
+        // different ASCII case (`[EPEL]`, `[epel]`) are both exact matches
+        // for a recorded value of "epel" -- `RepoId`'s folded `Eq` makes
+        // them equal to each other, so the choice between them cannot be
+        // made via `RepoId`'s own (also folded) `Ord` without degenerating
+        // to "whichever `read_dir` returned first". The written spelling
+        // must be the same regardless of file order.
+        let upper_first = vec![
+            repo_file(
+                "[EPEL]\nname=EPEL upper\nenabled=1\nbaseurl=https://example.invalid/epel-upper\n",
+            ),
+            repo_file(
+                "[epel]\nname=EPEL lower\nenabled=1\nbaseurl=https://example.invalid/epel-lower\n",
+            ),
+        ];
+        let mut lower_first = upper_first.clone();
+        lower_first.reverse();
+
+        let mut pkgs_a = vec![pkg_with_repo("htop", "epel")];
+        normalize_source_repos(&mut pkgs_a, &upper_first);
+        let mut pkgs_b = vec![pkg_with_repo("htop", "epel")];
+        normalize_source_repos(&mut pkgs_b, &lower_first);
+
+        assert_eq!(pkgs_a[0].source_repo, pkgs_b[0].source_repo);
     }
 }
