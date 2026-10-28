@@ -43,6 +43,7 @@ export function GroupRow({
 
   const isDegraded = group.render_state === "degraded";
   const isExcluded = group.render_state === "excluded";
+  const isInert = group.render_state === "inert";
   const hasOptionalSpillover = group.optional_spillover_count > 0;
 
   const handleExpandToggle = useCallback(() => {
@@ -140,6 +141,12 @@ export function GroupRow({
         {isExcluded && hasOptionalSpillover && (
           <span className="inspectah-group-row__subtitle">
             {group.optional_spillover_count} optional still included
+          </span>
+        )}
+
+        {isInert && (
+          <span className="inspectah-group-row__subtitle">
+            nothing to decide: all members are locked or from base
           </span>
         )}
 

@@ -531,10 +531,14 @@ export interface GroupMemberInfo {
 export interface GroupInfo {
   name: string;
   member_count: number;
+  /** In `packages_added`, actionable, and not locked (§ 3.7). */
+  effective_member_count: number;
+  /** Of the effective members, those currently included. */
+  effective_included: number;
   added_count: number;
   locked_count: number;
   optional_spillover_count: number;
-  render_state: "renderable" | "excluded" | "ungrouped" | "degraded";
+  render_state: "renderable" | "excluded" | "ungrouped" | "degraded" | "inert";
   degradation_reason: string | null;
   members: GroupMemberInfo[];
 }

@@ -499,7 +499,10 @@ export function PackageList({
               key={group.name}
               group={group}
               searchQuery={searchQuery}
-              isIncluded={group.render_state !== "excluded"}
+              isIncluded={
+                group.render_state !== "excluded" &&
+                group.render_state !== "inert"
+              }
               forceExpanded={autoExpandedGroups.has(group.name)}
               defaultExpanded={userExpandedGroups.has(group.name)}
               onExpandChange={handleGroupExpandChange}

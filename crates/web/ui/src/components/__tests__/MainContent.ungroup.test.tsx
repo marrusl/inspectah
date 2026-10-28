@@ -75,6 +75,8 @@ describe("MainContent ungroup focus restoration", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members,
@@ -144,6 +146,8 @@ describe("MainContent ungroup focus restoration", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members,
@@ -198,6 +202,8 @@ describe("MainContent ungroup focus restoration", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members,
@@ -247,6 +253,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 5, // All 5 members are new (not in base)
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -302,6 +310,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 1, // The single member is new (not in base)
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -356,6 +366,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -381,6 +393,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -479,6 +493,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -556,6 +572,8 @@ describe("MainContent ungroup focus and error handling", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 0,
+      effective_included: 0,
       render_state: "renderable",
       degradation_reason: null,
       members,
