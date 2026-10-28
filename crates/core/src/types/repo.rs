@@ -197,10 +197,10 @@ pub enum RepoAttribution {
 impl RepoAttribution {
     /// The repo identity as the host originally recorded it.
     ///
-    /// For `Exact`, the recorded value and the resolved id are the same
-    /// string (that is what made the match exact), so this returns the
-    /// id's host spelling. `Unrecorded` has nothing to report, so this
-    /// returns `""`.
+    /// For `Exact`, this returns the matched section's spelling, which may
+    /// differ from the host's recorded value in ASCII case -- the match is
+    /// case-insensitive, and the originally recorded spelling is not
+    /// retained. `Unrecorded` has nothing to report, so this returns `""`.
     pub fn recorded(&self) -> &str {
         match self {
             RepoAttribution::Exact { id } => id.as_str(),

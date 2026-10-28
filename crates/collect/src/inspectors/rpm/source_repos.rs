@@ -202,7 +202,14 @@ pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoF
 /// parsed `.repo` sections. See [`normalize_source_repos`] for the
 /// resolution order.
 fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAttribution {
-    if let Some(section) = sections.iter().find(|s| s.id == RepoId::new(recorded)) {
+    // `.min_by` rather than `.find`: when more than one section matches
+    // exactly (duplicate definitions), the result must not depend on
+    // which one happened to come first from `read_dir`.
+    if let Some(section) = sections
+        .iter()
+        .filter(|s| s.id == RepoId::new(recorded))
+        .min_by(|a, b| a.id.cmp(&b.id))
+    {
         return RepoAttribution::Exact {
             id: section.id.clone(),
         };
@@ -227,11 +234,22 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
             recorded: recorded.to_string(),
             id: substring_matches[0].clone(),
         },
-        n if n > 1 => RepoAttribution::Ambiguous {
-            recorded: recorded.to_string(),
-            candidates: substring_matches.into_iter().cloned().collect(),
-        },
-        _ => match recorded {
+        n if n > 1 => {
+            // Sorted so the result doesn't depend on `read_dir` order --
+            // this list serializes straight into a byte-pinned contract
+            // snapshot.
+            let mut candidates: Vec<RepoId> = substring_matches.into_iter().cloned().collect();
+            candidates.sort();
+            RepoAttribution::Ambiguous {
+                recorded: recorded.to_string(),
+                candidates,
+            }
+        }
+        // Pseudo repo names are matched case-insensitively, same as the
+        // exact-match rule above: dnf has been observed to record
+        // `@CommandLine` (see repo_tier's `@CommandLine` case), not just
+        // the lowercase spelling.
+        _ => match recorded.to_ascii_lowercase().as_str() {
             "@commandline" => RepoAttribution::Pseudo {
                 which: PseudoRepo::Commandline,
                 recorded: recorded.to_string(),
@@ -240,7 +258,7 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
                 which: PseudoRepo::Anaconda,
                 recorded: recorded.to_string(),
             },
-            "@System" => RepoAttribution::Pseudo {
+            "@system" => RepoAttribution::Pseudo {
                 which: PseudoRepo::System,
                 recorded: recorded.to_string(),
             },
@@ -594,7 +612,11 @@ Repository  : baseos
     }
 
     #[test]
-    fn test_normalize_no_repo_files_is_noop() {
+    fn test_normalize_no_repo_files_is_stale() {
+        // With zero sections, a non-empty, non-pseudo recorded value has
+        // nothing to match: § 3.2 calls that Stale, not Unrecorded (the
+        // host did record a value) and not a no-op (source_repo is left
+        // as recorded, but the attribution is a real classification).
         let repo_files: Vec<RepoFile> = Vec::new();
         let mut packages = vec![pkg_with_repo("httpd", "AppStream")];
 
@@ -602,8 +624,12 @@ Repository  : baseos
 
         assert_eq!(
             packages[0].source_repo, "AppStream",
-            "no repo files means no normalization"
+            "no repo files means source_repo is left as recorded"
         );
+        assert!(matches!(
+            &packages[0].repo_attribution,
+            RepoAttribution::Stale { recorded } if recorded == "AppStream"
+        ));
     }
 
     /// Four repo files matching the host's real layout, used to prove
@@ -668,10 +694,15 @@ Repository  : baseos
         let mut pkgs = vec![pkg_with_repo("glibc", "baseos")];
         normalize_source_repos(&mut pkgs, &two_enabled);
         assert_eq!(pkgs[0].source_repo, "baseos");
+        // Sorted, not read_dir order: proves F4's fix, not just that two
+        // candidates were found.
         assert!(matches!(
             &pkgs[0].repo_attribution,
             RepoAttribution::Ambiguous { recorded, candidates }
-                if recorded == "baseos" && candidates.len() == 2
+                if recorded == "baseos" && candidates == &[
+                    RepoId::new("rhel-9-for-x86_64-baseos-debug-rpms"),
+                    RepoId::new("rhel-9-for-x86_64-baseos-rpms"),
+                ]
         ));
 
         // "anaconda" -> Pseudo(Anaconda); "" -> Unrecorded
