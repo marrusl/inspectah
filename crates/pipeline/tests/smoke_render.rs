@@ -737,6 +737,75 @@ fn selinux_unlabel_renders_none_inside_the_same_guard() {
     );
 }
 
+/// `-f`, `-r`, `-s`, `-t`, in that order on the `-a` and the `-m`, with the
+/// `-d` carrying only `-f` and the spec. No spec section fixes the order; it
+/// is a ruling, recorded at `sel::FLAG_ORDER`.
+#[test]
+fn selinux_optional_context_flags_render_in_canonical_order() {
+    let cases: &[(&str, &str, &str, FcontextFileType, &str, &str)] = &[
+        // case, user, level, file type, expected -d extra, expected -a/-m args
+        (
+            "non-default user",
+            "user_u",
+            "s0",
+            FcontextFileType::All,
+            "",
+            "-s user_u -t httpd_sys_content_t",
+        ),
+        (
+            "non-default level",
+            "system_u",
+            "s0-s0:c0",
+            FcontextFileType::All,
+            "",
+            "-r s0-s0:c0 -t httpd_sys_content_t",
+        ),
+        (
+            "all four flags",
+            "user_u",
+            "s0-s0:c0",
+            FcontextFileType::Directory,
+            " -f d",
+            "-f d -r s0-s0:c0 -s user_u -t httpd_sys_content_t",
+        ),
+    ];
+
+    for (case, user, level, file_type, d_args, am_args) in cases {
+        let spec = "/opt/flags(/.*)?";
+        let snap = sel::snapshot_rules(vec![sel::label_with(
+            spec,
+            *file_type,
+            inspectah_core::types::selinux::SelinuxContext {
+                user: (*user).into(),
+                role: "object_r".into(),
+                type_: HTTPD_TYPE.into(),
+                level: Some((*level).into()),
+            },
+        )]);
+        assert_eq!(
+            rendered_runs(&snap),
+            vec![install_run(), sel::rule1_rendered(spec, d_args, am_args)],
+            "{case}"
+        );
+    }
+
+    // The order itself, stated once rather than inferred from the strings
+    // above: every flag the all-four case carries appears in FLAG_ORDER order.
+    let all_four = "-f d -r s0-s0:c0 -s user_u -t httpd_sys_content_t";
+    let positions: Vec<usize> = sel::FLAG_ORDER
+        .iter()
+        .map(|flag| {
+            all_four
+                .find(&format!("{flag} "))
+                .unwrap_or_else(|| panic!("{flag} missing from the all-four argument list"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "the all-four argument list does not follow FLAG_ORDER: {positions:?}"
+    );
+}
+
 #[test]
 fn selinux_no_run_line_contains_echo() {
     // Every form the block can emit, in one fixture, so the ban is checked
@@ -856,8 +925,12 @@ fn selinux_collected_srv_equivalence_and_the_synthesis_emit_one_run() {
 
 #[test]
 fn selinux_conflicting_collected_equivalence_emits_no_run_and_a_fixme_naming_both() {
+    // The collected target shares no suffix with `/var/srv` or `/srv`, so
+    // naming it in the FIXME is a fact a test can check on its own. An earlier
+    // `/opt/srv` could not be told apart from the synthesized `/srv`.
+    const COLLECTED_TARGET: &str = "/mnt/data";
     let snap = sel::snapshot_rules(vec![
-        sel::equivalence("/var/srv", "/opt/srv"),
+        sel::equivalence("/var/srv", COLLECTED_TARGET),
         sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
     ]);
     let block = render_block_text(&snap);
@@ -876,14 +949,54 @@ fn selinux_conflicting_collected_equivalence_emits_no_run_and_a_fixme_naming_bot
         .lines()
         .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
         .unwrap_or_else(|| panic!("no cause line under the FIXME instruction:\n{block}"));
-    // Both rows of the conflict: the collected mapping and the synthesized one.
+    // The two rows of the conflict. The synthesized row's `/srv` is not
+    // asserted here: `/var/srv` ends in it, so no fixture makes it
+    // independently checkable, and the sentence is not byte-specified yet.
     assert!(
         cause.contains("/var/srv"),
         "cause names no subject: {cause}"
     );
     assert!(
-        cause.contains("/opt/srv"),
+        cause.contains(COLLECTED_TARGET),
         "cause names no collected target: {cause}"
+    );
+}
+
+/// § 4: the Containerfile's header count is decision-bearing rules only.
+/// `Unparsed` carries no disposition and is not a decision, so it does not
+/// count. Today `containerfile.rs:1446-1449` counts `fcontext_rules.len()`.
+#[test]
+fn selinux_header_count_excludes_unparsed_rules() {
+    const UNPARSED_RAW: &str = "this is not a file_contexts line";
+    const HEADER: &str = "# SELinux file contexts (1 custom rule).";
+
+    let with_unparsed = render_block_text(&sel::snapshot_rules(vec![
+        sel::label("/opt/a(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::unparsed(UNPARSED_RAW),
+    ]));
+    // The Unparsed rule must actually have reached the block, or the count
+    // below is 1 because the fixture was dropped rather than because the
+    // count excludes it.
+    assert!(
+        with_unparsed.contains(UNPARSED_RAW),
+        "the Unparsed rule never reached the block:\n{with_unparsed}"
+    );
+    assert!(
+        with_unparsed.contains(HEADER),
+        "one decision-bearing rule and one Unparsed must count 1:\n{with_unparsed}"
+    );
+
+    // Paired: the same count from a fixture with the decision-bearing rule
+    // alone, so the assertion above is about the Unparsed rule and not about
+    // the header's wording.
+    let without = render_block_text(&sel::snapshot_rules(vec![sel::label(
+        "/opt/a(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        without.contains(HEADER),
+        "the one-rule header is not the text this test thinks:\n{without}"
     );
 }
 
@@ -1101,6 +1214,49 @@ fn selinux_install_precondition_absent_without_rules_or_port_labels() {
         assert!(
             !block.contains(line),
             "a block with neither a rule nor a port label emitted {line:?}:\n{block}"
+        );
+    }
+}
+
+/// The precondition installs the tool the emitted commands need, and sits
+/// immediately before the first of them. A block whose every rule failed
+/// validation emits comments and no command, so there is nothing to install
+/// for and nothing to sit before.
+#[test]
+fn selinux_install_precondition_absent_when_every_rule_is_unrenderable() {
+    let unrenderable = sel::snapshot_rules(vec![
+        sel::label("/tmp/it's", FcontextFileType::All, HTTPD_TYPE),
+        sel::equivalence("/srv;rm -rf /", "/srv"),
+    ]);
+    let block = render_block_text(&unrenderable);
+    assert!(
+        block.contains(sel::UNRENDERABLE_FIXME_INSTRUCTION),
+        "the fixture must actually reject its rules, or this proves nothing:\n{block}"
+    );
+    for run in sel::block_runs(&unrenderable) {
+        assert!(
+            !run.command.contains("semanage fcontext"),
+            "a rejected rule rendered a command:\n{}",
+            run.rendered
+        );
+    }
+    for line in sel::INSTALL_PRECONDITION {
+        assert!(
+            !block.contains(line),
+            "a block with no emitted semanage command carries {line:?}:\n{block}"
+        );
+    }
+
+    // Paired positive: one of the same rules made renderable, same renderer.
+    let renderable = render_block_text(&sel::snapshot_rules(vec![sel::label(
+        "/tmp/ok",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    for line in sel::INSTALL_PRECONDITION {
+        assert!(
+            renderable.contains(line),
+            "the precondition line {line:?} never renders at all:\n{renderable}"
         );
     }
 }

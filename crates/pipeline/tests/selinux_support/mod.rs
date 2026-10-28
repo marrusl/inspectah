@@ -50,6 +50,28 @@ pub fn label(spec: &str, file_type: FcontextFileType, type_: &str) -> FcontextRu
     }
 }
 
+/// A `Label` carrying a context the `ctx` helper does not produce, for the
+/// cases that exercise `-s` and `-r`.
+pub fn label_with(
+    spec: &str,
+    file_type: FcontextFileType,
+    context: SelinuxContext,
+) -> FcontextRule {
+    FcontextRule::Label {
+        spec: spec.into(),
+        file_type,
+        context,
+        disposition: FindingKind::included(),
+        aggregate: None,
+    }
+}
+
+/// A line the collector could not place. Display-only: it carries no
+/// disposition and is not a decision, so § 4's count line excludes it.
+pub fn unparsed(raw: &str) -> FcontextRule {
+    FcontextRule::Unparsed { raw: raw.into() }
+}
+
 pub fn unlabel(spec: &str, file_type: FcontextFileType) -> FcontextRule {
     FcontextRule::Unlabel {
         spec: spec.into(),
@@ -232,6 +254,13 @@ fn fold_continuations(lines: &[String]) -> String {
 // ---------------------------------------------------------------------------
 // Expected bodies — the § 3.1 templates, transcribed, with holes
 // ---------------------------------------------------------------------------
+
+/// Canonical order of the flags a rule 1 `-a`/`-m` carries: `-f`, `-r`, `-s`,
+/// `-t`. No spec section fixes it. `-f` leads so that the `-d`'s argument list
+/// (`-f` and the spec, nothing else) is a prefix of the `-a`'s; the rest take
+/// the man page's letter order. Arbitrary, and written down here so it is
+/// arbitrary in one place rather than per call site.
+pub const FLAG_ORDER: &[&str] = &["-f", "-r", "-s", "-t"];
 
 /// § 3.1 rule 1, transcribed from the spec. `@D_ARGS@` is what the `-d`
 /// carries beyond the spec (`" -f d"` or nothing), `@AM_ARGS@` the arguments
