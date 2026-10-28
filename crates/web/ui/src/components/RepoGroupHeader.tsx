@@ -8,6 +8,9 @@ export interface RepoGroupHeaderProps {
   provenance: RepoProvenance;
   isDistro: boolean;
   packageCount: number;
+  /** The repo control's effective member set (§ 3.2) -- zero means there is
+   *  nothing left for a toggle to decide. */
+  effectiveMemberCount: number;
   enabled: boolean;
   isExpanded?: boolean;
   /** Number of informational packages — shown in collapsed header */
@@ -21,10 +24,33 @@ export interface RepoGroupHeaderProps {
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 }
 
-/** Non-distro repos with known provenance are toggleable.
- *  Only "unknown" provenance (e.g. @commandline / locally installed) is excluded. */
-const showToggle = (isDistro: boolean, provenance: RepoProvenance): boolean =>
-  !isDistro && provenance !== "unknown";
+/** Non-distro repos with verified or incomplete provenance and at least one
+ *  effective (actionable, unlocked) member are toggleable. Everything else
+ *  -- disabled, stale, unknown, or a verified/incomplete repo with nothing
+ *  left to decide -- gets state text instead (§ 6.3). */
+const showToggle = (
+  isDistro: boolean,
+  provenance: RepoProvenance,
+  effectiveMemberCount: number,
+): boolean =>
+  !isDistro &&
+  (provenance === "verified" || provenance === "incomplete") &&
+  effectiveMemberCount > 0;
+
+/** § 6.3 state text for the badge cell when no control is shown. */
+function noControlStateText(provenance: RepoProvenance): string {
+  switch (provenance) {
+    case "disabled":
+      return "disabled on host";
+    case "stale":
+      return "repo id not found in any .repo file";
+    case "unknown":
+      return "installed outside any repo";
+    default:
+      // verified or incomplete, effective_member_count === 0
+      return "nothing to decide: all members are locked";
+  }
+}
 
 /**
  * Source classification label:
@@ -41,6 +67,7 @@ export function RepoGroupHeader({
   provenance,
   isDistro,
   packageCount,
+  effectiveMemberCount,
   enabled,
   isExpanded = false,
   infoCount,
@@ -50,9 +77,11 @@ export function RepoGroupHeader({
   onExpandToggle,
   onKeyDown: onKeyDownProp,
 }: RepoGroupHeaderProps) {
-  const canToggle = showToggle(isDistro, provenance);
+  const canToggle = showToggle(isDistro, provenance, effectiveMemberCount);
+  const showStateText = !isDistro && !canToggle;
   const label = classificationLabel(isDistro);
   const contentId = `repo-group-content-${sectionId}`;
+  const stateTextId = `repo-state-${sectionId}`;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -89,6 +118,7 @@ export function RepoGroupHeader({
       role="row"
       aria-expanded={isExpanded}
       aria-controls={contentId}
+      aria-describedby={showStateText ? stateTextId : undefined}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       className={`inspectah-repo-group-header${!enabled ? " inspectah-repo-group-header--disabled" : ""}`}
@@ -126,6 +156,11 @@ export function RepoGroupHeader({
           {summaryText}
         </span>
       )}
+      {canToggle && provenance === "incomplete" && (
+        <span className="inspectah-repo-group-header__incomplete">
+          repo definition incomplete
+        </span>
+      )}
       {canToggle && (
         <span
           className="inspectah-repo-group-header__toggle"
@@ -138,6 +173,14 @@ export function RepoGroupHeader({
             onChange={() => onToggle?.(sectionId, !enabled)}
             aria-label={`Toggle ${sectionId} repo`}
           />
+        </span>
+      )}
+      {showStateText && (
+        <span
+          id={stateTextId}
+          className="inspectah-repo-group-header__state-text"
+        >
+          {noControlStateText(provenance)}
         </span>
       )}
     </div>

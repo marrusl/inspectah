@@ -10,6 +10,9 @@ const mockRepos: RepoGroupInfo[] = [
     is_distro: true,
     tier: "distro",
     package_count: 12,
+    effective_member_count: 12,
+    effective_included: 12,
+    effective_unlisted: 0,
     enabled: true,
   },
   {
@@ -18,6 +21,9 @@ const mockRepos: RepoGroupInfo[] = [
     is_distro: true,
     tier: "distro",
     package_count: 28,
+    effective_member_count: 28,
+    effective_included: 28,
+    effective_unlisted: 0,
     enabled: true,
   },
   {
@@ -26,6 +32,9 @@ const mockRepos: RepoGroupInfo[] = [
     is_distro: false,
     tier: "official_optional",
     package_count: 4,
+    effective_member_count: 4,
+    effective_included: 4,
+    effective_unlisted: 0,
     enabled: true,
   },
   {
@@ -34,9 +43,28 @@ const mockRepos: RepoGroupInfo[] = [
     is_distro: false,
     tier: "third_party",
     package_count: 8,
+    effective_member_count: 8,
+    effective_included: 8,
+    effective_unlisted: 0,
     enabled: true,
   },
 ];
+
+/** Factory for a toggleable baseline repo fixture, overridable per test. */
+function repo(overrides: Partial<RepoGroupInfo>): RepoGroupInfo {
+  return {
+    section_id: "epel",
+    provenance: "verified",
+    is_distro: false,
+    tier: "third_party",
+    package_count: 2,
+    effective_member_count: 2,
+    effective_included: 1,
+    effective_unlisted: 0,
+    enabled: true,
+    ...overrides,
+  };
+}
 
 describe("RepoBar", () => {
   it("renders REPOSITORIES header", () => {
@@ -235,5 +263,66 @@ describe("RepoBar", () => {
     const announcement = screen.getByTestId("repo-bar-announcement");
     expect(announcement).toHaveAttribute("aria-live", "assertive");
     expect(announcement).toHaveAttribute("aria-atomic", "true");
+  });
+
+  it.each(["disabled", "stale"] as const)(
+    "renders no switch and the state text for %s",
+    (provenance) => {
+      render(
+        <RepoBar
+          repos={[
+            repo({
+              provenance,
+              effective_member_count: 2,
+              effective_included: 1,
+            }),
+          ]}
+          onToggle={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(
+        screen.getByText(
+          provenance === "disabled"
+            ? "disabled on host"
+            : "repo id not found in any .repo file",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("renders no switch for a verified repo with no effective member", () => {
+    render(
+      <RepoBar
+        repos={[
+          repo({
+            provenance: "verified",
+            effective_member_count: 0,
+            effective_included: 0,
+          }),
+        ]}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen.getByText("nothing to decide: all members are locked"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the switch for verified and incomplete with members", () => {
+    render(
+      <RepoBar
+        repos={[
+          repo({
+            provenance: "incomplete",
+            effective_member_count: 2,
+            effective_included: 2,
+          }),
+        ]}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("switch")).toBeInTheDocument();
   });
 });

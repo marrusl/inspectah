@@ -373,7 +373,12 @@ export interface ReferenceSection {
 }
 
 /** Rust: #[serde(rename_all = "snake_case")] */
-export type RepoProvenance = "verified" | "incomplete" | "unknown";
+export type RepoProvenance =
+  | "verified"
+  | "incomplete"
+  | "disabled"
+  | "stale"
+  | "unknown";
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type RepoTier = "distro" | "official_optional" | "third_party";
@@ -399,6 +404,13 @@ export interface RepoGroupInfo {
   is_distro: boolean;
   tier: RepoTier;
   package_count: number;
+  /** In `packages_added`, actionable, and not locked. The repo control's
+   *  effective member set. */
+  effective_member_count: number;
+  /** Of the effective members, those currently included. */
+  effective_included: number;
+  /** Of the effective members, those absent from the visible package list. */
+  effective_unlisted: number;
   enabled: boolean;
 }
 

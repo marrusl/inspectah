@@ -10,8 +10,16 @@ const baseRepo: RepoGroupInfo = {
   is_distro: false,
   tier: "third_party",
   package_count: 5,
+  effective_member_count: 5,
+  effective_included: 2,
+  effective_unlisted: 0,
   enabled: true,
 };
+
+/** Factory for a toggleable baseline repo fixture, overridable per test. */
+function repo(overrides: Partial<RepoGroupInfo>): RepoGroupInfo {
+  return { ...baseRepo, ...overrides };
+}
 
 describe("RepoGroup", () => {
   it("renders header with repo name", () => {
@@ -184,5 +192,66 @@ describe("RepoGroup", () => {
     expect(document.activeElement).toBe(header);
     await userEvent.keyboard("{Enter}");
     expect(document.activeElement).toBe(header);
+  });
+
+  it.each(["disabled", "stale"] as const)(
+    "renders no switch and the state text for %s",
+    (provenance) => {
+      render(
+        <RepoGroup
+          repo={repo({
+            provenance,
+            effective_member_count: 2,
+            effective_included: 1,
+          })}
+          defaultExpanded={true}
+        >
+          <div>content</div>
+        </RepoGroup>,
+      );
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(
+        screen.getByText(
+          provenance === "disabled"
+            ? "disabled on host"
+            : "repo id not found in any .repo file",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("renders no switch for a verified repo with no effective member", () => {
+    render(
+      <RepoGroup
+        repo={repo({
+          provenance: "verified",
+          effective_member_count: 0,
+          effective_included: 0,
+        })}
+        defaultExpanded={true}
+      >
+        <div>content</div>
+      </RepoGroup>,
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen.getByText("nothing to decide: all members are locked"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the switch for verified and incomplete with members", () => {
+    render(
+      <RepoGroup
+        repo={repo({
+          provenance: "incomplete",
+          effective_member_count: 2,
+          effective_included: 2,
+        })}
+        defaultExpanded={true}
+      >
+        <div>content</div>
+      </RepoGroup>,
+    );
+    expect(screen.getByRole("switch")).toBeInTheDocument();
   });
 });

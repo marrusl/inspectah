@@ -16,6 +16,30 @@ const tierColors: Record<string, string> = {
   third_party: "var(--pf-t--global--text--color--status--warning--default)",
 };
 
+/** Non-distro repos with verified or incomplete provenance and at least one
+ *  effective (actionable, unlocked) member are toggleable. Everything else
+ *  -- disabled, stale, unknown, or a verified/incomplete repo with nothing
+ *  left to decide -- gets state text instead (§ 6.3). */
+const canToggleRepo = (repo: RepoGroupInfo): boolean =>
+  !repo.is_distro &&
+  (repo.provenance === "verified" || repo.provenance === "incomplete") &&
+  repo.effective_member_count > 0;
+
+/** § 6.3 state text for the badge cell when no control is shown. */
+function noControlStateText(repo: RepoGroupInfo): string {
+  switch (repo.provenance) {
+    case "disabled":
+      return "disabled on host";
+    case "stale":
+      return "repo id not found in any .repo file";
+    case "unknown":
+      return "installed outside any repo";
+    default:
+      // verified or incomplete, effective_member_count === 0
+      return "nothing to decide: all members are locked";
+  }
+}
+
 export function RepoBar({
   repos,
   onToggle,
@@ -24,13 +48,11 @@ export function RepoBar({
   onRestoreDismissed,
 }: RepoBarProps) {
   const distroRepos = repos.filter((r) => r.is_distro);
-  // Repos with unknown provenance (e.g. @commandline / locally installed) are
-  // not toggleable — they represent packages installed outside any repo.
+  const toggleableRepos = repos.filter(canToggleRepo);
+  // Non-distro repos the server refuses to toggle: disabled, stale, unknown
+  // provenance, or a verified/incomplete repo with nothing left to decide.
   const nonToggleableRepos = repos.filter(
-    (r) => !r.is_distro && r.provenance === "unknown" && r.package_count > 0,
-  );
-  const toggleableRepos = repos.filter(
-    (r) => !r.is_distro && r.provenance !== "unknown",
+    (r) => !r.is_distro && !canToggleRepo(r),
   );
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
@@ -70,25 +92,30 @@ export function RepoBar({
         </div>
       ))}
 
-      {nonToggleableRepos.map((repo) => (
-        <div key={repo.section_id} className="inspectah-repo-bar__row">
-          <div className="inspectah-repo-bar__name">
-            <span style={{ color: tierColors.distro }}>
-              {repo.section_id === "@commandline"
-                ? "Local / Manual installs"
-                : repo.section_id}
-            </span>
-            <span className="inspectah-repo-bar__count">
-              {repo.package_count}
+      {nonToggleableRepos.map((repo) => {
+        const stateTextId = `repo-state-${repo.section_id}`;
+        return (
+          <div
+            key={repo.section_id}
+            className="inspectah-repo-bar__row"
+            aria-describedby={stateTextId}
+          >
+            <div className="inspectah-repo-bar__name">
+              <span style={{ color: tierColors.distro }}>
+                {repo.section_id === "@commandline"
+                  ? "Local / Manual installs"
+                  : repo.section_id}
+              </span>
+              <span className="inspectah-repo-bar__count">
+                {repo.package_count}
+              </span>
+            </div>
+            <span id={stateTextId} className="inspectah-repo-bar__always">
+              {noControlStateText(repo)}
             </span>
           </div>
-          <span className="inspectah-repo-bar__always">
-            {repo.section_id === "@commandline"
-              ? "not included"
-              : "always included"}
-          </span>
-        </div>
-      ))}
+        );
+      })}
 
       {toggleableRepos.map((repo) => (
         <div key={repo.section_id} className="inspectah-repo-bar__row">
@@ -100,6 +127,11 @@ export function RepoBar({
               {repo.package_count}
             </span>
           </div>
+          {repo.provenance === "incomplete" && (
+            <span className="inspectah-repo-bar__incomplete">
+              repo definition incomplete
+            </span>
+          )}
           <Switch
             id={`repo-toggle-${repo.section_id}`}
             aria-label={`${repo.section_id} (${repo.package_count})`}

@@ -247,6 +247,7 @@ describe("Repo group header classification label", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         onToggle={vi.fn()}
       />,
@@ -269,6 +270,7 @@ describe("Repo group header classification label", () => {
         provenance="verified"
         isDistro={true}
         packageCount={10}
+        effectiveMemberCount={10}
         enabled={true}
       />,
     );
@@ -289,6 +291,7 @@ describe("Repo group header classification label", () => {
         provenance="verified"
         isDistro={false}
         packageCount={3}
+        effectiveMemberCount={3}
         enabled={true}
       />,
     );
@@ -307,6 +310,7 @@ describe("Repo group header classification label", () => {
         provenance="verified"
         isDistro={false}
         packageCount={3}
+        effectiveMemberCount={3}
         enabled={true}
         onToggle={vi.fn()}
       />,

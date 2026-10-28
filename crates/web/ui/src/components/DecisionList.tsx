@@ -608,6 +608,9 @@ export function DecisionList({
                 is_distro: false,
                 tier: "third_party",
                 package_count: part.items.length,
+                effective_member_count: 0,
+                effective_included: 0,
+                effective_unlisted: 0,
                 enabled: true,
               };
               // Sort items within unknown group by attention priority

@@ -46,6 +46,9 @@ const distroRepo: RepoGroupInfo = {
   is_distro: true,
   tier: "distro",
   package_count: 10,
+  effective_member_count: 10,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
@@ -55,6 +58,9 @@ const officialRepo: RepoGroupInfo = {
   is_distro: false,
   tier: "official_optional",
   package_count: 3,
+  effective_member_count: 3,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
@@ -64,6 +70,9 @@ const thirdPartyRepo: RepoGroupInfo = {
   is_distro: false,
   tier: "third_party",
   package_count: 2,
+  effective_member_count: 2,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 

@@ -1506,6 +1506,9 @@ describe("RepoBar in MainContent", () => {
           is_distro: true,
           tier: "distro" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
         {
@@ -1514,6 +1517,9 @@ describe("RepoBar in MainContent", () => {
           is_distro: false,
           tier: "third_party" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
       ],
@@ -1551,6 +1557,9 @@ describe("RepoBar in MainContent", () => {
           is_distro: true,
           tier: "distro" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
         {
@@ -1559,6 +1568,9 @@ describe("RepoBar in MainContent", () => {
           is_distro: false,
           tier: "third_party" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
       ],
@@ -1826,6 +1838,9 @@ describe("Repo-first package grouping", () => {
       is_distro: true,
       tier: "distro" as const,
       package_count: 2,
+      effective_member_count: 2,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
     {
@@ -1834,6 +1849,9 @@ describe("Repo-first package grouping", () => {
       is_distro: true,
       tier: "distro" as const,
       package_count: 1,
+      effective_member_count: 1,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
     {
@@ -1842,6 +1860,9 @@ describe("Repo-first package grouping", () => {
       is_distro: false,
       tier: "third_party" as const,
       package_count: 2,
+      effective_member_count: 2,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
     {
@@ -1850,6 +1871,9 @@ describe("Repo-first package grouping", () => {
       is_distro: false,
       tier: "third_party" as const,
       package_count: 1,
+      effective_member_count: 1,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
     {
@@ -1858,6 +1882,9 @@ describe("Repo-first package grouping", () => {
       is_distro: false,
       tier: "third_party" as const,
       package_count: 1,
+      effective_member_count: 1,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: false,
     },
   ];
@@ -2248,6 +2275,9 @@ describe("Disabled repo behavior", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: false,
       },
       {
@@ -2256,6 +2286,9 @@ describe("Disabled repo behavior", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -2305,6 +2338,9 @@ describe("Disabled repo behavior", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 10,
+        effective_member_count: 10,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: false,
       },
     ];
@@ -2346,6 +2382,9 @@ describe("Disabled repo behavior", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: false,
       },
     ];
@@ -2380,6 +2419,9 @@ describe("Disabled repo behavior", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: false,
       },
     ];
@@ -2424,6 +2466,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={true}
         packageCount={50}
+        effectiveMemberCount={50}
         enabled={true}
       />,
     );
@@ -2440,6 +2483,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
       />,
     );
@@ -2454,6 +2498,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="incomplete"
         isDistro={false}
         packageCount={3}
+        effectiveMemberCount={3}
         enabled={true}
       />,
     );
@@ -2469,6 +2514,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="unknown"
         isDistro={false}
         packageCount={2}
+        effectiveMemberCount={2}
         enabled={true}
       />,
     );
@@ -2483,6 +2529,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         onToggle={vi.fn()}
       />,
@@ -2498,6 +2545,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="incomplete"
         isDistro={false}
         packageCount={3}
+        effectiveMemberCount={3}
         enabled={true}
         onToggle={vi.fn()}
       />,
@@ -2513,6 +2561,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="unknown"
         isDistro={false}
         packageCount={2}
+        effectiveMemberCount={2}
         enabled={true}
         onToggle={vi.fn()}
       />,
@@ -2527,6 +2576,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         isExpanded={false}
       />,
@@ -2541,6 +2591,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         isExpanded={true}
       />,
@@ -2558,6 +2609,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={false}
       />,
     );
@@ -2573,6 +2625,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={true}
         packageCount={20}
+        effectiveMemberCount={20}
         enabled={true}
         infoCount={3}
       />,
@@ -2587,6 +2640,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={true}
         packageCount={50}
+        effectiveMemberCount={50}
         enabled={true}
         summaryText="No action needed"
       />,
@@ -2603,6 +2657,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
@@ -2625,6 +2680,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
@@ -2646,6 +2702,7 @@ describe("RepoGroupHeader updated labels", () => {
         provenance="verified"
         isDistro={false}
         packageCount={5}
+        effectiveMemberCount={5}
         enabled={true}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
@@ -2669,6 +2726,9 @@ describe("Repo-first keyboard navigation", () => {
       is_distro: true,
       tier: "distro" as const,
       package_count: 1,
+      effective_member_count: 1,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
     {
@@ -2677,6 +2737,9 @@ describe("Repo-first keyboard navigation", () => {
       is_distro: false,
       tier: "third_party" as const,
       package_count: 1,
+      effective_member_count: 1,
+      effective_included: 0,
+      effective_unlisted: 0,
       enabled: true,
     },
   ];
@@ -2768,6 +2831,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
       {
@@ -2776,6 +2842,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -2821,6 +2890,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -2858,6 +2930,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -2897,6 +2972,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -2937,6 +3015,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
       {
@@ -2945,6 +3026,9 @@ describe("Repo-first keyboard navigation", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -3001,6 +3085,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
       {
@@ -3009,6 +3096,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -3061,6 +3151,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
       {
@@ -3069,6 +3162,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 1,
+        effective_member_count: 1,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -3125,6 +3221,9 @@ describe("Repo-first filter and reveal", () => {
             is_distro: false,
             tier: "third_party" as const,
             package_count: 1,
+            effective_member_count: 1,
+            effective_included: 0,
+            effective_unlisted: 0,
             enabled: false,
           },
         ]}
@@ -3150,6 +3249,9 @@ describe("Repo-first filter and reveal", () => {
             is_distro: false,
             tier: "third_party" as const,
             package_count: 1,
+            effective_member_count: 1,
+            effective_included: 0,
+            effective_unlisted: 0,
             enabled: false,
           },
         ]}
@@ -3168,6 +3270,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: true,
         tier: "distro" as const,
         package_count: 2,
+        effective_member_count: 2,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -3209,6 +3314,9 @@ describe("Repo-first filter and reveal", () => {
         is_distro: false,
         tier: "third_party" as const,
         package_count: 3,
+        effective_member_count: 3,
+        effective_included: 0,
+        effective_unlisted: 0,
         enabled: true,
       },
     ];
@@ -3266,6 +3374,9 @@ describe("Package section uses unified components", () => {
           is_distro: false,
           tier: "third_party" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
         {
@@ -3274,6 +3385,9 @@ describe("Package section uses unified components", () => {
           is_distro: true,
           tier: "distro" as const,
           package_count: 1,
+          effective_member_count: 1,
+          effective_included: 0,
+          effective_unlisted: 0,
           enabled: true,
         },
       ],

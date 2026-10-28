@@ -11,6 +11,9 @@ const distroRepo: RepoGroupInfo = {
   is_distro: true,
   tier: "distro",
   package_count: 10,
+  effective_member_count: 10,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
