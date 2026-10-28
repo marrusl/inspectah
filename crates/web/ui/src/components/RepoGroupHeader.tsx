@@ -38,7 +38,11 @@ const showToggle = (
   effectiveMemberCount > 0;
 
 /** § 6.3 state text for the badge cell when no control is shown. */
-function noControlStateText(provenance: RepoProvenance): string {
+function noControlStateText(
+  isDistro: boolean,
+  provenance: RepoProvenance,
+): string {
+  if (isDistro) return "always included";
   switch (provenance) {
     case "disabled":
       return "disabled on host";
@@ -78,10 +82,15 @@ export function RepoGroupHeader({
   onKeyDown: onKeyDownProp,
 }: RepoGroupHeaderProps) {
   const canToggle = showToggle(isDistro, provenance, effectiveMemberCount);
-  const showStateText = !isDistro && !canToggle;
+  // canToggle is always false when isDistro, so this also covers distro rows.
+  const showStateText = !canToggle;
   const label = classificationLabel(isDistro);
   const contentId = `repo-group-content-${sectionId}`;
   const stateTextId = `repo-state-${sectionId}`;
+  const displayName =
+    provenance === "unknown" && sectionId === "@commandline"
+      ? "Local / Manual installs"
+      : sectionId;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -134,7 +143,7 @@ export function RepoGroupHeader({
         className="inspectah-repo-group-header__label"
         style={disabledStyle}
       >
-        {sectionId}
+        {displayName}
       </span>
       {label && (
         <span className="inspectah-repo-group-header__classification">
@@ -180,7 +189,7 @@ export function RepoGroupHeader({
           id={stateTextId}
           className="inspectah-repo-group-header__state-text"
         >
-          {noControlStateText(provenance)}
+          {noControlStateText(isDistro, provenance)}
         </span>
       )}
     </div>

@@ -217,6 +217,8 @@ describe("RepoGroup", () => {
             : "repo id not found in any .repo file",
         ),
       ).toBeInTheDocument();
+      const header = screen.getByTestId("repo-group-epel");
+      expect(header).toHaveAttribute("aria-describedby", "repo-state-epel");
     },
   );
 
@@ -253,5 +255,42 @@ describe("RepoGroup", () => {
       </RepoGroup>,
     );
     expect(screen.getByRole("switch")).toBeInTheDocument();
+    expect(
+      screen.getByText("repo definition incomplete"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no switch for unknown provenance, with the commandline title swap", () => {
+    render(
+      <RepoGroup
+        repo={repo({
+          section_id: "@commandline",
+          provenance: "unknown",
+          effective_member_count: 0,
+          effective_included: 0,
+        })}
+        defaultExpanded={true}
+      >
+        <div>content</div>
+      </RepoGroup>,
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText("Local / Manual installs")).toBeInTheDocument();
+    expect(
+      screen.getByText("installed outside any repo"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows 'always included' state text for distro repos", () => {
+    render(
+      <RepoGroup
+        repo={repo({ section_id: "baseos", is_distro: true })}
+        defaultExpanded={true}
+      >
+        <div>content</div>
+      </RepoGroup>,
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText("always included")).toBeInTheDocument();
   });
 });

@@ -92,30 +92,27 @@ export function RepoBar({
         </div>
       ))}
 
-      {nonToggleableRepos.map((repo) => {
-        const stateTextId = `repo-state-${repo.section_id}`;
-        return (
-          <div
-            key={repo.section_id}
-            className="inspectah-repo-bar__row"
-            aria-describedby={stateTextId}
-          >
-            <div className="inspectah-repo-bar__name">
-              <span style={{ color: tierColors.distro }}>
-                {repo.section_id === "@commandline"
-                  ? "Local / Manual installs"
-                  : repo.section_id}
-              </span>
-              <span className="inspectah-repo-bar__count">
-                {repo.package_count}
-              </span>
-            </div>
-            <span id={stateTextId} className="inspectah-repo-bar__always">
-              {noControlStateText(repo)}
+      {nonToggleableRepos.map((repo) => (
+        // No aria-describedby here: this row is a bare div with no role or
+        // tabindex (maps to `generic`), so the attribute would be inert --
+        // not exposed in the accessibility tree. The association lands in
+        // phase 1 when these rows join PackageList's list/listitem tree.
+        <div key={repo.section_id} className="inspectah-repo-bar__row">
+          <div className="inspectah-repo-bar__name">
+            <span style={{ color: tierColors.distro }}>
+              {repo.section_id === "@commandline"
+                ? "Local / Manual installs"
+                : repo.section_id}
+            </span>
+            <span className="inspectah-repo-bar__count">
+              {repo.package_count}
             </span>
           </div>
-        );
-      })}
+          <span className="inspectah-repo-bar__always">
+            {noControlStateText(repo)}
+          </span>
+        </div>
+      ))}
 
       {toggleableRepos.map((repo) => (
         <div key={repo.section_id} className="inspectah-repo-bar__row">

@@ -324,5 +324,29 @@ describe("RepoBar", () => {
       />,
     );
     expect(screen.getByRole("switch")).toBeInTheDocument();
+    expect(
+      screen.getByText("repo definition incomplete"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no switch for unknown provenance, with the commandline title swap", () => {
+    render(
+      <RepoBar
+        repos={[
+          repo({
+            section_id: "@commandline",
+            provenance: "unknown",
+            effective_member_count: 0,
+            effective_included: 0,
+          }),
+        ]}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText("Local / Manual installs")).toBeInTheDocument();
+    expect(
+      screen.getByText("installed outside any repo"),
+    ).toBeInTheDocument();
   });
 });
