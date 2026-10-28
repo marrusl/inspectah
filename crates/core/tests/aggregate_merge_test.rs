@@ -1551,6 +1551,10 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             let agg = aggregate.as_ref().unwrap();
             assert_eq!(agg.count, 2);
             assert_eq!(agg.hosts, vec!["h1".to_string(), "h2".to_string()]);
+            // No disagreement -- aggregate_count/aggregate_hosts stay
+            // unset, per their own doc comment.
+            assert_eq!(agg.aggregate_count, None);
+            assert_eq!(agg.aggregate_hosts, None);
         }
         other => panic!("expected Label, got {other:?}"),
     }
@@ -1609,9 +1613,9 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
     let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
     // Order: hostname order, then each host's collected order -- not
-    // sorted by spec and not grouped by host. A disagreement on "shared"
-    // now survives as two rows (round 2 ruling), not one with the loser
-    // discarded (round 1), so there are 4 rows, not 3.
+    // sorted by spec and not grouped by host. Round 3's ruling: one row
+    // survives per key (spec § 3.1), so "shared" is one row, not two --
+    // 3 rows total, not 4.
     let specs_and_types: Vec<(&str, &str)> = result
         .fcontext_rules
         .iter()
@@ -1625,10 +1629,9 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
         vec![
             ("/opt/a", "httpd_sys_content_t"),
             ("/opt/shared", "y1_t"),
-            ("/opt/shared", "y2_t"),
             ("/opt/c", "httpd_sys_content_t"),
         ],
-        "a disagreement must survive as both variants, in hostname-then-collected order"
+        "one row per key, the first content seen in hostname order"
     );
 
     let included = |rule: &FcontextRule| match rule {
@@ -1636,54 +1639,66 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
         other => panic!("expected Label, got {:?}", other),
     };
 
-    // "/opt/a" and "/opt/c" each sit on only 1 of 2 hosts -- round 2's
-    // narrowing (count == total across the whole run) excludes these,
-    // where round 1's per-host-disposition rule included them (the only
-    // host carrying each had included it). This is the behaviour this
-    // round changed; assert it directly rather than letting it ride on an
-    // existing assertion.
+    // "/opt/a" and "/opt/c" each sit on only 1 of 2 hosts -- narrowing
+    // (count == total across the whole run) excludes these, where round
+    // 1's per-host-disposition rule included them (the only host carrying
+    // each had included it). This is the behaviour round 2 changed;
+    // assert it directly rather than letting it ride on an existing
+    // assertion.
     assert!(
         !included(&result.fcontext_rules[0]),
-        "/opt/a is on 1 of 2 hosts, must now be excluded"
+        "/opt/a is on 1 of 2 hosts, must be excluded"
     );
     assert!(
-        !included(&result.fcontext_rules[3]),
-        "/opt/c is on 1 of 2 hosts, must now be excluded"
+        !included(&result.fcontext_rules[2]),
+        "/opt/c is on 1 of 2 hosts, must be excluded"
     );
 
     // "/opt/shared" the *key* is universal (both hosts carry a rule at
     // this spec/file_type, they just disagree on its content), so
     // narrowing -- which answers "is this policy entry universal," not
-    // "is this exact content universal" -- includes both variants.
+    // "is this exact content universal" -- includes the surviving row.
     assert!(
         included(&result.fcontext_rules[1]),
         "shared key is universal even though its content disagrees"
     );
-    assert!(
-        included(&result.fcontext_rules[2]),
-        "shared key is universal even though its content disagrees"
-    );
 
-    // Each variant's own aggregate names only the host that actually
-    // holds it -- this is the record Task 11 needs to name both sides of
-    // the disagreement by host.
+    // The surviving row is h1's (first in hostname order); its count/hosts
+    // describe only h1, who shares that exact content. The disagreement
+    // itself is not lost: aggregate_count/aggregate_hosts (set only
+    // because this key has more than one variant) name every host
+    // carrying the key under any content, which is what a future audit
+    // report needs to name both sides by host.
     match &result.fcontext_rules[1] {
-        FcontextRule::Label { aggregate, .. } => {
+        FcontextRule::Label {
+            context, aggregate, ..
+        } => {
+            assert_eq!(context.type_, "y1_t", "h1's content survives, not h2's");
             let agg = aggregate.as_ref().expect("aggregate must be populated");
             assert_eq!(agg.count, 1);
             assert_eq!(agg.total, 2);
             assert_eq!(agg.hosts, vec!["h1".to_string()]);
+            assert_eq!(agg.aggregate_count, Some(2));
+            assert_eq!(
+                agg.aggregate_hosts,
+                Some(vec!["h1".to_string(), "h2".to_string()])
+            );
         }
         other => panic!("expected Label, got {:?}", other),
     }
-    match &result.fcontext_rules[2] {
-        FcontextRule::Label { aggregate, .. } => {
-            let agg = aggregate.as_ref().expect("aggregate must be populated");
-            assert_eq!(agg.count, 1);
-            assert_eq!(agg.total, 2);
-            assert_eq!(agg.hosts, vec!["h2".to_string()]);
+
+    // "/opt/a" and "/opt/c" have no disagreement -- aggregate_count/
+    // aggregate_hosts stay None, per their own doc comment ("only set for
+    // items with content variants").
+    for idx in [0, 2] {
+        match &result.fcontext_rules[idx] {
+            FcontextRule::Label { aggregate, .. } => {
+                let agg = aggregate.as_ref().expect("aggregate must be populated");
+                assert_eq!(agg.aggregate_count, None);
+                assert_eq!(agg.aggregate_hosts, None);
+            }
+            other => panic!("expected Label, got {:?}", other),
         }
-        other => panic!("expected Label, got {:?}", other),
     }
 }
 
@@ -1710,11 +1725,14 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
-    // One key -- but round 2's ruling preserves a disagreement as more
-    // than one row rather than discarding the loser (round 1 kept only
-    // h1's Label and silently dropped h2's Unlabel entirely). So this is
-    // 2 rows, both for the "/opt/x" key, not 1.
-    assert_eq!(result.fcontext_rules.len(), 2);
+    // One key, one surviving row (round 3 ruling, spec § 3.1: "hosts that
+    // disagree on the context for one key keep the first in hostname
+    // order"). Round 2 had this produce 2 rows; that would let both
+    // render and, under § 3.1 rule 1's replay, the second silently
+    // overwrites the first in the built image -- the exact failure the
+    // shared-key merge exists to prevent, recreated through row count
+    // instead of key count.
+    assert_eq!(result.fcontext_rules.len(), 1);
 
     match &result.fcontext_rules[0] {
         FcontextRule::Label {
@@ -1723,29 +1741,30 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
             aggregate,
             ..
         } => {
-            assert_eq!(spec, "/opt/x");
+            assert_eq!(
+                spec, "/opt/x",
+                "h1's Label survives, first in hostname order"
+            );
             // The key itself is universal (both hosts carry a rule at
             // this spec/file_type, they just disagree on Label vs
             // Unlabel), so narrowing includes it.
             assert!(disposition.is_included());
             let agg = aggregate.as_ref().expect("aggregate must be populated");
+            // count/hosts describe only the hosts sharing the surviving
+            // row's exact content: h1 alone.
+            assert_eq!(agg.count, 1);
             assert_eq!(agg.hosts, vec!["h1".to_string()]);
+            // aggregate_count/aggregate_hosts carry the disagreement: both
+            // hosts carry the key, across its two variants (Label,
+            // Unlabel) -- this is the record a future audit report needs
+            // to name both sides by host without adding a row.
+            assert_eq!(agg.aggregate_count, Some(2));
+            assert_eq!(
+                agg.aggregate_hosts,
+                Some(vec!["h1".to_string(), "h2".to_string()])
+            );
         }
-        other => panic!("expected h1's Label first, got {other:?}"),
-    }
-    match &result.fcontext_rules[1] {
-        FcontextRule::Unlabel {
-            spec,
-            disposition,
-            aggregate,
-            ..
-        } => {
-            assert_eq!(spec, "/opt/x");
-            assert!(disposition.is_included());
-            let agg = aggregate.as_ref().expect("aggregate must be populated");
-            assert_eq!(agg.hosts, vec!["h2".to_string()]);
-        }
-        other => panic!("expected h2's Unlabel second, got {other:?}"),
+        other => panic!("expected h1's Label to survive, got {other:?}"),
     }
 }
 

@@ -754,20 +754,27 @@ fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
 /// silently change which overlapping local expression the target policy
 /// resolves to by recency (see `collect_fcontext_rules`).
 ///
+/// One row survives per key, not one per content variant (spec § 3.1):
+/// "hosts that disagree on the context for one key keep the first in
+/// hostname order." Two surviving `Label` rows on one `(spec, file_type)`
+/// would both render, and under § 3.1 rule 1's `-d`-then-`-a` replay the
+/// second would silently overwrite the first in the built image -- the
+/// precise failure the shared-key merge exists to surface, re-created
+/// through a different door.
+///
 /// A key's disposition is narrowed the way `narrow_non_universal` narrows
 /// `merge_items` output -- included only when every host in the run carries
 /// the key (`count == total`), not merely when every host that happens to
-/// carry it agreed to include it. That narrowing is uniform across every
-/// variant of a key: it answers "is this policy entry universal," not "is
-/// this exact content universal."
+/// carry it agreed to include it.
 ///
-/// Hosts can disagree on a key's content (a `Label` on one host, an
-/// `Unlabel` on another; the same spec labeled two different types). Round 1
-/// kept only the first-seen content and discarded the rest, which made a
-/// disagreement invisible. Each distinct content for a key now survives as
-/// its own rule, carrying only the hosts that actually hold it in its
-/// `aggregate` field -- the record Task 11 needs to name both sides of a
-/// disagreement by host, rather than silently picking one.
+/// A disagreement on content does not vanish, it moves into metadata:
+/// `count`/`hosts` describe the hosts that share the surviving row's exact
+/// content, while `aggregate_count`/`aggregate_hosts` describe every host
+/// carrying the key under any content -- set only when a disagreement
+/// actually exists, per their own doc comments ("only set for items with
+/// content variants"). That gives a future renderer's audit report what it
+/// needs to name both sides of the disagreement, without adding a row that
+/// could itself be replayed.
 fn merge_fcontext_rules(
     sections: &[Option<SelinuxSection>],
     total_hosts: usize,
@@ -798,15 +805,24 @@ fn merge_fcontext_rules(
             .remove(&key)
             .expect("key was just recorded in key_order");
 
-        // Universality is evaluated per key, over every host carrying it
-        // under any content.
+        // Universality is evaluated over every host carrying the key under
+        // any content.
         let mut key_host_idxs: Vec<usize> = entries.iter().map(|(idx, _)| *idx).collect();
         key_host_idxs.sort_unstable();
         key_host_idxs.dedup();
         let include = key_host_idxs.len() == total_hosts;
+        let mut key_hosts: Vec<String> = key_host_idxs
+            .iter()
+            .map(|&i| hostnames[i].clone())
+            .collect();
+        key_hosts.sort();
+        key_hosts.dedup();
 
-        // Sub-group by exact content so a genuine disagreement survives as
-        // more than one rule, in first-seen order within the key.
+        // Sub-group by exact content, in first-seen order. `entries` was
+        // built host-by-host in ascending index order, preserving each
+        // host's own collected order within that, so `variants[0]` is
+        // exactly the first content seen in hostname order -- the
+        // survivor the spec names.
         let mut variants: Vec<(FcontextRule, Vec<usize>)> = Vec::new();
         for (host_idx, rule) in entries {
             match variants.iter_mut().find(|(r, _)| *r == rule) {
@@ -815,39 +831,41 @@ fn merge_fcontext_rules(
             }
         }
 
-        for (mut rule, idxs) in variants {
-            let mut hosts: Vec<String> = idxs.iter().map(|&i| hostnames[i].clone()).collect();
-            hosts.sort();
-            hosts.dedup();
-            let prevalence = AggregatePrevalence {
-                count: hosts.len() as i32,
-                total: total_hosts as i32,
-                hosts,
-                ..Default::default()
-            };
-            match &mut rule {
-                FcontextRule::Label {
-                    disposition,
-                    aggregate,
-                    ..
-                }
-                | FcontextRule::Unlabel {
-                    disposition,
-                    aggregate,
-                    ..
-                }
-                | FcontextRule::Equivalence {
-                    disposition,
-                    aggregate,
-                    ..
-                } => {
-                    *disposition = disposition.with_include(include);
-                    *aggregate = Some(prevalence);
-                }
-                FcontextRule::Unparsed { .. } => {}
+        let has_disagreement = variants.len() > 1;
+        let (mut rule, rep_idxs) = variants.remove(0);
+        let mut rep_hosts: Vec<String> = rep_idxs.iter().map(|&i| hostnames[i].clone()).collect();
+        rep_hosts.sort();
+        rep_hosts.dedup();
+
+        let prevalence = AggregatePrevalence {
+            count: rep_hosts.len() as i32,
+            total: total_hosts as i32,
+            hosts: rep_hosts,
+            aggregate_count: has_disagreement.then_some(key_host_idxs.len() as i32),
+            aggregate_hosts: has_disagreement.then_some(key_hosts),
+        };
+        match &mut rule {
+            FcontextRule::Label {
+                disposition,
+                aggregate,
+                ..
             }
-            result.push(rule);
+            | FcontextRule::Unlabel {
+                disposition,
+                aggregate,
+                ..
+            }
+            | FcontextRule::Equivalence {
+                disposition,
+                aggregate,
+                ..
+            } => {
+                *disposition = disposition.with_include(include);
+                *aggregate = Some(prevalence);
+            }
+            FcontextRule::Unparsed { .. } => {}
         }
+        result.push(rule);
     }
 
     result
