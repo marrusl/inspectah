@@ -344,6 +344,12 @@ body,
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
+.inspectah-repo-group-header__incomplete {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  font-style: italic;
+}
+
 .inspectah-repo-group-header__state-text {
   margin-left: auto;
   color: var(--pf-t--global--text--color--subtle);
