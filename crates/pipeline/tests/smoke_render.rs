@@ -737,6 +737,58 @@ fn selinux_unlabel_renders_none_inside_the_same_guard() {
     );
 }
 
+/// The only reachable pattern where `-f` meets a `-t` that did not come from
+/// a context: `Unlabel` carries no context field at all, so `-t '<<none>>'` is
+/// a literal. § 5.1 states both halves and never crosses them.
+#[test]
+fn selinux_unlabel_with_a_file_type_carries_both_flags() {
+    let spec = "/opt/none(/.*)?";
+    let snap = sel::snapshot_rules(vec![sel::unlabel(spec, FcontextFileType::Directory)]);
+    assert_eq!(
+        rendered_runs(&snap),
+        vec![
+            install_run(),
+            sel::rule1_rendered(spec, " -f d", "-f d -t '<<none>>'"),
+        ]
+    );
+}
+
+/// `-r` is suppressed for `None` and for `Some("s0")` alike. Every other
+/// fixture in this file uses `Some(..)`, so `None` is a branch nothing else
+/// reaches — the shape an `unwrap_or` gets wrong.
+#[test]
+fn selinux_level_none_suppresses_the_range_flag() {
+    let spec = "/opt/level(/.*)?";
+    let cases: &[(&str, Option<&str>, &str)] = &[
+        ("level None", None, "-t httpd_sys_content_t"),
+        ("level s0", Some("s0"), "-t httpd_sys_content_t"),
+        // Paired positive, in this test rather than another, so the two
+        // suppressions above are read against a case that does emit `-r`.
+        (
+            "level s0-s0:c0",
+            Some("s0-s0:c0"),
+            "-r s0-s0:c0 -t httpd_sys_content_t",
+        ),
+    ];
+    for (case, level, am_args) in cases {
+        let snap = sel::snapshot_rules(vec![sel::label_with(
+            spec,
+            FcontextFileType::All,
+            inspectah_core::types::selinux::SelinuxContext {
+                user: "system_u".into(),
+                role: "object_r".into(),
+                type_: HTTPD_TYPE.into(),
+                level: level.map(|l| l.to_string()),
+            },
+        )]);
+        assert_eq!(
+            rendered_runs(&snap),
+            vec![install_run(), sel::rule1_rendered(spec, "", am_args)],
+            "{case}"
+        );
+    }
+}
+
 /// `-f`, `-r`, `-s`, `-t`, in that order on the `-a` and the `-m`, with the
 /// `-d` carrying only `-f` and the spec. No spec section fixes the order; it
 /// is a ruling, recorded at `sel::FLAG_ORDER`.

@@ -162,6 +162,41 @@ pub struct SelinuxSection {
 mod tests {
     use super::*;
 
+    /// Every variant's `semanage fcontext -f` letter.
+    ///
+    /// The letters come from the `-f {a,f,d,c,b,s,l,p}` synopsis of
+    /// `semanage-fcontext(8)` and its gloss ("a" all files, "f" regular file,
+    /// "d" directory, "c" character device, "b" block device, "s" socket,
+    /// "l" symbolic link, "p" named pipe), not from the function under test.
+    /// Six of the seven are corroborated inside this repo by the
+    /// `file_contexts.local` flag forms the collector parses
+    /// (`collect/src/inspectors/selinux.rs:392-398`: `-d`, `-c`, `-b`, `-s`,
+    /// `-l`, `-p`); only `f` rests on the man page alone, because the store
+    /// file spells regular file `--`.
+    ///
+    /// `All` is `None` rather than `Some('a')` on purpose: "all files" is the
+    /// default, and § 5.1 emits `-f` only when the type is not `All`.
+    #[test]
+    fn test_semanage_flag_letters() {
+        let cases: &[(FcontextFileType, Option<char>)] = &[
+            (FcontextFileType::All, None),
+            (FcontextFileType::RegularFile, Some('f')),
+            (FcontextFileType::Directory, Some('d')),
+            (FcontextFileType::CharDevice, Some('c')),
+            (FcontextFileType::BlockDevice, Some('b')),
+            (FcontextFileType::Socket, Some('s')),
+            (FcontextFileType::Symlink, Some('l')),
+            (FcontextFileType::NamedPipe, Some('p')),
+        ];
+        for (file_type, expected) in cases {
+            assert_eq!(
+                file_type.semanage_flag(),
+                *expected,
+                "wrong -f letter for {file_type:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_selinux_section_roundtrip() {
         let section = SelinuxSection {
