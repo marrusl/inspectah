@@ -11,7 +11,14 @@
  * fake's current view is what that mock returns on every call.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+  within,
+} from "@testing-library/react";
 import { AggregateApp } from "../../AggregateApp";
 import type { AggregateAppProps } from "../../AggregateApp";
 import type {
@@ -246,6 +253,23 @@ async function toggleMemberRow(nameArch: string, expectChecked: boolean) {
     );
   });
 }
+
+/**
+ * Scoped to ExcludedZone, not the whole document: a disabled repo's members
+ * only have a checkbox there today, but the assertion should say that's
+ * where it clicked rather than relying on it being the only checkbox with
+ * this name in the document.
+ */
+async function includeExcludedZoneMember(nameArch: string) {
+  const zone = () => within(screen.getByTestId("excluded-zone"));
+  fireEvent.click(zone().getByRole("checkbox", { name: nameArch }));
+  await waitFor(() => {
+    expect(zone().getByRole("checkbox", { name: nameArch })).toHaveProperty(
+      "checked",
+      true,
+    );
+  });
+}
 const excludeMemberRow = (nameArch: string) => toggleMemberRow(nameArch, false);
 
 describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
@@ -331,8 +355,8 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
       effective_included: 0,
     });
 
-    await toggleMemberRow("a.x86_64", true);
-    await toggleMemberRow("b.x86_64", true);
+    await includeExcludedZoneMember("a.x86_64");
+    await includeExcludedZoneMember("b.x86_64");
     expect(fake.repo("vendor")).toMatchObject({
       enabled: false,
       effective_member_count: 2,

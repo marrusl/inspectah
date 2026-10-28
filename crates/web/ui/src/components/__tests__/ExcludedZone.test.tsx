@@ -14,8 +14,12 @@ describe("ExcludedZone", () => {
     render(
       <ExcludedZone packages={[]} hasEverToggled={true} onToggle={vi.fn()} />,
     );
-    expect(screen.getByText(/excluded · 0 packages/i)).toBeInTheDocument();
-    expect(screen.getByText(/no excluded packages/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/from excluded repos · 0 packages/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/no packages from excluded repos/i),
+    ).toBeInTheDocument();
   });
 
   it("shows excluded packages with strikethrough", () => {
@@ -28,7 +32,10 @@ describe("ExcludedZone", () => {
     );
     expect(screen.getByText("nginx")).toBeInTheDocument();
     expect(screen.getByText("jq")).toBeInTheDocument();
-    expect(screen.getByText(/excluded · 2 packages/i)).toBeInTheDocument();
+    expect(screen.getByText("nginx")).toHaveStyle({
+      textDecoration: "line-through",
+    });
+    expect(screen.getByText(/from excluded repos · 2 packages/i)).toBeInTheDocument();
   });
 
   it("renders a checkbox per package reflecting its own include state", () => {
@@ -61,13 +68,57 @@ describe("ExcludedZone", () => {
     expect(onToggle).toHaveBeenCalledWith("nginx");
   });
 
+  it("replaces the checkbox with an Upload RPM button when the package needs an upload", () => {
+    const pkgs = [{ name: "nginx", repo: "epel", include: false }];
+    render(
+      <ExcludedZone
+        packages={pkgs}
+        hasEverToggled={true}
+        onToggle={vi.fn()}
+        rpmRowStates={{ nginx: "needs_upload" }}
+      />,
+    );
+    expect(
+      screen.queryByRole("checkbox", { name: "nginx" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Upload RPM for nginx" }),
+    ).toBeInTheDocument();
+  });
+
+  it("calls onUploadClick with the package name when the Upload RPM button is clicked", () => {
+    const onUploadClick = vi.fn();
+    const pkgs = [{ name: "nginx", repo: "epel", include: false }];
+    render(
+      <ExcludedZone
+        packages={pkgs}
+        hasEverToggled={true}
+        onToggle={vi.fn()}
+        rpmRowStates={{ nginx: "needs_upload" }}
+        onUploadClick={onUploadClick}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Upload RPM for nginx" }));
+    expect(onUploadClick).toHaveBeenCalledWith("nginx");
+  });
+
   it("excluded count header has aria-live for dynamic announcements", () => {
     const pkgs = [{ name: "nginx", repo: "epel", include: false }];
     render(
       <ExcludedZone packages={pkgs} hasEverToggled={true} onToggle={vi.fn()} />,
     );
-    const header = screen.getByText(/excluded · 1 packages/i);
+    const header = screen.getByText(/from excluded repos · 1 package\b/i);
     expect(header).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("singular count reads '1 package', not '1 packages'", () => {
+    const pkgs = [{ name: "nginx", repo: "epel", include: false }];
+    render(
+      <ExcludedZone packages={pkgs} hasEverToggled={true} onToggle={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(/from excluded repos · 1 package$/i),
+    ).toBeInTheDocument();
   });
 
   it("collapses when 50+ packages with expander", () => {

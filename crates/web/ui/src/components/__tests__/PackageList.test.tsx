@@ -238,8 +238,8 @@ describe("PackageList", () => {
     const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
     const pkgs = [
       makePkg("bash", "baseos"),
-      makePkg("nginx", "epel"),
-      makePkg("jq", "epel"),
+      makePkg("nginx", "epel", false),
+      makePkg("jq", "epel", true),
     ];
     render(
       <PackageList
@@ -253,6 +253,9 @@ describe("PackageList", () => {
     const excluded = screen.getByTestId("excluded-zone");
     expect(within(excluded).getByText("nginx")).toBeInTheDocument();
     expect(within(excluded).getByText("jq")).toBeInTheDocument();
+    // Pin both polarities of the include pass-through at component level.
+    expect(within(excluded).getByRole("checkbox", { name: "nginx" })).not.toBeChecked();
+    expect(within(excluded).getByRole("checkbox", { name: "jq" })).toBeChecked();
   });
 
   it("re-includes an excluded repo's member by clicking its ExcludedZone checkbox", () => {
@@ -502,7 +505,7 @@ describe("PackageList", () => {
     expect(screen.queryByTestId("excluded-zone")).not.toBeInTheDocument();
   });
 
-  it("excluded zone stays visible with 'No excluded packages' after repo re-enabled (latched)", () => {
+  it("excluded zone stays visible with 'No packages from excluded repos' after repo re-enabled (latched)", () => {
     const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
     const pkgs = [makePkg("bash", "baseos"), makePkg("nginx", "epel")];
     // Render with repo disabled — excluded zone appears
@@ -527,8 +530,10 @@ describe("PackageList", () => {
         onRepoToggle={vi.fn()}
       />,
     );
-    // Zone stays visible, showing "No excluded packages" message
-    expect(screen.getByText("No excluded packages")).toBeInTheDocument();
+    // Zone stays visible, showing "No packages from excluded repos" message
+    expect(
+      screen.getByText("No packages from excluded repos"),
+    ).toBeInTheDocument();
   });
 
   // --- Aggregate conflict popover in rows ---

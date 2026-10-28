@@ -556,6 +556,8 @@ export function PackageList({
         packages={excludedPackages}
         hasEverToggled={hasEverToggled}
         onToggle={onToggle}
+        rpmRowStates={rpmRowStates}
+        onUploadClick={onUploadClick}
       />
     </div>
   );

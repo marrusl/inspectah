@@ -21,6 +21,7 @@ tests/e2e/fixtures/architect-topology/
 tests/e2e/fixtures/.schema-version
 tests/e2e/.env.test
 tests/e2e/.server-pids
+crates/web/ui/test-results/
 # Go CLI wrapper
 cmd/inspectah/inspectah
 cmd/inspectah/inspectah-mac
