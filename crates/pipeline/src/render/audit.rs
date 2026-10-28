@@ -671,6 +671,11 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
     lines.push("#### File Context Rules".into());
     lines.push(String::new());
+    // The per-rule cost is measured, not estimated: on
+    // `registry.redhat.io/rhel9/rhel-bootc:9.8` (2026-10-28) three rules
+    // added 21.4, 21.0 and 21.0 MB, one layer each. It is inherent to the
+    // approach, since each rule is its own `RUN`, so the sentence states it
+    // and stops there.
     lines.push(
         "What the Containerfile's SELinux block does with each rule. Every rule it replays \
          runs its own `semanage` command in its own build layer, which costs roughly 21 MB \
@@ -679,28 +684,14 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     );
     lines.push(String::new());
 
-    for row in rows {
-        let mut qualifiers = Vec::new();
-        if let Some(note) = selinux::origin_note(row.origin.as_ref()) {
-            qualifiers.push(note);
-        }
-        let command = match row.action {
-            selinux::BuildAction::Emits(command) => {
-                qualifiers.push("applied".into());
-                Some(command)
-            }
-            selinux::BuildAction::Skips(cause) => {
-                qualifiers.push(format!("not applied: {cause}"));
-                None
-            }
-        };
+    for row in &rows {
         lines.push(format!(
             "**`{}`** ({})",
             selinux::summary_label(&row.rule),
-            qualifiers.join("; ")
+            selinux::summary_disposition(row)
         ));
         lines.push(String::new());
-        if let Some(command) = command {
+        if let Some(command) = selinux::summary_command(row) {
             lines.push("```sh".into());
             lines.extend(command.lines().map(str::to_string));
             lines.push("```".into());

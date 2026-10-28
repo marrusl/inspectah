@@ -2456,24 +2456,106 @@ fn readme_semanage_caution_states_no_unmeasured_mechanism() {
         FcontextFileType::All,
         HTTPD_TYPE,
     )]));
-    let caution = lines_naming(&md, "semanage").join("\n");
+    let caution = lines_naming(&md, "on a deployed machine").join("\n");
+
+    // Positive anchors first. Five absence assertions over phrasings that
+    // were never present are satisfied by `"Do not run semanage."`, which
+    // carries no hedge at all: the absences only mean something once the
+    // hedge they are guarding is pinned down.
     assert!(
-        !caution.is_empty(),
-        "the README must warn against running semanage on the deployed machine:\n{md}"
+        caution.contains("not by running `semanage` on a deployed machine"),
+        "the README must tell the operator to rebuild instead:\n{md}"
     );
-    // The phrasings that assert the untested outcome as fact.
+    assert!(
+        caution.contains("has not been tested"),
+        "the caution must say the interaction is untested, which is why it is a caution:\n{caution}"
+    );
+    // Both directions. "A local change may not survive the next switch" is
+    // not false, but it picks a side, and the likelier reading is the
+    // reverse: the local edit wins and the image's rules never arrive.
+    assert!(
+        caution.contains("may not combine the way you expect")
+            && caution.contains("may not fail visibly"),
+        "the uncertainty must point both ways, not at one outcome:\n{caution}"
+    );
+
+    // The phrasings that would assert the untested outcome as fact.
     for claimed in [
         "silently loses",
         "will lose",
         "pins the policy store",
         "will be overwritten",
         "will not be applied",
+        "may not survive",
     ] {
         assert!(
             !md.contains(claimed),
             "{claimed:?} states an unmeasured mechanism as fact:\n{caution}"
         );
     }
+}
+
+/// The section renders on rules collected, not rules included, so that an
+/// operator who excluded all of them still learns the export carries none.
+/// That makes the opening sentence a claim about a block that replays
+/// nothing unless it branches.
+#[test]
+fn readme_does_not_claim_a_replay_when_every_rule_was_excluded() {
+    let all_excluded = readme::render_readme(&sel::snapshot_rules(vec![excluded_label(
+        "/opt/shared",
+        Some(contested_prevalence()),
+    )]));
+    assert!(
+        all_excluded.contains(README_SELINUX_HEADING),
+        "an all-excluded set still needs the section, to say the export has none:\n{all_excluded}"
+    );
+    assert!(
+        all_excluded.contains("None of this host's custom file context rules are in the export"),
+        "an all-excluded set must say so:\n{all_excluded}"
+    );
+    assert!(
+        !all_excluded.contains("The Containerfile replays"),
+        "nothing is replayed here, so the README must not say anything is:\n{all_excluded}"
+    );
+
+    // Paired: one included rule and the sentence flips back.
+    let some_included = readme::render_readme(&sel::snapshot_rules(vec![
+        excluded_label("/opt/shared", Some(contested_prevalence())),
+        sel::label("/opt/app(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]));
+    assert!(
+        some_included.contains("The Containerfile replays")
+            && !some_included.contains("None of this host's"),
+        "one included rule is a replay:\n{some_included}"
+    );
+}
+
+/// Two of the FIXMEs a rule can produce are printed by the build, not written
+/// into the Containerfile: rule 1's equivalence-subject skip and its
+/// listing-failure branch both run against the target's own policy. An
+/// operator told to grep the Containerfile and nothing else misses them.
+#[test]
+fn readme_points_at_the_build_output_as_well_as_the_containerfile() {
+    let md = readme::render_readme(&sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        md.contains("the build output can print FIXMEs the Containerfile does not contain"),
+        "grepping the Containerfile alone does not find the build-time FIXMEs:\n{md}"
+    );
+
+    // Paired absence: the all-excluded wording has no replay and so no
+    // build-time check to warn about.
+    let all_excluded = readme::render_readme(&sel::snapshot_rules(vec![excluded_label(
+        "/opt/shared",
+        Some(contested_prevalence()),
+    )]));
+    assert!(
+        !all_excluded.contains("the build output can print FIXMEs"),
+        "nothing runs at build time here:\n{all_excluded}"
+    );
 }
 
 // ---- The helper and the block cannot drift apart --------------------------
@@ -2545,5 +2627,202 @@ fn emitted_equivalences_match_the_blocks_add_equal_commands() {
             "the helper and the block disagree for {name}: the helper reports {emitted} \
              emitted equivalence(s) and the block renders {rendered} `-a -e`:\n{block}"
         );
+    }
+}
+
+// ---- Whole-surface pins (§ 8.9 applied to the report surfaces) ------------
+//
+// Every other assertion here is a `contains` on one sentence, and a section
+// in the wrong order, or carrying a duplicated row, satisfies all of them.
+// These two compare a whole section against hand-transcribed text, the way
+// `AFTER_TEXT` pins the block. The commands inside them come from the
+// support module's transcription of the § 3.1 templates, not from the
+// renderer, so the report is pinned against the same text the Containerfile
+// tests are pinned against.
+//
+// Not a snapshot on purpose: a snapshot goes green on `insta accept`, which
+// is the weakest pin in this suite's vocabulary.
+
+/// The audit's fcontext subsection, heading to end of section. Panics when
+/// absent, so a fixture that renders nothing fails rather than passing an
+/// empty comparison.
+fn audit_fcontext_section(md: &str) -> String {
+    let start = md
+        .find("#### File Context Rules")
+        .unwrap_or_else(|| panic!("no fcontext section in the audit report:\n{md}"));
+    let rest = &md[start..];
+    // No line of a rendered command begins with `#`, so the next heading
+    // ends the section.
+    let end = rest[1..].find("\n#").map(|i| i + 1).unwrap_or(rest.len());
+    rest[..end].trim_end().to_string()
+}
+
+/// The HTML report's fcontext list, heading to `</ul>`, with the template
+/// engine's whitespace-only lines dropped. Those lines are `{% for %}`
+/// artifacts that carry no content; everything else, indentation included,
+/// is compared.
+fn html_fcontext_list(html: &str) -> String {
+    let start = html
+        .find("<h4>File Context Rules</h4>")
+        .unwrap_or_else(|| panic!("no fcontext list in the HTML report:\n{html}"));
+    let rest = &html[start..];
+    let end = rest
+        .find("</ul>")
+        .map(|i| i + "</ul>".len())
+        .unwrap_or_else(|| panic!("the fcontext list is unterminated:\n{rest}"));
+    rest[..end]
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// minijinja's HTML escaping, transcribed so an expected fragment can be
+/// written as plain text. A change in what the engine escapes is a change to
+/// the rendered page and should fail here.
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+        .replace('/', "&#x2f;")
+}
+
+/// The sentence that opens the audit's fcontext section. Its 21 MB is
+/// measured, not estimated: on `registry.redhat.io/rhel9/rhel-bootc:9.8`
+/// (2026-10-28) three rules added 21.4, 21.0 and 21.0 MB, one layer each.
+const AUDIT_FCONTEXT_INTRO: &str = "What the Containerfile's SELinux block does with each rule. Every rule it replays runs its own `semanage` command in its own build layer, which costs roughly 21 MB of image size per rule.";
+
+/// The § 5.1 host rule's two rows, as the reports name them.
+const SYNTHESIS_ROW: &str = "/var/srv = /srv";
+const SYNTHESIS_DISPOSITION: &str = "synthesized by inspectah: /srv is a symlink to /var/srv on this base and the policy has no /var/srv alias; applied";
+const HOST_RULE_ROW: &str = "/srv/www(/.*)? -> httpd_sys_content_t";
+
+/// The conflict fixture's rows. The collected row claims `/var/srv` and the
+/// synthesis claims it too, so neither is added and the cause names both.
+const CONFLICT_ROW: &str = "/var/srv = /opt/srv";
+const CONFLICT_DISPOSITION: &str = "not applied: these equivalences conflict: \"/var/srv\" = \"/opt/srv\" and \"/var/srv\" = \"/srv\"; keep one and exclude the other, then rebuild";
+
+/// A collected `/var/srv = /opt/srv` against the synthesized `/var/srv =
+/// /srv`. § 4 asks for conflict rows to be marked, and no other test in this
+/// file renders one on a report surface.
+fn conflict_snapshot() -> inspectah_core::snapshot::InspectionSnapshot {
+    sel::snapshot_rules(vec![
+        sel::equivalence("/var/srv", "/opt/srv"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ])
+}
+
+#[test]
+fn audit_fcontext_section_matches_its_transcription_whole() {
+    let host_rule = sel::rule1_rendered("/srv/www(/.*)?", "", HTTPD_ARGS);
+
+    let expected_spec_fixture = format!(
+        "#### File Context Rules\n\
+         \n\
+         {AUDIT_FCONTEXT_INTRO}\n\
+         \n\
+         **`{SYNTHESIS_ROW}`** ({SYNTHESIS_DISPOSITION})\n\
+         \n\
+         ```sh\n{}\n```\n\
+         \n\
+         **`{HOST_RULE_ROW}`** (applied)\n\
+         \n\
+         ```sh\n{host_rule}\n```",
+        sel::rule2_rendered("/var/srv", "/srv")
+    );
+    assert_eq!(
+        audit_fcontext_section(&audit::render_audit(&host_snapshot())),
+        expected_spec_fixture
+    );
+
+    let expected_conflict = format!(
+        "#### File Context Rules\n\
+         \n\
+         {AUDIT_FCONTEXT_INTRO}\n\
+         \n\
+         **`{CONFLICT_ROW}`** ({CONFLICT_DISPOSITION})\n\
+         \n\
+         **`{HOST_RULE_ROW}`** (applied)\n\
+         \n\
+         ```sh\n{host_rule}\n```"
+    );
+    assert_eq!(
+        audit_fcontext_section(&audit::render_audit(&conflict_snapshot())),
+        expected_conflict
+    );
+}
+
+#[test]
+fn report_html_fcontext_list_matches_its_transcription_whole() {
+    let row = |name: &str, disposition: &str, command: Option<&str>| {
+        let mut out = format!(
+            "  <li>\n    <code>{}</code> ({})",
+            html_escape(name),
+            html_escape(disposition)
+        );
+        match command {
+            Some(command) => out.push_str(&format!(
+                "\n    <pre><code>{}</code></pre>\n  </li>",
+                html_escape(command)
+            )),
+            None => out.push_str("\n  </li>"),
+        }
+        out
+    };
+    let host_rule = sel::rule1_rendered("/srv/www(/.*)?", "", HTTPD_ARGS);
+
+    let expected_spec_fixture = format!(
+        "<h4>File Context Rules</h4>\n<ul>\n{}\n{}\n</ul>",
+        row(
+            SYNTHESIS_ROW,
+            SYNTHESIS_DISPOSITION,
+            Some(&sel::rule2_rendered("/var/srv", "/srv"))
+        ),
+        row(HOST_RULE_ROW, "applied", Some(&host_rule))
+    );
+    assert_eq!(
+        html_fcontext_list(&html_of(&host_snapshot())),
+        expected_spec_fixture
+    );
+
+    let expected_conflict = format!(
+        "<h4>File Context Rules</h4>\n<ul>\n{}\n{}\n</ul>",
+        row(CONFLICT_ROW, CONFLICT_DISPOSITION, None),
+        row(HOST_RULE_ROW, "applied", Some(&host_rule))
+    );
+    assert_eq!(
+        html_fcontext_list(&html_of(&conflict_snapshot())),
+        expected_conflict
+    );
+}
+
+/// § 3.1 asks the consumers to report a synthesis and a conflict the same way
+/// everywhere. The two surfaces built the same parenthetical from the same
+/// two clauses in different orders until they shared a formatter, and the
+/// whole-surface pins above would both have passed through that divergence
+/// if they had been written against the two surfaces separately.
+#[test]
+fn both_report_surfaces_word_a_row_identically() {
+    for snap in [
+        host_snapshot(),
+        conflict_snapshot(),
+        unneeded_synthesis_snapshot(),
+    ] {
+        let md = audit::render_audit(&snap);
+        let html = html_of(&snap);
+        for row in inspectah_pipeline::render::selinux::fcontext_summaries(&snap) {
+            let text = inspectah_pipeline::render::selinux::summary_disposition(&row);
+            assert!(
+                md.contains(&text),
+                "the audit does not carry {text:?}:\n{md}"
+            );
+            assert!(
+                html.contains(&html_escape(&text)),
+                "the HTML report does not carry {text:?}:\n{html}"
+            );
+        }
     }
 }

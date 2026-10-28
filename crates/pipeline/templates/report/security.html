@@ -43,7 +43,7 @@
 <ul>
   {% for fc in selinux_fcontexts %}
   <li>
-    <code>{{ fc.rule }}</code> ({{ fc.state }}{% if fc.detail %}: {{ fc.detail }}{% endif %})
+    <code>{{ fc.rule }}</code> ({{ fc.disposition }})
     {% if fc.command %}<pre><code>{{ fc.command }}</code></pre>{% endif %}
   </li>
   {% endfor %}

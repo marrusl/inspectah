@@ -357,15 +357,34 @@ fn file_type_suffix(file_type: FcontextFileType) -> String {
         .unwrap_or_default()
 }
 
-/// What a surface says about where an equivalence came from, beyond the row
-/// itself. A collected row came from the host and needs no note, and a
-/// conflict's cause already says it conflicts.
-pub fn origin_note(origin: Option<&EquivalenceOrigin>) -> Option<String> {
-    match origin? {
-        EquivalenceOrigin::Synthesized { reason } => {
-            Some(format!("synthesized by inspectah: {reason}"))
-        }
-        EquivalenceOrigin::Collected | EquivalenceOrigin::Conflict { .. } => None,
+/// The parenthetical both report surfaces put after a row's name: where it
+/// came from, when that is not already obvious, and what the build does
+/// about it.
+///
+/// One function rather than one per surface. § 3.1 asks the consumers to
+/// report a synthesis and a conflict the same way everywhere, and two
+/// orderings of the same two clauses are two stories, which is what the
+/// first version of these surfaces shipped.
+///
+/// A collected row came from the host and needs no note. A conflict's cause
+/// already says it conflicts and names both rows.
+pub fn summary_disposition(row: &FcontextSummary) -> String {
+    let mut clauses = Vec::new();
+    if let Some(EquivalenceOrigin::Synthesized { reason }) = &row.origin {
+        clauses.push(format!("synthesized by inspectah: {reason}"));
+    }
+    clauses.push(match &row.action {
+        BuildAction::Emits(_) => "applied".to_string(),
+        BuildAction::Skips(cause) => format!("not applied: {cause}"),
+    });
+    clauses.join("; ")
+}
+
+/// The command the block emits for a row, when it emits one.
+pub fn summary_command(row: &FcontextSummary) -> Option<&str> {
+    match &row.action {
+        BuildAction::Emits(command) => Some(command),
+        BuildAction::Skips(_) => None,
     }
 }
 
@@ -1057,7 +1076,9 @@ fn is_renderable(rule: &FcontextRule) -> bool {
 // Rule plumbing
 // ---------------------------------------------------------------------------
 
-fn is_included(rule: &FcontextRule) -> bool {
+/// Whether the export carries this rule at all. An `Unparsed` line never is:
+/// nothing decided it, so nothing can include it.
+pub fn is_included(rule: &FcontextRule) -> bool {
     match rule {
         FcontextRule::Label { disposition, .. }
         | FcontextRule::Unlabel { disposition, .. }

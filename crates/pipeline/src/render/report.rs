@@ -914,19 +914,12 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     // row shown with no command and no reason reads as "this will be added",
     // which is the inverse of the truth for a row the build refuses.
     let selinux_fcontexts: Vec<Value> = selinux::fcontext_summaries(snap)
-        .into_iter()
+        .iter()
         .map(|row| {
-            let note = selinux::origin_note(row.origin.as_ref());
-            let (state, cause, command) = match row.action {
-                selinux::BuildAction::Emits(command) => ("applied", None, command),
-                selinux::BuildAction::Skips(cause) => ("not applied", Some(cause), String::new()),
-            };
-            let detail: Vec<String> = note.into_iter().chain(cause).collect();
             Value::from_serialize(serde_json::json!({
                 "rule": selinux::summary_label(&row.rule),
-                "state": state,
-                "detail": detail.join("; "),
-                "command": command,
+                "disposition": selinux::summary_disposition(row),
+                "command": selinux::summary_command(row).unwrap_or_default(),
             }))
         })
         .collect();
