@@ -182,9 +182,16 @@ fn test_repo_index_provenance_unknown_empty_repo() {
 #[test]
 fn case_split_collapses_to_one_verified_key() {
     // § 8.5: [EPEL_10_Everything_x86_64] in the file, "epel_10_everything_x86_64" on the package.
+    // A second package spelled like the file's own header is included so
+    // `packages_by_repo().len() == 1` can actually fail if case-folding
+    // regresses -- with one package only, that map always has exactly one
+    // key regardless of whether folding works.
     let idx = index_with(
         "[EPEL_10_Everything_x86_64]\nname=EPEL 10 Everything\nbaseurl=http://example.invalid/epel10\n",
-        &[("some-pkg", "x86_64", "epel_10_everything_x86_64")],
+        &[
+            ("some-pkg", "x86_64", "epel_10_everything_x86_64"),
+            ("other-pkg", "x86_64", "EPEL_10_Everything_x86_64"),
+        ],
     );
     assert_eq!(
         idx.provenance(&RepoId::new("EPEL_10_Everything_x86_64")),
@@ -195,6 +202,14 @@ fn case_split_collapses_to_one_verified_key() {
         RepoProvenance::Verified
     );
     assert_eq!(idx.packages_by_repo().len(), 1);
+    assert_eq!(
+        idx.packages_by_repo()
+            .get(&RepoId::new("epel_10_everything_x86_64"))
+            .unwrap()
+            .len(),
+        2,
+        "both case-variant packages must land under the same key"
+    );
 }
 
 #[test]
@@ -206,6 +221,22 @@ fn disabled_section_reports_disabled() {
     assert_eq!(
         idx.provenance(&RepoId::new("epel_10_everything_x86_64")),
         RepoProvenance::Disabled
+    );
+}
+
+#[test]
+fn incomplete_when_declared_gpg_key_not_captured() {
+    // has_source is true, but the declared gpgkey path was never captured
+    // in rpm.gpg_keys (index_with's snapshot never populates it) -- the
+    // "a gpgkey=file:// path not in gpg_keys" half of the Incomplete
+    // definition, distinct from the "no baseurl/metalink/mirrorlist" half.
+    let idx = index_with(
+        "[some-repo]\nname=Some Repo\nbaseurl=http://example.invalid/some\ngpgkey=file:///missing\n",
+        &[("some-pkg", "x86_64", "some-repo")],
+    );
+    assert_eq!(
+        idx.provenance(&RepoId::new("some-repo")),
+        RepoProvenance::Incomplete
     );
 }
 
@@ -252,6 +283,16 @@ fn validate_target_accepts_incomplete_and_refuses_the_rest() {
     });
 
     let mut session = RefineSession::new(snap);
+
+    // Confirm the fixture actually produces Incomplete -- otherwise the
+    // apply() below would pass just as well if the section were Verified,
+    // and the test couldn't tell the two apart.
+    assert_eq!(
+        session
+            .repo_index()
+            .provenance(&RepoId::new("incomplete-repo")),
+        RepoProvenance::Incomplete
+    );
 
     // Incomplete -> Ok.
     assert!(

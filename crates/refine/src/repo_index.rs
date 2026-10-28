@@ -261,25 +261,29 @@ mod tests {
         use inspectah_core::snapshot::InspectionSnapshot;
         use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
+        // Lowercase section header; package recorded with dnf repoquery's
+        // mixed-case spelling.
+        let content =
+            "[appstream]\nname=CentOS AppStream\nbaseurl=http://example.invalid/appstream\n";
+
         let mut snap = InspectionSnapshot::new();
-        snap.rpm =
-            Some(RpmSection {
-                packages_added: vec![PackageEntry {
-                    name: "httpd".into(),
-                    arch: "x86_64".into(),
-                    state: PackageState::Added,
-                    source_repo: "AppStream".into(), // Mixed case from dnf repoquery
-                    disposition: FindingKind::included(),
-                    ..Default::default()
-                }],
-                repo_files: vec![RepoFile {
-                path: "/etc/yum.repos.d/centos.repo".into(),
-                content: "[appstream]\nname=CentOS AppStream\nbaseurl=http://example.invalid/appstream\n".into(), // Lowercase section
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "AppStream".into(), // Mixed case from dnf repoquery
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/centos.repo".into(),
+                content: content.into(),
+                disposition: FindingKind::included(),
                 ..Default::default()
-            });
+            }],
+            ..Default::default()
+        });
         let index = RepoIndex::build(&snap);
         // Package recorded as "AppStream" folds to the same RepoId as the
         // lowercase "appstream" section header -- lookups match either way.
@@ -288,14 +292,11 @@ mod tests {
                 .packages_by_repo()
                 .contains_key(&RepoId::new("appstream"))
         );
-        assert!(
-            index
-                .packages_by_repo()
-                .contains_key(&RepoId::new("AppStream"))
-        );
-        // Provenance should be Verified (matched the repo file section)
+        // The behavior under test: looking up the package's own (mixed-case)
+        // spelling now resolves against the lowercase section header. Before
+        // this task's RepoId-keying fix, this returned Unknown.
         assert_eq!(
-            index.provenance(&RepoId::new("appstream")),
+            index.provenance(&RepoId::new("AppStream")),
             RepoProvenance::Verified
         );
         // Should be recognized as distro
