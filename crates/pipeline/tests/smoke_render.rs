@@ -608,3 +608,580 @@ fn render_all_with_all_sections() {
         "render_all HTML report must contain Kernel & Boot section"
     );
 }
+
+// ---------------------------------------------------------------------------
+// SELinux file context rules — spec § 3.1, § 5.1, § 8.9 render half
+//
+// These are not smoke tests. The emitted commands are the whole of the
+// decision the renderer makes about the target system, so every one of them is
+// compared whole against the § 3.1 template with its placeholders filled
+// (§ 8.9), never by substring.
+// ---------------------------------------------------------------------------
+
+mod selinux_support;
+
+use inspectah_core::types::selinux::{FcontextFileType, FcontextSource};
+use selinux_support as sel;
+
+/// § 5.1's "After" text for the host's own rule, quoted whole. The fixture is
+/// the one the spec rendered it from: one `Label` on `/srv/www(/.*)?` and the
+/// pre-existing `ssh_port_t` port label.
+const AFTER_TEXT: &str = r#"# SELinux file contexts (1 custom rule). Labels for image content are computed at
+# deploy time from the image's own policy under /etc/selinux, so a rule only needs
+# to be in the policy store: no restorecon at build time. Data you restore into
+# /var (/var/srv included) keeps the labels it arrived with; run restorecon -R on
+# it before starting the services that use it.
+# The file context and port rules below need semanage, which this base does not
+# carry; policycoreutils-python-utils provides it.
+RUN dnf install -y policycoreutils-python-utils
+# Each rule removes its own key from the local store if present, then adds it, or
+# modifies it when the target policy defines the key; the rules end the local
+# list in the order the source host held them. A rule whose path the target
+# already maps as an equivalence is skipped with a FIXME in the build output,
+# because deleting its key would delete that equivalence.
+# /srv is a symlink to /var/srv on this base and the policy has no /var/srv alias;
+# this makes every /srv rule, stock and custom, apply to the real path. The
+# equivalence is added when absent and left alone when identical; a different
+# target mapping stops the build with an instruction.
+RUN eq="$(semanage fcontext -l -C | awk -v s='/var/srv' '$2 == "=" && $1 == s { print $3 }')"; \
+    if [ -z "$eq" ]; then semanage fcontext -a -e '/srv' '/var/srv'; \
+    elif [ "$eq" != '/srv' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\n' '/var/srv' "$eq" '/srv' >&2; exit 1; fi
+RUN spec='/srv/www(/.*)?'; \
+    eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before replaying the rule for %s; fix semanage in the base, or exclude this rule, then rebuild\n' "$spec" >&2; exit 1; }; \
+    if printf '%s\n' "$eqs" | awk '$2 == "=" { print $1 }' | grep -qxF -- "$spec"; then \
+      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild\n' "$spec" >&2; \
+    else semanage fcontext -d "$spec" 2>/dev/null || true; \
+      semanage fcontext -a -t httpd_sys_content_t "$spec" \
+      || semanage fcontext -m -t httpd_sys_content_t "$spec"; fi
+# 1 custom SELinux port label(s) detected
+RUN semanage port -a -t ssh_port_t -p tcp 2222"#;
+
+const HTTPD_TYPE: &str = "httpd_sys_content_t";
+const HTTPD_ARGS: &str = "-t httpd_sys_content_t";
+
+/// The host rule's snapshot: § 5.1's "Before" and "After" are both this one.
+fn host_snapshot() -> inspectah_core::snapshot::InspectionSnapshot {
+    sel::snapshot(
+        vec![sel::label(
+            "/srv/www(/.*)?",
+            FcontextFileType::All,
+            HTTPD_TYPE,
+        )],
+        FcontextSource::PolicyStore,
+        vec![sel::port_label("ssh_port_t", "tcp", "2222")],
+    )
+}
+
+fn render_block_text(snap: &inspectah_core::snapshot::InspectionSnapshot) -> String {
+    let output = containerfile::render_containerfile(snap, None, None);
+    sel::selinux_block(&output).join("\n")
+}
+
+fn rendered_runs(snap: &inspectah_core::snapshot::InspectionSnapshot) -> Vec<String> {
+    sel::block_runs(snap)
+        .into_iter()
+        .map(|r| r.rendered)
+        .collect()
+}
+
+/// The `RUN` of the install precondition, which leads every block that renders
+/// a rule or a port label.
+fn install_run() -> String {
+    sel::INSTALL_PRECONDITION[2].to_string()
+}
+
+#[test]
+fn selinux_block_renders_the_spec_after_text() {
+    assert_eq!(render_block_text(&host_snapshot()), AFTER_TEXT);
+}
+
+#[test]
+fn selinux_two_rules_render_two_guarded_forms_in_collected_order() {
+    let snap = sel::snapshot_rules(vec![
+        sel::label("/opt/alpha(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label("/opt/beta(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    assert_eq!(
+        rendered_runs(&snap),
+        vec![
+            install_run(),
+            sel::rule1_rendered("/opt/alpha(/.*)?", "", HTTPD_ARGS),
+            sel::rule1_rendered("/opt/beta(/.*)?", "", HTTPD_ARGS),
+        ]
+    );
+}
+
+#[test]
+fn selinux_directory_rule_carries_f_d_on_all_three_commands() {
+    let snap = sel::snapshot_rules(vec![sel::label(
+        "/opt/dir(/.*)?",
+        FcontextFileType::Directory,
+        HTTPD_TYPE,
+    )]);
+    let expected = sel::rule1_rendered("/opt/dir(/.*)?", " -f d", "-f d -t httpd_sys_content_t");
+    // The three commands are the `-d`, the `-a`, and the `-m`; the whole-body
+    // comparison below pins each, and this count says so in one line.
+    assert_eq!(expected.matches("-f d").count(), 3);
+    assert_eq!(rendered_runs(&snap), vec![install_run(), expected]);
+}
+
+#[test]
+fn selinux_unlabel_renders_none_inside_the_same_guard() {
+    let snap = sel::snapshot_rules(vec![sel::unlabel("/opt/none(/.*)?", FcontextFileType::All)]);
+    assert_eq!(
+        rendered_runs(&snap),
+        vec![
+            install_run(),
+            sel::rule1_rendered("/opt/none(/.*)?", "", "-t '<<none>>'"),
+        ]
+    );
+}
+
+#[test]
+fn selinux_no_run_line_contains_echo() {
+    // Every form the block can emit, in one fixture, so the ban is checked
+    // against a block that actually holds each of them.
+    let snap = sel::snapshot(
+        vec![
+            sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            sel::unlabel("/opt/none(/.*)?", FcontextFileType::Directory),
+            sel::equivalence("/home1", "/home"),
+        ],
+        FcontextSource::SemanageList,
+        vec![sel::port_label("ssh_port_t", "tcp", "2222")],
+    );
+    let runs = sel::block_runs(&snap);
+    // The ban is on the diagnostic form, so prove the fixture rendered a
+    // diagnostic. Without this the loop below passes over a block whose rules
+    // all came out as comments, which is not the thing being banned.
+    assert!(
+        runs.iter().any(|r| r.rendered.contains("printf 'FIXME:")),
+        "the fixture rendered no build-time diagnostic, so the echo ban is vacuous"
+    );
+    for run in &runs {
+        assert!(
+            !run.rendered.contains("echo"),
+            "a RUN of the block uses echo:\n{}",
+            run.rendered
+        );
+    }
+}
+
+#[test]
+fn selinux_no_restorecon_outside_the_comment_sentence() {
+    let block = render_block_text(&host_snapshot());
+    assert!(
+        block.contains("run restorecon -R on"),
+        "the block must keep the § 5.1 sentence about data restored into /var"
+    );
+    for line in block.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        assert!(
+            !line.contains("restorecon"),
+            "restorecon outside a comment line: {line:?}"
+        );
+    }
+}
+
+#[test]
+fn selinux_no_line_contains_dash_m_dash_e() {
+    // `-m -e` is the form semanage has no handler for; the equivalence path is
+    // add-or-refuse, never modify.
+    let snap = sel::snapshot_rules(vec![
+        sel::equivalence("/var/srv", "/srv"),
+        sel::equivalence("/home1", "/home"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let block = render_block_text(&snap);
+    assert!(
+        block.contains("-a -e"),
+        "the fixture must render at least one equivalence, or the ban below is vacuous"
+    );
+    assert!(
+        !block.contains("-m -e"),
+        "the block emits `-m -e`:\n{block}"
+    );
+}
+
+#[test]
+fn selinux_equivalence_run_appears_once_for_two_srv_rules_and_never_for_opt() {
+    let srv = sel::snapshot_rules(vec![
+        sel::label("/srv/alpha(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label("/srv/beta(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    assert_eq!(
+        rendered_runs(&srv),
+        vec![
+            install_run(),
+            sel::rule2_rendered("/var/srv", "/srv"),
+            sel::rule1_rendered("/srv/alpha(/.*)?", "", HTTPD_ARGS),
+            sel::rule1_rendered("/srv/beta(/.*)?", "", HTTPD_ARGS),
+        ]
+    );
+
+    let opt = sel::snapshot_rules(vec![sel::label(
+        "/opt/alpha(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]);
+    assert_eq!(
+        rendered_runs(&opt),
+        vec![
+            install_run(),
+            sel::rule1_rendered("/opt/alpha(/.*)?", "", HTTPD_ARGS),
+        ]
+    );
+}
+
+#[test]
+fn selinux_collected_srv_equivalence_and_the_synthesis_emit_one_run() {
+    let snap = sel::snapshot_rules(vec![
+        sel::equivalence("/var/srv", "/srv"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let runs = sel::block_runs(&snap);
+    let equivalences: Vec<&String> = runs
+        .iter()
+        .map(|r| &r.rendered)
+        .filter(|r| r.contains("-a -e"))
+        .collect();
+    assert_eq!(
+        equivalences,
+        vec![&sel::rule2_rendered("/var/srv", "/srv")],
+        "the collected row and the synthesized one are one equivalence, emitted once"
+    );
+}
+
+#[test]
+fn selinux_conflicting_collected_equivalence_emits_no_run_and_a_fixme_naming_both() {
+    let snap = sel::snapshot_rules(vec![
+        sel::equivalence("/var/srv", "/opt/srv"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let block = render_block_text(&snap);
+    for run in sel::block_runs(&snap) {
+        assert!(
+            !run.rendered.contains("-a -e"),
+            "a conflicting equivalence pair must emit no equivalence RUN:\n{}",
+            run.rendered
+        );
+    }
+    assert!(
+        block.contains(sel::UNRENDERABLE_FIXME_INSTRUCTION),
+        "the conflict must render the two-line FIXME, imperative first:\n{block}"
+    );
+    let cause = block
+        .lines()
+        .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+        .unwrap_or_else(|| panic!("no cause line under the FIXME instruction:\n{block}"));
+    // Both rows of the conflict: the collected mapping and the synthesized one.
+    assert!(
+        cause.contains("/var/srv"),
+        "cause names no subject: {cause}"
+    );
+    assert!(
+        cause.contains("/opt/srv"),
+        "cause names no collected target: {cause}"
+    );
+}
+
+#[test]
+fn selinux_semanage_list_renders_the_order_caveat_and_policy_store_does_not() {
+    let rules = || {
+        vec![sel::label(
+            "/opt/a(/.*)?",
+            FcontextFileType::All,
+            HTTPD_TYPE,
+        )]
+    };
+
+    let listed = sel::snapshot(rules(), FcontextSource::SemanageList, Vec::new());
+    let block = render_block_text(&listed);
+    let note_at = block
+        .lines()
+        .position(|l| l == sel::SEMANAGE_LIST_NOTE)
+        .unwrap_or_else(|| panic!("a SemanageList snapshot must carry the caveat:\n{block}"));
+    let first_rule_at = block
+        .lines()
+        .position(|l| l.starts_with("RUN spec="))
+        .unwrap_or_else(|| panic!("no rule rendered in:\n{block}"));
+    assert!(
+        note_at < first_rule_at,
+        "the caveat must precede the first rule:\n{block}"
+    );
+
+    let stored = sel::snapshot(rules(), FcontextSource::PolicyStore, Vec::new());
+    let stored_block = render_block_text(&stored);
+    assert!(
+        !stored_block.contains("# NOTE:"),
+        "a PolicyStore snapshot must carry no order caveat:\n{stored_block}"
+    );
+}
+
+// --- Operand validation: one case per forbidden byte per operand kind -------
+
+/// The three bytes single quotes do not make inert (Global Constraints,
+/// § 3.1 rule 4). Named so the three cases below read as one rule.
+const UNQUOTABLE_BYTES: &[(&str, &str)] = &[("apostrophe", "'"), ("newline", "\n"), ("nul", "\0")];
+
+#[test]
+fn selinux_unquotable_bytes_reject_every_operand_kind() {
+    for (name, byte) in UNQUOTABLE_BYTES {
+        let spec = format!("/tmp/a{byte}b");
+
+        // A label `spec`.
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::label(&spec, FcontextFileType::All, HTTPD_TYPE)]),
+            &spec,
+            &format!("label spec with {name}"),
+        );
+        // An equivalence `subject`.
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::equivalence(&spec, "/srv")]),
+            &spec,
+            &format!("equivalence subject with {name}"),
+        );
+        // An equivalence `labeled_like`.
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::equivalence("/var/other", &spec)]),
+            &spec,
+            &format!("equivalence labeled_like with {name}"),
+        );
+    }
+}
+
+#[test]
+fn selinux_spec_without_a_leading_slash_is_rejected() {
+    // `semanage fcontext -a --help` answers with usage text and exits 0, so a
+    // spec that is not a path would skip its rule silently (§ 3.1 rule 4).
+    assert_rejected(
+        &sel::snapshot_rules(vec![sel::label(
+            "--help",
+            FcontextFileType::All,
+            HTTPD_TYPE,
+        )]),
+        "--help",
+        "a spec with no leading slash",
+    );
+}
+
+/// A rejected rule renders the two-line FIXME, imperative first, and no
+/// command of any kind.
+fn assert_rejected(
+    snap: &inspectah_core::snapshot::InspectionSnapshot,
+    offending: &str,
+    case: &str,
+) {
+    let block = render_block_text(snap);
+    let expected = sel::unrenderable_fixme(offending);
+    let joined = expected.join("\n");
+    assert!(
+        block.contains(&joined),
+        "{case}: the two-line FIXME is missing or out of order.\nexpected:\n{joined}\ngot:\n{block}"
+    );
+    for run in sel::block_runs(snap) {
+        assert!(
+            !run.command.contains("semanage fcontext"),
+            "{case}: a rejected rule rendered a command:\n{}",
+            run.rendered
+        );
+    }
+}
+
+#[test]
+fn selinux_shell_looking_operands_reach_only_comment_lines() {
+    let snap = sel::snapshot_rules(vec![
+        sel::equivalence("/tmp/$(id)", "/tmp"),
+        sel::equivalence("/srv;rm -rf /", "/srv"),
+    ]);
+    let block = render_block_text(&snap);
+    // Both operands fail § 3.1 rule 4 for an equivalence — `(`/`)` on the
+    // first, whitespace on the second — so each must reach the Containerfile
+    // through the two-line FIXME and nothing else.
+    for operand in ["/tmp/$(id)", "/srv;rm -rf /"] {
+        assert_rejected(&snap, operand, operand);
+    }
+    for operand in ["/tmp/$(id)", "/srv;rm -rf /"] {
+        let carriers: Vec<&str> = block.lines().filter(|l| l.contains(operand)).collect();
+        assert!(
+            !carriers.is_empty(),
+            "the block must report {operand:?} somewhere:\n{block}"
+        );
+        for line in carriers {
+            assert!(
+                line.trim_start().starts_with('#'),
+                "{operand:?} reached a non-comment line: {line:?}"
+            );
+        }
+    }
+    for run in sel::block_runs(&snap) {
+        assert!(
+            !run.command.contains(";rm"),
+            "a RUN carries a command separator from an operand:\n{}",
+            run.rendered
+        );
+    }
+}
+
+// --- § 8.9's self-check on the whole-body comparison ------------------------
+
+#[test]
+fn selinux_whole_body_comparison_rejects_the_round_2_echo_diagnostic() {
+    let snap = sel::snapshot_rules(vec![sel::equivalence("/var/srv", "/srv")]);
+    let rendered = sel::block_runs(&snap)
+        .into_iter()
+        .map(|r| r.rendered)
+        .find(|r| r.contains("-a -e"))
+        .unwrap_or_else(|| panic!("the fixture rendered no equivalence RUN"));
+
+    let expected = sel::rule2_rendered("/var/srv", "/srv");
+    let round2 = sel::rule2_rendered_round2_echo("/var/srv", "/srv");
+
+    // The positive half: the renderer emits the printf form.
+    assert_eq!(rendered, expected);
+    // The self-check: the comparison above is one a double-quoted `echo`
+    // diagnostic fails, so passing it says something.
+    assert_ne!(
+        expected, round2,
+        "the substitution left the body unchanged, so the comparison proves nothing"
+    );
+    assert_ne!(rendered, round2);
+}
+
+// --- The install precondition, four cases -----------------------------------
+
+#[test]
+fn selinux_install_precondition_renders_for_an_fcontext_rule_alone() {
+    let snap = sel::snapshot_rules(vec![sel::label(
+        "/opt/a(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]);
+    assert_precondition_present(&snap, "RUN spec=");
+}
+
+#[test]
+fn selinux_install_precondition_renders_for_a_port_label_alone() {
+    // `RUN semanage port -a` shipped at 6e8a52b1 with the identical defect,
+    // so a snapshot with no fcontext rule at all still needs the line.
+    let snap = sel::snapshot(
+        Vec::new(),
+        FcontextSource::PolicyStore,
+        vec![sel::port_label("ssh_port_t", "tcp", "2222")],
+    );
+    assert_precondition_present(&snap, "RUN semanage port -a");
+}
+
+#[test]
+fn selinux_install_precondition_absent_without_rules_or_port_labels() {
+    // The fixture `containerfile.rs`'s section-ordering test uses: a block
+    // that renders for FIPS alone, with no rule and no port label.
+    let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
+    snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
+        fips_mode: true,
+        ..Default::default()
+    });
+    let block = render_block_text(&snap);
+
+    // Paired positive: the same three lines, from the same renderer, on a
+    // fixture that does carry a rule. Without it this test would hold against
+    // a renderer that never emits the precondition at all.
+    let with_rule = render_block_text(&sel::snapshot_rules(vec![sel::label(
+        "/opt/a(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    for line in sel::INSTALL_PRECONDITION {
+        assert!(
+            with_rule.contains(line),
+            "the precondition line {line:?} never renders at all:\n{with_rule}"
+        );
+        assert!(
+            !block.contains(line),
+            "a block with neither a rule nor a port label emitted {line:?}:\n{block}"
+        );
+    }
+}
+
+#[test]
+fn selinux_install_precondition_is_never_folded_into_the_package_list() {
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+    let mut snap = sel::snapshot_rules(vec![sel::label(
+        "/opt/a(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]);
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "appstream".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let output = containerfile::render_containerfile(&snap, None, None);
+    let active: Vec<&str> = output
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter(|l| l.contains(sel::SEMANAGE_PACKAGE))
+        .collect();
+    assert_eq!(
+        active,
+        vec![sel::INSTALL_PRECONDITION[2]],
+        "semanage's package belongs to exactly one active line, its own RUN, and \
+         never to the package set the refine UI presented for decision"
+    );
+    assert!(
+        output.contains("RUN dnf install -y \\"),
+        "the fixture must render a package install block, or the check above is vacuous"
+    );
+}
+
+/// The three precondition lines render once, in order, ahead of the block's
+/// first `semanage` command, and carry no `--enablerepo`.
+fn assert_precondition_present(
+    snap: &inspectah_core::snapshot::InspectionSnapshot,
+    first_semanage_prefix: &str,
+) {
+    let block = render_block_text(snap);
+    let joined = sel::INSTALL_PRECONDITION.join("\n");
+    assert!(
+        block.contains(&joined),
+        "the precondition's three lines are missing or out of order.\nexpected:\n{joined}\ngot:\n{block}"
+    );
+    assert_eq!(
+        block.matches(sel::INSTALL_PRECONDITION[2]).count(),
+        1,
+        "the install RUN renders exactly once:\n{block}"
+    );
+
+    let lines: Vec<&str> = block.lines().collect();
+    let install_at = lines
+        .iter()
+        .position(|l| *l == sel::INSTALL_PRECONDITION[2])
+        .expect("the install RUN is present");
+    let first_semanage_at = lines
+        .iter()
+        .position(|l| l.starts_with(first_semanage_prefix))
+        .unwrap_or_else(|| panic!("no line starting {first_semanage_prefix:?} in:\n{block}"));
+    assert!(
+        install_at < first_semanage_at,
+        "the precondition must precede the first semanage command:\n{block}"
+    );
+
+    // `policycoreutils-python-utils` is in AppStream; Task 17's CRB rule puts
+    // `--enablerepo` on every other `dnf ... install -y` and must not reach it.
+    assert!(
+        !lines[install_at].contains("--enablerepo"),
+        "the precondition carries --enablerepo: {}",
+        lines[install_at]
+    );
+}
