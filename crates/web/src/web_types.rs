@@ -132,7 +132,19 @@ pub struct RepoGroupInfo {
     pub provenance: RepoProvenance,
     pub is_distro: bool,
     pub tier: RepoTier,
+    /// The visible count over `view.packages` (§ 3.2). Never the
+    /// denominator of a control -- see the three fields below for that.
     pub package_count: usize,
+    /// In `packages_added`, actionable, and not locked (§ 3.2). The repo
+    /// control's effective member set.
+    pub effective_member_count: usize,
+    /// Of the effective members, those currently included.
+    pub effective_included: usize,
+    /// Of the effective members, those absent from `view.packages` after
+    /// its display filters.
+    pub effective_unlisted: usize,
+    /// `!repos_excluded().contains(section)`, the repo-exclusion history --
+    /// not derived from the effective-member counts above (§ 3.2).
     pub enabled: bool,
 }
 

@@ -1175,27 +1175,29 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .is_included()
     );
 
-    session
-        .apply(RefinementOp::SetInclude {
+    // "epel" has exactly one effective member (epel-release), now
+    // individually included -- a repo-level include is a genuine no-op
+    // under the § 3.2 member-based rule (position 29), even though the
+    // repo's own exclusion history still says excluded. Before Task 7 this
+    // op read only that history, accepted the op, and recorded a third
+    // timeline entry; the member-based rule refuses it instead, which is
+    // exactly the bug position 29 closes (a history-reading control posting
+    // a direction the members already hold).
+    let before = session.timeline_len();
+    assert!(matches!(
+        session.apply(RefinementOp::SetInclude {
             item_id: ItemId::Repo {
                 path: "epel".into(),
             },
             include: true,
-        })
-        .unwrap();
-    assert!(
-        session
-            .view()
-            .packages
-            .iter()
-            .find(|p| p.entry.name == "epel-release")
-            .unwrap()
-            .entry
-            .disposition
-            .is_included()
+        }),
+        Err(RefineError::NoopTarget(_))
+    ));
+    assert_eq!(
+        session.timeline_len(),
+        before,
+        "a refused op must not record"
     );
-
-    session.undo().unwrap();
     assert!(
         session
             .view()
@@ -1206,7 +1208,21 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .entry
             .disposition
             .is_included(),
-        "per-package include is still active after undoing repo include"
+        "the refused op changed nothing"
+    );
+
+    session.undo().unwrap();
+    assert!(
+        !session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .disposition
+            .is_included(),
+        "undo reverts the per-package include, the only op that actually ran"
     );
 }
 
@@ -1264,6 +1280,13 @@ fn test_exclude_repo_case_insensitive() {
     // Build a snapshot where packages have source_repo in mixed case ("Epel-Testing")
     // but SetInclude(exclude repo) uses lowercase ("epel-testing"). The exclude must still match.
     let mut snap = InspectionSnapshot::new();
+    // A baseline (even empty) is required so httpd normalizes to the Site
+    // bucket, defaulting to included (no `leaf_packages` means every Site
+    // package defaults to leaf), rather than Investigate -> excluded with no
+    // baseline at all -- otherwise the exclude op below would already be a
+    // no-op under the § 3.2 member-based rule and never exercise the
+    // case-insensitive match this test is for.
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "httpd".into(),
@@ -1311,6 +1334,10 @@ fn test_exclude_repo_case_insensitive() {
 fn test_include_repo_case_insensitive() {
     // Verify SetInclude(include repo) also works case-insensitively after an SetInclude(exclude repo)
     let mut snap = InspectionSnapshot::new();
+    // See the baseline comment in `test_exclude_repo_case_insensitive`: without
+    // it, nginx normalizes to excluded at construction and the exclude op
+    // below is already a no-op under the § 3.2 member-based rule.
+    snap.baseline = Some(empty_baseline());
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "nginx".into(),
@@ -1632,4 +1659,272 @@ fn a_group_whose_present_members_are_all_locked_is_inert() {
         s.apply(set_include_group("Locked Group", false)),
         Err(RefineError::NoopTarget(_))
     ));
+}
+
+// -- Task 7: repo effective members and the member-based no-op rule --------
+
+/// A `Verified` repo "vendor" with two actionable, unlocked members ("a" and
+/// "b"), no repo op applied yet. A baseline (even empty) is required so both
+/// packages normalize to the Site bucket, defaulting to included (no
+/// `leaf_packages` means every Site package defaults to leaf) -- without it
+/// both would normalize to Investigate -> excluded at construction and every
+/// op below would already be a no-op before the test gets to exercise one.
+fn verified_repo_session() -> RefineSession {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    RefineSession::new(snap)
+}
+
+/// The same `Verified` "vendor" repo, but both declared members are present
+/// and locked, so the effective set (present, actionable, not locked) is
+/// empty even though the index knows about and accepts the repo.
+fn all_members_locked_repo_session() -> RefineSession {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    RefineSession::new(snap)
+}
+
+/// A `Verified` "vendor" repo with no package attributed to it at all --
+/// the index knows the section (and accepts it), but the effective set is
+/// empty because nothing installed from it.
+fn repo_known_to_index_with_no_packages() -> RefineSession {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    RefineSession::new(snap)
+}
+
+/// No `rpm` section at all: `RepoIndex::build` returns an empty index, and
+/// any id resolves to `Unknown` provenance.
+fn session_with_no_rpm_section() -> RefineSession {
+    RefineSession::new(InspectionSnapshot::new())
+}
+
+fn set_include_pkg(canonical_id: &str, include: bool) -> RefinementOp {
+    let (name, arch) = canonical_id
+        .rsplit_once('.')
+        .expect("canonical package id has a dot");
+    RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: name.to_string(),
+            arch: arch.to_string(),
+        },
+        include,
+    }
+}
+
+fn set_include_repo(section_id: &str, include: bool) -> RefinementOp {
+    RefinementOp::SetInclude {
+        item_id: ItemId::Repo {
+            path: section_id.to_string(),
+        },
+        include,
+    }
+}
+
+/// Canonical `name.arch` ids of every currently-included package in the
+/// view -- the install list an exported Containerfile would carry.
+fn install_list(s: &RefineSession) -> Vec<String> {
+    s.view()
+        .packages
+        .iter()
+        .filter(|p| p.entry.disposition.is_included())
+        .map(|p| format!("{}.{}", p.entry.name, p.entry.arch))
+        .collect()
+}
+
+/// Whether the projected snapshot's repo file ending in `basename` is
+/// included -- the export carries it.
+fn export_carries_repo_file(s: &RefineSession, basename: &str) -> bool {
+    s.snapshot_projected()
+        .rpm
+        .as_ref()
+        .map(|r| {
+            r.repo_files
+                .iter()
+                .any(|rf| rf.path.ends_with(basename) && rf.disposition.is_included())
+        })
+        .unwrap_or(false)
+}
+
+#[test]
+fn repo_include_all_records_when_one_member_was_individually_excluded() {
+    // § 8.8 "Repo regression". Pre-task: `is_op_noop`'s `ItemId::Repo` arm
+    // read only `excluded_sections_at` (repo-exclusion history), which is
+    // empty here (no repo op has run) -- so `SetInclude(Repo, true)` below
+    // read as "already not excluded", `apply`'s idempotency shortcut
+    // returned `Ok(())` silently, and the timeline never grew: this
+    // assertion fails against pre-task code.
+    let mut s = verified_repo_session(); // two actionable unlocked members, no repo op yet
+    s.apply(set_include_pkg("b.x86_64", false)).unwrap();
+    let before = s.timeline_len();
+    s.apply(set_include_repo("vendor", true)).unwrap();
+    assert_eq!(s.timeline_len(), before + 1);
+    assert!(install_list(&s).contains(&"b.x86_64".to_string()));
+    assert!(
+        !s.pending_changes()
+            .repos_excluded()
+            .contains(&"vendor".to_string())
+    );
+    s.undo().unwrap();
+    assert!(!install_list(&s).contains(&"b.x86_64".to_string()));
+    s.redo().unwrap();
+    assert!(install_list(&s).contains(&"b.x86_64".to_string()));
+    // Both members are now included: a fresh include-all is a real no-op.
+    assert!(matches!(
+        s.apply(set_include_repo("vendor", true)),
+        Err(RefineError::NoopTarget(_))
+    ));
+}
+
+#[test]
+fn history_and_members_disagree_in_both_directions() {
+    // § 8.8, position 29. State (a): enabled history, both members
+    // individually excluded. Pre-task: the history-reading arm saw no repo
+    // op (empty `excluded_sections_at`) and refused BOTH directions as
+    // already-satisfied for `include: true` and accepted-but-recorded-
+    // nothing for `include: false` depending on direction read -- in
+    // particular the `include: false` case below would have returned
+    // `Ok(())` with no timeline growth instead of `NoopTarget`, so this
+    // assertion fails against pre-task code.
+    let mut a = verified_repo_session();
+    a.apply(set_include_pkg("a.x86_64", false)).unwrap();
+    a.apply(set_include_pkg("b.x86_64", false)).unwrap();
+    assert!(matches!(
+        a.apply(set_include_repo("vendor", false)),
+        Err(RefineError::NoopTarget(_))
+    ));
+    let n = a.timeline_len();
+    a.apply(set_include_repo("vendor", true)).unwrap();
+    assert_eq!(a.timeline_len(), n + 1);
+    assert_eq!(install_list(&a).len(), 2);
+    a.undo().unwrap();
+    assert_eq!(install_list(&a).len(), 0);
+    a.redo().unwrap();
+    assert_eq!(install_list(&a).len(), 2);
+
+    // State (b): excluded history, both members individually included.
+    // Pre-task: `include: true` here read as "section not in excluded set"
+    // -> false -> not a no-op, so it would have been accepted instead of
+    // refused -- this assertion fails against pre-task code too.
+    let mut b = verified_repo_session();
+    b.apply(set_include_repo("vendor", false)).unwrap();
+    b.apply(set_include_pkg("a.x86_64", true)).unwrap();
+    b.apply(set_include_pkg("b.x86_64", true)).unwrap();
+    assert!(matches!(
+        b.apply(set_include_repo("vendor", true)),
+        Err(RefineError::NoopTarget(_))
+    ));
+    b.apply(set_include_repo("vendor", false)).unwrap();
+    assert_eq!(install_list(&b).len(), 0);
+    assert!(!export_carries_repo_file(&b, "vendor.repo"));
+}
+
+#[test]
+fn a_repo_with_no_effective_member_is_refused_in_both_directions() {
+    // § 8.8 + position 26. A repo the index KNOWS and accepts, whose
+    // effective set is empty. Pre-task: with no repo-exclude op in the
+    // timeline, `include: true` read as "not excluded" -> no-op -> silent
+    // `Ok(())`; `include: false` read as "not yet excluded" -> not a no-op
+    // -> accepted and recorded, cascading onto a repo file no package
+    // justifies deciding through this control (position 26's bug). Either
+    // branch fails this assertion against pre-task code.
+    for mut s in [
+        all_members_locked_repo_session(),
+        repo_known_to_index_with_no_packages(),
+    ] {
+        for include in [true, false] {
+            match s.apply(set_include_repo("vendor", include)) {
+                Err(RefineError::NoopTarget(m)) => assert!(m.starts_with("nothing to decide")),
+                other => panic!("expected NoopTarget, got {other:?}"),
+            }
+        }
+        assert_eq!(s.timeline_len(), 0);
+    }
+}
+
+#[test]
+fn a_repo_op_with_no_rpm_section_is_refused_on_provenance() {
+    // Review Focus 3. This is a DIFFERENT refusal from the one above and
+    // must not be folded into it: `RepoIndex::build` on `rpm: None` returns
+    // an empty index, an id absent from it resolves to `Unknown`, and
+    // `apply` runs `validate_target` before the no-op check -- so § 3.2's
+    // provenance refusal fires first and the effective-set arm is never
+    // reached. There is no valid repo in this fixture whose effective set
+    // could be examined. This is unaffected by Task 7's change (it exercises
+    // `validate_target`, not `is_op_noop`/`check_repo_noop`), so it already
+    // passes against pre-task code -- it is here to prove the two refusals
+    // stay distinct, not to prove the member-based rule fires.
+    let mut s = session_with_no_rpm_section();
+    for include in [true, false] {
+        match s.apply(set_include_repo("vendor", include)) {
+            // the message names the provenance; `validate_target` formats it with `{prov:?}`
+            Err(RefineError::BadRequest(m)) => assert!(m.to_ascii_lowercase().contains("unknown")),
+            other => panic!("expected BadRequest naming the provenance, got {other:?}"),
+        }
+    }
+    assert_eq!(s.timeline_len(), 0);
 }

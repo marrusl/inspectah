@@ -1,5 +1,5 @@
 use inspectah_core::types::FindingKind;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::aggregate::classify_zone;
@@ -22,7 +22,7 @@ use crate::normalize::{
 use crate::repo_index::RepoIndex;
 use crate::types::{
     AggregateContext, AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, ItemId,
-    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoEffective, RepoProvenance,
     SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
     UserPasswordOp, ViewDirective,
 };
@@ -62,6 +62,21 @@ pub struct RefineSession {
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
+}
+
+/// Whether a package's `source_repo` resolves to the given repo section's
+/// `RepoId` -- `Exact` or `Resolved` attribution (§ 3.2). Attribution
+/// classification (`normalize_source_repos`) already rewrites `source_repo`
+/// to the matched section's own spelling for `Exact`/`Resolved`; every other
+/// attribution variant leaves `source_repo` as the recorded value, which
+/// cannot case-fold-equal any section id (an exact match against all
+/// sections is checked first during normalization, so a value that matched
+/// would already be `Exact`). A case-insensitive compare is therefore
+/// equivalent to checking the attribution kind directly, and is what the
+/// existing repo-toggle cascade (`session.rs`'s `ItemId::Repo` projection
+/// arm) already uses.
+fn package_attributed_to_repo(pkg: &PackageEntry, id: &RepoId) -> bool {
+    pkg.source_repo.eq_ignore_ascii_case(id.as_str())
 }
 
 /// Check whether an item is locked in the original (normalized) snapshot.
@@ -762,6 +777,21 @@ impl RefineSession {
             .expect("view is always computed after new() or mutation")
     }
 
+    /// The effective-member counts for one repo section (§ 3.2), computed
+    /// once per `recompute_view` pass. A section absent from the map has no
+    /// effective member -- the zero `RepoEffective` default is exactly that
+    /// case, whether because no package is attributed to it or because
+    /// every attributed package is locked. The repo no-op rule
+    /// (`check_repo_noop`) and `RepoGroupInfo`'s counts both read this one
+    /// accessor, so they can never compute a different effective set.
+    pub fn repo_effective(&self, id: &RepoId) -> RepoEffective {
+        self.view()
+            .repo_effective
+            .get(id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Returns the render context computed alongside the view.
     /// Contains per-group rendering state derived from the session timeline.
     pub fn render_context(&self) -> &RenderContext {
@@ -797,6 +827,19 @@ impl RefineSession {
         } = &op
         {
             self.check_group_noop(name, *include)?;
+        }
+
+        // Repos are refused on the same § 3.7 rule, applied to the repo's
+        // effective member set (§ 3.2, position 29): a history-reading
+        // no-op check cannot tell whether an op changes a member, and a
+        // control that derives its direction from the counts must never
+        // have that direction refused.
+        if let RefinementOp::SetInclude {
+            item_id: ItemId::Repo { path: section_id },
+            include,
+        } = &op
+        {
+            self.check_repo_noop(section_id, *include)?;
         }
 
         // Check idempotency
@@ -1821,20 +1864,14 @@ impl RefineSession {
                     .and_then(|c| c.files.iter().find(|e| e.path == *path))
                     .map(|e| e.disposition.is_included() == *include)
                     .unwrap_or(false),
-                ItemId::Repo { path: section_id } => {
-                    let excluded = self.excluded_sections_at(&projected);
-                    let id = RepoId::new(section_id.as_str());
-                    if *include {
-                        // Noop if the section is NOT in the excluded set
-                        !excluded.contains(&id)
-                    } else {
-                        // Noop if the section is already in the excluded set
-                        excluded.contains(&id)
-                    }
-                }
-                // ItemId::Group is handled by `check_group_noop`, called from
-                // `apply` before this idempotency shortcut: a group no-op is
-                // refused (NoopTarget), never silently swallowed here (§ 3.7).
+                // ItemId::Group and ItemId::Repo are handled by
+                // `check_group_noop`/`check_repo_noop`, called from `apply`
+                // before this idempotency shortcut: a no-op on either is
+                // refused (NoopTarget), never silently swallowed here (§ 3.2,
+                // § 3.7). A history-reading check here (the former
+                // `excluded_sections_at` lookup) cannot tell whether an op
+                // changes a repo's members, which is exactly position 29's
+                // bug (include-all-on-partial reads as already satisfied).
                 // Other item kinds: never noop for now
                 _ => false,
             },
@@ -1935,6 +1972,53 @@ impl RefineSession {
             return Err(RefineError::NoopTarget(format!(
                 "all {} effective members of '{name}' are already {state}",
                 effective.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Refuses a repo `SetInclude` that would change nothing (§ 3.2),
+    /// mirroring `check_group_noop`'s § 3.7 rule but over `repo_effective`,
+    /// computed once by `recompute_view`, rather than recomputed here --
+    /// this is the one place the no-op rule and `RepoGroupInfo`'s counts
+    /// both read, so they cannot diverge. `excluded_sections_at`'s
+    /// repo-exclusion history plays no part: a history bit cannot say
+    /// whether an op changes a member (position 29).
+    fn check_repo_noop(&self, section_id: &str, include: bool) -> Result<(), RefineError> {
+        let id = RepoId::new(section_id);
+        let effective = self.repo_effective(&id);
+
+        if effective.member_count == 0 {
+            let projected = self.project_snapshot();
+            let present_count = projected
+                .rpm
+                .as_ref()
+                .map(|r| {
+                    r.packages_added
+                        .iter()
+                        .filter(|p| package_attributed_to_repo(p, &id))
+                        .filter(|p| group_state::is_actionable(p))
+                        .count()
+                })
+                .unwrap_or(0);
+            let reason = if present_count > 0 {
+                format!("all {present_count} members are locked")
+            } else {
+                "no package is attributed to it".to_string()
+            };
+            return Err(RefineError::NoopTarget(format!(
+                "nothing to decide in '{section_id}': {reason}"
+            )));
+        }
+
+        let all_included = effective.included == effective.member_count;
+        let all_excluded = effective.included == 0;
+        if (include && all_included) || (!include && all_excluded) {
+            let state = if include { "included" } else { "excluded" };
+            return Err(RefineError::NoopTarget(format!(
+                "all {} effective members of '{section_id}' are already {state}",
+                effective.member_count
             )));
         }
 
@@ -2734,6 +2818,35 @@ impl RefineSession {
                     .collect()
             })
             .unwrap_or_default();
+
+        // Repo effective-member counts (§ 3.2): one definition for both
+        // `check_repo_noop` and `RepoGroupInfo`'s counts (`build_repo_groups`),
+        // computed from the same `effective_packages` pool groups use above
+        // -- present, actionable, not locked, before any display filter.
+        // `unlisted` compares against `packages`, the filtered list the view
+        // actually shows, so a member hidden by the leaf/baseline filters
+        // still counts in `member_count` but not in what's "listed".
+        let visible_ids: HashSet<String> = packages
+            .iter()
+            .map(|p| canonical_package_id(&p.entry.name, &p.entry.arch))
+            .collect();
+        let mut repo_effective: BTreeMap<RepoId, RepoEffective> = BTreeMap::new();
+        for pkg in &effective_packages {
+            if pkg.source_repo.is_empty() {
+                continue;
+            }
+            let entry = repo_effective
+                .entry(RepoId::new(pkg.source_repo.clone()))
+                .or_default();
+            entry.member_count += 1;
+            if pkg.disposition.is_included() {
+                entry.included += 1;
+            }
+            if !visible_ids.contains(&canonical_package_id(&pkg.name, &pkg.arch)) {
+                entry.unlisted += 1;
+            }
+        }
+
         let mut group_states = HashMap::new();
 
         for group in self.installed_groups() {
@@ -2865,6 +2978,7 @@ impl RefineSession {
             config_files,
             containerfile_preview,
             stats,
+            repo_effective,
             generation: self.generation,
         });
 

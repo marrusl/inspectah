@@ -1042,6 +1042,254 @@ async fn view_response_excludes_leaf_dep_tree() {
     );
 }
 
+// -- Task 7: the member-based repo no-op rule, wire-level (§ 3.2, § 8.8) -----
+
+/// A `Verified` "vendor" repo with two actionable, unlocked members ("a",
+/// "b"), included by default. A baseline (even empty) is required so both
+/// normalize to Site -> leaf -> included (no `leaf_packages` means every
+/// Site package defaults to leaf) rather than Investigate -> excluded with
+/// no baseline at all.
+fn vendor_repo_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+async fn post_set_include_pkg(
+    app: &axum::Router,
+    name: &str,
+    arch: &str,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": name, "arch": arch}},
+                "include": include
+            }
+        }),
+    )
+    .await
+}
+
+async fn post_set_include_repo(
+    app: &axum::Router,
+    path: &str,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Repo", "key": {"path": path}},
+                "include": include
+            }
+        }),
+    )
+    .await
+}
+
+async fn ops_len(app: &axum::Router) -> usize {
+    let (_, json) = get_json(app, "/api/ops").await;
+    json.as_array().expect("/api/ops is an array").len()
+}
+
+/// § 8.8 state (a): enabled history (no repo op), both members individually
+/// excluded. The counts derive `include: true` as the accepted direction;
+/// `include: false`, the direction a history-reading switch would post
+/// (the repo-exclusion history here is empty, i.e. "enabled"), is refused.
+#[tokio::test]
+async fn set_include_repo_state_a_accepted_and_refused() {
+    let app = app(vendor_repo_state());
+    post_set_include_pkg(&app, "a", "x86_64", false).await;
+    post_set_include_pkg(&app, "b", "x86_64", false).await;
+    let before = ops_len(&app).await;
+
+    // Refused direction first: must not record.
+    let (status, json) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 2 effective members of 'vendor' are already excluded"
+    );
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+
+    // Accepted direction: one new /api/ops entry.
+    let (status, _) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+}
+
+/// § 8.8 state (b): excluded history (a recorded repo exclude), both members
+/// individually included. The counts derive `include: false` as the
+/// accepted direction; `include: true`, the direction a history-reading
+/// switch would post (the history here is "excluded"), is refused.
+#[tokio::test]
+async fn set_include_repo_state_b_accepted_and_refused() {
+    let app = app(vendor_repo_state());
+    post_set_include_repo(&app, "vendor", false).await;
+    post_set_include_pkg(&app, "a", "x86_64", true).await;
+    post_set_include_pkg(&app, "b", "x86_64", true).await;
+    let before = ops_len(&app).await;
+
+    // Refused direction first: must not record.
+    let (status, json) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 2 effective members of 'vendor' are already included"
+    );
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+
+    // Accepted direction: one new /api/ops entry.
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+}
+
+/// § 8.8 + position 26: a repo the index knows and accepts, whose effective
+/// set is empty (both declared members present and locked), is refused in
+/// both directions with the "nothing to decide" reason -- never silently
+/// accepted, and never recorded. The wire `error` is the error.rs prefix
+/// ("nothing to change: ") plus the `NoopTarget` message in full: the brief
+/// describes the client-visible text as starting "nothing to decide", but
+/// `error.rs`'s existing, out-of-scope-for-this-task mapping always adds
+/// that prefix first, so the full string is asserted here rather than a
+/// `starts_with` check that the actual prefix would fail.
+#[tokio::test]
+async fn set_include_repo_with_no_effective_member_returns_422_in_both_directions() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let before = ops_len(&app).await;
+
+    for include in [true, false] {
+        let (status, json) = post_set_include_repo(&app, "vendor", include).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            json["error"],
+            "nothing to change: nothing to decide in 'vendor': all 2 members are locked"
+        );
+    }
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+}
+
+/// § 8.12's second API line, owned by this task: `SetInclude(Repo)` on an
+/// `Incomplete` repo with at least one effective member returns 200 --
+/// Task 5 made `validate_target` accept `Incomplete`, and this is the
+/// wire-level proof that the new provenance value is not refused.
+#[tokio::test]
+async fn set_include_repo_on_incomplete_provenance_with_effective_member_returns_200() {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "a".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "vendor".into(),
+            disposition: FindingKind::included(),
+            locked: false,
+            ..Default::default()
+        }],
+        // No baseurl/metalink/mirrorlist -> Incomplete, not Verified.
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 // --- build_web_sections unit tests --------------------------------------------
 
 #[test]

@@ -14,6 +14,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_pipeline::render::advisory::config_advisories;
@@ -73,17 +74,30 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
     restore_config_advisories(&mut view.config_files, session.snapshot());
     let decisions = session.decisions();
 
-    // Map repo groups from projection type to DTO
+    // Map repo groups from projection type to DTO. `RepoGroup` (the
+    // projection type `decisions.repo_groups` holds) has no effective-member
+    // concept of its own, so the three counts below come from
+    // `session.repo_effective` directly -- the same § 3.2 source
+    // `handlers::build_repo_groups` reads for the aggregate view, which
+    // keeps those three fields from diverging between the two surfaces even
+    // though `package_count` itself is computed twice (once here, ported
+    // into `decisions::build_repo_groups`, and once in `handlers.rs`).
     let repo_groups: Vec<RepoGroupInfo> = decisions
         .repo_groups
         .iter()
-        .map(|rg| RepoGroupInfo {
-            section_id: rg.section_id.clone(),
-            provenance: rg.provenance,
-            is_distro: rg.is_distro,
-            tier: rg.tier,
-            package_count: rg.package_count,
-            enabled: rg.enabled,
+        .map(|rg| {
+            let effective = session.repo_effective(&RepoId::new(rg.section_id.as_str()));
+            RepoGroupInfo {
+                section_id: rg.section_id.clone(),
+                provenance: rg.provenance,
+                is_distro: rg.is_distro,
+                tier: rg.tier,
+                package_count: rg.package_count,
+                effective_member_count: effective.member_count,
+                effective_included: effective.included,
+                effective_unlisted: effective.unlisted,
+                enabled: rg.enabled,
+            }
         })
         .collect();
 
@@ -2411,5 +2425,197 @@ mod tests {
             states[0]["shadow_rationale"],
             "Custom unit file overrides package default"
         );
+    }
+
+    // -- Task 7: `RepoGroupInfo`'s effective-member counts (§ 3.2) ----------
+
+    /// § 8.8 "Hidden member": a `Verified` "vendor" repo with one included
+    /// visible leaf ("a") and one actionable, unlocked, non-leaf dependency
+    /// ("b") the display filter hides -- originally excluded at
+    /// normalization, not `Investigate`. A baseline (even empty) is required
+    /// so "a" normalizes to Site -> leaf -> included; "b" is left off
+    /// `leaf_packages` so it normalizes to Site -> non-leaf -> excluded and
+    /// the hidden-dependency filter drops it from `view.packages`.
+    fn repo_group_info_for(section_id: &str) -> RepoGroupInfo {
+        use inspectah_core::baseline::BaselineData;
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "a".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "vendor".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "b".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "vendor".into(),
+                    disposition: FindingKind::excluded(),
+                    ..Default::default()
+                },
+            ],
+            leaf_packages: Some(vec!["a.x86_64".into()]),
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/vendor.repo".into(),
+                content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        response
+            .repo_groups
+            .into_iter()
+            .find(|rg| rg.section_id == section_id)
+            .expect("repo present in view")
+    }
+
+    /// Pre-task, `RepoGroupInfo` had no `effective_*` fields at all, so this
+    /// fails to compile against pre-task code -- the strongest form of
+    /// "fails before, passes after." What the old `package_count`-only
+    /// computation reports for "vendor" is 1 (the visible leaf only); the
+    /// effective set the control actually acts on is 2, with 1 included and
+    /// 1 unlisted, which `package_count` alone cannot distinguish.
+    #[test]
+    fn repo_group_info_counts_the_effective_set_not_the_visible_one() {
+        let rg = repo_group_info_for("vendor");
+        assert_eq!(
+            (
+                rg.effective_member_count,
+                rg.effective_included,
+                rg.effective_unlisted,
+                rg.package_count
+            ),
+            (2, 1, 1, 1)
+        );
+    }
+
+    /// A `Verified` "vendor" repo with two actionable, unlocked members, used
+    /// by `state_a`/`state_b` below. Mirrors
+    /// `inspectah_refine`'s own `verified_repo_session` test fixture
+    /// (`crates/refine/tests/session_test.rs`), rebuilt here because
+    /// integration test fixtures aren't shared across crates.
+    fn two_member_vendor_session() -> RefineSession {
+        use inspectah_core::baseline::BaselineData;
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "a".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "vendor".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "b".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "vendor".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/vendor.repo".into(),
+                content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        RefineSession::new(snap)
+    }
+
+    /// `(enabled, effective_member_count, effective_included, effective_unlisted)`
+    /// for the "vendor" repo, read the same way the § 6.3 Switch does.
+    fn repo_disagreement_state(session: &RefineSession) -> (bool, usize, usize, usize) {
+        let rg = build_web_view(session)
+            .repo_groups
+            .into_iter()
+            .find(|rg| rg.section_id == "vendor")
+            .expect("vendor repo present in view");
+        (
+            rg.enabled,
+            rg.effective_member_count,
+            rg.effective_included,
+            rg.effective_unlisted,
+        )
+    }
+
+    /// State (a), § 8.8: enabled history (no repo op), both members
+    /// individually excluded.
+    fn state_a() -> (bool, usize, usize, usize) {
+        use inspectah_refine::types::{ItemId, RefinementOp};
+
+        let mut s = two_member_vendor_session();
+        for name in ["a", "b"] {
+            s.apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: name.into(),
+                    arch: "x86_64".into(),
+                },
+                include: false,
+            })
+            .unwrap();
+        }
+        repo_disagreement_state(&s)
+    }
+
+    /// State (b), § 8.8: excluded history (a recorded repo exclude), both
+    /// members individually included.
+    fn state_b() -> (bool, usize, usize, usize) {
+        use inspectah_refine::types::{ItemId, RefinementOp};
+
+        let mut s = two_member_vendor_session();
+        s.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: "vendor".into(),
+            },
+            include: false,
+        })
+        .unwrap();
+        for name in ["a", "b"] {
+            s.apply(RefinementOp::SetInclude {
+                item_id: ItemId::Package {
+                    name: name.into(),
+                    arch: "x86_64".into(),
+                },
+                include: true,
+            })
+            .unwrap();
+        }
+        repo_disagreement_state(&s)
+    }
+
+    /// § 8.8: the exact inputs the § 6.3 Switch reads, which § 8.12's
+    /// frontend fixtures copy verbatim. Pre-task, `RepoGroupInfo` had no
+    /// `effective_*` fields, so this fails to compile against pre-task code.
+    #[test]
+    fn build_repo_groups_reports_the_two_disagreement_states() {
+        assert_eq!(state_a(), (true, 2, 0, 0)); // enabled, M=2, N=0, K=0
+        assert_eq!(state_b(), (false, 2, 2, 0)); // excluded history, M=2, N=2, K=0
     }
 }

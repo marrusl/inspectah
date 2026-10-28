@@ -294,14 +294,24 @@ fn validate_target_accepts_incomplete_and_refuses_the_rest() {
         RepoProvenance::Incomplete
     );
 
-    // Incomplete -> Ok.
+    // Incomplete -> Ok. `include: true`, not `false`: with no baseline on
+    // this snapshot every package normalizes to Investigate -> excluded at
+    // construction (`normalize_package_defaults`), so package "a" (and the
+    // other two) already start excluded. Before Task 7's member-based no-op
+    // rule (§ 3.2, position 29) that didn't matter -- the old rule read only
+    // repo-exclusion history, which is empty here, and accepted either
+    // direction. The new rule reads the real per-package state, so
+    // `include: false` is now a genuine no-op (refused) and would no longer
+    // exercise what this test is for: confirming `validate_target` accepts
+    // Incomplete provenance. `include: true` is a real change to "a"'s one
+    // effective member and reaches that check.
     assert!(
         session
             .apply(RefinementOp::SetInclude {
                 item_id: ItemId::Repo {
                     path: "incomplete-repo".into(),
                 },
-                include: false,
+                include: true,
             })
             .is_ok(),
         "Incomplete provenance should be accepted"

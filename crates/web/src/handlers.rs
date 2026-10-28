@@ -232,12 +232,16 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
             };
             let tier = RepoIndex::repo_tier(&section_id);
             let enabled = !excluded.contains(section_id.as_str());
+            let effective = session.repo_effective(&RepoId::new(section_id.as_str()));
             RepoGroupInfo {
                 section_id,
                 provenance,
                 is_distro,
                 tier,
                 package_count,
+                effective_member_count: effective.member_count,
+                effective_included: effective.included,
+                effective_unlisted: effective.unlisted,
                 enabled,
             }
         })
@@ -1363,11 +1367,23 @@ mod tests {
 
     #[test]
     fn apply_exclude_repo_via_op_endpoint() {
+        use inspectah_core::baseline::BaselineData;
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_refine::types::RefinementOp;
 
         // Build snapshot with packages from multiple repos including epel
         let mut snap = empty_snapshot();
+        // A baseline (even empty) is required so these packages normalize to
+        // the Site bucket, defaulting to included (no `leaf_packages` means
+        // every Site package defaults to leaf), rather than Investigate ->
+        // excluded with no baseline at all -- otherwise the exclude op below
+        // is already a no-op under the § 3.2 member-based rule and never
+        // exercises the op endpoint this test is for.
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: Default::default(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         snap.rpm = Some(RpmSection {
             packages_added: vec![
                 PackageEntry {

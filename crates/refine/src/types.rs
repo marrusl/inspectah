@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::kernelboot::SysctlOverride;
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::users::UserContainerfileStrategy;
@@ -591,12 +592,34 @@ pub struct RefineStats {
     pub baseline_available: bool,
 }
 
+/// A repo section's effective member counts (§ 3.2): the projected
+/// `packages_added` entries whose `source_repo` resolves to the section
+/// (`Exact`/`Resolved` attribution), that are actionable, and that are not
+/// locked -- computed before any display filter. `unlisted` is how many of
+/// those effective members are absent from the filtered `view.packages`.
+/// One definition, computed once per [`RefinedView`] and read through
+/// [`crate::session::RefineSession::repo_effective`] by both the repo
+/// no-op rule and `RepoGroupInfo`'s counts, so the two can never diverge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoEffective {
+    pub member_count: usize,
+    pub included: usize,
+    pub unlisted: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedView {
     pub packages: Vec<RefinedPackage>,
     pub config_files: Vec<RefinedConfig>,
     pub containerfile_preview: String,
     pub stats: RefineStats,
+    /// Per-`RepoId` effective-member counts (§ 3.2). Not part of the wire
+    /// contract: `ViewResponse` flattens `RefinedView` directly into
+    /// `/api/view`, and this is an internal computation the session reads
+    /// through `repo_effective`, not a field the client sees -- the client
+    /// sees `RepoGroupInfo`'s three counts instead.
+    #[serde(skip)]
+    pub repo_effective: BTreeMap<RepoId, RepoEffective>,
     pub generation: u64,
 }
 

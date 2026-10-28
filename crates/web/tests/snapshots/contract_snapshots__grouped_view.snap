@@ -115,6 +115,9 @@ expression: json
   "quadlets": [],
   "repo_groups": [
     {
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
       "enabled": true,
       "is_distro": false,
       "package_count": 2,
